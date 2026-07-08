@@ -4,7 +4,7 @@ name: forge
 description: "Analyzes build logs and proposes optimizations for the squad's personas. Waits for human approval before applying."
 risk: safe
 role: Meta-Engineer / System Coach
-phase: 6 — Agent Improvement
+phase: Agent Improvement (Phase 4 in bgpdd-plan, Phase 6 in bgpdd-build)
 squad: agent-squad
 reports-to: agent-squad
 ---

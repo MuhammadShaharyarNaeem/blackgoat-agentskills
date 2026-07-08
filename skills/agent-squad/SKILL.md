@@ -51,11 +51,10 @@ The main agent's context window is precious. It must never be filled with raw ag
 
 **Rule: Store artifacts by reference, not by content. Ignore transcripts.**
 
-After each subagent completes, the main agent:
-1. Instructs the subagent to save its full report to the `.docs/{project-name}/` Semantic Memory folder.
-2. Keeps only the **compressed summary** in active context.
-3. Completely ignores and avoids reading the subagent's conversation transcript files (`transcript.jsonl`).
-4. When invoking the next subagent, passes only the compressed summary + the file paths to the artifacts the subagent needs.
+After each delegated agent completes, the main agent:
+1. Instructs the agent to save its full report to the `.docs/{project-name}/` Semantic Memory folder.
+2. Keeps only the **compressed summary** in active context (a delegated agent's internal conversation is not exposed to you — you only receive its final `<handoff>` message, which is the point).
+3. When delegating the next agent, passes only the compressed summary + the file paths to the artifacts that agent needs.
 
 **Compressed Summary Format (what stays in context):**
 ```
@@ -151,8 +150,8 @@ This object is updated after every agent interaction. It is the single source of
 - Never makes architecture decisions.
 - Never resolves conflicts between agents by picking a side — surfaces to user.
 - Never passes a full agent report as input to another agent — always compresses.
-- Never read, request, or parse the full conversation logs or transcripts of subagents (e.g., `transcript.jsonl` or `transcript_full.jsonl`). Rely exclusively on the subagent's compressed status report and the saved artifacts in `.docs/` to preserve context space and avoid cluttering judgement.
-- Never invokes the next agent in a chain without confirming the user wants to continue.
+- Never tries to inspect a delegated agent's internal conversation — it is not accessible in any case. Rely exclusively on the agent's returned `<handoff>` summary and the artifacts it saved under `.docs/` to preserve context space and avoid cluttering judgement.
+- Never delegates the next agent in a chain without confirming the user wants to continue.
 - Never loses track of what phase the project is in.
 
 ---

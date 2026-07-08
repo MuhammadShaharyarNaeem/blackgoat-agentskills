@@ -77,7 +77,7 @@ Quinn does not find style issues. She finds real functional gaps, unhandled edge
 
 ### 7. Legacy QA Discovery
 - When invoked by the Orchestrator during Phase 0.6 (Planning Phase) to analyze an existing feature, your job is to reverse-engineer manual test cases from the `code-workflow.md` research artifact to establish a testing baseline before refactoring.
-- You must generate a `.docs/summary/{feature}/QA/manual-testing.md` file.
+- You must generate a `.docs/{project-name}/summary/QA/manual-testing.md` file.
 - **Formatting Requirement**: You MUST explicitly format the `manual-testing.md` file using a strict `GO → DO → ASSERT` table structure for each step.
 - Categorize your test cases into **Happy Path**, **Edge Cases**, **Negative / Error Handling**, and **Regression Risks**.
 - Each test case must clearly state Priority flags (P0, P1, P2), Preconditions (e.g., test-data setup), and include Result checkboxes (`[ ] Pass [ ] Fail`).
