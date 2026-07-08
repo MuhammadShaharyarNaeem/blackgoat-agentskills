@@ -1,0 +1,53 @@
+# The 5 Audit Heuristics (Deep Dive)
+
+When auditing an agent's persona and methodology files, apply the following 5 metrics systematically. These heuristics are designed to detect logical deadlocks that cause LLM-based agents to hallucinate, crash, or disobey instructions.
+
+## 1. Interface Alignment (Input/Output Collisions)
+**Definition**: The output expected by a downstream agent must perfectly match the actual output format produced by the upstream agent.
+- **Why it matters**: Agents do not have common sense. If Agent B's skill tells them to extract the "Definition of Done" from a plan, but Agent A (the planner) was updated to output "Acceptance Criteria" instead, Agent B will either fail, hallucinate a Definition of Done, or loop infinitely.
+- **Example**: Mason's persona instructed him to read the "Definition of Done" from Alex's plan, but Alex had been updated to drop the DoD format.
+
+## 2. Dependency Conflict Detection
+**Definition**: A global/inherited methodology (like `base-persona.md`) must not mandate rules that contradict the agent's core identity or capabilities.
+- **Why it matters**: Over-broad global rules often break specialized agents. If a global rule forces an XML `<handoff>` structure, but a builder agent's local persona forces a `<changed_files>` XML structure, the agent will suffer from cognitive dissonance and likely output corrupted XML.
+- **Example**: `base-persona.md` instructed *all* agents to save their final output to the `.docs/` folder. This broke Mason, who is an execution agent whose entire job is to write code in `src/`. The fix was forking the dependency into a Planner persona and a Builder persona.
+
+## 3. Role Cohesion (The Bloat Test)
+**Definition:** Agents must only know what they need to know to do their job. Global personas should not be bloated with framework-specific syntax or project-specific procedural memories unless they are specialized agents for that exact framework.
+
+**The Abstraction Rule:**
+Auditors must NOT blindly delete all Procedural Memories. Instead, use the Abstraction Rule:
+- **Elevate**: Universal Engineering Principles (e.g., Separation of Concerns, Data Safety) must be KEPT and ideally elevated into the agent's core Responsibilities.
+- **Abstract**: If a rule is highly specific (e.g., Docker specific), attempt to *generalize it* into a language-agnostic software engineering principle (e.g., "Verify environment configurations drop privileges safely") before deciding to move it.
+- **Purge/Move**: Irreducible, hyper-specific project bloat that cannot be generalized must be moved to the project's `.agents/AGENTS.md`.
+
+**Red Flag:** The global persona contains specific instructions for React, Docker, or Terraform, even though the agent is meant to be a generalist code reviewer or planner.
+
+**Real-World Example:**
+*Luna (Reviewer)* had a procedural memory dictating how to parse Vue.js global state mutations and specific Docker health checks. The auditor applied the Abstraction Rule, abstracting the Docker check into a general "Infrastructure & CI/CD Security" responsibility, and moving the Vue.js specific rule to the project's `.agents/AGENTS.md`.
+
+## 4. Escalation Hallucination & Path Validity
+**Definition**: An agent must have a physically possible chain of command to escalate blockers. Furthermore, isolated subagents must not be given instructions to manage workflow state transitions (e.g., "proceed to Phase 2").
+- **Why it matters**: Subagents running in isolated workspaces cannot magically invoke other subagents or transition pipeline states. They can only communicate back to their caller.
+- **Example 1**: Mason's skill instructed him to "escalate to Aria" if he encountered an architectural blocker. Mason lacked the tools to spawn or message Aria. He must be instructed to escalate back to the Orchestrator.
+- **Example 2**: A research methodology tells an isolated subagent to "ask the user for approval before proceeding to planning." The subagent doesn't control the pipeline; the Orchestrator does. This causes severe Role Dissonance.
+
+## 5. Token Efficiency (Formatting Micromanagement)
+**Definition**: Agents should not be burdened with overly strict, redundant, or conflicting formatting templates.
+- **Why it matters**: Fighting formatting constraints wastes token context and degrades reasoning performance. If a methodology dictates a tagging format, the persona should not try to invent its own hierarchy.
+- **Example**: Alex's persona forced him to use `[LOW]/[MED]` tags and a `1.1` hierarchy, while his methodology forced `[SEC]/[EXT]` tags and a `Task N` hierarchy. By stripping the formatting rules out of the persona and deferring entirely to the methodology, Alex's reasoning capabilities improved dramatically.
+
+## 6. DRY (Don't Repeat Yourself) & Contract Reuse
+**Definition**: Methodologies (like a code simplification matrix) should be role-agnostic and shared. Do not duplicate a contract just to change the instruction verb (e.g. from "rewrite" to "flag").
+- **Why it matters**: Duplicating a methodology creates a maintenance nightmare. If you add a new pattern later, you have to update multiple files. This is how codebases rot.
+- **Example**: Instead of creating a `code-simplification-reviewer-contract.md` for Luna and a `code-simplification-builder-contract.md` for Max, keep one role-agnostic methodology. The *Persona* dictates the interaction rule (Luna's persona is told to "audit only", Max's persona is told to "execute the rewrites").
+
+## 7. Orchestrator vs Methodology Collision (Workflow Dissonance)
+**Definition**: A Methodology (`HOW` a task is done) must not attempt to orchestrate the swarm, manage multi-agent state transitions, or spawn subagents. That is the exclusive job of the Orchestrator.
+- **Why it matters**: If a methodology is written as if the subagent is managing the entire workflow (e.g., "Step 1: Plan, Step 2: Spawn workers, Step 3: Synthesize"), but the Orchestrator is *also* trying to manage those steps from the outside, the subagent will get confused and skip steps.
+- **Example**: The `blackgoat-research` methodology told Aria to conduct the research herself, while the `bgpdd-plan` Orchestrator was trying to spawn Scout workers to do it for her. The fix is to split the methodology into discrete "Modes" that the Orchestrator can explicitly trigger (e.g., Mode 1: Plan, Mode 2: Synthesize).
+
+## 8. Context Bloat & File Bloat (The Wake-Up Tax)
+**Definition**: A persona must strictly limit how many Methodology Dependencies (`SKILL-CONTRACT.md`) it forces the agent to read via `view_file` at startup. 
+- **Why it matters**: Reading methodologies at runtime guarantees the agent gets the exact text (avoiding Orchestrator hallucination), but it creates "Episodic Memory Bloat". If a persona forces an agent to read 5 massive files before starting, the agent's context window will fill up with generic rules, leaving no room for project-specific reasoning.
+- **Example**: A persona should not load `godot-gdscript-patterns/SKILL.md` "Always". It should explicitly state: "When evaluating external libraries or APIs" or "If the project uses Godot Engine". Only the absolute core rules should be loaded unconditionally.
