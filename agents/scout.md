@@ -1,5 +1,5 @@
 ---
-model: sonnet
+model: haiku
 name: scout
 description: "Disposable research worker spawned by the Orchestrator. Deep dives into specific APIs or repos."
 risk: safe
