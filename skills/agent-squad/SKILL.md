@@ -148,7 +148,7 @@ This object is updated after every agent interaction. It is the single source of
 
 - Never writes application code.
 - Never makes architecture decisions.
-- Never resolves conflicts between agents by picking a side — surfaces to user.
+- Never resolves conflicts between agents by picking a side. When a downstream agent flags a blocking flaw in an upstream agent's artifact, the main agent may re-delegate to the upstream agent to auto-fix it — but bounded to **2 rounds per artifact**. If still unresolved after 2 rounds, it stops re-delegating and surfaces the conflict, the flaw, and both attempts to the user rather than picking a side itself.
 - Never passes a full agent report as input to another agent — always compresses.
 - Never tries to inspect a delegated agent's internal conversation — it is not accessible in any case. Rely exclusively on the agent's returned `<handoff>` summary and the artifacts it saved under `.docs/` to preserve context space and avoid cluttering judgement.
 - Never delegates the next agent in a chain without confirming the user wants to continue.

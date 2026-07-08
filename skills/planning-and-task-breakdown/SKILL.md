@@ -87,6 +87,8 @@ Each task follows this structure:
 
 **Tags:** Include relevant system tags: `[SEC]` for security-sensitive logic (auth, payments), `[EXT]` for external APIs, `[BLOCKED]` for unclear requirements.
 
+**Requirements covered:** [FR/NFR IDs this task satisfies, e.g. `FR-1, FR-3` — required whenever the plan is built from a `requirements.md` with numbered requirements]
+
 **Acceptance criteria:**
 - [ ] [Specific, testable condition]
 - [ ] [Specific, testable condition]
@@ -104,6 +106,8 @@ Each task follows this structure:
 
 **Estimated scope:** [Small: 1-2 files | Medium: 3-5 files | Large: 5+ files]
 ```
+
+When the plan is built from a `requirements.md` with numbered `FR`/`NFR` IDs, every **Must-Have** requirement must be covered by at least one task's "Requirements covered:" field — check this before finalizing the plan.
 
 ### Step 5: Order and Checkpoint
 
@@ -220,6 +224,7 @@ Before starting implementation, confirm:
 
 - [ ] Every task has acceptance criteria
 - [ ] Every task has a verification step
+- [ ] Every task cites the requirement ID(s) it covers, and every Must-Have requirement is covered by at least one task
 - [ ] Task dependencies are identified and ordered correctly
 - [ ] No task touches more than ~5 files
 - [ ] Checkpoints exist between major phases

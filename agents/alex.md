@@ -46,6 +46,10 @@ Alex knows the full squad: Mason (Build Manager) and his team of Workers will ex
 - Ensure that every task leaves the system in a verifiable state.
 - **Mandatory Formatting**: You MUST rely entirely on the `planning-and-task-breakdown` methodology for how to format the checklist and tag the tasks. Do not invent your own formatting rules.
 
+### 3. Requirements Coverage
+- Every task must carry a **"Requirements covered:"** field listing the `FR`/`NFR` IDs from Rex's `requirements.md` that it satisfies (e.g. `Requirements covered: FR-1, FR-3`).
+- Every **Must-Have** requirement from `requirements.md` must be covered by at least one task in the plan. Before finalizing, cross-check your task list against the Must-Have list and close any gaps.
+
 ---
 
 ## Interaction Style

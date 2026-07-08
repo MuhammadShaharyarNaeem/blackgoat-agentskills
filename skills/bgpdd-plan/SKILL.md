@@ -20,8 +20,11 @@ Skill and agent paths in this document use `{PLUGIN_ROOT}` as a placeholder for 
 - **Strict Delegation**: You are a MANAGER. For non-interactive phases you MUST NOT roleplay the agent's work yourself — this collapses your context window. Instead, delegate to the named agent (e.g. Aria). Pass the agent the specific "Working Memory" chunk it needs in the prompt. The agent runs to completion in its own context and returns its `<handoff>` summary as its final message — that returned text is what you read to continue. You cannot message a running agent; each delegation is a single self-contained task.
   - **EXCEPTION — Phase 1 (Honing)**: Requirements honing is interactive (turn-by-turn Q&A with the user). A delegated agent cannot pause to ask the user and resume, so **you (the main session) run Phase 1 yourself** following Rex's persona as the behavioral spec. See Phase 1 below.
 - **Phase Transitions**: Never start a new phase until the user explicitly types 'proceed', 'approved', or similar confirmation.
-- **Upgraded Chain-of-Thought**: Before transitioning between phases, you MUST explicitly verify that the required artifact exists.
-  - *Format*: "Thinking: Phase X requires Y. Checking `.docs/{project-name}/Y`... File exists and is populated. Proceeding."
+- **Upgraded Chain-of-Thought**: Before transitioning between phases, you MUST explicitly verify that the required artifact exists AND satisfies its content contract — existence and non-emptiness alone are not sufficient. Content contracts:
+  - `requirements.md`: has at least one Must-Have requirement carrying an `FR` ID and a Given/When/Then acceptance criterion.
+  - `detailed-design.md`: explicitly references the `FR` IDs it addresses (the design must show which requirements it covers).
+  - `plan.md`: every task cites the requirement ID(s) it satisfies (a "Requirements covered:" field), and every task carries a verification step.
+  - *Format*: "Thinking: Phase X requires Y. Checking `.docs/{project-name}/Y`... File exists and satisfies its content contract [state which check(s) passed]. Proceeding."
 - **Strict Progressive Disclosure (Working Memory)**: Never pass the entire project history or the full `.docs/` folder to a delegated agent. Extract and pass ONLY the specific "Working Memory" chunk they need for their current task. Overloading context causes downstream hallucination.
 - **File Artifacts**: All artifacts must use standard GitHub markdown and be saved under `.docs/{project-name}/`. This folder is the project's persistent **Semantic Memory**.
 
@@ -34,7 +37,7 @@ If *any* delegated agent (or you, the Orchestrator) exhibits the following behav
 
 **ACTION**: You MUST immediately halt execution, output a structured state summary of what went wrong, and request explicit human intervention. Do not attempt to guess or bypass the failure silently. (There is no "kill" step — a delegated agent terminates on its own when it returns; simply stop delegating and escalate.)
 
-**AUTONOMOUS REJECTION**: If an agent reports a blocking flaw in a previous agent's artifact, re-delegate to the previous agent (a fresh delegation) with the rejection notes so it fixes the artifact automatically. Do not halt unless human input is explicitly required.
+**AUTONOMOUS REJECTION**: If an agent reports a blocking flaw in a previous agent's artifact, re-delegate to the previous agent (a fresh delegation) with the rejection notes so it fixes the artifact automatically. **Bound this to 2 rounds per artifact**: track how many auto-fix rounds a given artifact (e.g. `requirements.md`) has been through. If, after 2 rounds, the flaw is still unresolved, halt and surface the artifact, the flaw, and both attempts to the user rather than re-delegating a third time. Do not halt before that unless human input is explicitly required.
 
 **CONTEXT CHECKPOINTS**: A delegated agent's context is bounded by its own run — you do not need to timebox it. If *you* (the Orchestrator) sense your own context is getting large across many phases, checkpoint your state to `.docs/{project-name}/orchestrator-state.json` (see Phase 4) so a fresh session can resume. Do NOT instruct delegated agents to schedule timers or spawn their own replacements — that is your responsibility, not theirs.
 
@@ -59,12 +62,12 @@ indexed by durable feature id (`{feature}`, e.g. `slide`) so the next time a fea
 its map already exists. If a file here already exists, ask the user whether to update or keep it.
 ```text
 .docs/summary/
-├── context.md                     # Project-wide tech-stack context (Iris) — one file
+├── context.md                     # Project-wide tech-stack context + Target Scope (Iris) — one file
 └── {feature}/                     # Durable per-feature knowledge base (e.g. slide/)
-    ├── overview.md                #   Synthesized cross-API overview (Scout)
+    ├── overview.md                #   Synthesized cross-API overview (Quinn)
     ├── {api}.md                   #   Per-API feature-fragment maps, one per API (Scout)
     └── QA/
-        ├── code-workflow.md       #   Mermaid sequence diagrams & execution paths (Scout)
+        ├── code-workflow.md       #   Mermaid sequence diagrams & execution paths (Quinn)
         └── manual-testing.md      #   Reverse-engineered manual test cases (Quinn)
 ```
 
@@ -94,31 +97,34 @@ its map already exists. If a file here already exists, ask the user whether to u
 - **Delegated Agent**: **Iris** (Observer)
 - **Trigger**: Brownfield only — execute FIRST if the user is modifying an existing system.
 - **Workflow**:
-  1. Delegate to the **Iris** agent.
-  2. Instruct Iris to scan the repository and determine the global tech stack and overall project context (e.g., 2D Godot game vs Next.js Web App).
-  3. Instruct Iris to output her findings to `.docs/summary/context.md` (Tier 1, project-wide). If the file already exists, she must explicitly note this in her handoff so you can ask the user whether to update it.
-  4. Read Iris's returned handoff before proceeding.
+  1. **Target Scope (Orchestrator, before delegating)**: This pipeline may target a single repo or a set of microservice repos, since a single feature can span multiple services. Establish and record, up front: (a) the target repository or repositories (single repo, or a named set of microservice repos), (b) the working branch, and (c) for multi-repo, the local path to each repo. Ask the user if this isn't already clear from context — do not guess. Record it in `.docs/summary/context.md` (Tier 1), and include the relevant repo path(s) in every delegated agent's briefing from this point forward.
+  2. Delegate to the **Iris** agent, passing her the established Target Scope.
+  3. Instruct Iris to scan the repository/repositories and determine the global tech stack and overall project context (e.g., 2D Godot game vs Next.js Web App).
+  4. Instruct Iris to record the Target Scope (repo set + per-repo local paths) alongside her tech-stack findings in `.docs/summary/context.md` (Tier 1, project-wide). If the file already exists, she must explicitly note this in her handoff so you can ask the user whether to update it.
+  5. Read Iris's returned handoff before proceeding.
 
 ### Phase 0.5: Feature Auto-Scouting (Orchestrator)
 - **Delegated Agent**: **Scout** (Research Worker)
 - **Trigger**: Brownfield only — execute after Phase 0.
 - **Workflow**:
   1. YOU (the Orchestrator) MUST ask the user for the durable **feature id** (`{feature}`, e.g. `slide`) and whether a `.docs/summary/{feature}/` knowledge base already exists (if so, ask whether to refresh it or reuse it as-is).
-  2. YOU MUST ask the user which specific microservices or APIs contain fragments of the feature that need to be parsed.
+  2. YOU MUST ask the user which specific microservices or APIs contain fragments of the feature that need to be parsed. Cross-reference against the Target Scope established in Phase 0 to confirm which repo (and local path) each named API lives in; ask the user to clarify any API that doesn't map cleanly to a repo in scope.
   3. **CRITICAL HALT**: Stop generating your response here and await the user's explicit reply. Do NOT hallucinate a list of APIs; do NOT proceed to step 4 without the user's input.
-  4. Once the user provides the list of APIs, delegate to multiple **Scout** agents in parallel (one per API), in a single batch. Tell each Scout its `{feature}` and its assigned `{api}`.
-  5. Instruct each Scout to deep-dive its assigned API, map the feature fragments, and write findings to `.docs/summary/{feature}/{api}.md` (Tier 1). Also instruct Scout to generate `.docs/summary/{feature}/QA/code-workflow.md` with Mermaid sequence diagrams and execution paths.
-  6. After the per-API Scouts return, ensure a synthesized `.docs/summary/{feature}/overview.md` exists (how the feature spans the APIs, cross-service flow, integration seams, links to each `{api}.md`). Either delegate one final Scout to synthesize it from the per-API files, or instruct the last Scout to produce it. Aria will read this overview first and drill into `{api}.md` files on demand.
-  7. Read all Scouts' returned handoffs before proceeding to Phase 0.6.
+  4. Once the user provides the list of APIs, delegate to multiple **Scout** agents in parallel (one per API), in a single batch. Tell each Scout its `{feature}`, its assigned `{api}`, and which repo (and local path) that API lives in per the Target Scope.
+  5. Instruct each Scout to deep-dive its assigned API, map the feature fragments, and write findings to ONLY its own `.docs/summary/{feature}/{api}.md` (Tier 1) — including that API's own execution-path detail. Scouts do not write any shared feature-level file (no `overview.md`, no `QA/code-workflow.md`); that synthesis is Quinn's job in Phase 0.6, which avoids multiple Scouts racing to write the same file.
+  6. Read all Scouts' returned handoffs before proceeding to Phase 0.6, where Quinn will synthesize the feature-level `overview.md` and `QA/code-workflow.md` from these per-API files.
 
-### Phase 0.6: Legacy QA Extraction (Quinn)
-- **Delegated Agent**: **Quinn** (QA Tester)
-- **Trigger**: Brownfield only — execute after Phase 0.5. **Skip if `.docs/summary/{feature}/QA/code-workflow.md` does not exist.**
+### Phase 0.6: Feature Synthesis & Legacy QA Extraction (Quinn)
+- **Delegated Agent**: **Quinn** (QA Tester, Mode A — Legacy QA Discovery)
+- **Trigger**: Brownfield only — execute after Phase 0.5. **Skip if no per-API `.docs/summary/{feature}/{api}.md` files exist.**
 - **Workflow**:
   1. Delegate to the **Quinn** agent, telling her the `{feature}`.
-  2. Instruct Quinn to read `.docs/summary/{feature}/QA/code-workflow.md` and the per-API maps to reverse-engineer manual test cases.
-  3. Instruct Quinn to write her test cases to `.docs/summary/{feature}/QA/manual-testing.md` (Tier 1) following her Legacy QA Discovery guidelines.
-  4. Read Quinn's returned handoff before proceeding to Phase 1.
+  2. Instruct Quinn to read ALL per-API `.docs/summary/{feature}/{api}.md` files written by the Scouts in Phase 0.5.
+  3. Instruct Quinn to synthesize, in this order, within the same pass:
+     a. `.docs/summary/{feature}/overview.md` (Tier 1) — the cross-API consolidation: which API owns what, cross-service call flow, integration seams, links to each `{api}.md`.
+     b. `.docs/summary/{feature}/QA/code-workflow.md` (Tier 1) — Mermaid sequence diagrams and step-by-step execution paths across the services.
+     c. `.docs/summary/{feature}/QA/manual-testing.md` (Tier 1) — reverse-engineered manual test cases, using the `code-workflow.md` she just produced, following her Legacy QA Discovery guidelines.
+  4. Read Quinn's returned handoff before proceeding to Phase 1. Aria will read `overview.md` first and drill into `{api}.md` files on demand.
 
 ### Phase 1: Honing & Requirements (HYBRID)
 - **Behavioral spec**: `{PLUGIN_ROOT}/../agents/rex.md` (Rex, the Analyst) + `{PLUGIN_ROOT}/blackgoat-idea-honing/SKILL.md`
@@ -152,6 +158,14 @@ its map already exists. If a file here already exists, ask the user whether to u
   2. Instruct Alex to read `.docs/{project-name}/requirements.md`, `.docs/{project-name}/honing-transcript.md`, and `.docs/{project-name}/design/detailed-design.md`, and convert the blueprint into micro-tasks ordered to satisfy dependencies.
   3. **CRITICAL PATHING**: Instruct Alex that he MUST save the checklist exactly to `.docs/{project-name}/implementation/plan.md` (NOT the root `.docs/{project-name}/` folder), using his planning methodology's format.
   4. Read Alex's returned handoff.
+
+### Phase 3.5: Coverage Gate (Orchestrator)
+- **Delegated Agent**: None — the Orchestrator performs this check directly.
+- **Workflow**:
+  1. Read `.docs/{project-name}/requirements.md` and `.docs/{project-name}/implementation/plan.md`.
+  2. Verify every Must-Have `FR` ID maps to at least one task's "Requirements covered:" field in `plan.md`, and that every task in `plan.md` cites the requirement ID(s) it satisfies.
+  3. If any Must-Have `FR` is uncovered, or any task is missing its "Requirements covered:" field, re-delegate to **Alex** (a fresh delegation) with the specific gap — subject to the 2-round auto-fix bound in Global Error Recovery (§2). If unresolved after 2 rounds, halt and surface to the user.
+  4. Once coverage is confirmed, proceed to Phase 4.
 
 ### Phase 4: Agent Improvement (Forge)
 - **Delegated Agent**: **Forge** (System Coach)
