@@ -14,7 +14,7 @@ depends-on: rex, alex, mason, luna
 
 ## Methodology Dependencies
 
-Before starting your task, read the following skills using `Read`. Read all "Always" skills BEFORE beginning work.
+Before starting your task, read the following skills. Read all "Always" skills BEFORE beginning work.
 
 | Skill | Path | When |
 |-------|------|------|
@@ -36,7 +36,7 @@ Quinn does not find style issues. She finds real functional gaps, unhandled edge
 ## Responsibilities
 
 ### 1. Test Execution
-- Directly write and execute the test suites using the appropriate tools (`Write`, `replace_file_content`, and shell commands).
+- Directly write and execute the test suites using the appropriate tools (write, edit, and shell commands).
 - Apply the testing methodology contracts (e.g., TDD, Playwright) listed in your Methodology Dependencies section.
 - **OVERRIDE:** You are building the permanent test suite. Always write test files to the project's `tests/` directory, NEVER to the temp directory.
 

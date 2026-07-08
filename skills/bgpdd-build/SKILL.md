@@ -13,13 +13,13 @@ Invoke with `/bgpdd-build` (add the `auto` argument for Autonomous Execution Mod
 
 ## Path Resolution
 
-Skill and agent paths use `{PLUGIN_ROOT}` as a placeholder for the plugin's `skills/` directory (agents live at `{PLUGIN_ROOT}/../agents/`). When this skill is invoked, its base directory is provided to you. Use `Glob` to confirm a path exists before referencing it.
+Skill and agent paths use `{PLUGIN_ROOT}` as a placeholder for the plugin's `skills/` directory (agents live at `{PLUGIN_ROOT}/../agents/`). When this skill is invoked, its base directory is provided to you. List files to confirm a path exists before referencing it.
 
 ---
 
 ## 1. Global System Constraints
 
-- **Strict Delegation**: You are a MANAGER. You MUST NOT roleplay the phases yourself — this collapses your context window. For each phase, use the **`Agent` (Task) tool** with `subagent_type: blackgoat-agentskills:<name>` (e.g. `blackgoat-agentskills:mason`) to delegate. The agent runs to completion in its own context and returns its `<handoff>` summary as its final message — that returned text is what you read to continue. You cannot message a running agent; each delegation is a single self-contained task.
+- **Strict Delegation**: You are a MANAGER. You MUST NOT roleplay the phases yourself — this collapses your context window. For each phase, delegate to the named agent (e.g. Mason). The agent runs to completion in its own context and returns its `<handoff>` summary as its final message — that returned text is what you read to continue. You cannot message a running agent; each delegation is a single self-contained task.
 - **Prerequisites**: Do NOT run unless `.docs/{project-name}/implementation/plan.md` exists and is fully populated.
 - **Hydration Phase**: Before Phase 1, read `.docs/{project-name}/orchestrator-state.json` (if it exists) to restore context from the planning phase.
 - **Phase Transitions**: Never start a new phase until the user explicitly types 'proceed', 'approved', or similar confirmation (except in Auto Mode — see §3).
@@ -76,54 +76,54 @@ When communicating with the user during a phase transition checkpoint (non-auto 
 ## 6. Detailed Pipeline Phases
 
 ### Phase 1: Building
-- **Delegated Agent**: `blackgoat-agentskills:mason` (Builder). He reads his methodology dependencies (TDD, debugging, SDD) on-demand with `Read`.
+- **Delegated Agent**: **Mason** (Builder). He reads his methodology dependencies (TDD, debugging, SDD) on-demand.
 - **Workflow**:
   1. Pick the next pending milestone from `implementation/plan.md`.
-  2. Delegate to Mason via the `Agent` tool. **CRITICAL CONTEXT HANDOFF**: copy the exact text of the active milestone from `plan.md` into the `Agent` prompt so he knows exactly what to build.
-  3. **STRICT BLAST RADIUS RULE**: Instruct Mason that *before* modifying any shared DTO or library, he MUST trace dependencies — using the `code-review-graph` MCP's impact tool if available, otherwise manually via `Grep`. If the radius extends beyond his active microservice, he must document it in his handoff and return for architectural review.
+  2. Delegate to the **Mason** agent. **CRITICAL CONTEXT HANDOFF**: copy the exact text of the active milestone from `plan.md` into the delegation prompt so he knows exactly what to build.
+  3. **STRICT BLAST RADIUS RULE**: Instruct Mason that *before* modifying any shared DTO or library, he MUST trace dependencies — using the `code-review-graph` MCP's impact tool if available, otherwise manually by searching the codebase. If the radius extends beyond his active microservice, he must document it in his handoff and return for architectural review.
   4. If the blast radius exceeds the active microservice:
      a. Notify the User: "Blast radius exceeds the current microservice boundary. Architectural review required."
-     b. Delegate to **`blackgoat-agentskills:aria`** as a temporary advisor, passing her Mason's blast-radius report; ask for a scoped architectural recommendation.
+     b. Delegate to the **Aria** agent as a temporary advisor, passing her Mason's blast-radius report; ask for a scoped architectural recommendation.
      c. Present Aria's recommendation to the User for approval.
-     d. After approval, delegate a **fresh Mason** (new `Agent` call), passing him Mason's prior handoff state and Aria's ruling.
+     d. After approval, delegate a **fresh Mason** agent, passing him Mason's prior handoff state and Aria's ruling.
   5. Read Mason's returned handoff and extract the strict `<changed_files>` XML list from it.
 
 ### Phase 2: Testing
-- **Delegated Agent**: `blackgoat-agentskills:quinn` (QA Tester). She reads her methodology dependencies (playwright, browser-testing) on-demand with `Read`.
+- **Delegated Agent**: **Quinn** (QA Tester). She reads her methodology dependencies (playwright, browser-testing) on-demand.
 - **Workflow**:
-  1. Delegate to Quinn via the `Agent` tool. **CRITICAL CONTEXT HANDOFF**: pass her the exact text of the active milestone and the `<changed_files>` list from Mason. **CRITICAL PATHING**: instruct her to append results to `.docs/{project-name}/implementation/test-report.md`.
+  1. Delegate to the **Quinn** agent. **CRITICAL CONTEXT HANDOFF**: pass her the exact text of the active milestone and the `<changed_files>` list from Mason. **CRITICAL PATHING**: instruct her to append results to `.docs/{project-name}/implementation/test-report.md`.
   2. Instruct Quinn to design and directly execute the test strategy for the newly built code.
-  3. **Rejection Loop**: If Quinn's returned handoff reports failing tests, extract her failing-test logs and delegate a fresh Mason (Bugfix mode) with the exact failures. Loop Mason ↔ Quinn (fresh delegation each round) until tests pass.
+  3. **Rejection Loop**: If Quinn's returned handoff reports failing tests, extract her failing-test logs and delegate a fresh Mason agent (Bugfix mode) with the exact failures. Loop Mason ↔ Quinn (fresh delegation each round) until tests pass.
 
 ### Phase 3: Code Review
-- **Delegated Agent**: `blackgoat-agentskills:luna` (Reviewer). She reads her methodology dependencies on-demand with `Read`.
+- **Delegated Agent**: **Luna** (Reviewer). She reads her methodology dependencies on-demand.
 - **Workflow**:
-  1. Delegate to Luna via the `Agent` tool, passing her the exact `<changed_files>` XML list from Mason so her scope is surgical.
+  1. Delegate to the **Luna** agent, passing her the exact `<changed_files>` XML list from Mason so her scope is surgical.
   2. Instruct Luna to run a 5-axis review: Correctness, Readability, Architecture, Security, Performance (using MCP tools or file-based navigation per her MCP Fallback rule).
   3. **CRITICAL PATHING**: instruct Luna to save findings to `.docs/{project-name}/implementation/review-report.md`.
-  4. If Luna's handoff flags "Critical" or "Important" blockers, delegate a fresh Mason to resolve them before proceeding.
+  4. If Luna's handoff flags "Critical" or "Important" blockers, delegate a fresh Mason agent to resolve them before proceeding.
 
 ### Phase 4: Optimization & Refactoring
-- **Delegated Agent**: `blackgoat-agentskills:max` (Optimizer). He reads his methodology dependencies on-demand with `Read`.
+- **Delegated Agent**: **Max** (Optimizer). He reads his methodology dependencies on-demand.
 - **Workflow**:
   1. **Conditional Invocation**: ONLY invoke Max IF Luna's review contains `[LOW]` / Refactor tags, or if the user explicitly requests optimization. Otherwise, skip this phase.
-  2. Delegate to Max via the `Agent` tool, passing him the exact `<changed_files>` XML list so his scope is surgical.
-  3. Instruct Max to refactor for clarity without behavioral changes, then run regression tests to guarantee stability (or you re-delegate Quinn to run the suite).
+  2. Delegate to the **Max** agent, passing him the exact `<changed_files>` XML list so his scope is surgical.
+  3. Instruct Max to refactor for clarity without behavioral changes, then run regression tests to guarantee stability (or you re-delegate to a Quinn agent to run the suite).
 
 ### Phase 5: Epic Shipping (Deferred)
-- **Delegated Agent**: `blackgoat-agentskills:dep` (DevOps). He reads his methodology dependencies (shipping-and-launch) on-demand with `Read`.
+- **Delegated Agent**: **Dep** (DevOps). He reads his methodology dependencies (shipping-and-launch) on-demand.
 - **Workflow**:
   1. **Completion Gate**: Before invoking Dep, verify that ALL milestones in `implementation/plan.md` are marked complete (`[x]`). If any `[ ]` remain, loop back to Phase 1 for the next pending milestone.
-  2. If the Epic is 100% complete, delegate to Dep via the `Agent` tool.
+  2. If the Epic is 100% complete, delegate to the **Dep** agent.
   3. Instruct Dep to scan for deployment risks and credentials across the epic and formulate a mandatory **Rollback Plan**.
   4. **CRITICAL PATHING**: instruct Dep to generate `.docs/{project-name}/implementation/ship-decision.md` with a `GO` or `NO-GO` verdict.
   5. **Doubt-Driven Check**: after Dep returns, YOU (the Orchestrator) run the Doubt-Driven Development cycle on Dep's plan before presenting it to the user.
   6. On explicit user confirmation, instruct the User to trigger `/bgpdd-shipping` to orchestrate the final Launch Squad.
 
 ### Phase 6: Agent Improvement
-- **Delegated Agent**: `blackgoat-agentskills:forge` (System Coach). He reads his methodology dependencies (agent-orchestration-improve-agent) on-demand with `Read`.
+- **Delegated Agent**: **Forge** (System Coach). He reads his methodology dependencies (agent-orchestration-improve-agent) on-demand.
 - **Workflow**:
-  1. Delegate to Forge via the `Agent` tool. Instruct him to analyze project metrics, error logs, and review reports, and write proposed updates to `.docs/{project-name}/implementation/agent-improvements.md`.
+  1. Delegate to the **Forge** agent. Instruct him to analyze project metrics, error logs, and review reports, and write proposed updates to `.docs/{project-name}/implementation/agent-improvements.md`.
   2. Read Forge's returned handoff.
   3. **HALT EXECUTION**. Explicitly ask the User to review and approve `agent-improvements.md`. Do NOT proceed until you have explicit human approval.
-  4. Upon approval, re-delegate to Forge (fresh `Agent` call) to apply the approved changes to the relevant `SKILL.md`/agent files with his `Edit`/`Write` tools.
+  4. Upon approval, re-delegate to a fresh **Forge** agent to apply the approved changes to the relevant `SKILL.md`/agent files by editing and writing them directly.

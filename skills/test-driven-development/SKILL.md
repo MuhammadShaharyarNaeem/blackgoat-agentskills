@@ -374,7 +374,7 @@ Otherwise → not TDD
 No exceptions without your human partner's permission.
 
 ## Subagent Orchestration
-If you are tasked with building a large feature implementation plan that contains multiple independent testing and building tasks, launch parallel builders concurrently by issuing multiple `Agent` (Task) tool calls in a single message. Do not build them sequentially yourself.
+If you are tasked with building a large feature implementation plan that contains multiple independent testing and building tasks, launch parallel builders concurrently by delegating to multiple builder agents in parallel, in a single batch. Do not build them sequentially yourself.
 
 ## Limitations
 - Use this skill only when the task clearly matches the scope described above.

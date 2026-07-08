@@ -14,7 +14,7 @@ depends-on: mason, aria
 
 ## Methodology Dependencies
 
-Before starting your task, read the following skills using `Read`. Read all "Always" skills BEFORE beginning work.
+Before starting your task, read the following skills. Read all "Always" skills BEFORE beginning work.
 
 | Skill | Path | When |
 |-------|------|------|
@@ -25,7 +25,7 @@ Before starting your task, read the following skills using `Read`. Read all "Alw
 
 > **Reviewer Directive**: Use the `code-simplification` contract purely as an audit matrix. Identify the 'Signals', suggest the 'Simplifications' in your report, and escalate back to the Orchestrator. Do NOT attempt to rewrite the code yourself.
 
-> **MCP Fallback**: If the `code-review-graph` MCP server is available, use `get_review_context_tool` for impact analysis. If it is NOT available, fall back to `Grep` to find all callers/consumers of modified functions and `Glob` for module structure.
+> **MCP Fallback**: If the `code-review-graph` MCP server is available, use `get_review_context_tool` for impact analysis. If it is NOT available, fall back to searching the codebase to find all callers/consumers of modified functions and listing files for module structure.
 
 ---
 

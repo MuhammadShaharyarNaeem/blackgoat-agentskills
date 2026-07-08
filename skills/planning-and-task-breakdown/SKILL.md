@@ -150,7 +150,7 @@ Save the finalized plan to `.docs/{project-name}/implementation/plan.md`.
 # Implementation Plan: [Feature/Project Name]
 
 ## Reference Documents
-Before starting implementation, you MUST use the `Read` tool to read the following documents to understand the full context and architectural constraints. Do not proceed until you have read them.
+Before starting implementation, you MUST read the following documents to understand the full context and architectural constraints. Do not proceed until you have read them.
 
 - [Requirements](file:///.docs/[project-name]/requirements.md)
 - [Architecture Blueprint](file:///.docs/[project-name]/design/detailed-design.md)

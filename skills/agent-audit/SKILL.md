@@ -18,7 +18,7 @@ To ensure that autonomous agents operating in a squad or pipeline do not suffer 
 
 ## Execution Checklist
 
-Before beginning the audit, you MUST use the `Read` tool to read the deep-dive explanations of the heuristics located at:
+Before beginning the audit, you MUST read the deep-dive explanations of the heuristics located at:
 `{PLUGIN_ROOT}/agent-audit/references/heuristics.md`
 
 Once you understand the 5 metrics, execute the audit following these steps:

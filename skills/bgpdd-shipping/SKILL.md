@@ -32,17 +32,17 @@ As the Orchestrator, you must follow these steps in exact order. Do not skip ste
 Read the full contract located at `{PLUGIN_ROOT}/shipping-and-launch/shipping-contract.md`. You will use this contract to delegate tasks to your sub-agents.
 
 ### Step 2: Delegate the Launch Squad
-Delegate the following three agents **in parallel** — issue all three `Agent` (Task) tool calls in a single message. Pass each its exact checklist assignment in the `Agent` prompt. Each returns its pass/fail handoff as its final message.
+Delegate to the following three agents **in parallel** — start all three delegations in a single batch. Pass each its exact checklist assignment in its delegation prompt. Each returns its pass/fail handoff as its final message.
 
-1. **Quinn (QA & Performance)** — `subagent_type: blackgoat-agentskills:quinn`
+1. **Quinn (QA & Performance)** — delegate to the **Quinn** agent
    - **Assignment**: `Code Quality`, `Performance`, and `Accessibility` checklists.
    - **Prompt**: "Execute the Code Quality, Performance, and Accessibility sections of the `shipping-and-launch` contract against the current codebase. Run all tests, linters, and accessibility checks. Report back with a final pass/fail."
 
-2. **Cipher (Security Auditor)** — `subagent_type: blackgoat-agentskills:cipher`
+2. **Cipher (Security Auditor)** — delegate to the **Cipher** agent
    - **Assignment**: `Security` checklist.
    - **Prompt**: "Execute the Security section of the `shipping-and-launch` contract against the current codebase. Scan for vulnerabilities, check CORS and headers, and verify auth routes. Report back with a final pass/fail."
 
-3. **Dep (DevOps Engineer)** — `subagent_type: blackgoat-agentskills:dep`
+3. **Dep (DevOps Engineer)** — delegate to the **Dep** agent
    - **Assignment**: `Infrastructure`, `Feature Flag Strategy`, `Staged Rollout`, and `Monitoring`.
    - **Prompt**: "Execute the Infrastructure, Feature Flags, and Monitoring sections of the `shipping-and-launch` contract. Verify production environment variables and define the Staged Rollout sequence. Compile the Emergency Rollback Plan into `.docs/{project-name}/rollback-plan.md`. Report back with your findings."
 

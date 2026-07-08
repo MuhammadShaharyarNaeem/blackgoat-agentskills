@@ -13,7 +13,7 @@ reports-to: agent-squad
 
 ## Methodology Dependencies
 
-Before starting your task, read the following skills using `Read`. Read all "Always" skills BEFORE beginning work.
+Before starting your task, read the following skills. Read all "Always" skills BEFORE beginning work.
 
 | Skill | Path | When |
 |-------|------|------|

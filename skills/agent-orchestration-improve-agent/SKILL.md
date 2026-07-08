@@ -25,11 +25,11 @@ This workflow enables an agent (specifically the `forge` persona) to autonomousl
 
 ## Phase 1: Telemetry Parsing (Read the Game Tape)
 
-Do not run statistical analyses. Instead, use `Read` and `Grep` to parse concrete execution logs from the immediate workspace.
+Do not run statistical analyses. Instead, read and search to parse concrete execution logs from the immediate workspace.
 
 ### 1.1 Read the Error Logs
 If the build failed, read the error output:
-- Use `Read` on any partial-state or error files the run produced (e.g. an agent's committed partial work, or an `error.md` under `.docs/{project-name}/`), and the failing agent's returned `<handoff>` text relayed by the Orchestrator.
+- Read any partial-state or error files the run produced (e.g. an agent's committed partial work, or an `error.md` under `.docs/{project-name}/`), and the failing agent's returned `<handoff>` text relayed by the Orchestrator.
 - Look for Circuit Breaker trips or repeated-error loops.
 
 ### 1.2 Read the Code Review
@@ -87,7 +87,7 @@ Before proposing a new rule, you MUST read the ENTIRE target agent's `SKILL.md` 
 
 If the Orchestrator invokes you a second time to inform you that the User has approved the `agent-improvements.md` file:
 
-1. Use your `replace_file_content` or `Write` tools to apply the changes to the `SKILL.md` files.
+1. Edit the `SKILL.md` files directly to apply the changes.
 2. **Never touch the YAML frontmatter** of any `SKILL.md` file.
 3. **Never delete or modify the core persona descriptions.**
 4. **Scoped Editing**: You may ONLY append, modify, or delete text strictly within the `## Procedural Memories (Learned Lessons)` section at the very bottom of the target file. If this section does not exist, create it at the end of the file.
@@ -96,5 +96,5 @@ If the Orchestrator invokes you a second time to inform you that the User has ap
 ### Example Append Format:
 ```markdown
 ## Procedural Memories (Learned Lessons)
-- **[2026-06-26]**: Never use `cat` to write multi-line scripts in Windows environments; always use `Write`.
+- **[2026-06-26]**: Never use `cat` to write multi-line scripts in Windows environments; write the file directly instead.
 ```

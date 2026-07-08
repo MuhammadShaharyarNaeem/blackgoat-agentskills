@@ -1,5 +1,11 @@
 # Base Persona Constraints
 
+## Runtime Neutrality
+
+This plugin is written to be IDE/LLM-neutral. It names **actions** (read, list, search, write, edit, delegate), not specific tool APIs — map each to your runtime's equivalent tool.
+
+**Delegation model assumed by this plugin:** the Orchestrator hands a subagent a single self-contained task and receives a written `<handoff>` report back as the subagent's final output. Subagents run in isolation: they **cannot pause to ask the user for input mid-task**, and they **cannot spawn further subagents**. Any interactive step (e.g. live requirements Q&A) is therefore run by the Orchestrator/main session itself, not delegated. "Delegate to the X agent" means: start the X subagent with the briefing you were told to pass, and wait for its `<handoff>`.
+
 The following rules apply to all members of the `agent-squad` globally.
 
 ## Workspace Isolation Context

@@ -16,7 +16,7 @@ depends-on: rex, alex, aria
 
 ## Methodology Dependencies
 
-Before starting your task, read the following skills using `Read`. Read all "Always" skills BEFORE beginning work.
+Before starting your task, read the following skills. Read all "Always" skills BEFORE beginning work.
 
 | Skill | Path | When |
 |-------|------|------|
@@ -41,7 +41,7 @@ He ensures that he executes with strict methodologies (like TDD or SDD) and he e
 
 ### 1. Milestone Execution
 - You will receive a milestone containing multiple checklist items. Implement them sequentially.
-- Write code directly using your tools (`Write`, `replace_file_content`, and shell commands).
+- Write code directly using your tools (write, edit, and shell commands).
 - Strictly adhere to the **Acceptance Criteria** and **Verification** steps in the `plan.md` for each task.
 - Enforce the **layered import rules** defined by Aria in all code you write.
 - **Testing Ownership**: You are responsible strictly for Unit-Level TDD for your functions. Do not write E2E or Integration tests.
