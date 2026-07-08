@@ -1,8 +1,6 @@
 ---
 name: bgpdd-shipping
 description: "Phase 3 of the Prompt-Driven Development SOP (Verification & Deployment). Orchestrates a dedicated Launch Squad (Quinn, Cipher, and Dep) to execute the pre-launch checklist, harden the application, and orchestrate the final rollout."
-category: process
-risk: safe
 ---
 
 # bgpdd-shipping
@@ -20,9 +18,9 @@ To orchestrate Phase 3 of the Prompt-Driven Development (PDD) lifecycle. This sk
 
 ## Core Capabilities
 
-1. **Launch Orchestration**: Spawns and manages 3 specialized sub-agents to parallelize the pre-launch checklists.
-2. **Strict Gatekeeping**: Blocks final deployment until all 3 sub-agents report a fully green checklist.
-3. **Automated Documentation**: Compiles the final Changelog, README updates, and Emergency Rollback Plan based on sub-agent reports.
+1. **Launch Orchestration**: Delegates to 3 specialized agents to parallelize the pre-launch checklists.
+2. **Strict Gatekeeping**: Blocks final deployment until all 3 agents report a fully green checklist.
+3. **Automated Documentation**: Compiles the final Changelog, README updates, and Emergency Rollback Plan based on agent reports.
 
 ---
 
@@ -33,25 +31,25 @@ As the Orchestrator, you must follow these steps in exact order. Do not skip ste
 ### Step 1: Read the Contract
 Read the full contract located at `{PLUGIN_ROOT}/shipping-and-launch/shipping-contract.md`. You will use this contract to delegate tasks to your sub-agents.
 
-### Step 2: Spawn the Launch Squad
-Use `invoke_subagent` to spawn the following three agents in parallel. Pass them their exact checklist assignments in their `InitialPrompt`.
+### Step 2: Delegate the Launch Squad
+Delegate the following three agents **in parallel** — issue all three `Agent` (Task) tool calls in a single message. Pass each its exact checklist assignment in the `Agent` prompt. Each returns its pass/fail handoff as its final message.
 
-1. **Quinn (QA & Performance)**
+1. **Quinn (QA & Performance)** — `subagent_type: blackgoat-agentskills:quinn`
    - **Assignment**: `Code Quality`, `Performance`, and `Accessibility` checklists.
    - **Prompt**: "Execute the Code Quality, Performance, and Accessibility sections of the `shipping-and-launch` contract against the current codebase. Run all tests, linters, and accessibility checks. Report back with a final pass/fail."
 
-2. **Cipher (Security Auditor)**
+2. **Cipher (Security Auditor)** — `subagent_type: blackgoat-agentskills:cipher`
    - **Assignment**: `Security` checklist.
    - **Prompt**: "Execute the Security section of the `shipping-and-launch` contract against the current codebase. Scan for vulnerabilities, check CORS and headers, and verify auth routes. Report back with a final pass/fail."
 
-3. **Dep (DevOps Engineer)**
+3. **Dep (DevOps Engineer)** — `subagent_type: blackgoat-agentskills:dep`
    - **Assignment**: `Infrastructure`, `Feature Flag Strategy`, `Staged Rollout`, and `Monitoring`.
-   - **Prompt**: "Execute the Infrastructure, Feature Flags, and Monitoring sections of the `shipping-and-launch` contract. Verify production environment variables and define the Staged Rollout sequence. Compile the Emergency Rollback Plan into `.docs/rollback-plan.md`. Report back with your findings."
+   - **Prompt**: "Execute the Infrastructure, Feature Flags, and Monitoring sections of the `shipping-and-launch` contract. Verify production environment variables and define the Staged Rollout sequence. Compile the Emergency Rollback Plan into `.docs/{project-name}/rollback-plan.md`. Report back with your findings."
 
 ### Step 3: Wait and Block
-You must WAIT for all three sub-agents to report back. 
-- If any agent reports a failure (e.g., failing tests, high vulnerabilities), you must **BLOCK** the deployment and inform the user of the specific failure. 
-- You may route the failure to Mason or Max using `bgpdd-build` to fix the issue, but you cannot proceed to Step 4 until the Launch Squad is fully green.
+Read all three agents' returned handoffs.
+- If any agent reports a failure (e.g., failing tests, high vulnerabilities), you must **BLOCK** the deployment and inform the user of the specific failure.
+- You may route the failure to Mason or Max via `/bgpdd-build` to fix the issue, but you cannot proceed to Step 4 until the Launch Squad is fully green.
 
 ### Step 4: Compile Documentation
 Once the squad is fully green, act as the Documenter:

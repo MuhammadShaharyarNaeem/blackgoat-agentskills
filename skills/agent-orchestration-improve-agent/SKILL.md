@@ -29,18 +29,21 @@ Do not run statistical analyses. Instead, use `Read` and `Grep` to parse concret
 
 ### 1.1 Read the Error Logs
 If the build failed, read the error output:
-- Use `Read` on `scratch/error.md` or `scratch/handoff.md`.
-- Look for Circuit Breaker trips, timeout errors, or infinite loops.
+- Use `Read` on any partial-state or error files the run produced (e.g. an agent's committed partial work, or an `error.md` under `.docs/{project-name}/`), and the failing agent's returned `<handoff>` text relayed by the Orchestrator.
+- Look for Circuit Breaker trips or repeated-error loops.
 
 ### 1.2 Read the Code Review
 Even if the build succeeded, the code may have been flawed.
 - Read `.docs/{project-name}/implementation/review-report.md`.
 - Identify recurring issues flagged by the code reviewer (e.g., "Mason keeps forgetting to hash passwords").
 
-### 1.3 Read the Transcripts
-If an agent behaved erratically, inspect their conversation transcript:
-- Use `Grep` on `transcript.jsonl` in the `.system_generated/logs` directory.
-- Search for "ERROR", "invalid tool call", or "is_truncated: true" to find context bloat or tool misuse.
+### 1.3 Read the Evidence
+> **Runtime note (Claude Code):** delegated-agent conversation transcripts are NOT exposed to the main session — there is no `transcript.jsonl` to parse. Reconstruct behavior from what *is* available instead.
+If an agent behaved erratically, inspect the durable evidence:
+- The agent's returned `<handoff>` summary (relayed by the Orchestrator) and any artifacts it wrote under `.docs/{project-name}/`.
+- Git history of the agent's commits (diff churn, reverted work) via `git log`/`git diff`.
+- Any error output or repeated-failure notes the user pasted into the conversation.
+- Look for signs of context bloat or tool misuse (e.g. an agent that rewrote the same file many times, or ignored an explicit rule).
 
 ---
 
