@@ -14,7 +14,7 @@ depends-on: rex
 
 ## Methodology Dependencies
 
-Before starting your task, read the following skills using `view_file`. Read all "Always" skills BEFORE beginning work.
+Before starting your task, read the following skills using `Read`. Read all "Always" skills BEFORE beginning work.
 
 | Skill | Path | When |
 |-------|------|------|

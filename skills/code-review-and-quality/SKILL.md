@@ -125,8 +125,8 @@ Before looking at code, understand the intent and blast radius:
    **If** `code-review-graph` MCP is available:
      - Use `get_review_context_tool` from the `code-review-graph` MCP server to instantly calculate the impact radius, coupling, and system boundaries affected by the changed files.
    **Else**:
-     - Use `grep_search` to find all callers/consumers of the modified functions/classes.
-     - Use `list_dir` to understand the module structure.
+     - Use `Grep` to find all callers/consumers of the modified functions/classes.
+     - Use `Glob` to understand the module structure.
      - Manually trace the dependency chain (max 2 levels deep).
 2. Answer the following questions:
 

@@ -17,7 +17,7 @@ This Standard Operating Procedure (SOP) coordinates the planning squad (Rex, Ari
 
 ## Path Resolution
 
-All skill paths in this document use `{PLUGIN_ROOT}` as a placeholder. Before spawning any subagent, resolve it to the root `skills/` directory (the directory two levels above this file). Use `list_dir` on the resolved path to confirm it exists before passing it to subagents.
+All skill paths in this document use `{PLUGIN_ROOT}` as a placeholder. Before spawning any subagent, resolve it to the root `skills/` directory (the directory two levels above this file). Use `Glob` on the resolved path to confirm it exists before passing it to subagents.
 
 ---
 
@@ -115,7 +115,7 @@ When communicating with the user during a phase transition checkpoint, adhere to
   * [agents/rex]({PLUGIN_ROOT}/../agents/rex.md)
 - **Workflow**:
   1. Use `invoke_subagent` to spawn **Rex**. Since he is natively loaded from the `agents/` folder, you do not need to define him first.
-  3. Instruct Rex to explicitly read `.docs/common_patterns/` (if it exists) to understand existing codebase patterns BEFORE asking the user any questions. Then, instruct Rex to ask the user targeted questions **one at a time**, logging them to `idea-honing.md`. Instruct him to probe edge cases deeply. **CRITICAL**: Even if the user provides a complete requirements document upfront, you MUST STILL define and invoke Rex. Instruct Rex to review the provided document, check for missing edge cases, and save the document himself to prevent truncation. Do NOT roleplay Rex and do NOT use `write_to_file` to save the requirements yourself.
+  3. Instruct Rex to explicitly read `.docs/common_patterns/` (if it exists) to understand existing codebase patterns BEFORE asking the user any questions. Then, instruct Rex to ask the user targeted questions **one at a time**, logging them to `idea-honing.md`. Instruct him to probe edge cases deeply. **CRITICAL**: Even if the user provides a complete requirements document upfront, you MUST STILL define and invoke Rex. Instruct Rex to review the provided document, check for missing edge cases, and save the document himself to prevent truncation. Do NOT roleplay Rex and do NOT use `Write` to save the requirements yourself.
   4. **The Relay Loop**: Rex operates interactively. When Rex sends you a message containing questions or feedback, you MUST stop execution and relay his exact message to the user.
   5. When the user replies to you, use the `send_message` tool to pass the user's response back to Rex.
   6. Continue this relay loop until Rex reports `<status>COMPLETE</status>`. Then use `manage_subagents` to `kill` Rex before proceeding to Phase 2.
@@ -148,7 +148,7 @@ When communicating with the user during a phase transition checkpoint, adhere to
   * [agents/forge]({PLUGIN_ROOT}/../agents/forge.md)
 - **Workflow**:
   1. Use `invoke_subagent` to spawn **Forge**. Since he is natively loaded from the `agents/` folder, you do not need to define him first.
-  2. He will read his methodology dependencies (agent-orchestration-improve-agent) on-demand via `view_file`.
+  2. He will read his methodology dependencies (agent-orchestration-improve-agent) on-demand via `Read`.
   3. Instruct Forge to analyze the project metrics: Did Rex miss any edge cases? Did Aria struggle with diagrams? Instruct him to write his proposed updates to `.docs/{project-name}/implementation/agent-improvements.md`.
   4. Wait for Forge to confirm the proposal is ready and terminate.
   5. **HALT EXECUTION**. Explicitly ask the User to review and approve the `agent-improvements.md` file. Do NOT proceed until you have explicit human approval.

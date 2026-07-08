@@ -17,7 +17,7 @@ This Standard Operating Procedure (SOP) coordinates the execution squad (Mason, 
 
 ## Path Resolution
 
-All skill paths in this document use `{PLUGIN_ROOT}` as a placeholder. Before spawning any subagent, resolve it to the root `skills/` directory (the directory two levels above this file). Use `list_dir` on the resolved path to confirm it exists before passing it to subagents.
+All skill paths in this document use `{PLUGIN_ROOT}` as a placeholder. Before spawning any subagent, resolve it to the root `skills/` directory (the directory two levels above this file). Use `Glob` on the resolved path to confirm it exists before passing it to subagents.
 
 ---
 
@@ -88,9 +88,9 @@ When communicating with the user during a phase transition checkpoint (in non-au
   * [agents/mason]({PLUGIN_ROOT}/../agents/mason.md)
 - **Workflow**:
   1. Pick the next pending milestone from `implementation/plan.md`.
-  2. Use `invoke_subagent` to spawn **Mason**. Since he is natively loaded from the `agents/` folder, you do not need to define him first. He will read his methodology dependencies (TDD, debugging, SDD) on-demand via `view_file`.
+  2. Use `invoke_subagent` to spawn **Mason**. Since he is natively loaded from the `agents/` folder, you do not need to define him first. He will read his methodology dependencies (TDD, debugging, SDD) on-demand via `Read`.
   4. Instruct Mason to implement the active milestone. **CRITICAL CONTEXT HANDOFF**: You MUST copy the exact text of the active milestone from `plan.md` and pass it to Mason in the `invoke_subagent` prompt so he knows exactly what to build.
-  5. **STRICT BLAST RADIUS RULE**: Instruct Mason that *before* he modifies any shared DTO or library, he MUST use the `get_impact_radius_tool` (if `code-review-graph` MCP is available) or manually trace dependencies via `grep_search`. If the radius extends beyond his active microservice, he must escalate to the User.
+  5. **STRICT BLAST RADIUS RULE**: Instruct Mason that *before* he modifies any shared DTO or library, he MUST use the `get_impact_radius_tool` (if `code-review-graph` MCP is available) or manually trace dependencies via `Grep`. If the radius extends beyond his active microservice, he must escalate to the User.
   6. If the blast radius extends beyond the active microservice:
      a. **HALT**: Gracefully TERMINATE Mason, ensuring his partial state is committed to git or `scratch/handoff.md`.
      b. Notify the User: "Blast radius exceeds the current microservice boundary. Architectural review required."
@@ -106,7 +106,7 @@ When communicating with the user during a phase transition checkpoint (in non-au
 - **Invoked Skills**: Quinn reads her own methodology dependencies on-demand.
   * [agents/quinn]({PLUGIN_ROOT}/../agents/quinn.md)
 - **Workflow**:
-  1. Use `invoke_subagent` to spawn **Quinn**. Since she is natively loaded from the `agents/` folder, you do not need to define her first. She will read her methodology dependencies (playwright, browser-testing) on-demand via `view_file`.
+  1. Use `invoke_subagent` to spawn **Quinn**. Since she is natively loaded from the `agents/` folder, you do not need to define her first. She will read her methodology dependencies (playwright, browser-testing) on-demand via `Read`.
   3. Instruct Quinn to design and directly execute the test strategy for the newly built code. **CRITICAL CONTEXT HANDOFF**: Pass Quinn the exact text of the active milestone and the `<changed_files>` list from Mason so she knows what to test. **CRITICAL PATHING**: Explicitly instruct her to append her results exactly to `.docs/{project-name}/implementation/test-report.md`.
   4. **Rejection Loop**: If Quinn reports failing tests, extract her failing test logs, TERMINATE Quinn, and spawn Mason (in Bugfix mode) passing him the exact failures. Loop between Mason and Quinn until tests pass.
   5. Wait for Quinn to confirm all tests pass.
@@ -142,7 +142,7 @@ When communicating with the user during a phase transition checkpoint (in non-au
   * [agents/dep]({PLUGIN_ROOT}/../agents/dep.md)
 - **Workflow**:
   1. **Completion Gate**: Before invoking Dep, you MUST verify that ALL milestones in `implementation/plan.md` are marked as complete (`[x]`). If any `[ ]` tasks remain, DO NOT proceed to Phase 5. Instead, loop back to Phase 1 (Building) for the next pending milestone.
-  2. If the Epic is 100% complete, use `invoke_subagent` to spawn **Dep**. Since he is natively loaded from the `agents/` folder, you do not need to define him first. He will read his methodology dependencies (shipping-and-launch) on-demand via `view_file`.
+  2. If the Epic is 100% complete, use `invoke_subagent` to spawn **Dep**. Since he is natively loaded from the `agents/` folder, you do not need to define him first. He will read his methodology dependencies (shipping-and-launch) on-demand via `Read`.
   4. Instruct Dep to scan for deployment risks and credentials across the entire epic.
   5. Instruct Dep to formulate a mandatory **Rollback Plan**.
   6. **CRITICAL PATHING**: Instruct Dep to generate exactly `.docs/{project-name}/implementation/ship-decision.md` with `GO` or `NO-GO`.
@@ -155,7 +155,7 @@ When communicating with the user during a phase transition checkpoint (in non-au
 - **Invoked Skills**: Forge reads his own methodology dependencies on-demand.
   * [agents/forge]({PLUGIN_ROOT}/../agents/forge.md)
 - **Workflow**:
-  1. Use `invoke_subagent` to spawn **Forge**. Since he is natively loaded from the `agents/` folder, you do not need to define him first. He will read his methodology dependencies (agent-orchestration-improve-agent) on-demand via `view_file`.
+  1. Use `invoke_subagent` to spawn **Forge**. Since he is natively loaded from the `agents/` folder, you do not need to define him first. He will read his methodology dependencies (agent-orchestration-improve-agent) on-demand via `Read`.
   3. Instruct Forge to analyze the project metrics, error logs, and review reports, and to write his proposed updates to `.docs/{project-name}/implementation/agent-improvements.md`.
   4. Wait for Forge to confirm the proposal is ready and terminate.
   5. **HALT EXECUTION**. Explicitly ask the User to review and approve the `agent-improvements.md` file. Do NOT proceed until you have explicit human approval.

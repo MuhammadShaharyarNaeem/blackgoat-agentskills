@@ -48,6 +48,6 @@ Auditors must NOT blindly delete all Procedural Memories. Instead, use the Abstr
 - **Example**: The `blackgoat-research` methodology told Aria to conduct the research herself, while the `bgpdd-plan` Orchestrator was trying to spawn Scout workers to do it for her. The fix is to split the methodology into discrete "Modes" that the Orchestrator can explicitly trigger (e.g., Mode 1: Plan, Mode 2: Synthesize).
 
 ## 8. Context Bloat & File Bloat (The Wake-Up Tax)
-**Definition**: A persona must strictly limit how many Methodology Dependencies (`SKILL-CONTRACT.md`) it forces the agent to read via `view_file` at startup. 
+**Definition**: A persona must strictly limit how many Methodology Dependencies (`SKILL-CONTRACT.md`) it forces the agent to read via `Read` at startup. 
 - **Why it matters**: Reading methodologies at runtime guarantees the agent gets the exact text (avoiding Orchestrator hallucination), but it creates "Episodic Memory Bloat". If a persona forces an agent to read 5 massive files before starting, the agent's context window will fill up with generic rules, leaving no room for project-specific reasoning.
 - **Example**: A persona should not load `godot-gdscript-patterns/SKILL.md` "Always". It should explicitly state: "When evaluating external libraries or APIs" or "If the project uses Godot Engine". Only the absolute core rules should be loaded unconditionally.
