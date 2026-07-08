@@ -49,23 +49,39 @@ When communicating with the user during a phase transition checkpoint, adhere to
 
 ---
 
-## 4. Folder Structure (Semantic Memory)
+## 4. Folder Structure (Semantic Memory) — TWO TIERS
+
+This pipeline uses two distinct memory scopes. Do not conflate them.
+
+**Tier 1 — Global project knowledge base** (`.docs/summary/`): built by the discovery agents
+(Iris, Scout, Quinn) at **project scope** and **persisted across enhancement cycles**. It is
+indexed by durable feature id (`{feature}`, e.g. `slide`) so the next time a feature is touched,
+its map already exists. If a file here already exists, ask the user whether to update or keep it.
+```text
+.docs/summary/
+├── context.md                     # Project-wide tech-stack context (Iris) — one file
+└── {feature}/                     # Durable per-feature knowledge base (e.g. slide/)
+    ├── overview.md                #   Synthesized cross-API overview (Scout)
+    ├── {api}.md                   #   Per-API feature-fragment maps, one per API (Scout)
+    └── QA/
+        ├── code-workflow.md       #   Mermaid sequence diagrams & execution paths (Scout)
+        └── manual-testing.md      #   Reverse-engineered manual test cases (Quinn)
+```
+
+**Tier 2 — Per-enhancement work dir** (`.docs/{project-name}/`): the isolated artifacts for
+**this** piece of work, where `{project-name}` is the current enhancement's work slug (e.g.
+`slide-enhancement`). Produced by Rex/Aria/Alex; scoped to this cycle.
 ```text
 .docs/{project-name}/
 ├── rough-idea.md          # Initial concept
-├── idea-honing.md         # Interactive Q&A transcript (Phase 1)
-├── requirements.md        # Finalized specification (Phase 1)
-├── summary/               # Brownfield discovery artifacts (Phases 0–0.6, existing systems only)
-│   ├── context.md         #   Global tech-stack context (Iris)
-│   ├── {api}.md           #   Per-API feature-fragment maps (Scout)
-│   └── QA/
-│       ├── code-workflow.md    # Mermaid sequence diagrams & execution paths (Scout)
-│       └── manual-testing.md   # Reverse-engineered manual test cases (Quinn)
+├── honing-transcript.md   # Interactive Q&A transcript (Phase 1, main session)
+├── requirements.md        # Finalized specification (Phase 1, Rex synthesis)
 ├── research/              # Technical research & findings (Aria)
 ├── design/                # System designs & Mermaid diagrams (Aria)
 │   └── detailed-design.md
-└── implementation/        # Checklists (Alex)
-    └── plan.md            # Dependency-mapped task list
+├── implementation/        # Checklists (Alex)
+│   └── plan.md            # Dependency-mapped task list
+└── orchestrator-state.json # Handoff state for bgpdd-build (Phase 4)
 ```
 
 ---
@@ -80,45 +96,51 @@ When communicating with the user during a phase transition checkpoint, adhere to
 - **Workflow**:
   1. Delegate to Iris via the `Agent` tool.
   2. Instruct Iris to scan the repository and determine the global tech stack and overall project context (e.g., 2D Godot game vs Next.js Web App).
-  3. Instruct Iris to output her findings to `.docs/{project-name}/summary/context.md`. If the file already exists, she must explicitly note this in her handoff so you can ask the user whether to update it.
+  3. Instruct Iris to output her findings to `.docs/summary/context.md` (Tier 1, project-wide). If the file already exists, she must explicitly note this in her handoff so you can ask the user whether to update it.
   4. Read Iris's returned handoff before proceeding.
 
 ### Phase 0.5: Feature Auto-Scouting (Orchestrator)
 - **Delegated Agent**: `blackgoat-agentskills:scout` (Research Worker)
 - **Trigger**: Brownfield only — execute after Phase 0.
 - **Workflow**:
-  1. YOU (the Orchestrator) MUST ask the user if feature documentation already exists for the feature they are updating.
+  1. YOU (the Orchestrator) MUST ask the user for the durable **feature id** (`{feature}`, e.g. `slide`) and whether a `.docs/summary/{feature}/` knowledge base already exists (if so, ask whether to refresh it or reuse it as-is).
   2. YOU MUST ask the user which specific microservices or APIs contain fragments of the feature that need to be parsed.
   3. **CRITICAL HALT**: Stop generating your response here and await the user's explicit reply. Do NOT hallucinate a list of APIs; do NOT proceed to step 4 without the user's input.
-  4. Once the user provides the list of APIs, delegate a Scout **in parallel for each API** — issue multiple `Agent` calls (`subagent_type: blackgoat-agentskills:scout`) in a single message.
-  5. Instruct each Scout to deep-dive its assigned API, map the feature fragments, and write findings to `.docs/{project-name}/summary/{api}.md`. Also instruct Scout to generate `.docs/{project-name}/summary/QA/code-workflow.md` with Mermaid sequence diagrams and execution paths.
-  6. Read all Scouts' returned handoffs before proceeding to Phase 0.6.
+  4. Once the user provides the list of APIs, delegate a Scout **in parallel for each API** — issue multiple `Agent` calls (`subagent_type: blackgoat-agentskills:scout`) in a single message. Tell each Scout its `{feature}` and its assigned `{api}`.
+  5. Instruct each Scout to deep-dive its assigned API, map the feature fragments, and write findings to `.docs/summary/{feature}/{api}.md` (Tier 1). Also instruct Scout to generate `.docs/summary/{feature}/QA/code-workflow.md` with Mermaid sequence diagrams and execution paths.
+  6. After the per-API Scouts return, ensure a synthesized `.docs/summary/{feature}/overview.md` exists (how the feature spans the APIs, cross-service flow, integration seams, links to each `{api}.md`). Either delegate one final Scout to synthesize it from the per-API files, or instruct the last Scout to produce it. Aria will read this overview first and drill into `{api}.md` files on demand.
+  7. Read all Scouts' returned handoffs before proceeding to Phase 0.6.
 
 ### Phase 0.6: Legacy QA Extraction (Quinn)
 - **Delegated Agent**: `blackgoat-agentskills:quinn` (QA Tester)
-- **Trigger**: Brownfield only — execute after Phase 0.5. **Skip if `.docs/{project-name}/summary/QA/code-workflow.md` does not exist.**
+- **Trigger**: Brownfield only — execute after Phase 0.5. **Skip if `.docs/summary/{feature}/QA/code-workflow.md` does not exist.**
 - **Workflow**:
-  1. Delegate to Quinn via the `Agent` tool.
-  2. Instruct Quinn to read `summary/QA/code-workflow.md` and any API research notes to reverse-engineer manual test cases.
-  3. Instruct Quinn to write her test cases to `.docs/{project-name}/summary/QA/manual-testing.md` following her Legacy QA Discovery guidelines.
+  1. Delegate to Quinn via the `Agent` tool, telling her the `{feature}`.
+  2. Instruct Quinn to read `.docs/summary/{feature}/QA/code-workflow.md` and the per-API maps to reverse-engineer manual test cases.
+  3. Instruct Quinn to write her test cases to `.docs/summary/{feature}/QA/manual-testing.md` (Tier 1) following her Legacy QA Discovery guidelines.
   4. Read Quinn's returned handoff before proceeding to Phase 1.
 
-### Phase 1: Honing & Requirements (run by YOU, the main session)
+### Phase 1: Honing & Requirements (HYBRID)
 - **Behavioral spec**: `{PLUGIN_ROOT}/../agents/rex.md` (Rex, the Analyst) + `{PLUGIN_ROOT}/blackgoat-idea-honing/SKILL.md`
-- **Why not delegated**: honing is an interactive, turn-by-turn conversation with the user. Delegated agents are fire-and-forget and cannot conduct it. **Run this phase yourself**, adopting Rex's persona and method.
-- **Workflow**:
-  1. Read Rex's persona (`agents/rex.md`) and the `blackgoat-idea-honing` methodology, and adopt them as your behavior for this phase.
-  2. If brownfield, read `.docs/{project-name}/summary/` (context, API maps, QA) first to ground your questions in the real system. Save any rough idea the user gave into `.docs/{project-name}/rough-idea.md`.
-  3. Conduct the honing Q&A: ask the user **one targeted question at a time**, probing edge cases deeply, appending each question and answer to `.docs/{project-name}/idea-honing.md`. Use `AskUserQuestion` when a question is a clear multiple-choice decision; otherwise ask in plain conversation.
+- **Why hybrid**: honing is an interactive, turn-by-turn conversation with the user, and a delegated (fire-and-forget) agent cannot pause to ask the user and resume. So the **live Q&A runs in the main session**, but the **spec authoring is delegated to an isolated Rex** — preserving the isolation you want for the heavy artifact work.
+
+- **Step A — Interactive honing (YOU, the main session)**:
+  1. Read Rex's persona (`agents/rex.md`) and the `blackgoat-idea-honing` methodology; adopt them as your behavior for this step.
+  2. Save any rough idea the user gave into `.docs/{project-name}/rough-idea.md`. If brownfield, read the Tier-1 knowledge base first — `.docs/summary/context.md` and `.docs/summary/{feature}/overview.md` (drill into `{api}.md` / QA files as needed) — to ground your questions in the real system. (Greenfield: these don't exist; skip.)
+  3. Conduct the honing Q&A: ask the user **one targeted question at a time**, probing edge cases deeply, appending each question and answer to `.docs/{project-name}/honing-transcript.md`. Use `AskUserQuestion` for clear multiple-choice decisions; otherwise ask in plain conversation.
   4. Even if the user provides a complete requirements document upfront, still review it for missing edge cases and drive it through the honing checkpoint — do not skip straight to acceptance.
-  5. When the user confirms honing is complete, write the finalized specification to `.docs/{project-name}/requirements.md` using Rex's requirements template.
-  6. Request user confirmation to transition to Phase 2.
+  5. When the user confirms honing is complete, the transcript is final.
+
+- **Step B — Spec synthesis (delegate isolated Rex)**:
+  6. Delegate to `blackgoat-agentskills:rex` via the `Agent` tool. Pass him the paths to `.docs/{project-name}/honing-transcript.md`, `.docs/{project-name}/rough-idea.md`, and (if brownfield) the `.docs/summary/{feature}/` knowledge base. Instruct him to synthesize `.docs/{project-name}/requirements.md` from the transcript using his requirements template.
+  7. Read Rex's returned handoff. If he flags unresolved **open questions** (he cannot ask the user directly), relay them to the user, append answers to the transcript, and re-delegate Rex to finalize. Loop until `requirements.md` is complete.
+  8. Request user confirmation to transition to Phase 2.
 
 ### Phase 2: Research & Architecture (Aria)
 - **Delegated Agent**: `blackgoat-agentskills:aria` (Architect)
 - **Workflow**:
-  1. Delegate to Aria via the `Agent` tool.
-  2. Instruct Aria to read `.docs/{project-name}/requirements.md` and — **if brownfield** — the discovery artifacts under `.docs/{project-name}/summary/` (so the prior Scout research is consumed, not orphaned). Then conduct any additional necessary technical research.
+  1. Delegate to Aria via the `Agent` tool (tell her the `{feature}` if brownfield).
+  2. Instruct Aria to read `.docs/{project-name}/requirements.md` **and** `.docs/{project-name}/honing-transcript.md` (for intent nuance), and — **if brownfield** — the Tier-1 `.docs/summary/{feature}/overview.md`, drilling into individual `.docs/summary/{feature}/{api}.md` files as the design requires (so the prior Scout research is consumed, not orphaned). She then does her own additional research. Note: Aria cannot delegate to Scout — she reads the existing maps.
   3. **CRITICAL PATHING**: Instruct Aria that she MUST write the final blueprint exactly to `.docs/{project-name}/design/detailed-design.md`.
   4. Read Aria's returned handoff.
   5. **Iteration Checkpoint**: Present Aria's design to the user and explicitly offer to bounce back to Phase 1 if research uncovered new questions.
@@ -127,7 +149,7 @@ When communicating with the user during a phase transition checkpoint, adhere to
 - **Delegated Agent**: `blackgoat-agentskills:alex` (Strategist)
 - **Workflow**:
   1. Delegate to Alex via the `Agent` tool. He reads his own methodology dependencies on-demand with `Read`.
-  2. Instruct Alex to read both `.docs/{project-name}/requirements.md` and `.docs/{project-name}/design/detailed-design.md`, and convert the blueprint into micro-tasks ordered to satisfy dependencies.
+  2. Instruct Alex to read `.docs/{project-name}/requirements.md`, `.docs/{project-name}/honing-transcript.md`, and `.docs/{project-name}/design/detailed-design.md`, and convert the blueprint into micro-tasks ordered to satisfy dependencies.
   3. **CRITICAL PATHING**: Instruct Alex that he MUST save the checklist exactly to `.docs/{project-name}/implementation/plan.md` (NOT the root `.docs/{project-name}/` folder), using his planning methodology's format.
   4. Read Alex's returned handoff.
 

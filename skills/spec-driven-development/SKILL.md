@@ -125,9 +125,9 @@ REFRAMED SUCCESS CRITERIA:
 This lets you loop, retry, and problem-solve toward a clear goal rather than guessing what "faster" means.
 
 ## File Outputs
-Always write your final spec to `.docs/{project-name}/spec.md` and document the Q&A process in `.docs/{project-name}/idea-honing.md`.
+Always write your final spec to `.docs/{project-name}/spec.md` and document the Q&A process in `.docs/{project-name}/honing-transcript.md`.
 
-Note: `.docs/{project-name}/idea-honing.md` is created by Rex during requirements gathering. The spec document builds ON TOP of the honing output — it does not replace it.
+Note: `.docs/{project-name}/honing-transcript.md` is created during requirements gathering (Phase 1 honing). The spec document builds ON TOP of the honing output — it does not replace it.
 
 ## Keeping the Spec Alive
 
