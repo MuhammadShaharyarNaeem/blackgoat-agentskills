@@ -21,7 +21,7 @@ To ensure that autonomous agents operating in a squad or pipeline do not suffer 
 Before beginning the audit, you MUST read the deep-dive explanations of the heuristics located at:
 `{PLUGIN_ROOT}/agent-audit/references/heuristics.md`
 
-Once you understand the 5 metrics, execute the audit following these steps:
+Once you understand the audit metrics, execute the audit following these steps:
 
 1. **Read Target Files**: Read the target agent's `SKILL.md` file AND all underlying methodology skills (`SKILL-CONTRACT.md` files) they inherit.
 2. **Apply The Golden Rule (Who vs. How)**: The Persona (`SKILL.md`) defines WHO the agent is. The Skills (`SKILL-CONTRACT.md`) define HOW they work. This is a critical distinction—never let procedural 'How' instructions pollute the identity 'Who' file.
@@ -36,6 +36,7 @@ Once you understand the 5 metrics, execute the audit following these steps:
 8. **Apply Metric 6 (DRY & Contract Reuse)**: Ensure methodologies are shared rather than duplicated.
 9. **Apply Metric 7 (Orchestrator vs Methodology Collision)**: Ensure the methodology does not attempt to orchestrate a swarm or manage state transitions that belong to the Orchestrator. If necessary, split the methodology into explicit "Modes".
 10. **Apply Metric 8 (Context & File Bloat)**: Check the persona's "Methodology Dependencies" table. Ensure only the absolute bare minimum files are loaded "Always", and that heavy methodology files are strictly loaded on-demand.
+11. **Apply Metric 9 (ID Traceability)**: Ensure requirements generate stable IDs (`FR`/`NFR`) and that those IDs are threaded through the whole pipeline — Alex's tasks cite them, Quinn's tests exercise them, and the coverage gates (bgpdd-plan Phase 3.5, bgpdd-build Build Coverage Gate) check them. Flag any link that drops the ID or falls back to unverifiable prose-matching.
 
 ## Output Format
 

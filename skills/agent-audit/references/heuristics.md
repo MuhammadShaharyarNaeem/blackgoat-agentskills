@@ -1,6 +1,6 @@
-# The 5 Audit Heuristics (Deep Dive)
+# The Audit Heuristics (Deep Dive)
 
-When auditing an agent's persona and methodology files, apply the following 5 metrics systematically. These heuristics are designed to detect logical deadlocks that cause LLM-based agents to hallucinate, crash, or disobey instructions.
+When auditing an agent's persona and methodology files, apply the following metrics systematically. These heuristics are designed to detect logical deadlocks that cause LLM-based agents to hallucinate, crash, or disobey instructions.
 
 ## 1. Interface Alignment (Input/Output Collisions)
 **Definition**: The output expected by a downstream agent must perfectly match the actual output format produced by the upstream agent.
@@ -51,3 +51,7 @@ Auditors must NOT blindly delete all Procedural Memories. Instead, use the Abstr
 **Definition**: A persona must strictly limit how many Methodology Dependencies (`SKILL-CONTRACT.md`) it forces the agent to read at startup. 
 - **Why it matters**: Reading methodologies at runtime guarantees the agent gets the exact text (avoiding Orchestrator hallucination), but it creates "Episodic Memory Bloat". If a persona forces an agent to read 5 massive files before starting, the agent's context window will fill up with generic rules, leaving no room for project-specific reasoning.
 - **Example**: A persona should not load `godot-gdscript-patterns/SKILL.md` "Always". It should explicitly state: "When evaluating external libraries or APIs" or "If the project uses Godot Engine". Only the absolute core rules should be loaded unconditionally.
+
+## 9. ID Traceability (The Golden Thread)
+**Definition**: Requirements must generate stable, verifiable IDs (`FR-1`, `NFR-1`, …), and those IDs must be explicitly threaded through the entire pipeline — Rex's `requirements.md` assigns them, Alex's `plan.md` tasks cite them (`Requirements covered: FR-…`), Quinn's tests exercise them, and gates check them.
+- **Why it matters**: Prose-matching ("the test checks the login feature") is unverifiable. ID traceability enables hard boolean gates: bgpdd-plan Phase 3.5 (every Must-Have `FR` maps to a task) and the bgpdd-build Build Coverage Gate (every Must-Have `FR` maps to a passing test). If any link in the chain drops the ID, those gates silently pass on incomplete work.

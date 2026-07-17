@@ -114,11 +114,12 @@ When communicating with the user during a phase transition checkpoint (non-auto 
 - **Delegated Agent**: **Dep** (DevOps). He reads his methodology dependencies (shipping-and-launch) on-demand.
 - **Workflow**:
   1. **Completion Gate**: Before invoking Dep, verify that ALL milestones in `implementation/plan.md` are marked complete (`[x]`). If any `[ ]` remain, loop back to Phase 1 for the next pending milestone.
-  2. If the Epic is 100% complete, delegate to the **Dep** agent.
-  3. Instruct Dep to scan for deployment risks and credentials across the epic and formulate a mandatory **Rollback Plan**.
-  4. **CRITICAL PATHING**: instruct Dep to generate `.docs/{project-name}/implementation/ship-decision.md` with a `GO` or `NO-GO` verdict.
-  5. **Doubt-Driven Check**: after Dep returns, YOU (the Orchestrator) run the Doubt-Driven Development cycle on Dep's plan before presenting it to the user.
-  6. On explicit user confirmation, instruct the User to trigger `/bgpdd-shipping` to orchestrate the final Launch Squad.
+  2. **Build Coverage Gate**: Verify that `implementation/test-report.md` contains at least one passing test for every **Must-Have `FR`** in `.docs/{project-name}/requirements.md`. If any Must-Have `FR` has no passing test, DO NOT proceed — loop back to Phase 2 (Testing) to close the gap. (This closes the requirement-traceability chain: Rex's `FR` → Alex's task → Quinn's test.)
+  3. If the Epic is 100% complete and every Must-Have `FR` is covered, delegate to the **Dep** agent.
+  4. Instruct Dep to scan for deployment risks and credentials across the epic and formulate a mandatory **Rollback Plan**.
+  5. **CRITICAL PATHING**: instruct Dep to generate `.docs/{project-name}/implementation/ship-decision.md` with a `GO` or `NO-GO` verdict.
+  6. **Doubt-Driven Check**: after Dep returns, YOU (the Orchestrator) run the Doubt-Driven Development cycle on Dep's plan before presenting it to the user.
+  7. On explicit user confirmation, instruct the User to trigger `/bgpdd-shipping` to orchestrate the final Launch Squad.
 
 ### Phase 6: Agent Improvement
 - **Delegated Agent**: **Forge** (System Coach). He reads his methodology dependencies (agent-orchestration-improve-agent) on-demand.

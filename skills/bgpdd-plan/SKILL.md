@@ -56,10 +56,11 @@ When communicating with the user during a phase transition checkpoint, adhere to
 
 This pipeline uses two distinct memory scopes. Do not conflate them.
 
-**Tier 1 — Global project knowledge base** (`.docs/summary/`): built by the discovery agents
-(Iris, Scout, Quinn) at **project scope** and **persisted across enhancement cycles**. It is
-indexed by durable feature id (`{feature}`, e.g. `slide`) so the next time a feature is touched,
-its map already exists. If a file here already exists, ask the user whether to update or keep it.
+**Tier 1 — Global project knowledge base** (`.docs/summary/`): built by the **`/bgpdd-discovery`**
+pipeline (Iris, Scout, Quinn) at **project scope** and **persisted across enhancement cycles**. This
+skill (`bgpdd-plan`) **consumes** it — it does not produce it; run `/bgpdd-discovery` first for
+brownfield work (see the Pre-Flight Check below). It is indexed by durable feature id (`{feature}`,
+e.g. `slide`) so the next time a feature is touched, its map already exists.
 ```text
 .docs/summary/
 ├── context.md                     # Project-wide tech-stack context + Target Scope (Iris) — one file
@@ -91,40 +92,16 @@ its map already exists. If a file here already exists, ask the user whether to u
 
 ## 5. Detailed Pipeline Phases
 
-> **Brownfield vs Greenfield**: Phases 0, 0.5, and 0.6 apply **only when the user is modifying an existing system (Brownfield)**. For a greenfield (new) project, skip directly to Phase 1.
+> **Brownfield vs Greenfield**: The Pre-Flight Check applies **only when the user is modifying an existing system (Brownfield)**. For a greenfield (new) project, skip directly to Phase 1.
 
-### Phase 0: Project Context Discovery (Iris)
-- **Delegated Agent**: **Iris** (Observer)
-- **Trigger**: Brownfield only — execute FIRST if the user is modifying an existing system.
+### Pre-Flight Check: Global Context Verification (Brownfield only)
+- **Delegated Agent**: None — the Orchestrator performs this check directly.
+- **Purpose**: This skill **consumes** the Tier-1 knowledge base but no longer produces it — global discovery (Iris → Scout → Quinn) now lives in the standalone **`/bgpdd-discovery`** pipeline. Verify that discovery has already run before planning against an existing system.
 - **Workflow**:
-  1. **Target Scope (Orchestrator, before delegating)**: This pipeline may target a single repo or a set of microservice repos, since a single feature can span multiple services. Establish and record, up front: (a) the target repository or repositories (single repo, or a named set of microservice repos), (b) the working branch, and (c) for multi-repo, the local path to each repo. Ask the user if this isn't already clear from context — do not guess. Record it in `.docs/summary/context.md` (Tier 1), and include the relevant repo path(s) in every delegated agent's briefing from this point forward.
-  2. Delegate to the **Iris** agent, passing her the established Target Scope.
-  3. Instruct Iris to scan the repository/repositories and determine the global tech stack and overall project context (e.g., 2D Godot game vs Next.js Web App).
-  4. Instruct Iris to record the Target Scope (repo set + per-repo local paths) alongside her tech-stack findings in `.docs/summary/context.md` (Tier 1, project-wide). If the file already exists, she must explicitly note this in her handoff so you can ask the user whether to update it.
-  5. Read Iris's returned handoff before proceeding.
-
-### Phase 0.5: Feature Auto-Scouting (Orchestrator)
-- **Delegated Agent**: **Scout** (Research Worker)
-- **Trigger**: Brownfield only — execute after Phase 0.
-- **Workflow**:
-  1. YOU (the Orchestrator) MUST ask the user for the durable **feature id** (`{feature}`, e.g. `slide`) and whether a `.docs/summary/{feature}/` knowledge base already exists (if so, ask whether to refresh it or reuse it as-is).
-  2. YOU MUST ask the user which specific microservices or APIs contain fragments of the feature that need to be parsed. Cross-reference against the Target Scope established in Phase 0 to confirm which repo (and local path) each named API lives in; ask the user to clarify any API that doesn't map cleanly to a repo in scope.
-  3. **CRITICAL HALT**: Stop generating your response here and await the user's explicit reply. Do NOT hallucinate a list of APIs; do NOT proceed to step 4 without the user's input.
-  4. Once the user provides the list of APIs, delegate to multiple **Scout** agents in parallel (one per API), in a single batch. Tell each Scout its `{feature}`, its assigned `{api}`, and which repo (and local path) that API lives in per the Target Scope.
-  5. Instruct each Scout to deep-dive its assigned API, map the feature fragments, and write findings to ONLY its own `.docs/summary/{feature}/{api}.md` (Tier 1) — including that API's own execution-path detail. Scouts do not write any shared feature-level file (no `overview.md`, no `QA/code-workflow.md`); that synthesis is Quinn's job in Phase 0.6, which avoids multiple Scouts racing to write the same file.
-  6. Read all Scouts' returned handoffs before proceeding to Phase 0.6, where Quinn will synthesize the feature-level `overview.md` and `QA/code-workflow.md` from these per-API files.
-
-### Phase 0.6: Feature Synthesis & Legacy QA Extraction (Quinn)
-- **Delegated Agent**: **Quinn** (QA Tester, Mode A — Legacy QA Discovery)
-- **Trigger**: Brownfield only — execute after Phase 0.5. **Skip if no per-API `.docs/summary/{feature}/{api}.md` files exist.**
-- **Workflow**:
-  1. Delegate to the **Quinn** agent, telling her the `{feature}`.
-  2. Instruct Quinn to read ALL per-API `.docs/summary/{feature}/{api}.md` files written by the Scouts in Phase 0.5.
-  3. Instruct Quinn to synthesize, in this order, within the same pass:
-     a. `.docs/summary/{feature}/overview.md` (Tier 1) — the cross-API consolidation: which API owns what, cross-service call flow, integration seams, links to each `{api}.md`.
-     b. `.docs/summary/{feature}/QA/code-workflow.md` (Tier 1) — Mermaid sequence diagrams and step-by-step execution paths across the services.
-     c. `.docs/summary/{feature}/QA/manual-testing.md` (Tier 1) — reverse-engineered manual test cases, using the `code-workflow.md` she just produced, following her Legacy QA Discovery guidelines.
-  4. Read Quinn's returned handoff before proceeding to Phase 1. Aria will read `overview.md` first and drill into `{api}.md` files on demand.
+  1. Determine whether this is brownfield (modifying an existing system) or greenfield (new project). If greenfield, skip this check entirely and go to Phase 1.
+  2. **Brownfield**: check that the Tier-1 `.docs/summary/context.md` exists, and — for the feature being enhanced — that `.docs/summary/{feature}/overview.md` exists.
+  3. **If either is missing**: HALT. Explicitly instruct the user to run **`/bgpdd-discovery`** first to map the global tech stack, per-API feature fragments, and legacy QA baseline. Do NOT attempt to run discovery yourself or hand-author these files — resume Phase 1 only once the knowledge base is present.
+  4. **If present**: confirm the `{feature}` id with the user (so downstream phases read the right `.docs/summary/{feature}/` subtree) and proceed to Phase 1.
 
 ### Phase 1: Honing & Requirements (HYBRID)
 - **Behavioral spec**: `{PLUGIN_ROOT}/../agents/rex.md` (Rex, the Analyst) + `{PLUGIN_ROOT}/blackgoat-idea-honing/SKILL.md`
