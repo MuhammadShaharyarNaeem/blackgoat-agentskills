@@ -21,6 +21,16 @@
         "mcp-remote",
         "https://mcp.linear.app/mcp"
       ]
+    },
+    "github-mcp-server": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://api.githubcopilot.com/mcp/",
+        "--header",
+        "Authorization: Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"
+      ]
     }
   }
 }
