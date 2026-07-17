@@ -74,7 +74,7 @@ If you can't name the trust boundaries for a feature, you're not ready to secure
 
 ## OWASP Top 10 Prevention Patterns
 
-These are prevention patterns, not a ranking. The 2021 ordering (A01 Broken Access Control → A10 SSRF) is available on the [OWASP Top 10 site](https://owasp.org/www-project-top-ten/).
+These are prevention patterns, not a ranking. For the 2021 ordering, see the OWASP Top 10 Quick Reference table in `{PLUGIN_ROOT}/../references/security-checklist.md` (or the [OWASP Top 10 site](https://owasp.org/www-project-top-ten/)).
 
 ### Injection (SQL, NoSQL, OS Command)
 
@@ -417,6 +417,10 @@ container.textContent = await llm.reply(userMessage);
 - [ ] Secrets and other users' data kept out of prompts
 - [ ] Tool/agent permissions scoped; destructive actions require confirmation
 ```
+
+## See Also
+
+For detailed security checklists and pre-commit verification steps, see `{PLUGIN_ROOT}/../references/security-checklist.md`.
 
 ## Common Rationalizations
 

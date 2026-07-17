@@ -323,8 +323,8 @@ Save the review report to `.docs/{project-name}/implementation/review-report.md`
 ```
 ## See Also
 
-- For detailed security review guidance, see `references/security-checklist.md`
-- For performance review checks, see `references/performance-checklist.md`
+- For detailed security review guidance, see `{PLUGIN_ROOT}/../references/security-checklist.md`
+- For performance review checks, see `{PLUGIN_ROOT}/../references/performance-checklist.md`
 
 ## Common Rationalizations
 
