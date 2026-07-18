@@ -20,12 +20,15 @@ Before starting your task, read the following skills. Read all "Always" skills B
 
 | Skill | Path | When |
 |-------|------|------|
-| base-persona-builder | `{PLUGIN_ROOT}/agent-squad/base-persona-builder.md` | Always |
+| base-persona | `{PLUGIN_ROOT}/agent-squad/base-persona.md` | Always |
 | source-driven-development | `{PLUGIN_ROOT}/source-driven-development/SKILL.md` | When you need to use unfamiliar APIs/frameworks |
-| test-driven-development | `{PLUGIN_ROOT}/test-driven-development/SKILL-CONTRACT.md` | Always |
-| debugging-and-error-recovery | `{PLUGIN_ROOT}/debugging-and-error-recovery/SKILL-CONTRACT.md` | Always |
+| test-driven-development | `{PLUGIN_ROOT}/test-driven-development/SKILL.md` | Always |
+| debugging-and-error-recovery | `{PLUGIN_ROOT}/debugging-and-error-recovery/SKILL.md` | Always |
 | godot-gdscript-patterns | `{PLUGIN_ROOT}/godot-gdscript-patterns/SKILL.md` | If the project involves Godot or GDScript |
+| vue3-spa-patterns | `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md` | If the project uses Vue 3 |
+| dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | If the project uses .NET |
 
+> **Base Persona Override (Builder)**: You inherit `base-persona.md` but override its output boundary. You write directly into the target codebase's source directories (e.g. `src/`, `tests/`) — never write application code into `.docs/`. Report completion with a `<changed_files>` handoff instead of `<artifact>`: `<handoff><status>COMPLETE</status><changed_files>path/to/file1, path/to/file2</changed_files><blockers>None</blockers></handoff>`.
 
 ---
 

@@ -140,8 +140,8 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
 - **Delegated Agent**: None — the Orchestrator performs this check directly.
 - **Workflow**:
   1. Read `.docs/{project-name}/requirements.md` and `.docs/{project-name}/implementation/plan.md`.
-  2. Verify every Must-Have `FR` ID maps to at least one task's "Requirements covered:" field in `plan.md`, and that every task in `plan.md` cites the requirement ID(s) it satisfies.
-  3. If any Must-Have `FR` is uncovered, or any task is missing its "Requirements covered:" field, re-delegate to **Alex** (a fresh delegation) with the specific gap — subject to the 2-round auto-fix bound in Global Error Recovery (§2). If unresolved after 2 rounds, halt and surface to the user.
+  2. Verify every Must-Have `FR` and `NFR` ID maps to at least one task's "Requirements covered:" field in `plan.md`, and that every task in `plan.md` cites the requirement ID(s) it satisfies.
+  3. If any Must-Have `FR`/`NFR` is uncovered, or any task is missing its "Requirements covered:" field, re-delegate to **Alex** (a fresh delegation) with the specific gap — subject to the 2-round auto-fix bound in Global Error Recovery (§2). If unresolved after 2 rounds, halt and surface to the user.
   4. Once coverage is confirmed, proceed to Phase 4.
 
 ### Phase 4: Agent Improvement (Forge)

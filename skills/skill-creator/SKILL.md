@@ -14,6 +14,15 @@ date_added: "2026-02-27"
 
 To create new CLI skills following Anthropic's official best practices with zero manual configuration. This skill automates brainstorming, template application, validation, and installation processes while maintaining progressive disclosure patterns and writing style standards.
 
+## House Convention Override (blackgoat-agentskills)
+
+For skills created INSIDE this plugin, the plugin's `CLAUDE.md` conventions supersede the generic template below:
+- Lean operational spine (`## Worker Execution Contract`) + depth in `references/` deep-dives — NOT the 1,500–2,000-word SKILL.md target.
+- No per-skill `README.md`.
+- Worker-methodology descriptions end with the squad-internal suffix so they don't collide with pipeline triggers.
+- Validation = the 14-metric `agent-audit` skill, not only the YAML/word-count scripts.
+The workflow below remains the right tool for standalone or multi-platform (Copilot/Codex) skills outside this plugin.
+
 ## When to Use This Skill
 
 This skill should be used when:

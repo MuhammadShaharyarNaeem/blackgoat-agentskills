@@ -1,6 +1,6 @@
 ---
 name: bgpdd-build
-description: Phase 2 of the Prompt-Driven Development SOP (Execution & Deployment). Takes an existing implementation plan and executes it using Mason, Max, Luna, Quinn, and Dep.
+description: Phase 2 of the Prompt-Driven Development SOP (Execution). Takes an existing implementation plan and executes it using Mason, Max, Luna, Quinn, and Dep.
 ---
 
 # End-to-End Multi-Agent PDD: Execution Phase (bgPDD-Build)
@@ -89,7 +89,7 @@ When communicating with the user during a phase transition checkpoint (non-auto 
   5. Read Mason's returned handoff and extract the strict `<changed_files>` XML list from it.
 
 ### Phase 2: Testing
-- **Delegated Agent**: **Quinn** (QA Tester). She reads her methodology dependencies (playwright, browser-testing) on-demand.
+- **Delegated Agent**: **Quinn** (QA Tester). She reads her methodology dependencies (debugging, playwright) on-demand.
 - **Workflow**:
   1. Delegate to the **Quinn** agent. **CRITICAL CONTEXT HANDOFF**: pass her the exact text of the active milestone and the `<changed_files>` list from Mason. **CRITICAL PATHING**: instruct her to append results to `.docs/{project-name}/implementation/test-report.md`.
   2. Instruct Quinn to design and directly execute the test strategy for the newly built code.
@@ -106,7 +106,7 @@ When communicating with the user during a phase transition checkpoint (non-auto 
 ### Phase 4: Optimization & Refactoring
 - **Delegated Agent**: **Max** (Optimizer). He reads his methodology dependencies on-demand.
 - **Workflow**:
-  1. **Conditional Invocation**: ONLY invoke Max IF Luna's review contains `[LOW]` / Refactor tags, or if the user explicitly requests optimization. Otherwise, skip this phase.
+  1. **Conditional Invocation**: ONLY invoke Max IF Luna's review contains **Suggestion**-level findings (simplification/refactor suggestions from her code-simplification audit), or if the user explicitly requests optimization. Otherwise, skip this phase.
   2. Delegate to the **Max** agent, passing him the exact `<changed_files>` XML list so his scope is surgical.
   3. Instruct Max to refactor for clarity without behavioral changes, then run regression tests to guarantee stability (or you re-delegate to a Quinn agent to run the suite).
 
@@ -114,8 +114,8 @@ When communicating with the user during a phase transition checkpoint (non-auto 
 - **Delegated Agent**: **Dep** (DevOps). He reads his methodology dependencies (shipping-and-launch) on-demand.
 - **Workflow**:
   1. **Completion Gate**: Before invoking Dep, verify that ALL milestones in `implementation/plan.md` are marked complete (`[x]`). If any `[ ]` remain, loop back to Phase 1 for the next pending milestone.
-  2. **Build Coverage Gate**: Verify that `implementation/test-report.md` contains at least one passing test for every **Must-Have `FR`** in `.docs/{project-name}/requirements.md`. If any Must-Have `FR` has no passing test, DO NOT proceed — loop back to Phase 2 (Testing) to close the gap. (This closes the requirement-traceability chain: Rex's `FR` → Alex's task → Quinn's test.)
-  3. If the Epic is 100% complete and every Must-Have `FR` is covered, delegate to the **Dep** agent.
+  2. **Build Coverage Gate**: Verify that `implementation/test-report.md` contains at least one passing test for every **Must-Have `FR` and `NFR`** in `.docs/{project-name}/requirements.md`. If any Must-Have `FR`/`NFR` has no passing test, DO NOT proceed — loop back to Phase 2 (Testing) to close the gap. (This closes the requirement-traceability chain: Rex's `FR`/`NFR` → Alex's task → Quinn's test.)
+  3. If the Epic is 100% complete and every Must-Have `FR`/`NFR` is covered, delegate to the **Dep** agent.
   4. Instruct Dep to scan for deployment risks and credentials across the epic and formulate a mandatory **Rollback Plan**.
   5. **CRITICAL PATHING**: instruct Dep to generate `.docs/{project-name}/implementation/ship-decision.md` with a `GO` or `NO-GO` verdict.
   6. **Doubt-Driven Check**: after Dep returns, YOU (the Orchestrator) run the Doubt-Driven Development cycle on Dep's plan before presenting it to the user.

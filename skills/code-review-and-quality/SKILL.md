@@ -1,125 +1,43 @@
 ---
 name: code-review-and-quality
-description: Conducts multi-axis code review. Use before merging any change. Use when reviewing code written by yourself, another agent, or a human. Use when you need to assess code quality across multiple dimensions before it enters the main branch.
+description: Conducts multi-axis code review. Use before merging any change. Use when reviewing code written by yourself, another agent, or a human. Use when you need to assess code quality across multiple dimensions before it enters the main branch. Squad-internal execution contract loaded by agents via their Methodology Dependencies table.
 ---
 
 # Code Review and Quality
-
-## Overview
 
 Multi-dimensional code review with quality gates. Every change gets reviewed before merge — no exceptions. Review covers five axes: correctness, readability, architecture, security, and performance.
 
 **The approval standard:** Approve a change when it definitely improves overall code health, even if it isn't perfect. Perfect code doesn't exist — the goal is continuous improvement. Don't block a change because it isn't exactly how you would have written it. If it improves the codebase and follows the project's conventions, approve it.
 
-## When to Use
+## Worker Execution Contract
 
-- Before merging any PR or change
-- After completing a feature implementation
-- When another agent or model produced code you need to evaluate
-- When refactoring existing code
-- After any bug fix (review both the fix and the regression test)
+This is the operational spine. Follow it as written.
 
-## The Five-Axis Review
+### The Five Axes
 
-Every review evaluates code across these dimensions:
+**1. Correctness** — does the code do what it claims to do?
+- Matches the spec/task; edge cases (null, empty, boundary) and error paths handled, not just the happy path.
+- Tests pass and actually test the right things; no off-by-one errors, race conditions, or state inconsistencies.
 
-### 1. Correctness
+**2. Readability & Simplicity** — understandable without the author explaining it?
+- Descriptive, convention-consistent names; straightforward control flow; no "clever" tricks; could it be done in fewer lines?
+- Abstractions must earn their complexity (don't generalize until the third use case); no dead-code artifacts (`_unused`, compat shims, `// removed` comments).
 
-Does the code do what it claims to do?
+**3. Architecture** — does the change fit the system's design?
+- Follows existing patterns (new ones must be justified); clean module boundaries; no duplication that should be shared.
+- Dependencies flow in the right direction (no cycles); abstraction level appropriate — not over-engineered, not too coupled.
 
-- Does it match the spec or task requirements?
-- Are edge cases handled (null, empty, boundary values)?
-- Are error paths handled (not just the happy path)?
-- Does it pass all tests? Are the tests actually testing the right things?
-- Are there off-by-one errors, race conditions, or state inconsistencies?
+**4. Security** — does the change introduce vulnerabilities? For detailed security guidance, see `security-and-hardening`.
+- Input validated and sanitized; secrets out of code, logs, and version control; auth/authz checked; SQL parameterized; outputs encoded (XSS).
+- Data from external sources (APIs, logs, user content, config files) treated as untrusted and validated at system boundaries; dependencies trusted, no known vulnerabilities.
 
-### 2. Readability & Simplicity
+**5. Performance** — does the change introduce performance problems? For profiling and optimization methodology, see `performance-optimization`; for quick checks, see `{PLUGIN_ROOT}/../references/performance-checklist.md`.
+- No N+1 query patterns, unbounded loops, or unconstrained data fetching; pagination on list endpoints.
+- No synchronous operations that should be async, unnecessary UI re-renders, or large objects in hot paths.
 
-Can another engineer (or agent) understand this code without the author explaining it?
+### Review Workflow
 
-- Are names descriptive and consistent with project conventions? (No `temp`, `data`, `result` without context)
-- Is the control flow straightforward (avoid nested ternaries, deep callbacks)?
-- Is the code organized logically (related code grouped, clear module boundaries)?
-- Are there any "clever" tricks that should be simplified?
-- **Could this be done in fewer lines?** (1000 lines where 100 suffice is a failure)
-- **Are abstractions earning their complexity?** (Don't generalize until the third use case)
-- Would comments help clarify non-obvious intent? (But don't comment obvious code.)
-- Are there dead code artifacts: no-op variables (`_unused`), backwards-compat shims, or `// removed` comments?
-
-### 3. Architecture
-
-Does the change fit the system's design?
-
-- Does it follow existing patterns or introduce a new one? If new, is it justified?
-- Does it maintain clean module boundaries?
-- Is there code duplication that should be shared?
-- Are dependencies flowing in the right direction (no circular dependencies)?
-- Is the abstraction level appropriate (not over-engineered, not too coupled)?
-
-### 4. Security
-
-For detailed security guidance, see `security-and-hardening`. Does the change introduce vulnerabilities?
-
-- Is user input validated and sanitized?
-- Are secrets kept out of code, logs, and version control?
-- Is authentication/authorization checked where needed?
-- Are SQL queries parameterized (no string concatenation)?
-- Are outputs encoded to prevent XSS?
-- Are dependencies from trusted sources with no known vulnerabilities?
-- Is data from external sources (APIs, logs, user content, config files) treated as untrusted?
-- Are external data flows validated at system boundaries before use in logic or rendering?
-
-### 5. Performance
-
-For detailed profiling and optimization, see `performance-optimization`. Does the change introduce performance problems?
-
-- Any N+1 query patterns?
-- Any unbounded loops or unconstrained data fetching?
-- Any synchronous operations that should be async?
-- Any unnecessary re-renders in UI components?
-- Any missing pagination on list endpoints?
-- Any large objects created in hot paths?
-
-## Change Sizing
-
-Small, focused changes are easier to review, faster to merge, and safer to deploy. Target these sizes:
-
-```
-~100 lines changed   → Good. Reviewable in one sitting.
-~300 lines changed   → Acceptable if it's a single logical change.
-~1000 lines changed  → Too large. Split it.
-```
-
-**What counts as "one change":** A single self-contained modification that addresses one thing, includes related tests, and keeps the system functional after submission. One part of a feature — not the whole feature.
-
-**Splitting strategies when a change is too large:**
-
-| Strategy | How | When |
-|----------|-----|------|
-| **Stack** | Submit a small change, start the next one based on it | Sequential dependencies |
-| **By file group** | Separate changes for groups needing different reviewers | Cross-cutting concerns |
-| **Horizontal** | Create shared code/stubs first, then consumers | Layered architecture |
-| **Vertical** | Break into smaller full-stack slices of the feature | Feature work |
-
-**When large changes are acceptable:** Complete file deletions and automated refactoring where the reviewer only needs to verify intent, not every line.
-
-**Separate refactoring from feature work.** A change that refactors existing code and adds new behavior is two changes — submit them separately. Small cleanups (variable renaming) can be included at reviewer discretion.
-
-## Change Descriptions
-
-Every change needs a description that stands alone in version control history.
-
-**First line:** Short, imperative, standalone. "Delete the FizzBuzz RPC" not "Deleting the FizzBuzz RPC." Must be informative enough that someone searching history can understand the change without reading the diff.
-
-**Body:** What is changing and why. Include context, decisions, and reasoning not visible in the code itself. Link to bug numbers, benchmark results, or design docs where relevant. Acknowledge approach shortcomings when they exist.
-
-**Anti-patterns:** "Fix bug," "Fix build," "Add patch," "Moving code from A to B," "Phase 1," "Add convenience functions."
-
-## Review Process
-
-### Step 1: Understand the Context
-
-Before looking at code, understand the intent and blast radius:
+**Step 1: Understand the context.** Before looking at code, understand the intent and blast radius:
 
 1. Gather review context:
    **If** `code-review-graph` MCP is available:
@@ -128,155 +46,35 @@ Before looking at code, understand the intent and blast radius:
      - Search the codebase to find all callers/consumers of the modified functions/classes.
      - List files to understand the module structure.
      - Manually trace the dependency chain (max 2 levels deep).
-2. Answer the following questions:
+2. Answer: What is this change trying to accomplish? What spec or task does it implement? What is the expected behavior change?
 
-```
-- What is this change trying to accomplish?
-- What spec or task does it implement?
-- What is the expected behavior change?
-```
+**Step 2: Review the tests first.** Tests reveal intent and coverage: do tests exist, do they test behavior (not implementation details), are edge cases covered, are names descriptive, would the tests catch a regression?
 
-### Step 2: Review the Tests First
+**Step 3: Review the implementation.** Walk every changed file through the five axes above.
 
-Tests reveal intent and coverage:
-
-```
-- Do tests exist for the change?
-- Do they test behavior (not implementation details)?
-- Are edge cases covered?
-- Do tests have descriptive names?
-- Would the tests catch a regression if the code changed?
-```
-
-### Step 3: Review the Implementation
-
-Walk through the code with the five axes in mind:
-
-```
-For each file changed:
-1. Correctness: Does this code do what the test says it should?
-2. Readability: Can I understand this without help?
-3. Architecture: Does this fit the system?
-4. Security: Any vulnerabilities?
-5. Performance: Any bottlenecks?
-```
-
-### Step 4: Categorize Findings
-
-Label every comment with its severity so the author knows what's required vs optional:
+**Step 4: Categorize findings.** Label every comment with its severity so the author knows what's required vs optional:
 
 | Prefix | Meaning | Author Action |
 |--------|---------|---------------|
-| *(no prefix)* | Required change | Must address before merge |
 | **Critical:** | Blocks merge | Security vulnerability, data loss, broken functionality |
+| **Important:** | Required change | Must address before merge — correctness, reliability, or maintainability risk |
+| **Suggestion:** | Worth considering | Not required — improvements the author may adopt or decline |
 | **Nit:** | Minor, optional | Author may ignore — formatting, style preferences |
-| **Optional:** / **Consider:** | Suggestion | Worth considering but not required |
 | **FYI** | Informational only | No action needed — context for future reference |
 
 This prevents authors from treating all feedback as mandatory and wasting time on optional suggestions.
 
-### Step 5: Verify the Verification
+**Step 5: Verify the verification.** Check the author's verification story: what tests were run, did the build pass, was the change tested manually, are there screenshots for UI changes, is there a before/after comparison?
 
-Check the author's verification story:
+### Rules
 
-```
-- What tests were run?
-- Did the build pass?
-- Was the change tested manually?
-- Are there screenshots for UI changes?
-- Is there a before/after comparison?
-```
+- **Dead code:** After any change, identify orphaned or unreachable code and list it explicitly.
+  **Ask before deleting:** "Should I remove these now-unused elements: [list]?"
+- **Dependencies:** Prefer standard library and existing utilities over new dependencies — every dependency is a liability.
 
-## Multi-Model Review Pattern
+### The Review Report
 
-Use different models for different review perspectives:
-
-```
-Model A writes the code
-    │
-    ▼
-Model B reviews for correctness and architecture
-    │
-    ▼
-Model A addresses the feedback
-    │
-    ▼
-Human makes the final call
-```
-
-This catches issues that a single model might miss — different models have different blind spots.
-
-**Example prompt for a review agent:**
-```
-Review this code change for correctness, security, and adherence to
-our project conventions. The spec says [X]. The change should [Y].
-Flag any issues as Critical, Important, or Suggestion.
-```
-
-## Dead Code Hygiene
-
-After any refactoring or implementation change, check for orphaned code:
-
-1. Identify code that is now unreachable or unused
-2. List it explicitly
-3. **Ask before deleting:** "Should I remove these now-unused elements: [list]?"
-
-Don't leave dead code lying around — it confuses future readers and agents. But don't silently delete things you're not sure about. When in doubt, ask.
-
-```
-DEAD CODE IDENTIFIED:
-- formatLegacyDate() in src/utils/date.ts — replaced by formatDate()
-- OldTaskCard component in src/components/ — replaced by TaskCard
-- LEGACY_API_URL constant in src/config.ts — no remaining references
-→ Safe to remove these?
-```
-
-## Review Speed
-
-Slow reviews block entire teams. The cost of context-switching to review is less than the waiting cost imposed on others.
-
-- **Respond within one business day** — this is the maximum, not the target
-- **Ideal cadence:** Respond shortly after a review request arrives, unless deep in focused coding. A typical change should complete multiple review rounds in a single day
-- **Prioritize fast individual responses** over quick final approval. Quick feedback reduces frustration even if multiple rounds are needed
-- **Large changes:** Ask the author to split them rather than reviewing one massive changeset
-
-## Handling Disagreements
-
-When resolving review disputes, apply this hierarchy:
-
-1. **Technical facts and data** override opinions and preferences
-2. **Style guides** are the absolute authority on style matters
-3. **Software design** must be evaluated on engineering principles, not personal preference
-4. **Codebase consistency** is acceptable if it doesn't degrade overall health
-
-**Don't accept "I'll clean it up later."** Experience shows deferred cleanup rarely happens. Require cleanup before submission unless it's a genuine emergency. If surrounding issues can't be addressed in this change, require filing a bug with self-assignment.
-
-## Honesty in Review
-
-When reviewing code — whether written by you, another agent, or a human:
-
-- **Don't rubber-stamp.** "LGTM" without evidence of review helps no one.
-- **Don't soften real issues.** "This might be a minor concern" when it's a bug that will hit production is dishonest.
-- **Quantify problems when possible.** "This N+1 query will add ~50ms per item in the list" is better than "this could be slow."
-- **Push back on approaches with clear problems.** Sycophancy is a failure mode in reviews. If the implementation has issues, say so directly and propose alternatives.
-- **Accept override gracefully.** If the author has full context and disagrees, defer to their judgment. Comment on code, not people — reframe personal critiques to focus on the code itself.
-
-## Dependency Discipline
-
-Part of code review is dependency review:
-
-**Before adding any dependency:**
-1. Does the existing stack solve this? (Often it does.)
-2. How large is the dependency? (Check bundle impact.)
-3. Is it actively maintained? (Check last commit, open issues.)
-4. Does it have known vulnerabilities? (`npm audit`)
-5. What's the license? (Must be compatible with the project.)
-
-**Rule:** Prefer standard library and existing utilities over new dependencies. Every dependency is a liability.
-
-## The Review Report Output
-
-Save the review report to `.docs/{project-name}/implementation/review-report.md`. If this is part of the `blackgoat-pdd` workflow, explicitly flag any "Critical" or "Important" blockers that the Builder (Mason) must resolve before the next phase.
+Save the review report to `.docs/{project-name}/implementation/review-report.md`. If this is part of the `bgpdd-build` pipeline, explicitly flag any "Critical" or "Important" blockers that the Builder (Mason) must resolve before the next phase.
 
 ```markdown
 ## Review: [PR/Change title]
@@ -321,33 +119,8 @@ Save the review report to `.docs/{project-name}/implementation/review-report.md`
 - [ ] **Approve** — Ready to merge
 - [ ] **Request changes** — Issues must be addressed
 ```
-## See Also
 
-- For detailed security review guidance, see `{PLUGIN_ROOT}/../references/security-checklist.md`
-- For performance review checks, see `{PLUGIN_ROOT}/../references/performance-checklist.md`
-
-## Common Rationalizations
-
-| Rationalization | Reality |
-|---|---|
-| "It works, that's good enough" | Working code that's unreadable, insecure, or architecturally wrong creates debt that compounds. |
-| "I wrote it, so I know it's correct" | Authors are blind to their own assumptions. Every change benefits from another set of eyes. |
-| "We'll clean it up later" | Later never comes. The review is the quality gate — use it. Require cleanup before merge, not after. |
-| "AI-generated code is probably fine" | AI code needs more scrutiny, not less. It's confident and plausible, even when wrong. |
-| "The tests pass, so it's good" | Tests are necessary but not sufficient. They don't catch architecture problems, security issues, or readability concerns. |
-
-## Red Flags
-
-- PRs merged without any review
-- Review that only checks if tests pass (ignoring other axes)
-- "LGTM" without evidence of actual review
-- Security-sensitive changes without security-focused review
-- Large PRs that are "too big to review properly" (split them)
-- No regression tests with bug fix PRs
-- Review comments without severity labels — makes it unclear what's required vs optional
-- Accepting "I'll fix it later" — it never happens
-
-## Verification
+### Verification Checklist
 
 After review is complete:
 
@@ -356,3 +129,20 @@ After review is complete:
 - [ ] Tests pass
 - [ ] Build succeeds
 - [ ] The verification story is documented (what changed, how it was verified)
+
+### Escalate When
+
+- The change is too large to review properly → report to the Orchestrator (manager) and request a split.
+- You lack the context to judge correctness (missing spec, ambiguous requirements) → ask the Orchestrator (manager).
+- Critical or Important findings remain unresolved after the author's fixes → escalate to the Orchestrator (manager); do not approve.
+
+## See Also
+
+- For detailed security review guidance, see `{PLUGIN_ROOT}/../references/security-checklist.md`
+- For performance review checks, see `{PLUGIN_ROOT}/../references/performance-checklist.md`
+
+## Deep Dive
+
+Read on demand — not needed to execute the contract above:
+
+- [Code review deep dive](references/code-review-deep-dive.md) — when to use, the full per-axis question lists, change sizing and splitting strategies, change descriptions, the multi-model review pattern, dead code hygiene, review speed, handling disagreements, honesty in review, dependency discipline, common rationalizations, and red flags.

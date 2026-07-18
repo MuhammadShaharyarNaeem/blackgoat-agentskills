@@ -1,30 +1,17 @@
 ---
 name: source-driven-development
-description: Grounds every implementation decision in official documentation. Use when you want authoritative, source-cited code free from outdated patterns. Use when building with any framework or library where correctness matters.
+description: Grounds every implementation decision in official documentation. Use when you want authoritative, source-cited code free from outdated patterns. Use when building with any framework or library where correctness matters. Squad-internal execution contract loaded by agents via their Methodology Dependencies table.
 ---
 
 # Source-Driven Development
 
-## Overview
+Every framework-specific code decision must be backed by official documentation. Don't implement from memory — verify, cite, and let the user see your sources. Training data goes stale, APIs get deprecated, best practices evolve; every pattern must trace back to an authoritative source the user can check.
 
-Every framework-specific code decision must be backed by official documentation. Don't implement from memory — verify, cite, and let the user see your sources. Training data goes stale, APIs get deprecated, best practices evolve. This skill ensures the user gets code they can trust because every pattern traces back to an authoritative source they can check.
+## Worker Execution Contract
 
-## When to Use
+This is the operational spine. Follow it as written.
 
-- The user wants code that follows current best practices for a given framework
-- Building boilerplate, starter code, or patterns that will be copied across a project
-- The user explicitly asks for documented, verified, or "correct" implementation
-- Implementing features where the framework's recommended approach matters (forms, routing, data fetching, state management, auth)
-- Reviewing or improving code that uses framework-specific patterns
-- Any time you are about to write framework-specific code from memory
-
-**When NOT to use:**
-
-- Correctness does not depend on a specific version (renaming variables, fixing typos, moving files)
-- Pure logic that works the same across all versions (loops, conditionals, data structures)
-- The user explicitly wants speed over verification ("just do it quickly")
-
-## The Process
+### The Process
 
 ```
 DETECT ──→ FETCH ──→ IMPLEMENT ──→ CITE
@@ -48,17 +35,9 @@ Cargo.toml      → Rust
 Gemfile         → Ruby/Rails
 ```
 
-State what you found explicitly:
+State the detected stack and versions explicitly before fetching docs.
 
-```
-STACK DETECTED:
-- React 19.1.0 (from package.json)
-- Vite 6.2.0
-- Tailwind CSS 4.0.3
-→ Fetching official docs for the relevant patterns.
-```
-
-If versions are missing or ambiguous, **ask the user**. Don't guess — the version determines which patterns are correct.
+If versions are missing or ambiguous, **ask the user** (main session) or **surface the ambiguity in your `<handoff>`** (delegated worker). Don't guess — the version determines which patterns are correct.
 
 ### Step 2: Fetch Official Documentation
 
@@ -85,14 +64,9 @@ Fetch the specific documentation page for the feature you're implementing. Not t
 ```
 BAD:  Fetch the React homepage
 GOOD: Fetch react.dev/reference/react/useActionState
-
-BAD:  Search "django authentication best practices"
-GOOD: Fetch docs.djangoproject.com/en/6.0/topics/auth/
 ```
 
-After fetching, extract the key patterns and note any deprecation warnings or migration guidance.
-
-When official sources conflict with each other (e.g. a migration guide contradicts the API reference), surface the discrepancy to the user and verify which pattern actually works against the detected version.
+After fetching, extract the key patterns and note any deprecation warnings or migration guidance. When official sources conflict with each other (e.g. a migration guide contradicts the API reference), surface the discrepancy to the user and verify which pattern actually works against the detected version.
 
 ### Step 3: Implement Following Documented Patterns
 
@@ -102,46 +76,11 @@ Write code that matches what the documentation shows:
 - If the docs show a new way to do something, use the new way
 - If the docs deprecate a pattern, don't use the deprecated version
 - If the docs don't cover something, flag it as unverified
-
-**When docs conflict with existing project code:**
-
-```
-CONFLICT DETECTED:
-The existing codebase uses useState for form loading state,
-but React 19 docs recommend useActionState for this pattern.
-(Source: react.dev/reference/react/useActionState)
-
-Options:
-A) Use the modern pattern (useActionState) — consistent with current docs
-B) Match existing code (useState) — consistent with codebase
-→ Which approach do you prefer?
-```
-
-Surface the conflict. Don't silently pick one.
+- When docs conflict with existing project code, surface the conflict to the user with both options. Don't silently pick one.
 
 ### Step 4: Cite Your Sources
 
 Every framework-specific pattern gets a citation. The user must be able to verify every decision.
-
-**In code comments:**
-
-```typescript
-// React 19 form handling with useActionState
-// Source: https://react.dev/reference/react/useActionState#usage
-const [state, formAction, isPending] = useActionState(submitOrder, initialState);
-```
-
-**In conversation:**
-
-```
-I'm using useActionState instead of manual useState for the
-form submission state. React 19 replaced the manual
-isPending/setIsPending pattern with this hook.
-
-Source: https://react.dev/blog/2024/12/05/react-19#actions
-"useTransition now supports async functions [...] to handle
-pending states automatically"
-```
 
 **Citation rules:**
 
@@ -159,28 +98,7 @@ Verify before using in production.
 
 Honesty about what you couldn't verify is more valuable than false confidence.
 
-## Common Rationalizations
-
-| Rationalization | Reality |
-|---|---|
-| "I'm confident about this API" | Confidence is not evidence. Training data contains outdated patterns that look correct but break against current versions. Verify. |
-| "Fetching docs wastes tokens" | Hallucinating an API wastes more. The user debugs for an hour, then discovers the function signature changed. One fetch prevents hours of rework. |
-| "The docs won't have what I need" | If the docs don't cover it, that's valuable information — the pattern may not be officially recommended. |
-| "I'll just mention it might be outdated" | A disclaimer doesn't help. Either verify and cite, or clearly flag it as unverified. Hedging is the worst option. |
-| "This is a simple task, no need to check" | Simple tasks with wrong patterns become templates. The user copies your deprecated form handler into ten components before discovering the modern approach exists. |
-
-## Red Flags
-
-- Writing framework-specific code without checking the docs for that version
-- Using "I believe" or "I think" about an API instead of citing the source
-- Implementing a pattern without knowing which version it applies to
-- Citing Stack Overflow or blog posts instead of official documentation
-- Using deprecated APIs because they appear in training data
-- Not reading `package.json` / dependency files before implementing
-- Delivering code without source citations for framework-specific decisions
-- Fetching an entire docs site when only one page is relevant
-
-## Verification
+### Verification
 
 After implementing with source-driven development:
 
@@ -192,3 +110,15 @@ After implementing with source-driven development:
 - [ ] No deprecated APIs are used (checked against migration guides)
 - [ ] Conflicts between docs and existing code were surfaced to the user
 - [ ] Anything that could not be verified is explicitly flagged as unverified
+
+### Escalate When
+
+- Versions are missing or ambiguous → ask the user (main session) or surface the ambiguity in your `<handoff>` to the Orchestrator (manager) when delegated.
+- Docs conflict with the existing codebase and the choice materially affects the deliverable → surface both options; report to the Orchestrator when delegated.
+- Official documentation is unreachable or doesn't cover the pattern → flag the code as UNVERIFIED and note it in your report to the Orchestrator.
+
+## Deep Dive
+
+Read on demand — not needed to execute the contract above:
+
+- [Source-driven deep dive](references/source-driven-deep-dive.md) — when (not) to use this skill, the STACK DETECTED example, extended fetch good/bad examples, in-code and in-conversation citation examples, the CONFLICT DETECTED walkthrough, the Common Rationalizations table, and red flags.

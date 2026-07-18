@@ -1,25 +1,19 @@
 ---
 name: shipping-and-launch
-description: Prepares production launches. Use when preparing to deploy to production. Use when you need a pre-launch checklist, when setting up monitoring, when planning a staged rollout, or when you need a rollback strategy.
+description: Prepares production launches. Use when preparing to deploy to production. Use when you need a pre-launch checklist, when setting up monitoring, when planning a staged rollout, or when you need a rollback strategy. Squad-internal execution contract loaded by agents via their Methodology Dependencies table.
 ---
 
 # Shipping and Launch
 
-## Overview
-
 Ship with confidence. The goal is not just to deploy — it's to deploy safely, with monitoring in place, a rollback plan ready, and a clear understanding of what success looks like. Every launch should be reversible, observable, and incremental.
 
-## When to Use
+## Worker Execution Contract
 
-- Deploying a feature to production for the first time
-- Releasing a significant change to users
-- Migrating data or infrastructure
-- Opening a beta or early access program
-- Any deployment that carries risk (all of them)
+This is the operational spine. Follow it as written. Pipelines delegate the checklist sections below by name — do not rename or drop them.
 
-## The Pre-Launch Checklist
+### The Pre-Launch Checklist
 
-### Code Quality
+#### Code Quality
 
 - [ ] All tests pass (unit, integration, e2e)
 - [ ] Build succeeds with no warnings
@@ -29,7 +23,7 @@ Ship with confidence. The goal is not just to deploy — it's to deploy safely, 
 - [ ] No `console.log` debugging statements in production code
 - [ ] Error handling covers expected failure modes
 
-### Security
+#### Security
 
 - [ ] No secrets in code or version control
 - [ ] `npm audit` shows no critical or high vulnerabilities
@@ -39,7 +33,7 @@ Ship with confidence. The goal is not just to deploy — it's to deploy safely, 
 - [ ] Rate limiting on authentication endpoints
 - [ ] CORS configured to specific origins (not wildcard)
 
-### Performance
+#### Performance
 
 - [ ] Core Web Vitals within "Good" thresholds
 - [ ] No N+1 queries in critical paths
@@ -48,7 +42,7 @@ Ship with confidence. The goal is not just to deploy — it's to deploy safely, 
 - [ ] Database queries have appropriate indexes
 - [ ] Caching configured for static assets and repeated queries
 
-### Accessibility
+#### Accessibility
 
 - [ ] Keyboard navigation works for all interactive elements
 - [ ] Screen reader can convey page content and structure
@@ -57,7 +51,7 @@ Ship with confidence. The goal is not just to deploy — it's to deploy safely, 
 - [ ] Error messages are descriptive and associated with form fields
 - [ ] No accessibility warnings in axe-core or Lighthouse
 
-### Infrastructure
+#### Infrastructure
 
 - [ ] Environment variables set in production
 - [ ] Database migrations applied (or ready to apply)
@@ -66,7 +60,7 @@ Ship with confidence. The goal is not just to deploy — it's to deploy safely, 
 - [ ] Logging and error reporting configured
 - [ ] Health check endpoint exists and responds
 
-### Documentation
+#### Documentation
 
 - [ ] README updated with any new setup requirements
 - [ ] API documentation current
@@ -74,22 +68,9 @@ Ship with confidence. The goal is not just to deploy — it's to deploy safely, 
 - [ ] Changelog updated
 - [ ] User-facing documentation updated (if applicable)
 
-## Feature Flag Strategy
+### Feature Flag Strategy
 
-Ship behind feature flags to decouple deployment from release:
-
-```typescript
-// Feature flag check
-const flags = await getFeatureFlags(userId);
-
-if (flags.taskSharing) {
-  // New feature: task sharing
-  return <TaskSharingPanel task={task} />;
-}
-
-// Default: existing behavior
-return null;
-```
+Ship behind feature flags to decouple deployment from release.
 
 **Feature flag lifecycle:**
 
@@ -107,9 +88,9 @@ return null;
 - Don't nest feature flags (creates exponential combinations)
 - Test both flag states (on and off) in CI
 
-## Staged Rollout
+### Staged Rollout
 
-### The Rollout Sequence
+**The Rollout Sequence:**
 
 ```
 1. DEPLOY to staging
@@ -139,9 +120,7 @@ return null;
    └── Clean up feature flag
 ```
 
-### Rollout Decision Thresholds
-
-Use these thresholds to decide whether to advance, hold, or roll back at each stage:
+**Rollout Decision Thresholds** — use these to decide whether to advance, hold, or roll back at each stage:
 
 | Metric | Advance (green) | Hold and investigate (yellow) | Roll back (red) |
 |--------|-----------------|-------------------------------|-----------------|
@@ -150,81 +129,22 @@ Use these thresholds to decide whether to advance, hold, or roll back at each st
 | Client JS errors | No new error types | New errors at <0.1% of sessions | New errors at >0.1% of sessions |
 | Business metrics | Neutral or positive | Decline <5% (may be noise) | Decline >5% |
 
-### When to Roll Back
-
-Roll back immediately if:
+**When to Roll Back** — roll back immediately if:
 - Error rate increases by more than 2x baseline
 - P95 latency increases by more than 50%
 - User-reported issues spike
 - Data integrity issues detected
 - Security vulnerability discovered
 
-## Monitoring and Observability
+### Monitoring and Observability
 
-### What to Monitor
+**What to Monitor:**
 
-```
-Application metrics:
-├── Error rate (total and by endpoint)
-├── Response time (p50, p95, p99)
-├── Request volume
-├── Active users
-└── Key business metrics (conversion, engagement)
+- Application metrics: error rate (total and by endpoint); response time (p50, p95, p99); request volume; active users; key business metrics (conversion, engagement)
+- Infrastructure metrics: CPU and memory utilization; database connection pool usage; disk space; network latency; queue depth (if applicable)
+- Client metrics: Core Web Vitals (LCP, INP, CLS); JavaScript errors; API error rates from client perspective; page load time
 
-Infrastructure metrics:
-├── CPU and memory utilization
-├── Database connection pool usage
-├── Disk space
-├── Network latency
-└── Queue depth (if applicable)
-
-Client metrics:
-├── Core Web Vitals (LCP, INP, CLS)
-├── JavaScript errors
-├── API error rates from client perspective
-└── Page load time
-```
-
-### Error Reporting
-
-```typescript
-// Set up error boundary with reporting
-class ErrorBoundary extends React.Component {
-  componentDidCatch(error: Error, info: React.ErrorInfo) {
-    // Report to error tracking service
-    reportError(error, {
-      componentStack: info.componentStack,
-      userId: getCurrentUser()?.id,
-      page: window.location.pathname,
-    });
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return <ErrorFallback onRetry={() => this.setState({ hasError: false })} />;
-    }
-    return this.props.children;
-  }
-}
-
-// Server-side error reporting
-app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
-  reportError(err, {
-    method: req.method,
-    url: req.url,
-    userId: req.user?.id,
-  });
-
-  // Don't expose internals to users
-  res.status(500).json({
-    error: { code: 'INTERNAL_ERROR', message: 'Something went wrong' },
-  });
-});
-```
-
-### Post-Launch Verification
-
-In the first hour after launch:
+**Post-Launch Verification** — in the first hour after launch:
 
 ```
 1. Check health endpoint returns 200
@@ -235,7 +155,7 @@ In the first hour after launch:
 6. Confirm rollback mechanism works (dry run if possible)
 ```
 
-## Rollback Strategy
+### Rollback Strategy
 
 Every deployment needs a rollback plan before it happens:
 
@@ -265,34 +185,16 @@ Every deployment needs a rollback plan before it happens:
 ```
 
 ### Documenting the Ship Decision
-If running within the `blackgoat-pdd` workflow, save your final Rollback Strategy and Launch Checklist to `.docs/{project-name}/implementation/ship-decision.md` with a final `GO` or `NO-GO` recommendation.
-## See Also
+
+If running within the `bgpdd-build` or `bgpdd-shipping` pipelines, save your final Rollback Strategy and Launch Checklist to `.docs/{project-name}/implementation/ship-decision.md` with a final `GO` or `NO-GO` recommendation.
+
+### See Also
 
 - For security pre-launch checks, see `{PLUGIN_ROOT}/../references/security-checklist.md`
 - For performance pre-launch checklist, see `{PLUGIN_ROOT}/../references/performance-checklist.md`
 - For accessibility verification before launch, see `{PLUGIN_ROOT}/../references/accessibility-checklist.md`
 
-## Common Rationalizations
-
-| Rationalization | Reality |
-|---|---|
-| "It works in staging, it'll work in production" | Production has different data, traffic patterns, and edge cases. Monitor after deploy. |
-| "We don't need feature flags for this" | Every feature benefits from a kill switch. Even "simple" changes can break things. |
-| "Monitoring is overhead" | Not having monitoring means you discover problems from user complaints instead of dashboards. |
-| "We'll add monitoring later" | Add it before launch. You can't debug what you can't see. |
-| "Rolling back is admitting failure" | Rolling back is responsible engineering. Shipping a broken feature is the failure. |
-
-## Red Flags
-
-- Deploying without a rollback plan
-- No monitoring or error reporting in production
-- Big-bang releases (everything at once, no staging)
-- Feature flags with no expiration or owner
-- No one monitoring the deploy for the first hour
-- Production environment configuration done by memory, not code
-- "It's Friday afternoon, let's ship it"
-
-## Verification
+### Verification
 
 Before deploying:
 
@@ -310,3 +212,15 @@ After deploying:
 - [ ] Critical user flow works
 - [ ] Logs are flowing
 - [ ] Rollback tested or verified ready
+
+### Escalate When
+
+- Any Pre-Launch Checklist section cannot be brought green → report to the Orchestrator (manager) with the failing items and a `NO-GO` recommendation.
+- A rollout metric crosses a red threshold and rollback fails or its outcome is unclear → halt and escalate to the Orchestrator immediately.
+- No viable rollback plan exists (e.g. an irreversible migration) → escalate to the Orchestrator before deploying, not after.
+
+## Deep Dive
+
+Read on demand — not needed to execute the contract above:
+
+- [Shipping deep dive](references/shipping-deep-dive.md) — feature-flag and error-reporting code samples (React ErrorBoundary, Express error handler), when to use this skill, the Common Rationalizations table, and red flags.

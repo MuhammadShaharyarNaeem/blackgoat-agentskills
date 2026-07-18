@@ -48,10 +48,36 @@ Auditors must NOT blindly delete all Procedural Memories. Instead, use the Abstr
 - **Example**: The `blackgoat-research` methodology told Aria to conduct the research herself, while the `bgpdd-plan` Orchestrator was trying to spawn Scout workers to do it for her. The fix is to split the methodology into discrete "Modes" that the Orchestrator can explicitly trigger (e.g., Mode 1: Plan, Mode 2: Synthesize).
 
 ## 8. Context Bloat & File Bloat (The Wake-Up Tax)
-**Definition**: A persona must strictly limit how many Methodology Dependencies (`SKILL-CONTRACT.md`) it forces the agent to read at startup. 
+**Definition**: A persona must strictly limit how many Methodology Dependencies (each a skill's `SKILL.md`) it forces the agent to read at startup. 
 - **Why it matters**: Reading methodologies at runtime guarantees the agent gets the exact text (avoiding Orchestrator hallucination), but it creates "Episodic Memory Bloat". If a persona forces an agent to read 5 massive files before starting, the agent's context window will fill up with generic rules, leaving no room for project-specific reasoning.
 - **Example**: A persona should not load `godot-gdscript-patterns/SKILL.md` "Always". It should explicitly state: "When evaluating external libraries or APIs" or "If the project uses Godot Engine". Only the absolute core rules should be loaded unconditionally.
 
 ## 9. ID Traceability (The Golden Thread)
-**Definition**: Requirements must generate stable, verifiable IDs (`FR-1`, `NFR-1`, …), and those IDs must be explicitly threaded through the entire pipeline — Rex's `requirements.md` assigns them, Alex's `plan.md` tasks cite them (`Requirements covered: FR-…`), Quinn's tests exercise them, and gates check them.
-- **Why it matters**: Prose-matching ("the test checks the login feature") is unverifiable. ID traceability enables hard boolean gates: bgpdd-plan Phase 3.5 (every Must-Have `FR` maps to a task) and the bgpdd-build Build Coverage Gate (every Must-Have `FR` maps to a passing test). If any link in the chain drops the ID, those gates silently pass on incomplete work.
+**Definition**: Requirements must generate stable, verifiable IDs (`FR-1`, `NFR-1`, …), and those IDs must be explicitly threaded through the entire pipeline — the requirements stage assigns them, planning tasks cite them (`Requirements covered: FR-…`), tests exercise them, and coverage gates check them.
+- **Why it matters**: Prose-matching ("the test checks the login feature") is unverifiable. ID traceability enables hard boolean gates: a planning-coverage gate (every Must-Have `FR` maps to a task) and a build-coverage gate (every Must-Have `FR` maps to a passing test). If any link in the chain drops the ID, those gates silently pass on incomplete work.
+- **Example** (blackgoat squad): Rex's `requirements.md` assigns the IDs, Alex's `plan.md` tasks cite them, Quinn's tests exercise them, and the bgpdd-plan Phase 3.5 + bgpdd-build Build Coverage gates check them.
+
+## 10. Wake-Up Context Weight (Quantified)
+**Definition**: Measure, don't guess. For each audited agent, count the words of its persona file PLUS every "Always"-loaded Methodology Dependency (e.g. via `wc -w`). Flag any agent whose unconditional wake-up load exceeds ~2,500 words, and any methodology `SKILL.md` that is not a lean spine (`## Worker Execution Contract` + `references/` deep-dive per the house convention).
+- **Why it matters**: This quantifies Metric 8's qualitative check. A persona can *look* lean while its "Always" dependencies quietly stack thousands of words of generic rules into every wake-up, crowding out the project-specific reasoning the agent was spawned to do. A hard number makes the bloat undeniable and the fix measurable.
+- **Example**: Luna's wake-up load was ~3,600 words (persona + base-persona + a 2,360-word code-review methodology full of human-team process advice like "respond within one business day"). Spine-splitting the methodology cut her load by a third without losing any contract rule.
+
+## 11. Frontmatter & Metadata Hygiene
+**Definition**: Frontmatter must be internally consistent across the squad: `phase:` labels form one coherent, collision-free sequence; `model:` tiers exist and fit; `description:` matches what the file actually does; `depends-on` names real agents.
+- **Why it matters**: Stale or colliding metadata misleads both humans and the Orchestrator. If two agents claim the same phase, or a phase label contradicts where the pipeline actually runs the agent, delegation decisions are made on fiction.
+- **Example**: `max.md` declared `phase: 3 — Refactoring`, colliding with Alex's `phase: 3 — Planning`, while the build pipeline actually ran Max in its Phase 4 — three contradictory answers to "when does Max run".
+
+## 12. Trigger Collision
+**Definition**: Skill `description:` fields are the triggering surface. Worker methodologies must not carry end-user trigger language that competes with the orchestrator pipelines. Worker methodologies must self-identify as squad-internal execution contracts; user-facing triggers belong to the pipeline skills.
+- **Why it matters**: When a worker methodology's description advertises a user-facing trigger, it can hijack the trigger from the pipeline skill and run without any orchestration, gates, or squad — the user gets a bare checklist instead of the hardened SOP.
+- **Example**: `shipping-and-launch` (a worker checklist) said "Use when preparing to deploy to production", competing with the `bgpdd-shipping` pipeline for the user's "ship it" — the methodology could hijack the trigger and run without any orchestration, gates, or squad.
+
+## 13. Cross-Pipeline Consistency
+**Definition**: Sibling orchestrator SOPs (e.g. the bgpdd-* pipelines) must share the same hardening skeleton: Path Resolution, Global System Constraints (strict delegation, phase-transition confirmation, artifact-verification chain-of-thought), Global Error Recovery + circuit breaker, state hydration/persistence (`orchestrator-state.json`), and an agent-improvement phase.
+- **Why it matters**: A pipeline missing pieces its siblings have is a latent Blocker: agents behave differently depending on which pipeline delegated them. The hardening skeleton is only a guarantee if every pipeline carries it.
+- **Example**: `bgpdd-shipping` referenced `{project-name}` and deleted `orchestrator-state.json` yet had no hydration step establishing either, and lacked the error-recovery/circuit-breaker/improvement machinery all three sibling pipelines carried.
+
+## 14. Model Assignment Fit
+**Definition**: Each agent's `model:` tier must match its task complexity — lightweight scanners on small/fast tiers, architecture/planning/code-writing/meta-editing agents on top tiers, everything else mid-tier.
+- **Why it matters**: A too-small model silently degrades output; a too-large one wastes budget on mechanical work. Neither failure announces itself — the scanner just gets slower and pricier, or the builder just gets subtly worse.
+- **Example**: A haiku-tier model fits Iris's lightweight tech-stack scan; opus-tier fits Aria/Alex/Mason/Forge (architecture, planning, code execution, meta-editing). Assigning the scanner an opus tier or the builder a haiku tier would fail this metric.

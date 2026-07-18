@@ -1,84 +1,25 @@
 ---
 name: planning-and-task-breakdown
-description: Breaks work into ordered tasks. Use when you have a spec or clear requirements and need to break work into implementable tasks. Use when a task feels too large to start, when you need to estimate scope, or when parallel work is possible.
+description: Breaks work into ordered tasks. Use when you have a spec or clear requirements and need to break work into implementable tasks. Use when a task feels too large to start, when you need to estimate scope, or when parallel work is possible. Squad-internal execution contract loaded by agents via their Methodology Dependencies table.
 ---
 
 # Planning and Task Breakdown
 
-## Overview
+Decompose work into small, verifiable tasks with explicit acceptance criteria. Every task should be small enough to implement, test, and verify in a single focused session.
 
-Decompose work into small, verifiable tasks with explicit acceptance criteria. Good task breakdown is the difference between an agent that completes work reliably and one that produces a tangled mess. Every task should be small enough to implement, test, and verify in a single focused session.
+## Worker Execution Contract
 
-## When to Use
+This is the operational spine. Follow it as written.
 
-- You have a spec and need to break it into implementable units
-- A task feels too large or vague to start
-- Work needs to be parallelized across multiple agents or sessions
-- You need to communicate scope to a human
-- The implementation order isn't obvious
+### Workflow
 
-**When NOT to use:** Single-file changes with obvious scope, or when the spec already contains well-defined tasks.
+**Step 1: Enter Plan Mode.** Operate read-only: read the spec and relevant codebase sections, identify existing patterns and conventions, map dependencies between components, note risks and unknowns. **Do NOT write code during planning.** The output is a plan document, not implementation.
 
-## The Planning Process
+**Step 2: Identify the Dependency Graph.** Before writing tasks, you MUST use a `<dag_scratchpad>` XML block to explicitly map the dependency graph. Map what depends on what. Implementation order follows the dependency graph bottom-up: build foundations first.
 
-### Step 1: Enter Plan Mode
+**Step 3: Slice Vertically.** Build one complete feature path at a time (schema + API + UI for one feature), not layer-by-layer (all schema, then all API, then all UI). Each vertical slice delivers working, testable functionality.
 
-Before writing any code, operate in read-only mode:
-
-- Read the spec and relevant codebase sections
-- Identify existing patterns and conventions
-- Map dependencies between components
-- Note risks and unknowns
-
-**Do NOT write code during planning.** The output is a plan document, not implementation.
-
-### Step 2: Identify the Dependency Graph
-
-Before writing tasks, you MUST use a `<dag_scratchpad>` XML block to explicitly map the dependency graph. Map what depends on what:
-
-```
-Database schema
-    │
-    ├── API models/types
-    │       │
-    │       ├── API endpoints
-    │       │       │
-    │       │       └── Frontend API client
-    │       │               │
-    │       │               └── UI components
-    │       │
-    │       └── Validation logic
-    │
-    └── Seed data / migrations
-```
-
-Implementation order follows the dependency graph bottom-up: build foundations first.
-
-### Step 3: Slice Vertically
-
-Instead of building all the database, then all the API, then all the UI — build one complete feature path at a time:
-
-**Bad (horizontal slicing):**
-```
-Task 1: Build entire database schema
-Task 2: Build all API endpoints
-Task 3: Build all UI components
-Task 4: Connect everything
-```
-
-**Good (vertical slicing):**
-```
-Task 1: User can create an account (schema + API + UI for registration)
-Task 2: User can log in (auth schema + API + UI for login)
-Task 3: User can create a task (task schema + API + UI for creation)
-Task 4: User can view task list (query + API + UI for list view)
-```
-
-Each vertical slice delivers working, testable functionality.
-
-### Step 4: Write Tasks
-
-Each task follows this structure:
+**Step 4: Write Tasks.** Each task follows this structure:
 
 ```markdown
 ## Task [N]: [Short descriptive title]
@@ -107,11 +48,9 @@ Each task follows this structure:
 **Estimated scope:** [Small: 1-2 files | Medium: 3-5 files | Large: 5+ files]
 ```
 
-When the plan is built from a `requirements.md` with numbered `FR`/`NFR` IDs, every **Must-Have** requirement must be covered by at least one task's "Requirements covered:" field — check this before finalizing the plan.
+When the plan is built from a `requirements.md` with numbered `FR`/`NFR` IDs, every **Must-Have** requirement (`FR` and `NFR` IDs alike) must be covered by at least one task's "Requirements covered:" field — check this before finalizing the plan.
 
-### Step 5: Order and Checkpoint
-
-Arrange tasks so that:
+**Step 5: Order and Checkpoint.** Arrange tasks so that:
 
 1. Dependencies are satisfied (build foundation first)
 2. Each task leaves the system in a working state
@@ -128,7 +67,7 @@ Add explicit checkpoints:
 - [ ] Review with human before proceeding
 ```
 
-## Task Sizing Guidelines
+### Task Sizing
 
 | Size | Files | Scope | Example |
 |------|-------|-------|---------|
@@ -138,15 +77,9 @@ Add explicit checkpoints:
 | **L** | 5-8 | Multi-component feature | Search with filtering and pagination |
 | **XL** | 8+ | **Too large — break it down further** | — |
 
-If a task is L or larger, it should be broken into smaller tasks. An agent performs best on S and M tasks.
+If a task is L or larger, break it into smaller tasks. An agent performs best on S and M tasks. Break a task down further when: it needs more than one focused session (roughly 2+ hours of agent work); its acceptance criteria won't fit in 3 or fewer bullets; it touches two or more independent subsystems (e.g., auth and billing); or its title needs "and" (a sign it is two tasks).
 
-**When to break a task down further:**
-- It would take more than one focused session (roughly 2+ hours of agent work)
-- You cannot describe the acceptance criteria in 3 or fewer bullet points
-- It touches two or more independent subsystems (e.g., auth and billing)
-- You find yourself writing "and" in the task title (a sign it is two tasks)
-
-## Plan Document Output
+### Plan Document Output
 
 Save the finalized plan to `.docs/{project-name}/implementation/plan.md`.
 
@@ -192,40 +125,26 @@ Before starting implementation, you MUST read the following documents to underst
 - [Question needing human input]
 ```
 
-## Parallelization Opportunities
-
-When multiple agents or sessions are available:
-
-- **Safe to parallelize:** Independent feature slices, tests for already-implemented features, documentation
-- **Must be sequential:** Database migrations, shared state changes, dependency chains
-- **Needs coordination:** Features that share an API contract (define the contract first, then parallelize)
-
-## Common Rationalizations
-
-| Rationalization | Reality |
-|---|---|
-| "I'll figure it out as I go" | That's how you end up with a tangled mess and rework. 10 minutes of planning saves hours. |
-| "The tasks are obvious" | Write them down anyway. Explicit tasks surface hidden dependencies and forgotten edge cases. |
-| "Planning is overhead" | Planning is the task. Implementation without a plan is just typing. |
-| "I can hold it all in my head" | Context windows are finite. Written plans survive session boundaries and compaction. |
-
-## Red Flags
-
-- Starting implementation without a written task list
-- Tasks that say "implement the feature" without acceptance criteria
-- No verification steps in the plan
-- All tasks are XL-sized
-- No checkpoints between tasks
-- Dependency order isn't considered
-
-## Verification
+### Verification
 
 Before starting implementation, confirm:
 
 - [ ] Every task has acceptance criteria
 - [ ] Every task has a verification step
-- [ ] Every task cites the requirement ID(s) it covers, and every Must-Have requirement is covered by at least one task
+- [ ] Every task cites the requirement ID(s) it covers, and every Must-Have requirement is covered by at least one task (FR and NFR)
 - [ ] Task dependencies are identified and ordered correctly
 - [ ] No task touches more than ~5 files
 - [ ] Checkpoints exist between major phases
-- [ ] The human has reviewed and approved the plan
+- [ ] The plan has been surfaced for human review — via your `<handoff>` to the Orchestrator when delegated, or directly to the user when running in the main session
+
+### Escalate When
+
+- Requirements are missing, ambiguous, or contradictory → tag the affected task `[BLOCKED]` and report the ambiguity to the Orchestrator (manager) instead of guessing.
+- A Must-Have requirement cannot be mapped to any implementable task → escalate to the Orchestrator.
+- Decomposition keeps producing XL tasks no matter how you slice → escalate to the Orchestrator with the blocking constraint.
+
+## Deep Dive
+
+Read on demand — not needed to execute the contract above:
+
+- [Planning deep dive](references/planning-deep-dive.md) — when (not) to use this skill, a worked dependency-graph example, horizontal-vs-vertical slicing examples, parallelization guidance, the Common Rationalizations table, and red flags.

@@ -6,7 +6,7 @@ risk: safe
 source: community
 date_added: "2026-07-07"
 role: Security Auditor
-phase: 8 — Deployment
+phase: 8 — Shipping (Security)
 squad: agent-squad
 reports-to: agent-squad
 depends-on: mason, quinn
@@ -20,6 +20,8 @@ Before starting your task, read the following skills. Read all "Always" skills B
 |-------|------|------|
 | base-persona | `{PLUGIN_ROOT}/agent-squad/base-persona.md` | Always |
 | security-and-hardening | `{PLUGIN_ROOT}/security-and-hardening/SKILL.md` | Always |
+| shipping-and-launch | `{PLUGIN_ROOT}/shipping-and-launch/SKILL.md` | When executing the launch checklist in bgpdd-shipping |
+| cloud-deploy-patterns | `{PLUGIN_ROOT}/cloud-deploy-patterns/SKILL.md` | When auditing AWS/Azure infrastructure |
 
 > **Path Resolution**: `{PLUGIN_ROOT}` = the `skills/` directory that contains your persona folder. Resolve it by navigating one level up to the plugin root, then into the skills/ directory.
 
