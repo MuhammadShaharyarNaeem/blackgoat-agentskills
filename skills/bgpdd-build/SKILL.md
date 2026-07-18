@@ -1,11 +1,11 @@
 ---
 name: bgpdd-build
-description: Phase 2 of the Prompt-Driven Development SOP (Execution). Takes an existing implementation plan and executes it using Mason, Max, Luna, Quinn, and Dep.
+description: Phase 2 of the Prompt-Driven Development SOP (Execution). Takes an existing implementation plan and executes it using Mason, Quinn, Luna, Max, and Dep.
 ---
 
 # End-to-End Multi-Agent PDD: Execution Phase (bgPDD-Build)
 
-This Standard Operating Procedure (SOP) coordinates the execution squad (Mason, Luna, Max, Quinn, Dep) to take an existing `plan.md` through building, review, optimization, testing, and shipping.
+This Standard Operating Procedure (SOP) coordinates the execution squad (Mason, Quinn, Luna, Max, Dep) to take an existing `plan.md` through building, review, optimization, testing, and shipping.
 
 Invoke with `/bgpdd-build` (add the `auto` argument for Autonomous Execution Mode — see §3).
 
@@ -21,7 +21,11 @@ Skill and agent paths use `{PLUGIN_ROOT}` as a placeholder for the plugin's `ski
 
 - **Strict Delegation**: You are a MANAGER. You MUST NOT roleplay the phases yourself — this collapses your context window. For each phase, delegate to the named agent (e.g. Mason). The agent runs to completion in its own context and returns its `<handoff>` summary as its final message — that returned text is what you read to continue. You cannot message a running agent; each delegation is a single self-contained task.
 - **Prerequisites**: Do NOT run unless `.docs/{project-name}/implementation/plan.md` exists and is fully populated.
-- **Hydration Phase**: Before Phase 1, read `.docs/{project-name}/orchestrator-state.json` (if it exists) to restore context from the planning phase.
+- **Hydration Phase**: Before Phase 1, read `.docs/{project-name}/orchestrator-state.json` (if it exists) to restore context from the planning phase. The file follows the schema defined in `bgpdd-plan` Phase 4 (fields: `schema`, `project_name`, `feature`, `pipeline`, `branch`, `phase_completed`, `milestone_cursor`, `artifacts`, `blockers`, `updated`). At hydration, once the working branch is established (see Git Workflow below), record it in the `branch` field. After each milestone completes its Build→Test→Review→Refactor cycle, update the state file: set `pipeline` to `"bgpdd-build"` and `milestone_cursor` to the next pending milestone (or `null` when all milestones are complete).
+- **Git Workflow**:
+  - At hydration, establish the working branch: ask the user for the repo's branch-naming convention if unknown; default to `feature/{project-name}`. Create it if it does not exist. NEVER build directly on the default branch (main/master).
+  - After each milestone goes green (Phase 2 tests pass, and any Phase 3/4 fixes are re-verified), YOU (the Orchestrator) commit the milestone's changes on the working branch with a message citing the milestone name and the `FR`/`NFR` IDs it covers. Committing is pipeline state management, not application-code writing — it does not violate your no-coding rule.
+  - A worker that cannot finish in one run commits its partial work to the same working branch before returning its handoff (this makes the CONTEXT CHECKPOINTS rule in §2 explicit — same branch, commit before returning).
 - **Phase Transitions**: Never start a new phase until the user explicitly types 'proceed', 'approved', or similar confirmation (except in Auto Mode — see §3).
 - **Upgraded Chain-of-Thought**: Before transitioning between phases, explicitly verify the required artifact exists.
   - *Format*: "Thinking: Phase X requires Y. Checking `.docs/{project-name}/Y`... File exists and is populated. Proceeding."
@@ -39,15 +43,15 @@ If *any* delegated agent (or you, the Orchestrator) exhibits the following behav
 
 **CRITICAL CIRCUIT BREAKER**: You must pass the following rule to every delegated agent in its prompt: "If you encounter the exact same error or test failure 3 times in a row, you MUST stop, document the failure state clearly in your `<handoff>` (what you tried and the exact error), and return immediately to escalate to the Orchestrator. Do NOT attempt a 4th fix."
 
-**CONTEXT CHECKPOINTS**: A delegated agent's context is bounded by its own run — you do not timebox it, and you must NOT instruct agents to schedule timers or spawn their own replacements. If a worker cannot finish in one run, it commits its partial work to git and returns a `<handoff>` describing the remaining work; **you** then re-delegate a fresh agent with that handoff. If *your own* context grows large, checkpoint to `.docs/{project-name}/orchestrator-state.json` so a fresh session can resume.
+**CONTEXT CHECKPOINTS**: A delegated agent's context is bounded by its own run — you do not timebox it, and you must NOT instruct agents to schedule timers or spawn their own replacements. If a worker cannot finish in one run, it commits its partial work to the working branch (see Git Workflow in §1) and returns a `<handoff>` describing the remaining work; **you** then re-delegate a fresh agent with that handoff. If *your own* context grows large, checkpoint to `.docs/{project-name}/orchestrator-state.json` so a fresh session can resume.
 
 ## 3. Auto Mode (Optional Argument)
 
 If invoked with the `auto` argument (`/bgpdd-build auto`), operate in **Autonomous Execution Mode**:
 - **Macro-Loop Execution**: Seamlessly transition [Phase 1 (Build) → Phase 2 (Test) → Phase 3 (Review) → Phase 4 (Refactor)] in a loop for *each milestone* in `plan.md` without asking for "proceed" confirmation.
 - **Phase 5 (Epic Shipping)**: Dep deploys with doubt-driven verification.
-- **Phase 6 (Agent Improvement)**: Forge analyzes and proposes skill refinements.
-- **HALT**: Once ALL milestones are complete, drop out of Auto Mode. You MUST ask for explicit human approval before invoking Phase 5 and Phase 6 for the entire epic.
+- **Phase 6 (Game Tape Checkpoint)**: the Orchestrator appends this run's evidence to `game-tape.md`; Forge runs once at epic end, in `bgpdd-shipping` Step 7.
+- **HALT**: Once ALL milestones are complete, drop out of Auto Mode. You MUST ask for explicit human approval before invoking Phase 5 for the entire epic (Phase 6 is a free Orchestrator checkpoint — no approval needed).
 - **Circuit Breakers**: If Mason loops 3 times, or Luna flags a blocker Mason cannot fix, immediately drop out of Auto Mode and halt for human intervention.
 
 ## 4. Few-Shot Handoff Examples
@@ -62,13 +66,17 @@ When communicating with the user during a phase transition checkpoint (non-auto 
 ---
 
 ## 5. Folder Structure (Semantic Memory)
+
+This is **Tier 2** — the per-enhancement work dir (`.docs/{project-name}/`): this pipeline's read-write workspace, scoped to the current enhancement. **Tier 1** (`.docs/summary/{feature}/`) is the global knowledge base produced by **`/bgpdd-discovery`** — read-only for this pipeline. NEVER write build artifacts to Tier 1.
+
 ```text
 .docs/{project-name}/
 └── implementation/        # Checklists, reviews, and release plans
     ├── plan.md            # Dependency-mapped task list (REQUIRED INPUT)
     ├── test-report.md     # Test execution logs and coverage (Quinn)
     ├── review-report.md   # Quality review (Luna)
-    └── ship-decision.md   # Deployment checklist and rollback plan (Dep)
+    ├── ship-decision.md   # Deployment checklist and rollback plan (Dep)
+    └── game-tape.md       # Per-phase evidence checkpoints (Orchestrator, Phase 6)
 ```
 
 ---
@@ -80,7 +88,7 @@ When communicating with the user during a phase transition checkpoint (non-auto 
 - **Workflow**:
   1. Pick the next pending milestone from `implementation/plan.md`.
   2. Delegate to the **Mason** agent. **CRITICAL CONTEXT HANDOFF**: copy the exact text of the active milestone from `plan.md` into the delegation prompt so he knows exactly what to build.
-  3. **STRICT BLAST RADIUS RULE**: Instruct Mason that *before* modifying any shared DTO or library, he MUST trace dependencies — using the `code-review-graph` MCP's impact tool if available, otherwise manually by searching the codebase. If the radius extends beyond his active microservice, he must document it in his handoff and return for architectural review.
+  3. **STRICT BLAST RADIUS RULE**: Instruct Mason that *before* modifying any shared DTO or library, he MUST trace dependencies by searching the codebase for all consumers of the DTO/library. (Optionally, if a `code-review-graph` MCP server happens to be available — it is not wired in this plugin's `.mcp.json` — its impact tool may be used instead.) If the radius extends beyond his active microservice, he must document it in his handoff and return for architectural review.
   4. If the blast radius exceeds the active microservice:
      a. Notify the User: "Blast radius exceeds the current microservice boundary. Architectural review required."
      b. Delegate to the **Aria** agent as a temporary advisor, passing her Mason's blast-radius report; ask for a scoped architectural recommendation.
@@ -93,13 +101,13 @@ When communicating with the user during a phase transition checkpoint (non-auto 
 - **Workflow**:
   1. Delegate to the **Quinn** agent. **CRITICAL CONTEXT HANDOFF**: pass her the exact text of the active milestone and the `<changed_files>` list from Mason. **CRITICAL PATHING**: instruct her to append results to `.docs/{project-name}/implementation/test-report.md`.
   2. Instruct Quinn to design and directly execute the test strategy for the newly built code.
-  3. **Rejection Loop**: If Quinn's returned handoff reports failing tests, extract her failing-test logs and delegate a fresh Mason agent (Bugfix mode) with the exact failures. Loop Mason ↔ Quinn (fresh delegation each round) until tests pass.
+  3. **Rejection Loop**: If Quinn's returned handoff reports failing tests, extract her failing-test logs and delegate a fresh Mason agent (Bugfix mode) with the exact failures. Loop Mason ↔ Quinn (fresh delegation each round) until tests pass. **Bound this to 3 rounds per milestone**: track how many Mason-fix → Quinn-retest rounds the current milestone has been through. If tests still fail after round 3, HALT and surface to the user: the milestone, Mason's attempted fixes across rounds, and Quinn's exact failing-test logs. Do NOT delegate a 4th round.
 
 ### Phase 3: Code Review
 - **Delegated Agent**: **Luna** (Reviewer). She reads her methodology dependencies on-demand.
 - **Workflow**:
   1. Delegate to the **Luna** agent, passing her the exact `<changed_files>` XML list from Mason so her scope is surgical.
-  2. Instruct Luna to run a 5-axis review: Correctness, Readability, Architecture, Security, Performance (using MCP tools or file-based navigation per her MCP Fallback rule).
+  2. Instruct Luna to run a 5-axis review: Correctness, Readability, Architecture, Security, Performance (tracing impact per the **Impact Analysis** directive in her persona).
   3. **CRITICAL PATHING**: instruct Luna to save findings to `.docs/{project-name}/implementation/review-report.md`.
   4. If Luna's handoff flags "Critical" or "Important" blockers, delegate a fresh Mason agent to resolve them before proceeding.
 
@@ -121,10 +129,8 @@ When communicating with the user during a phase transition checkpoint (non-auto 
   6. **Doubt-Driven Check**: after Dep returns, YOU (the Orchestrator) run the Doubt-Driven Development cycle on Dep's plan before presenting it to the user.
   7. On explicit user confirmation, instruct the User to trigger `/bgpdd-shipping` to orchestrate the final Launch Squad.
 
-### Phase 6: Agent Improvement
-- **Delegated Agent**: **Forge** (System Coach). He reads his methodology dependencies (agent-orchestration-improve-agent) on-demand.
+### Phase 6: Game Tape Checkpoint (Orchestrator)
+- **Delegated Agent**: None — the Orchestrator performs this phase directly. No delegation, no halt.
 - **Workflow**:
-  1. Delegate to the **Forge** agent. Instruct him to analyze project metrics, error logs, and review reports, and write proposed updates to `.docs/{project-name}/implementation/agent-improvements.md`.
-  2. Read Forge's returned handoff.
-  3. **HALT EXECUTION**. Explicitly ask the User to review and approve `agent-improvements.md`. Do NOT proceed until you have explicit human approval.
-  4. Upon approval, re-delegate to a fresh **Forge** agent to apply the approved changes to the relevant `SKILL.md`/agent files by editing and writing them directly.
+  1. While your session context is still alive, append a `## bgpdd-build — [date]` section to `.docs/{project-name}/implementation/game-tape.md` (create the file if it does not exist). At most 10 bullets, covering: user corrections made, agent failures/retries, re-delegation rounds and why, circuit-breaker trips, gates that were rubber-stamped vs. genuinely exercised, and this session's id/transcript path if the runtime exposes it (Claude Code: `~/.claude/projects/<project-slug>/<session-id>.jsonl`).
+  2. This evidence feeds the SINGLE end-of-epic Forge run in `bgpdd-shipping` Step 7 — do NOT delegate Forge here. If this run went badly enough that lessons should not wait for the epic to ship, offer the user an on-demand `/learn` run now instead.

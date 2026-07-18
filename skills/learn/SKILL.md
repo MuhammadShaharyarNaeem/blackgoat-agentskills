@@ -13,7 +13,7 @@ This skill runs in the main session, never inside a delegated subagent.
 
 ### Step 1: EVIDENCE (main session)
 
-Scan the live conversation for user corrections, agent failures and retries, circuit-breaker trips, and the skills/agents in play. Read the durable artifacts: `.docs/{project-name}/implementation/review-report.md`, `test-report.md`, handoffs relayed in-conversation, and recent `git log`. Compress into an evidence brief of at most 15 bullets: what happened, which skill/agent/rule was involved, what the user had to correct.
+Scan the live conversation for user corrections, agent failures and retries, circuit-breaker trips, and the skills/agents in play. Read the durable artifacts: `.docs/{project-name}/implementation/game-tape.md` (the accumulated per-phase evidence checkpoints, if present), `review-report.md`, `test-report.md`, handoffs relayed in-conversation, and recent `git log`. Compress into an evidence brief of at most 15 bullets: what happened, which skill/agent/rule was involved, what the user had to correct.
 
 **Transcript access:** if the runtime persists session transcripts as files (Claude Code: `~/.claude/projects/<project-slug>/<session-id>.jsonl`), resolve the current session's transcript path and pass it to Forge alongside the brief. The brief remains the always-available fallback.
 
@@ -45,4 +45,4 @@ On approval, re-delegate a fresh Forge, pasting the approved lessons (rule + des
 
 - **Reuses** `agent-orchestration-improve-agent` Phases 2–5 and **extends** it with the Destination Triage rubric.
 - **Supersedes** ad-hoc rule appending, such as bg-bugfix's old Phase 5.
-- **Complements** the pipeline-end Forge phases (bgpdd-plan Phase 4, bgpdd-build Phase 6, bgpdd-shipping Step 7); it does not replace them.
+- **Complements** the per-phase Game Tape checkpoints and the single end-of-epic Forge run (bgpdd-shipping Step 7); it is the mid-epic escape valve when lessons should not wait for the epic to ship.

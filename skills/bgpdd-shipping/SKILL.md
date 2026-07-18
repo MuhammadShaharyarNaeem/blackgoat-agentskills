@@ -51,6 +51,11 @@ If *any* delegated agent (or you, the Orchestrator) exhibits the following behav
 
 **CONTEXT CHECKPOINTS**: If a worker cannot finish in one run, it commits its partial work and returns a `<handoff>` describing the remaining work; **you** then re-delegate a fresh agent with that handoff. If *your own* context grows large, checkpoint to `.docs/{project-name}/orchestrator-state.json` so a fresh session can resume.
 
+## Path Model
+
+- **Tier 1 (global knowledge base)**: `.docs/summary/{feature}/` — produced ONLY by `/bgpdd-discovery`. Read-only in this pipeline.
+- **Tier 2 (per-enhancement workspace)**: `.docs/{project-name}/` — this pipeline's read-write workspace (plan.md, test-report.md, ship-decision.md, game-tape.md, orchestrator-state.json). Never write shipping artifacts to Tier 1.
+
 ---
 
 ## Execution Checklist
@@ -59,31 +64,35 @@ As the Orchestrator, you must follow these steps in exact order. Do not skip ste
 
 ### Step 0: Hydration
 1. Establish `{project-name}`: take it from the user, or list `.docs/` and confirm the correct project with the user. Do NOT guess.
-2. Read `.docs/{project-name}/orchestrator-state.json` (if it exists) to restore context from `bgpdd-build`.
+2. Read `.docs/{project-name}/orchestrator-state.json` (if it exists) to restore context from `bgpdd-build`. The file follows the schema defined in `bgpdd-plan` Phase 4 (fields: `schema`, `project_name`, `feature`, `pipeline`, `branch`, `phase_completed`, `milestone_cursor`, `artifacts`, `blockers`, `updated`). If its `pipeline` is not `"bgpdd-build"`, or its `milestone_cursor` is not null/complete, the build did not finish — apply the Prerequisite Gate below and HALT.
 3. **Prerequisite Gate**: Verify that `.docs/{project-name}/implementation/plan.md` exists with ALL milestones marked `[x]`, and that `.docs/{project-name}/implementation/test-report.md` exists. If either check fails, HALT and instruct the user to complete `/bgpdd-build` first.
 
 ### Step 1: Read the Skill
 Read the full `shipping-and-launch` skill located at `{PLUGIN_ROOT}/shipping-and-launch/SKILL.md`. Extract the exact text of each checklist section that each agent needs — you must paste that text into their delegation prompts as their Working Memory, not merely name the section.
 
 ### Step 2: Delegate the Launch Squad
-Delegate to the following three agents **in parallel** — start all three delegations in a single batch. Each prompt MUST (a) include the exact checklist section text pasted from `shipping-and-launch`, (b) name the skill path `{PLUGIN_ROOT}/shipping-and-launch/SKILL.md` so the agent can consult it, and (c) include the CRITICAL CIRCUIT BREAKER rule verbatim. Each agent returns its pass/fail `<handoff>` as its final message.
+Delegate to the following three agents in **two stages**. Each prompt MUST (a) include the exact checklist section text pasted from `shipping-and-launch`, (b) name the skill path `{PLUGIN_ROOT}/shipping-and-launch/SKILL.md` so the agent can consult it, and (c) include the CRITICAL CIRCUIT BREAKER rule verbatim. Each agent returns its pass/fail `<handoff>` as its final message.
 
-1. **Quinn (QA & Performance)** — delegate to the **Quinn** agent
+- **Stage 1 — Quinn alone**: Delegate Quinn first and wait for her handoff before starting Stage 2. Quinn runs full builds and test suites that take file, build-output, and port locks; running scanners or infra verification concurrently against the same checkout causes lock collisions and flaky failures (especially on Windows).
+- **Stage 2 — Cipher and Dep in parallel**: After Quinn's handoff returns, delegate Cipher and Dep **in parallel** — start both delegations in a single batch.
+
+1. **Quinn (QA & Performance)** — delegate to the **Quinn** agent (Stage 1)
    - **Assignment**: `Code Quality`, `Performance`, and `Accessibility` checklists.
    - **Prompt**: "This is Mode C — Launch Verification (not Mode A or B). Execute the Code Quality, Performance, and Accessibility sections of the `shipping-and-launch` skill (`{PLUGIN_ROOT}/shipping-and-launch/SKILL.md`) against the current codebase. [Paste the exact checklist section text here.] Run all tests, linters, and accessibility checks. Report back with a final pass/fail."
 
-2. **Cipher (Security Auditor)** — delegate to the **Cipher** agent
+2. **Cipher (Security Auditor)** — delegate to the **Cipher** agent (Stage 2)
    - **Assignment**: `Security` checklist.
    - **Prompt**: "Execute the Security section of the `shipping-and-launch` skill (`{PLUGIN_ROOT}/shipping-and-launch/SKILL.md`) against the current codebase. [Paste the exact checklist section text here.] Scan for vulnerabilities, check CORS and headers, and verify auth routes. Report back with a final pass/fail."
 
-3. **Dep (DevOps Engineer)** — delegate to the **Dep** agent
+3. **Dep (DevOps Engineer)** — delegate to the **Dep** agent (Stage 2)
    - **Assignment**: `Infrastructure`, `Feature Flag Strategy`, `Staged Rollout`, and `Monitoring`.
    - **Prompt**: "Execute the Infrastructure, Feature Flags, and Monitoring sections of the `shipping-and-launch` skill (`{PLUGIN_ROOT}/shipping-and-launch/SKILL.md`). [Paste the exact checklist section text here.] Verify production environment variables and define the Staged Rollout sequence. Compile the Emergency Rollback Plan and your `GO`/`NO-GO` verdict into `.docs/{project-name}/implementation/ship-decision.md`. Report back with your findings."
 
 ### Step 3: Wait and Block
-Read all three agents' returned handoffs.
+Read the returned handoffs as each stage completes — Quinn's after Stage 1, then Cipher's and Dep's after Stage 2. All three must be in hand before you proceed.
 - If any agent reports a failure (e.g., failing tests, high vulnerabilities), you must **BLOCK** the deployment and inform the user of the specific failure.
 - You may route the failure to Mason or Max via `/bgpdd-build` to fix the issue, but you cannot proceed until the Launch Squad is fully green.
+- **Fix-routing bound**: At most **2 fix-and-reverify rounds per failing checklist area**. If an area is still failing after 2 rounds, **HALT** — surface the area, both fix attempts, and the failing evidence to the user. Do NOT route a third time.
 
 ### Step 3.5: Requirements Coverage Gate
 Before compiling documentation:
@@ -96,16 +105,26 @@ Once the squad is fully green and coverage is verified, act as the Documenter:
 - Update the `CHANGELOG.md` with all features implemented in Phase 2.
 - Update the `README.md` if any deployment commands changed.
 
+### Step 4.5: Open the Pull Request
+Once the squad is fully green and documentation is compiled:
+1. Push the working branch (the `branch` field from `orchestrator-state.json`; if absent, confirm the branch with the user — do NOT guess) to the remote.
+2. Open a pull request via the user's git hosting tool. The PR description must summarize the epic, the FR/NFR coverage (from the Step 3.5 gate), and link to `.docs/{project-name}/implementation/ship-decision.md`.
+3. If the runtime has the `github-pr-review` skill available, offer the user an automated multi-repo PR review pass.
+
 ### Step 5: Final Handoff
-Present the user with the final "Launch Readiness Report". Clearly state that all checks have passed and provide the manual commands they need to run to trigger the production deployment.
+Present the user with the final "Launch Readiness Report", including the PR link(s) from Step 4.5. Clearly state that all checks have passed and provide the manual commands they need to run to trigger the production deployment.
 
 ### Step 6: Cleanup
-Delete `.docs/{project-name}/orchestrator-state.json` — the pipeline lifecycle has successfully completed and the state is no longer needed.
+Delete `.docs/{project-name}/orchestrator-state.json` — the pipeline lifecycle has successfully completed and the state is no longer needed. Delete ONLY that file: `.docs/{project-name}/implementation/game-tape.md` survives as the epic's durable record and is the primary input to Step 7.
+
+### Step 6.5: Game Tape Checkpoint (Orchestrator)
+No delegation, no halt — you perform this step directly, before briefing Forge:
+1. Append a `## bgpdd-shipping — [date]` section to `.docs/{project-name}/implementation/game-tape.md` (create the file if the earlier phases did not). At most 10 bullets, covering: user corrections made, agent failures/retries, re-delegation rounds and why, circuit-breaker trips, gates that were rubber-stamped vs. genuinely exercised, and this session's id/transcript path if the runtime exposes it (Claude Code: `~/.claude/projects/<project-slug>/<session-id>.jsonl`).
 
 ### Step 7: Agent Improvement (Forge)
 - **Delegated Agent**: **Forge** (System Coach). He reads his methodology dependencies (agent-orchestration-improve-agent) on-demand.
 - **Workflow**:
-  1. Delegate to the **Forge** agent. Instruct him to analyze the launch run (agent handoffs, blockers, checklist failures) and write proposed updates to `.docs/{project-name}/implementation/agent-improvements.md`.
+  1. Delegate to the **Forge** agent. Brief him as the SINGLE end-of-epic improvement run — the per-phase pipelines no longer invoke Forge; their evidence has accumulated for him. Instruct him to read, in this order: (a) `.docs/{project-name}/implementation/game-tape.md` FIRST — the per-phase evidence checkpoints from `bgpdd-plan`, `bgpdd-build`, and this shipping run; (b) the durable reports — `.docs/{project-name}/implementation/review-report.md` and `test-report.md`; (c) optionally, the session transcripts listed in the game tape, under the `/learn` filtered-read rule: he must NEVER full-read a transcript file (transcripts embed every tool result) — grep targeted slices only (user messages, correction phrases, `<handoff>` blocks, error/circuit-breaker patterns, skill invocations), then read just those line ranges. Instruct him to hunt cross-phase patterns specifically (e.g. build-phase failures that trace back to plan-phase gaps), and write proposed updates to `.docs/{project-name}/implementation/agent-improvements.md`.
   2. Read Forge's returned handoff.
   3. **HALT EXECUTION**. Explicitly ask the User to review and approve `agent-improvements.md`. Do NOT proceed until you have explicit human approval.
   4. Upon approval, re-delegate to a fresh **Forge** agent to apply the approved changes to the relevant `SKILL.md`/agent files by editing and writing them directly.

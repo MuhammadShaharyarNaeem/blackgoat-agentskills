@@ -40,12 +40,10 @@ This is the operational spine. Follow it as written.
 **Step 1: Understand the context.** Before looking at code, understand the intent and blast radius:
 
 1. Gather review context:
-   **If** `code-review-graph` MCP is available:
-     - Use `get_review_context_tool` from the `code-review-graph` MCP server to instantly calculate the impact radius, coupling, and system boundaries affected by the changed files.
-   **Else**:
      - Search the codebase to find all callers/consumers of the modified functions/classes.
      - List files to understand the module structure.
      - Manually trace the dependency chain (max 2 levels deep).
+     - Optionally, if a `code-review-graph` MCP server happens to be available (it is NOT wired in this plugin's `.mcp.json`), you may use its `get_review_context_tool` instead to calculate the impact radius, coupling, and system boundaries affected by the changed files.
 2. Answer: What is this change trying to accomplish? What spec or task does it implement? What is the expected behavior change?
 
 **Step 2: Review the tests first.** Tests reveal intent and coverage: do tests exist, do they test behavior (not implementation details), are edge cases covered, are names descriptive, would the tests catch a regression?

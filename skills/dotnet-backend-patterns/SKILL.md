@@ -48,7 +48,7 @@ Before marking work complete:
 - [ ] Every read-only query has `AsNoTracking()` and projects to a DTO where a subset suffices
 - [ ] No cascade delete introduced on critical records; concurrency handled where writes race
 - [ ] All async methods propagate `CancellationToken`; no sync-over-async
-- [ ] Integration tests execute against the real Dev DB — zero mocked `DbContext`
+- [ ] Integration tests against the real Dev DB cover DB-crossing behavior — zero mocked `DbContext`. (Builders do not author these — verify they exist or flag the gap to the Orchestrator; QA — Quinn, Mode B — authors them.)
 - [ ] Responses conform to the standardized Response Pattern (Mode A) or the declared endpoint contract (Mode B)
 
 ### Escalate When
