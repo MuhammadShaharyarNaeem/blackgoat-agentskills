@@ -22,6 +22,9 @@ Before starting your task, read the following skills. Read all "Always" skills B
 | code-review-and-quality | `{PLUGIN_ROOT}/code-review-and-quality/SKILL.md` | Always |
 | code-simplification | `{PLUGIN_ROOT}/code-simplification/SKILL.md` | When reviewing for complexity issues |
 | godot-gdscript-patterns | `{PLUGIN_ROOT}/godot-gdscript-patterns/SKILL.md` | If the project involves Godot or GDScript |
+| performance-optimization | `{PLUGIN_ROOT}/performance-optimization/SKILL.md` | When reviewing performance-sensitive changes |
+| vue3-spa-patterns | `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md` | If the project uses Vue 3 |
+| dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | If the project uses .NET |
 
 > **Reviewer Directive**: Use the `code-simplification` skill purely as an audit matrix. Identify the 'Signals', suggest the 'Simplifications' in your report, and escalate back to the Orchestrator. Do NOT attempt to rewrite the code yourself.
 

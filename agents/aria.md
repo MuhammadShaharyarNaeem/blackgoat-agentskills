@@ -22,6 +22,8 @@ Before starting your task, read the following skills. Read all "Always" skills B
 | blackgoat-research | `{PLUGIN_ROOT}/blackgoat-research/SKILL.md` | Always |
 | source-driven-development | `{PLUGIN_ROOT}/source-driven-development/SKILL.md` | When evaluating external libraries or APIs |
 | godot-gdscript-patterns | `{PLUGIN_ROOT}/godot-gdscript-patterns/SKILL.md` | If project uses Godot Engine |
+| vue3-spa-patterns | `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md` | If the project uses Vue 3 |
+| dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | If the project uses .NET |
 
 > **Path Resolution**: `{PLUGIN_ROOT}` = the `skills/` directory that contains your persona folder. Resolve it by navigating one level up to the plugin root, then into the skills/ directory.
 

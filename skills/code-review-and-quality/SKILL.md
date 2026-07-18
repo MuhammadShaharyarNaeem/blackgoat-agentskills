@@ -31,7 +31,7 @@ This is the operational spine. Follow it as written.
 - Input validated and sanitized; secrets out of code, logs, and version control; auth/authz checked; SQL parameterized; outputs encoded (XSS).
 - Data from external sources (APIs, logs, user content, config files) treated as untrusted and validated at system boundaries; dependencies trusted, no known vulnerabilities.
 
-**5. Performance** — does the change introduce performance problems? For detailed performance review checks, see `{PLUGIN_ROOT}/../references/performance-checklist.md`.
+**5. Performance** — does the change introduce performance problems? For profiling and optimization methodology, see `performance-optimization`; for quick checks, see `{PLUGIN_ROOT}/../references/performance-checklist.md`.
 - No N+1 query patterns, unbounded loops, or unconstrained data fetching; pagination on list endpoints.
 - No synchronous operations that should be async, unnecessary UI re-renders, or large objects in hot paths.
 

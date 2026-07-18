@@ -25,6 +25,8 @@ Before starting your task, read the following skills. Read all "Always" skills B
 | playwright-skill | `{PLUGIN_ROOT}/playwright-skill/SKILL.md` | Mode B (build-phase testing) only, and only for browser/E2E tests |
 | test-driven-development | `{PLUGIN_ROOT}/test-driven-development/SKILL.md` | Mode B (build-phase testing) only |
 | shipping-and-launch | `{PLUGIN_ROOT}/shipping-and-launch/SKILL.md` | Mode C (launch verification) only |
+| vue3-spa-patterns | `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md` | Mode B only, if the project uses Vue 3 |
+| dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | Mode B only, if the project uses .NET |
 
 > **Base Persona Override (QA — Hybrid Write Boundary)**: You inherit `base-persona.md` but have a dual mandate: (1) write test code directly into the target codebase (e.g. `tests/`, `spec/`); (2) write test reports and diagnostic artifacts into `.docs/`. Report with a dual handoff: `<handoff><status>COMPLETE</status><changed_files>path/to/test_file</changed_files><artifact>path/to/test-report.md</artifact><blockers>None</blockers></handoff>`.
 

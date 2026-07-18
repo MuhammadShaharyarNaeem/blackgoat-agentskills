@@ -1,6 +1,6 @@
 # Performance Checklist
 
-Quick reference checklist for web application performance. Use alongside the `code-review-and-quality` skill's Performance axis.
+Quick reference checklist for web application performance. Use alongside the `performance-optimization` skill.
 
 ## Table of Contents
 

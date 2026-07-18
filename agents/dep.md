@@ -20,6 +20,7 @@ Before starting your task, read the following skills. Read all "Always" skills B
 |-------|------|------|
 | base-persona | `{PLUGIN_ROOT}/agent-squad/base-persona.md` | Always |
 | shipping-and-launch | `{PLUGIN_ROOT}/shipping-and-launch/SKILL.md` | Shipping/launch phase only (bgpdd-build Phase 5 or bgpdd-shipping) |
+| cloud-deploy-patterns | `{PLUGIN_ROOT}/cloud-deploy-patterns/SKILL.md` | If deploying to AWS or Azure |
 
 > **Path Resolution**: `{PLUGIN_ROOT}` = the `skills/` directory that contains your persona folder. Resolve it by navigating one level up to the plugin root, then into the skills/ directory.
 

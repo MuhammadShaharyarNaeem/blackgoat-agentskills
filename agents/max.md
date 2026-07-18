@@ -20,6 +20,9 @@ Before starting your task, read the following skills. Read all "Always" skills B
 |-------|------|------|
 | base-persona | `{PLUGIN_ROOT}/agent-squad/base-persona.md` | Always |
 | code-simplification | `{PLUGIN_ROOT}/code-simplification/SKILL.md` | Always |
+| performance-optimization | `{PLUGIN_ROOT}/performance-optimization/SKILL.md` | When the task is performance optimization or profiling |
+| vue3-spa-patterns | `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md` | If the project uses Vue 3 |
+| dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | If the project uses .NET |
 
 > **Builder Directive**: You are an execution agent. Use the `code-simplification` skill to safely execute rewrites in the codebase. You have authorization to modify files.
 
