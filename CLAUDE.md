@@ -35,6 +35,8 @@ blackgoat-agentskills/
 
 6. **Orchestrator owns routing; subagents are isolated.** Subagents cannot pause to ask the user and cannot spawn further subagents. Never write instructions telling a delegated agent to hand off to another agent, schedule a timer, or spawn its own replacement — that is always the Orchestrator's job. Interactive steps run in the main session.
 
+7. **`agents/blackgoat.md` is the human author's psychological profile — NEVER modify it.** It is not a normal agent persona: it documents the author's core personality and working psychology, maintained by the author to track how they work and whether they are learning; the author extracts skills FROM it over time. It is exempt by design from convention #4, from every agent-audit finding (Role Cohesion, DRY, or any other metric), and from Forge's editing privileges. No agent, audit surgery plan, or improvement proposal may edit, slim, refactor, or "fix" this file for any reason. If an audit flags it, record the finding as N/A-by-design and move on. Only the human author edits `agents/blackgoat.md`.
+
 ## Adding a New Agent
 
 1. Create `agents/<name>.md` with frontmatter: `name`, `description`, `model`, `role`, `phase`, `squad: agent-squad`, `reports-to: agent-squad`, and `depends-on` (if any).
