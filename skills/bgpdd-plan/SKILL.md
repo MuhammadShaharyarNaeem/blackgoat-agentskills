@@ -110,7 +110,7 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
 - **Step A — Interactive honing (YOU, the main session)**:
   1. Read Rex's persona (`agents/rex.md`) and the `blackgoat-idea-honing` methodology; adopt them as your behavior for this step.
   2. Save any rough idea the user gave into `.docs/{project-name}/rough-idea.md`. If brownfield, read the Tier-1 knowledge base first — `.docs/summary/context.md` and `.docs/summary/{feature}/overview.md` (drill into `{api}.md` / QA files as needed) — to ground your questions in the real system. (Greenfield: these don't exist; skip.)
-  3. Conduct the honing Q&A: ask the user **one targeted question at a time**, probing edge cases deeply, appending each question and answer to `.docs/{project-name}/honing-transcript.md`. Use `AskUserQuestion` for clear multiple-choice decisions; otherwise ask in plain conversation.
+  3. Conduct the honing Q&A: ask the user **one targeted question at a time**, probing edge cases deeply, appending each question and answer to `.docs/{project-name}/honing-transcript.md`. Use your runtime's structured multiple-choice question tool (if one exists) for clear multiple-choice decisions; otherwise ask in plain conversation.
   4. Even if the user provides a complete requirements document upfront, still review it for missing edge cases and drive it through the honing checkpoint — do not skip straight to acceptance.
   5. When the user confirms honing is complete, the transcript is final.
 
@@ -152,5 +152,24 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
   3. Read Forge's returned handoff.
   4. **HALT EXECUTION**. Explicitly ask the User to review and approve `agent-improvements.md`. Do NOT proceed until you have explicit human approval.
   5. Upon approval, re-delegate to Forge (a fresh delegation) instructing him to apply the approved changes to the relevant `SKILL.md`/agent files by editing and writing them directly.
-  6. **State Persistence**: Before concluding, write your orchestrator state to `.docs/{project-name}/orchestrator-state.json`. The `bgpdd-build` workflow reads this to hydrate itself.
+  6. **State Persistence**: Before concluding, write your orchestrator state to `.docs/{project-name}/orchestrator-state.json`. The `bgpdd-build` workflow reads this to hydrate itself. Use exactly this shape:
+```json
+{
+  "schema": 1,
+  "project_name": "slide-enhancement",
+  "feature": "slide",
+  "pipeline": "bgpdd-plan",
+  "branch": null,
+  "phase_completed": 4,
+  "milestone_cursor": null,
+  "artifacts": {
+    "requirements": ".docs/{project-name}/requirements.md",
+    "design": ".docs/{project-name}/design/detailed-design.md",
+    "plan": ".docs/{project-name}/implementation/plan.md"
+  },
+  "blockers": [],
+  "updated": "<ISO-8601 timestamp>"
+}
+```
+     Field notes: `feature` is the Tier-1 durable feature id from `.docs/summary/{feature}/` (`null` for greenfield). `pipeline` is the last pipeline that wrote the state. `milestone_cursor` is owned by `bgpdd-build` — the next pending milestone in `plan.md`; leave it `null` until build starts. `blockers` is an array of open blocker strings. `branch` is owned by `bgpdd-build` — the working branch established at build hydration; `bgpdd-shipping` Step 4.5 pushes this branch; `null` until build starts. Downstream pipelines (`bgpdd-build`, `bgpdd-shipping`) hydrate from this exact shape.
   7. Prompt the user to open a new chat session and trigger `/bgpdd-build` to execute the code.
