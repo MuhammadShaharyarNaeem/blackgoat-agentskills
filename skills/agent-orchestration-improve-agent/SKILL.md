@@ -16,6 +16,7 @@ This workflow enables an agent (specifically the `forge` persona) to autonomousl
 - A build cycle has completed (successfully or unsuccessfully).
 - You need to analyze why a subagent failed, timed out, or produced bad code.
 - You need to update an agent's instructions so they don't repeat the same mistake.
+- The user invokes `/learn` after any session (Learning Triage mode) — not only pipeline-end improvement phases.
 
 ## Do not use this skill when
 - You are actively writing code or designing architecture.
@@ -38,7 +39,7 @@ Even if the build succeeded, the code may have been flawed.
 - Identify recurring issues flagged by the code reviewer (e.g., "Mason keeps forgetting to hash passwords").
 
 ### 1.3 Read the Evidence
-> **Runtime note (Claude Code):** delegated-agent conversation transcripts are NOT exposed to the main session — there is no `transcript.jsonl` to parse. Reconstruct behavior from what *is* available instead.
+> **Runtime note (Claude Code):** delegated-agent internal transcripts are NOT exposed — reconstruct their behavior from handoffs and artifacts. The MAIN session's transcript, however, may exist as a file (`~/.claude/projects/<project-slug>/<session-id>.jsonl`). When the Orchestrator passes you a transcript path (Learning Triage mode), read it with the filtered-read rule: grep targeted slices only (user messages, corrections, `<handoff>` blocks, error patterns, skill invocations) and read just those line ranges — NEVER full-read the file; it embeds every tool result and will flood your context.
 If an agent behaved erratically, inspect the durable evidence:
 - The agent's returned `<handoff>` summary (relayed by the Orchestrator) and any artifacts it wrote under `.docs/{project-name}/`.
 - Git history of the agent's commits (diff churn, reverted work) via `git log`/`git diff`.
@@ -73,6 +74,21 @@ Before proposing a new rule, you MUST read the ENTIRE target agent's `SKILL.md` 
 
 ---
 
+## Destination Triage (Learning Triage Mode)
+
+When invoked via `/learn` (or whenever a lesson's home is not predetermined), route each formulated rule to exactly ONE layer — this is the agent-audit Golden Rule (personas = WHO, skills = HOW) plus the Abstraction Rule (elevate → generalize → move) applied to learning:
+
+| Lesson is... | Destination |
+|---|---|
+| Project-specific and not generalizable (names this repo's files, stack quirks, local conventions) | The target project's `.agents/AGENTS.md` (or the project's `CLAUDE.md`) |
+| About WHO an agent is — judgment, boundaries, escalation behavior | That agent's `agents/<name>.md`, `## Procedural Memories` section |
+| About HOW a task is done, role-agnostic | The methodology skill: contract-level rules in the SKILL.md spine, rationale in its `references/` deep-dive |
+| Already covered by an existing rule, or a one-off with no recurrence risk | Discard (Pruning Protocol) |
+
+Every proposed lesson must name its destination and a one-line rationale for that layer. In Learning Triage mode, the proposal is returned in your `<handoff>` — do not write a proposal file; only approved lessons are ever written to their destination files. (Pipeline improvement phases still use `agent-improvements.md` as their review artifact.) If a lesson seems to belong at two layers, generalize it until it belongs at one.
+
+---
+
 ## Phase 4: Human-in-the-Loop Proposal [CRITICAL]
 
 **DO NOT edit any `SKILL.md` files yet.**
@@ -81,11 +97,13 @@ Before proposing a new rule, you MUST read the ENTIRE target agent's `SKILL.md` 
 2. Format the file clearly, showing exactly which `SKILL.md` file you intend to modify, and the exact text you intend to append.
 3. Terminate your execution and report back to the Orchestrator that the proposal is ready for Human review.
 
+> **Learning Triage mode (`/learn`) exception**: skip the review artifact — return the formatted proposal directly in your `<handoff>` instead of writing `agent-improvements.md`. The Orchestrator relays it to the user.
+
 ---
 
 ## Phase 5: Scoped File Editing (Post-Approval)
 
-If the Orchestrator invokes you a second time to inform you that the User has approved the `agent-improvements.md` file:
+If the Orchestrator invokes you a second time to inform you that the User has approved the `agent-improvements.md` file (pipeline mode) or passes you the approved lessons directly in the delegation prompt (Learning Triage mode):
 
 1. Edit the `SKILL.md` files directly to apply the changes.
 2. **Never touch the YAML frontmatter** of any `SKILL.md` file.
