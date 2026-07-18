@@ -51,7 +51,7 @@ PDD runs as a chain of slash-command SOP skills. Each SOP is a *manager script*:
 | **Discovery** | `/bgpdd-discovery` | Iris, Scout, Quinn (Mode A), Forge | Tier-1 knowledge base under `.docs/summary/`: tech-stack context, per-API feature maps, reverse-engineered QA baseline |
 | **Plan** | `/bgpdd-plan` | Rex, Aria, Alex, Forge | `requirements.md` (FR/NFR IDs), `design/detailed-design.md`, `implementation/plan.md`, `orchestrator-state.json` |
 | **Build** | `/bgpdd-build` (`auto` optional) | Mason, Quinn (Mode B), Luna, Max, Dep, Forge | Working code in `src/`/`tests/`, `test-report.md`, `review-report.md`, `ship-decision.md` |
-| **Shipping** | `/bgpdd-shipping` | Quinn, Cipher, Dep (parallel Launch Squad) | Green pre-launch checklist, `rollback-plan.md`, updated CHANGELOG/README, launch readiness report |
+| **Shipping** | `/bgpdd-shipping` | Quinn, Cipher, Dep (parallel Launch Squad) | Green pre-launch checklist, `implementation/ship-decision.md`, updated CHANGELOG/README, launch readiness report |
 
 For lightweight defects that don't need the full squad, use **`/bg-bugfix`** — a lean 5-phase RCA → TDD → fix → blast-radius → memory sequence.
 

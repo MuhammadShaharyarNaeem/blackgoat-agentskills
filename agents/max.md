@@ -6,7 +6,7 @@ risk: safe
 source: community
 date_added: "2026-06-11"
 role: Optimizer / Refactorer
-phase: 3 — Refactoring
+phase: 7 — Refactoring
 squad: agent-squad
 reports-to: agent-squad
 depends-on: mason, luna, quinn

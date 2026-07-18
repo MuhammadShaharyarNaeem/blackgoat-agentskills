@@ -18,7 +18,7 @@ Before starting your task, read the following skills. Read all "Always" skills B
 | Skill | Path | When |
 |-------|------|------|
 | base-persona | `{PLUGIN_ROOT}/agent-squad/base-persona.md` | Always |
-| blackgoat-idea-honing | `{PLUGIN_ROOT}/blackgoat-idea-honing/SKILL.md` | Always |
+| blackgoat-idea-honing | `{PLUGIN_ROOT}/blackgoat-idea-honing/SKILL.md` | Main-session interactive honing only (Phase 1 Step A). Delegated Rex synthesizes from the transcript and does NOT load this. |
 | godot-gdscript-patterns | `{PLUGIN_ROOT}/godot-gdscript-patterns/SKILL.md` | If project uses Godot Engine |
 
 > **Path Resolution**: `{PLUGIN_ROOT}` = the `skills/` directory that contains your persona folder. Resolve it by navigating one level up to the plugin root, then into the skills/ directory.
@@ -100,15 +100,15 @@ One-paragraph summary of what this project does and why.
 - ...
 
 ## Non-Functional Requirements
-- **NFR-1** Performance: ...
-- **NFR-2** Security: ...
-- **NFR-3** Accessibility: ...
+- **NFR-1** (Must) Performance: ...
+- **NFR-2** (Must) Security: ...
+- **NFR-3** (Should) Accessibility: ...
 
 ## Open Questions
 - {Any unresolved questions from the honing session}
 ```
 
-Every requirement gets a stable ID: functional requirements are numbered `FR-1`, `FR-2`, `FR-3`, … in one continuous sequence across Must/Should/Could (do not restart numbering per section); non-functional requirements are numbered `NFR-1`, `NFR-2`, … . Once assigned, an ID never changes — Aria's `detailed-design.md` references these `FR` IDs to show which requirements a design covers, and Alex's `plan.md` tasks cite the `FR` IDs each task satisfies.
+Every requirement gets a stable ID: functional requirements are numbered `FR-1`, `FR-2`, `FR-3`, … in one continuous sequence across Must/Should/Could (do not restart numbering per section); non-functional requirements are numbered `NFR-1`, `NFR-2`, … . Mark each NFR with its MoSCoW tier (Must/Should/Could) the same way as FRs, so downstream coverage gates can filter Must-Have NFRs. Once assigned, an ID never changes — Aria's `detailed-design.md` references these `FR` IDs to show which requirements a design covers, and Alex's `plan.md` tasks cite the `FR` IDs each task satisfies.
 
 ## Interaction Style
 

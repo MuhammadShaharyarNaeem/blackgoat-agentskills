@@ -1,6 +1,6 @@
 ---
 name: test-driven-development
-description: "Use when implementing any feature or bugfix, before writing implementation code. Provides the worker execution contract (RED/GREEN/REFACTOR, rules, verification, escalation) plus on-demand deep-dive rationale."
+description: "Use when implementing any feature or bugfix, before writing implementation code. Provides the worker execution contract (RED/GREEN/REFACTOR, rules, verification, escalation) plus on-demand deep-dive rationale. Squad-internal execution contract loaded by agents via their Methodology Dependencies table."
 risk: unknown
 source: community
 date_added: "2026-02-27"

@@ -2,6 +2,25 @@
 
 I have run the static analysis heuristics against `mason/SKILL.md` and his inherited `base-persona.md`. Mason is currently out of sync with the rest of the squad and will fail if executed in his current state.
 
+## Coverage Table
+
+| # | Metric | Verdict | Severity |
+|---|--------|---------|----------|
+| 1 | Interface Alignment | FAIL | Blocker |
+| 2 | Dependency Conflict | FAIL | Blocker |
+| 3 | Role Cohesion | FAIL | Warning |
+| 4 | Escalation Path Validity | FAIL | Blocker |
+| 5 | Token Efficiency | PASS | — |
+| 6 | DRY & Contract Reuse | PASS | — |
+| 7 | Orchestrator vs Methodology Collision | PASS | — |
+| 8 | Context & File Bloat | PASS | — |
+| 9 | ID Traceability | PASS | — |
+| 10 | Wake-Up Context Weight | PASS | — (persona + "Always" dependencies measure ~1,900 words, under the ~2,500-word ceiling) |
+| 11 | Frontmatter & Metadata Hygiene | PASS | — |
+| 12 | Trigger Collision | N/A | — (persona audit; Mason exposes no skill `description:` triggering surface) |
+| 13 | Cross-Pipeline Consistency | N/A | — (single-agent audit; no sibling pipelines in scope) |
+| 14 | Model Assignment Fit | PASS | — (top-tier model fits a code-writing Builder) |
+
 Here is the breakdown of the logical deadlocks:
 
 ### 1. Interface Alignment Failure (The "Definition of Done" Phantom)
@@ -26,7 +45,7 @@ Mason's skill tells him to *"escalate to Aria if cross-service changes are requi
 
 To bring Mason back online, we must execute the following surgical plan:
 
-1. **Fork the Dependency**: Create a `base-persona-builder.md` specifically for execution agents that mandates writing to source folders, and update Mason's methodology array to point to it instead of the global `base-persona`.
+1. **Inline Override**: Add a short "Base Persona Override (Builder)" block to Mason's `agents/mason.md` declaring that he writes directly into the target codebase's source directories (e.g. `src/`, `tests/`) and reports a `<changed_files>` handoff instead of `<artifact>` — do NOT fork `base-persona.md` into role variants.
 2. **Update Target Lock**: Change Mason's input instructions from "Definition of Done" to "Acceptance Criteria".
 3. **Purge Bloat**: Delete the Vue.js procedural memories from his global persona. Offer the user the option to migrate them to a project-specific `.agents/AGENTS.md` file.
 4. **Fix Escalation**: Reroute his blocker escalation path back to the main agent.

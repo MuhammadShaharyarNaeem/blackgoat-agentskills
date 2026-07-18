@@ -52,6 +52,6 @@ blackgoat-agentskills/
 
 ## Validating a Change
 
-- Run the **`agent-audit`** skill against any agent/methodology you touched. It enforces the structural invariants via 9 heuristics: interface alignment, dependency conflict, role cohesion, escalation-path validity, token efficiency, DRY/contract reuse, orchestrator-vs-methodology collision, context/file bloat, and ID traceability. Fill every row of its coverage table; every `FAIL` must flip to `PASS` before you're done.
+- Run the **`agent-audit`** skill against any agent/methodology you touched. It enforces the structural invariants via 14 heuristics: interface alignment, dependency conflict, role cohesion, escalation-path validity, token efficiency, DRY/contract reuse, orchestrator-vs-methodology collision, context/file bloat, ID traceability, wake-up context weight, frontmatter/metadata hygiene, trigger collision, cross-pipeline consistency, and model-assignment fit. Fill every row of its coverage table; every `FAIL` must flip to `PASS` before you're done.
 - Independently confirm all `{PLUGIN_ROOT}` dependency paths resolve to existing files.
 - Grep the tree to confirm no `SKILL-CONTRACT.md` and no `base-persona-*` variant files were introduced.

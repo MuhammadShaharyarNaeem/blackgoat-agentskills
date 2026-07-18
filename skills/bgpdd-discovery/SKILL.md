@@ -1,6 +1,6 @@
 ---
 name: bgpdd-discovery
-description: Global Context Discovery phase. Uses Iris and Scout to research global tech stacks, reverse-engineer legacy QA, and map out APIs before detailed feature planning begins.
+description: Phase 0 of the Prompt-Driven Development SOP (Global Context Discovery). Uses Iris and Scout to research global tech stacks, reverse-engineer legacy QA, and map out APIs before detailed feature planning begins.
 ---
 
 # End-to-End Multi-Agent PDD: Global Discovery (bgPDD-Discovery)

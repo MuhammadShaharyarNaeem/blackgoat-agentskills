@@ -1,6 +1,6 @@
 ---
 name: playwright-skill
-description: MCP-based end-to-end browser testing. Drive real user flows through the Playwright MCP tool surface (browser_navigate, browser_click, browser_fill_form, browser_snapshot, ...) to verify critical paths. Use when a task needs a real browser to confirm behavior, not unit tests.
+description: MCP-based end-to-end browser testing. Drive real user flows through the Playwright MCP tool surface (browser_navigate, browser_click, browser_fill_form, browser_snapshot, ...) to verify critical paths. Use when a task needs a real browser to confirm behavior, not unit tests. Squad-internal execution contract loaded by agents via their Methodology Dependencies table.
 risk: unknown
 source: community
 date_added: "2026-02-27"

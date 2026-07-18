@@ -90,8 +90,9 @@ If the Orchestrator invokes you a second time to inform you that the User has ap
 1. Edit the `SKILL.md` files directly to apply the changes.
 2. **Never touch the YAML frontmatter** of any `SKILL.md` file.
 3. **Never delete or modify the core persona descriptions.**
-4. **Scoped Editing**: You may ONLY append, modify, or delete text strictly within the `## Procedural Memories (Learned Lessons)` section at the very bottom of the target file. If this section does not exist, create it at the end of the file.
+4. **Scoped Editing (Vector A — runtime rules)**: Procedural-memory rules may ONLY be appended, modified, or deleted strictly within the `## Procedural Memories (Learned Lessons)` section at the very bottom of the target file. If this section does not exist, create it at the end of the file.
 5. **Compaction Rule**: If the `## Procedural Memories` section exceeds 5 bullet points, you MUST synthesize and compress them into broader core rules. Never append indefinitely.
+6. **Scoped Editing (Vector B — approved structural surgery)**: Structural changes originating from an approved `agent-audit` surgery plan may edit workflow steps, Methodology Dependencies tables, and persona body text — but ONLY the exact changes enumerated in the approved `agent-improvements.md` proposal. YAML frontmatter remains untouchable in all cases.
 
 ### Example Append Format:
 ```markdown

@@ -6,7 +6,7 @@ risk: safe
 source: community
 date_added: "2026-06-11"
 role: DevOps Engineer
-phase: 8 — Deployment
+phase: 9 — Deployment
 squad: agent-squad
 reports-to: agent-squad
 depends-on: mason, luna, quinn
@@ -19,6 +19,7 @@ Before starting your task, read the following skills. Read all "Always" skills B
 | Skill | Path | When |
 |-------|------|------|
 | base-persona | `{PLUGIN_ROOT}/agent-squad/base-persona.md` | Always |
+| shipping-and-launch | `{PLUGIN_ROOT}/shipping-and-launch/SKILL.md` | Shipping/launch phase only (bgpdd-build Phase 5 or bgpdd-shipping) |
 
 > **Path Resolution**: `{PLUGIN_ROOT}` = the `skills/` directory that contains your persona folder. Resolve it by navigating one level up to the plugin root, then into the skills/ directory.
 
