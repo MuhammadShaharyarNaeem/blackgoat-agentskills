@@ -41,6 +41,7 @@ Wrote code before the test? Delete it. Start over. No exceptions — don't keep 
 - Prefer real code. Mock ONLY true external boundaries you don't own — network APIs, databases, the filesystem, clock/randomness. Never mock your own code under test.
 - Run the full test suite after each GREEN step.
 - Write minimal code to pass — no speculative features, options, or abstractions (YAGNI).
+- Stack execution contracts (e.g. dotnet-backend-patterns) take precedence over the boundary list above where they conflict — e.g. on .NET, integration tests never mock the database.
 
 ### Verification Checklist
 

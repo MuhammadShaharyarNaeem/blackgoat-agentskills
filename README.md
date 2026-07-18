@@ -84,7 +84,7 @@ For lightweight defects that don't need the full squad, use **`/bg-bugfix`** —
 - **godot-gdscript-patterns** — Godot 4 GDScript patterns (conditional, several agents)
 
 ### Meta skills (operate on the plugin itself)
-- **agent-audit** — audits personas/dependencies against 9 structural heuristics
+- **agent-audit** — audits personas/dependencies against 14 structural heuristics
 - **agent-orchestration-improve-agent** — log-parsing → procedural-memory generation (Forge)
 - **skill-creator** — scaffolds new CLI skills to Anthropic best practices
 

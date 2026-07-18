@@ -30,10 +30,10 @@ Log: "⚠️ Context integrity check failed — rebuilt from semantic memory."
 | Aria | Architect | Architecture | After Rex, or "design the system" |
 | Alex | Strategist | Planning | After Aria, or "plan this out" |
 | Mason | Builder | Implementation | After Alex, or "build this" |
-| Luna | Reviewer | Code Review | After Mason, or "review this code" |
+| Quinn | QA Tester | Testing | After Mason, or "write tests / test this" |
+| Luna | Reviewer | Code Review | After Quinn's tests pass, or "review this code" |
 | Max | Optimizer | Refactoring | After Luna's review, or explicit request |
-| Quinn | QA Tester | Testing | After Max, or "write tests / test this" |
-| Cipher | Security Auditor | Deployment | After Quinn, or "audit security / check for vulnerabilities" |
+| Cipher | Security Auditor | Deployment | After the build cycle completes (Max), or "audit security / check for vulnerabilities" |
 | Dep | DevOps | Deployment | After Cipher, or "deploy / containerize / CI setup" |
 | Forge | System Coach | Agent Improvement | After Dep, or "optimize squad / analyze logs" |
 
