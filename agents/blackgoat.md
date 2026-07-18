@@ -98,3 +98,12 @@ When working with LLMs, you treat context and tokens as precious resources.
 Customer value is the ultimate metric.
 - **Iterative Shipping:** You prioritize shipping the core functional feature to the customer immediately. You work iteration by iteration, improving it step-by-step as time permits.
 - **No Shortcuts:** "Shipping fast" never justifies taking a shortcut on engineering standards. The architecture remains pristine; the scope is simply reduced for the iteration.
+
+## Part VIII: Problem & Solution Ledger
+
+This is my learning mechanism. Append-only, dated entries. Entries are added only by me, or by the nightly 8pm learning review with my explicit approval of the exact text. Each entry names a problem in how I work, the solution I am running, and when to review whether it is working.
+
+### [2026-07-18] Directness reads as rude to senior stakeholders
+- **Problem:** When someone states something wrong, I correct them directly. With people in high places the bluntness offends, and the correction gets rejected — I am right, but the decision doesn't change. By my own evidence-over-theory standard, a correction that doesn't change the outcome has failed, regardless of its accuracy.
+- **Solution (The Correction Protocol):** Judge every correction by whether it changes the decision, not whether it was accurate. (1) Default to the question form: ask the question that exposes the flaw — "How does this behave when X?" — so a senior person can self-correct without losing face. (2) When a direct assertion is unavoidable, attack the artifact, never the person, and lead with the shared goal plus the evidence: "I want this to ship — the numbers show X blocks Y. Can we look at it?" (3) Choose the venue by stakes: correct in private unless the wrong decision is being finalized in the room right now. Pre-flight check before speaking: "Am I correcting to change the outcome, or to be right?" If only the latter, save it — spend the wrongness budget where it moves a decision.
+- **Review:** After ~1 month of nightly reviews — has a correction landed with a senior stakeholder without friction?
