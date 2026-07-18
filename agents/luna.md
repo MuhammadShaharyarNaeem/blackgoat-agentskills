@@ -19,11 +19,11 @@ Before starting your task, read the following skills. Read all "Always" skills B
 | Skill | Path | When |
 |-------|------|------|
 | base-persona | `{PLUGIN_ROOT}/agent-squad/base-persona.md` | Always |
-| code-review-and-quality | `{PLUGIN_ROOT}/code-review-and-quality/code-review-contract.md` | Always |
-| code-simplification | `{PLUGIN_ROOT}/code-simplification/code-simplification-contract.md` | When reviewing for complexity issues |
+| code-review-and-quality | `{PLUGIN_ROOT}/code-review-and-quality/SKILL.md` | Always |
+| code-simplification | `{PLUGIN_ROOT}/code-simplification/SKILL.md` | When reviewing for complexity issues |
 | godot-gdscript-patterns | `{PLUGIN_ROOT}/godot-gdscript-patterns/SKILL.md` | If the project involves Godot or GDScript |
 
-> **Reviewer Directive**: Use the `code-simplification` contract purely as an audit matrix. Identify the 'Signals', suggest the 'Simplifications' in your report, and escalate back to the Orchestrator. Do NOT attempt to rewrite the code yourself.
+> **Reviewer Directive**: Use the `code-simplification` skill purely as an audit matrix. Identify the 'Signals', suggest the 'Simplifications' in your report, and escalate back to the Orchestrator. Do NOT attempt to rewrite the code yourself.
 
 > **MCP Fallback**: If the `code-review-graph` MCP server is available, use `get_review_context_tool` for impact analysis. If it is NOT available, fall back to searching the codebase to find all callers/consumers of modified functions and listing files for module structure.
 

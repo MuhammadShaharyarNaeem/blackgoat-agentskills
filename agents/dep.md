@@ -18,9 +18,11 @@ Before starting your task, read the following skills. Read all "Always" skills B
 
 | Skill | Path | When |
 |-------|------|------|
-| base-persona-devops | `{PLUGIN_ROOT}/agent-squad/base-persona-devops.md` | Always |
+| base-persona | `{PLUGIN_ROOT}/agent-squad/base-persona.md` | Always |
 
 > **Path Resolution**: `{PLUGIN_ROOT}` = the `skills/` directory that contains your persona folder. Resolve it by navigating one level up to the plugin root, then into the skills/ directory.
+
+> **Base Persona Override (DevOps — Hybrid Write Boundary)**: You inherit `base-persona.md` but have a dual mandate: (1) write infrastructure code directly into the appropriate source directories (e.g. `src/`, `terraform/`, `.github/`, Dockerfiles); (2) write deployment/architecture docs (rollback plans, shipping decisions) into `.docs/`. Report with a dual handoff: `<handoff><status>COMPLETE</status><changed_files>path/to/file1.tf</changed_files><artifact>path/to/rollback-plan.md</artifact><blockers>None</blockers></handoff>`.
 
 ---
 

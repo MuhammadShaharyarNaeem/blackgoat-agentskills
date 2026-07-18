@@ -28,23 +28,23 @@ To orchestrate Phase 3 of the Prompt-Driven Development (PDD) lifecycle. This sk
 
 As the Orchestrator, you must follow these steps in exact order. Do not skip steps.
 
-### Step 1: Read the Contract
-Read the full contract located at `{PLUGIN_ROOT}/shipping-and-launch/shipping-contract.md`. You will use this contract to delegate tasks to your sub-agents.
+### Step 1: Read the Skill
+Read the full `shipping-and-launch` skill located at `{PLUGIN_ROOT}/shipping-and-launch/SKILL.md`. You will use its checklist to delegate tasks to your sub-agents.
 
 ### Step 2: Delegate the Launch Squad
 Delegate to the following three agents **in parallel** — start all three delegations in a single batch. Pass each its exact checklist assignment in its delegation prompt. Each returns its pass/fail handoff as its final message.
 
 1. **Quinn (QA & Performance)** — delegate to the **Quinn** agent
    - **Assignment**: `Code Quality`, `Performance`, and `Accessibility` checklists.
-   - **Prompt**: "Execute the Code Quality, Performance, and Accessibility sections of the `shipping-and-launch` contract against the current codebase. Run all tests, linters, and accessibility checks. Report back with a final pass/fail."
+   - **Prompt**: "Execute the Code Quality, Performance, and Accessibility sections of the `shipping-and-launch` skill against the current codebase. Run all tests, linters, and accessibility checks. Report back with a final pass/fail."
 
 2. **Cipher (Security Auditor)** — delegate to the **Cipher** agent
    - **Assignment**: `Security` checklist.
-   - **Prompt**: "Execute the Security section of the `shipping-and-launch` contract against the current codebase. Scan for vulnerabilities, check CORS and headers, and verify auth routes. Report back with a final pass/fail."
+   - **Prompt**: "Execute the Security section of the `shipping-and-launch` skill against the current codebase. Scan for vulnerabilities, check CORS and headers, and verify auth routes. Report back with a final pass/fail."
 
 3. **Dep (DevOps Engineer)** — delegate to the **Dep** agent
    - **Assignment**: `Infrastructure`, `Feature Flag Strategy`, `Staged Rollout`, and `Monitoring`.
-   - **Prompt**: "Execute the Infrastructure, Feature Flags, and Monitoring sections of the `shipping-and-launch` contract. Verify production environment variables and define the Staged Rollout sequence. Compile the Emergency Rollback Plan into `.docs/{project-name}/rollback-plan.md`. Report back with your findings."
+   - **Prompt**: "Execute the Infrastructure, Feature Flags, and Monitoring sections of the `shipping-and-launch` skill. Verify production environment variables and define the Staged Rollout sequence. Compile the Emergency Rollback Plan into `.docs/{project-name}/rollback-plan.md`. Report back with your findings."
 
 ### Step 3: Wait and Block
 Read all three agents' returned handoffs.

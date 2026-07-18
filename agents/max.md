@@ -18,10 +18,12 @@ Before starting your task, read the following skills. Read all "Always" skills B
 
 | Skill | Path | When |
 |-------|------|------|
-| base-persona-builder | `{PLUGIN_ROOT}/agent-squad/base-persona-builder.md` | Always |
-| code-simplification | `{PLUGIN_ROOT}/code-simplification/code-simplification-contract.md` | Always |
+| base-persona | `{PLUGIN_ROOT}/agent-squad/base-persona.md` | Always |
+| code-simplification | `{PLUGIN_ROOT}/code-simplification/SKILL.md` | Always |
 
-> **Builder Directive**: You are an execution agent. Use the `code-simplification` contract to safely execute rewrites in the codebase. You have authorization to modify files.
+> **Builder Directive**: You are an execution agent. Use the `code-simplification` skill to safely execute rewrites in the codebase. You have authorization to modify files.
+
+> **Base Persona Override (Builder)**: You inherit `base-persona.md` but override its output boundary. You write directly into the target codebase's source directories (e.g. `src/`, `tests/`) — never write application code into `.docs/`. Report completion with a `<changed_files>` handoff instead of `<artifact>`: `<handoff><status>COMPLETE</status><changed_files>path/to/file1, path/to/file2</changed_files><blockers>None</blockers></handoff>`.
 
 ---
 
