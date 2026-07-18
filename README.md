@@ -36,7 +36,7 @@ State lives in a per-project semantic-memory folder, `.docs/{project-name}/` (an
 | **Quinn** | QA Tester — legacy QA discovery (Mode A) and build-phase testing (Mode B) | Discovery · Build · Shipping |
 | **Cipher** | Security Auditor — hardens boundaries and audits for vulnerabilities | Shipping |
 | **Dep** | DevOps — containerization, CI/CD, environment config, rollback plans | Build · Shipping |
-| **Forge** | Meta-Engineer / System Coach — analyzes runs and proposes agent improvements | After every phase (human-approved) |
+| **Forge** | Meta-Engineer / System Coach — analyzes the epic's game tape and proposes agent improvements | End of epic (Shipping Step 7) · `/learn` on-demand (human-approved) |
 
 Every agent's frontmatter declares its `role`, `phase`, `model`, and `depends-on`, plus a **Methodology Dependencies** table naming exactly which skills it loads and when.
 
@@ -48,10 +48,10 @@ PDD runs as a chain of slash-command SOP skills. Each SOP is a *manager script*:
 
 | Phase | Slash command | Agents spawned | Produces |
 |-------|---------------|----------------|----------|
-| **Discovery** | `/bgpdd-discovery` | Iris, Scout, Quinn (Mode A), Forge | Tier-1 knowledge base under `.docs/summary/`: tech-stack context, per-API feature maps, reverse-engineered QA baseline |
-| **Plan** | `/bgpdd-plan` | Rex, Aria, Alex, Forge | `requirements.md` (FR/NFR IDs), `design/detailed-design.md`, `implementation/plan.md`, `orchestrator-state.json` |
-| **Build** | `/bgpdd-build` (`auto` optional) | Mason, Quinn (Mode B), Luna, Max, Dep, Forge | Working code in `src/`/`tests/`, `test-report.md`, `review-report.md`, `ship-decision.md` |
-| **Shipping** | `/bgpdd-shipping` | Quinn, Cipher, Dep (parallel Launch Squad) | Green pre-launch checklist, `implementation/ship-decision.md`, updated CHANGELOG/README, launch readiness report |
+| **Discovery** | `/bgpdd-discovery` | Iris, Scout, Quinn (Mode A) | Tier-1 knowledge base under `.docs/summary/`: tech-stack context, per-API feature maps, reverse-engineered QA baseline |
+| **Plan** | `/bgpdd-plan` | Rex, Aria, Alex | `requirements.md` (FR/NFR IDs), `design/detailed-design.md`, `implementation/plan.md`, `orchestrator-state.json` |
+| **Build** | `/bgpdd-build` (`auto` optional) | Mason, Quinn (Mode B), Luna, Max, Dep | Working code in `src/`/`tests/`, `test-report.md`, `review-report.md`, `ship-decision.md` |
+| **Shipping** | `/bgpdd-shipping` | Quinn, Cipher, Dep (parallel Launch Squad), Forge (end-of-epic) | Green pre-launch checklist, `implementation/ship-decision.md`, updated CHANGELOG/README, launch readiness report |
 
 For lightweight defects that don't need the full squad, use **`/bg-bugfix`** — a lean 5-phase RCA → TDD → fix → blast-radius → memory sequence.
 

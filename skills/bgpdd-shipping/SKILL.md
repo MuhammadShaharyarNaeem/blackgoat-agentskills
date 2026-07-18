@@ -54,7 +54,7 @@ If *any* delegated agent (or you, the Orchestrator) exhibits the following behav
 ## Path Model
 
 - **Tier 1 (global knowledge base)**: `.docs/summary/{feature}/` — produced ONLY by `/bgpdd-discovery`. Read-only in this pipeline.
-- **Tier 2 (per-enhancement workspace)**: `.docs/{project-name}/` — this pipeline's read-write workspace (plan.md, test-report.md, ship-decision.md, orchestrator-state.json). Never write shipping artifacts to Tier 1.
+- **Tier 2 (per-enhancement workspace)**: `.docs/{project-name}/` — this pipeline's read-write workspace (plan.md, test-report.md, ship-decision.md, game-tape.md, orchestrator-state.json). Never write shipping artifacts to Tier 1.
 
 ---
 
@@ -115,12 +115,16 @@ Once the squad is fully green and documentation is compiled:
 Present the user with the final "Launch Readiness Report", including the PR link(s) from Step 4.5. Clearly state that all checks have passed and provide the manual commands they need to run to trigger the production deployment.
 
 ### Step 6: Cleanup
-Delete `.docs/{project-name}/orchestrator-state.json` — the pipeline lifecycle has successfully completed and the state is no longer needed.
+Delete `.docs/{project-name}/orchestrator-state.json` — the pipeline lifecycle has successfully completed and the state is no longer needed. Delete ONLY that file: `.docs/{project-name}/implementation/game-tape.md` survives as the epic's durable record and is the primary input to Step 7.
+
+### Step 6.5: Game Tape Checkpoint (Orchestrator)
+No delegation, no halt — you perform this step directly, before briefing Forge:
+1. Append a `## bgpdd-shipping — [date]` section to `.docs/{project-name}/implementation/game-tape.md` (create the file if the earlier phases did not). At most 10 bullets, covering: user corrections made, agent failures/retries, re-delegation rounds and why, circuit-breaker trips, gates that were rubber-stamped vs. genuinely exercised, and this session's id/transcript path if the runtime exposes it (Claude Code: `~/.claude/projects/<project-slug>/<session-id>.jsonl`).
 
 ### Step 7: Agent Improvement (Forge)
 - **Delegated Agent**: **Forge** (System Coach). He reads his methodology dependencies (agent-orchestration-improve-agent) on-demand.
 - **Workflow**:
-  1. Delegate to the **Forge** agent. Instruct him to analyze the launch run (agent handoffs, blockers, checklist failures) and write proposed updates to `.docs/{project-name}/implementation/agent-improvements.md`.
+  1. Delegate to the **Forge** agent. Brief him as the SINGLE end-of-epic improvement run — the per-phase pipelines no longer invoke Forge; their evidence has accumulated for him. Instruct him to read, in this order: (a) `.docs/{project-name}/implementation/game-tape.md` FIRST — the per-phase evidence checkpoints from `bgpdd-plan`, `bgpdd-build`, and this shipping run; (b) the durable reports — `.docs/{project-name}/implementation/review-report.md` and `test-report.md`; (c) optionally, the session transcripts listed in the game tape, under the `/learn` filtered-read rule: he must NEVER full-read a transcript file (transcripts embed every tool result) — grep targeted slices only (user messages, correction phrases, `<handoff>` blocks, error/circuit-breaker patterns, skill invocations), then read just those line ranges. Instruct him to hunt cross-phase patterns specifically (e.g. build-phase failures that trace back to plan-phase gaps), and write proposed updates to `.docs/{project-name}/implementation/agent-improvements.md`.
   2. Read Forge's returned handoff.
   3. **HALT EXECUTION**. Explicitly ask the User to review and approve `agent-improvements.md`. Do NOT proceed until you have explicit human approval.
   4. Upon approval, re-delegate to a fresh **Forge** agent to apply the approved changes to the relevant `SKILL.md`/agent files by editing and writing them directly.

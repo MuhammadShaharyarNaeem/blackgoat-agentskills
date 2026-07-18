@@ -73,7 +73,7 @@ Auditors must NOT blindly delete all Procedural Memories. Instead, use the Abstr
 - **Example**: `shipping-and-launch` (a worker checklist) said "Use when preparing to deploy to production", competing with the `bgpdd-shipping` pipeline for the user's "ship it" — the methodology could hijack the trigger and run without any orchestration, gates, or squad.
 
 ## 13. Cross-Pipeline Consistency
-**Definition**: Sibling orchestrator SOPs (e.g. the bgpdd-* pipelines) must share the same hardening skeleton: Path Resolution, Global System Constraints (strict delegation, phase-transition confirmation, artifact-verification chain-of-thought), Global Error Recovery + circuit breaker, state hydration/persistence (`orchestrator-state.json`), and an agent-improvement phase.
+**Definition**: Sibling orchestrator SOPs (e.g. the bgpdd-* pipelines) must share the same hardening skeleton: Path Resolution, Global System Constraints (strict delegation, phase-transition confirmation, artifact-verification chain-of-thought), Global Error Recovery + circuit breaker, state hydration/persistence (`orchestrator-state.json`), and a Game Tape evidence checkpoint (per-phase pipelines) feeding the single end-of-epic agent-improvement run (bgpdd-shipping).
 - **Why it matters**: A pipeline missing pieces its siblings have is a latent Blocker: agents behave differently depending on which pipeline delegated them. The hardening skeleton is only a guarantee if every pipeline carries it.
 - **Example**: `bgpdd-shipping` referenced `{project-name}` and deleted `orchestrator-state.json` yet had no hydration step establishing either, and lacked the error-recovery/circuit-breaker/improvement machinery all three sibling pipelines carried.
 

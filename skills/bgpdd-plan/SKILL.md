@@ -48,7 +48,7 @@ When communicating with the user during a phase transition checkpoint, adhere to
 **Good Example (Crisp, action-oriented):**
 > Phase 3 (Planning) is complete. Alex has saved the detailed task list to `.docs/my-app/implementation/plan.md`.
 > **Blockers**: None.
-> **Next Step**: Are you ready to proceed to Phase 4 (Agent Improvement)?
+> **Next Step**: Are you ready to proceed to Phase 4 (Game Tape Checkpoint)?
 
 ---
 
@@ -84,7 +84,8 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
 ├── design/                # System designs & Mermaid diagrams (Aria)
 │   └── detailed-design.md
 ├── implementation/        # Checklists (Alex)
-│   └── plan.md            # Dependency-mapped task list
+│   ├── plan.md            # Dependency-mapped task list
+│   └── game-tape.md       # Per-phase evidence checkpoints (Orchestrator, Phase 4)
 └── orchestrator-state.json # Handoff state for bgpdd-build (Phase 4)
 ```
 
@@ -144,15 +145,12 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
   3. If any Must-Have `FR`/`NFR` is uncovered, or any task is missing its "Requirements covered:" field, re-delegate to **Alex** (a fresh delegation) with the specific gap — subject to the 2-round auto-fix bound in Global Error Recovery (§2). If unresolved after 2 rounds, halt and surface to the user.
   4. Once coverage is confirmed, proceed to Phase 4.
 
-### Phase 4: Agent Improvement (Forge)
-- **Delegated Agent**: **Forge** (System Coach)
+### Phase 4: Game Tape Checkpoint (Orchestrator)
+- **Delegated Agent**: None — the Orchestrator performs this phase directly. No delegation, no halt.
 - **Workflow**:
-  1. Delegate to the **Forge** agent. He reads his methodology dependencies (agent-orchestration-improve-agent, agent-audit) on-demand.
-  2. Instruct Forge to analyze the run: Did Phase 1 miss any edge cases? Did Aria struggle with diagrams? Instruct him to write proposed updates to `.docs/{project-name}/implementation/agent-improvements.md`.
-  3. Read Forge's returned handoff.
-  4. **HALT EXECUTION**. Explicitly ask the User to review and approve `agent-improvements.md`. Do NOT proceed until you have explicit human approval.
-  5. Upon approval, re-delegate to Forge (a fresh delegation) instructing him to apply the approved changes to the relevant `SKILL.md`/agent files by editing and writing them directly.
-  6. **State Persistence**: Before concluding, write your orchestrator state to `.docs/{project-name}/orchestrator-state.json`. The `bgpdd-build` workflow reads this to hydrate itself. Use exactly this shape:
+  1. While your session context is still alive, append a `## bgpdd-plan — [date]` section to `.docs/{project-name}/implementation/game-tape.md` (create the file if it does not exist). At most 10 bullets, covering: user corrections made, agent failures/retries, re-delegation rounds and why, circuit-breaker trips, gates that were rubber-stamped vs. genuinely exercised, and this session's id/transcript path if the runtime exposes it (Claude Code: `~/.claude/projects/<project-slug>/<session-id>.jsonl`).
+  2. This evidence feeds the SINGLE end-of-epic Forge run in `bgpdd-shipping` Step 7 — do NOT delegate Forge here. If this run went badly enough that lessons should not wait for the epic to ship, offer the user an on-demand `/learn` run now instead.
+  3. **State Persistence**: Before concluding, write your orchestrator state to `.docs/{project-name}/orchestrator-state.json`. The `bgpdd-build` workflow reads this to hydrate itself. Use exactly this shape:
 ```json
 {
   "schema": 1,
@@ -172,4 +170,4 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
 }
 ```
      Field notes: `feature` is the Tier-1 durable feature id from `.docs/summary/{feature}/` (`null` for greenfield). `pipeline` is the last pipeline that wrote the state. `milestone_cursor` is owned by `bgpdd-build` — the next pending milestone in `plan.md`; leave it `null` until build starts. `blockers` is an array of open blocker strings. `branch` is owned by `bgpdd-build` — the working branch established at build hydration; `bgpdd-shipping` Step 4.5 pushes this branch; `null` until build starts. Downstream pipelines (`bgpdd-build`, `bgpdd-shipping`) hydrate from this exact shape.
-  7. Prompt the user to open a new chat session and trigger `/bgpdd-build` to execute the code.
+  4. Prompt the user to open a new chat session and trigger `/bgpdd-build` to execute the code.

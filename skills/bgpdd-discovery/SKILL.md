@@ -97,12 +97,9 @@ already exists, the responsible agent must flag it so you can ask the user wheth
      c. `.docs/summary/{feature}/QA/manual-testing.md` — reverse-engineered manual test cases, using the `code-workflow.md` she just produced, following her Legacy QA Discovery guidelines.
   4. Read Quinn's returned handoff before proceeding to Phase 5.
 
-### Phase 5: Agent Improvement (Forge)
-- **Delegated Agent**: **Forge** (System Coach)
+### Phase 5: Session Learning Offer (Orchestrator)
+- **Delegated Agent**: None — the Orchestrator performs this phase directly.
 - **Workflow**:
-  1. Delegate to the **Forge** agent. He reads his own methodology dependencies (agent-orchestration-improve-agent, agent-audit) on-demand.
-  2. Instruct Forge to analyze the discovery run: Did Iris miss any tech-stack details? Did a Scout struggle to map its API? Instruct him to write his proposed updates to `.docs/summary/discovery-agent-improvements.md`.
-  3. Read Forge's returned handoff.
-  4. **HALT EXECUTION**. Explicitly ask the User to review and approve `discovery-agent-improvements.md`. Do NOT proceed until you have explicit human approval.
-  5. Upon approval, re-delegate to Forge (a fresh delegation) instructing him to apply the approved changes to the relevant `SKILL.md`/agent files by editing and writing them directly.
-  6. The discovery pipeline is complete. Instruct the user to open a new chat session and run `/bgpdd-plan` to begin feature-level planning — it will consume the `.docs/summary/` knowledge base you just built.
+  1. Discovery is global-tier and runs outside any epic — no `.docs/{project-name}/` exists, so there is no game tape to append to and no end-of-epic Forge run will see this session's evidence. Instead, offer the user an on-demand **`/learn`** run now to capture lessons (Did Iris miss any tech-stack details? Did a Scout struggle to map its API?) while this session's evidence is still alive.
+  2. If the user declines, simply summarize any run friction in your closing message — do NOT delegate Forge.
+  3. The discovery pipeline is complete. Instruct the user to open a new chat session and run `/bgpdd-plan` to begin feature-level planning — it will consume the `.docs/summary/` knowledge base you just built.

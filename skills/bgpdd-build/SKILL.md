@@ -50,8 +50,8 @@ If *any* delegated agent (or you, the Orchestrator) exhibits the following behav
 If invoked with the `auto` argument (`/bgpdd-build auto`), operate in **Autonomous Execution Mode**:
 - **Macro-Loop Execution**: Seamlessly transition [Phase 1 (Build) → Phase 2 (Test) → Phase 3 (Review) → Phase 4 (Refactor)] in a loop for *each milestone* in `plan.md` without asking for "proceed" confirmation.
 - **Phase 5 (Epic Shipping)**: Dep deploys with doubt-driven verification.
-- **Phase 6 (Agent Improvement)**: Forge analyzes and proposes skill refinements.
-- **HALT**: Once ALL milestones are complete, drop out of Auto Mode. You MUST ask for explicit human approval before invoking Phase 5 and Phase 6 for the entire epic.
+- **Phase 6 (Game Tape Checkpoint)**: the Orchestrator appends this run's evidence to `game-tape.md`; Forge runs once at epic end, in `bgpdd-shipping` Step 7.
+- **HALT**: Once ALL milestones are complete, drop out of Auto Mode. You MUST ask for explicit human approval before invoking Phase 5 for the entire epic (Phase 6 is a free Orchestrator checkpoint — no approval needed).
 - **Circuit Breakers**: If Mason loops 3 times, or Luna flags a blocker Mason cannot fix, immediately drop out of Auto Mode and halt for human intervention.
 
 ## 4. Few-Shot Handoff Examples
@@ -75,7 +75,8 @@ This is **Tier 2** — the per-enhancement work dir (`.docs/{project-name}/`): t
     ├── plan.md            # Dependency-mapped task list (REQUIRED INPUT)
     ├── test-report.md     # Test execution logs and coverage (Quinn)
     ├── review-report.md   # Quality review (Luna)
-    └── ship-decision.md   # Deployment checklist and rollback plan (Dep)
+    ├── ship-decision.md   # Deployment checklist and rollback plan (Dep)
+    └── game-tape.md       # Per-phase evidence checkpoints (Orchestrator, Phase 6)
 ```
 
 ---
@@ -128,10 +129,8 @@ This is **Tier 2** — the per-enhancement work dir (`.docs/{project-name}/`): t
   6. **Doubt-Driven Check**: after Dep returns, YOU (the Orchestrator) run the Doubt-Driven Development cycle on Dep's plan before presenting it to the user.
   7. On explicit user confirmation, instruct the User to trigger `/bgpdd-shipping` to orchestrate the final Launch Squad.
 
-### Phase 6: Agent Improvement
-- **Delegated Agent**: **Forge** (System Coach). He reads his methodology dependencies (agent-orchestration-improve-agent) on-demand.
+### Phase 6: Game Tape Checkpoint (Orchestrator)
+- **Delegated Agent**: None — the Orchestrator performs this phase directly. No delegation, no halt.
 - **Workflow**:
-  1. Delegate to the **Forge** agent. Instruct him to analyze project metrics, error logs, and review reports, and write proposed updates to `.docs/{project-name}/implementation/agent-improvements.md`.
-  2. Read Forge's returned handoff.
-  3. **HALT EXECUTION**. Explicitly ask the User to review and approve `agent-improvements.md`. Do NOT proceed until you have explicit human approval.
-  4. Upon approval, re-delegate to a fresh **Forge** agent to apply the approved changes to the relevant `SKILL.md`/agent files by editing and writing them directly.
+  1. While your session context is still alive, append a `## bgpdd-build — [date]` section to `.docs/{project-name}/implementation/game-tape.md` (create the file if it does not exist). At most 10 bullets, covering: user corrections made, agent failures/retries, re-delegation rounds and why, circuit-breaker trips, gates that were rubber-stamped vs. genuinely exercised, and this session's id/transcript path if the runtime exposes it (Claude Code: `~/.claude/projects/<project-slug>/<session-id>.jsonl`).
+  2. This evidence feeds the SINGLE end-of-epic Forge run in `bgpdd-shipping` Step 7 — do NOT delegate Forge here. If this run went badly enough that lessons should not wait for the epic to ship, offer the user an on-demand `/learn` run now instead.
