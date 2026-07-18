@@ -1,0 +1,18 @@
+{
+  "name": "blackgoat",
+  "owner": {
+    "name": "shaharyar.naeem",
+    "email": "shaharyar.naeem@gorelo.io"
+  },
+  "metadata": {
+    "description": "Blackgoat's agent squad, PDD workflow, and dev-practice skills",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "blackgoat-agentskills",
+      "source": "./",
+      "description": "Blackgoat's custom skills and agents (agent squad, PDD workflow, dev practices)"
+    }
+  ]
+}
