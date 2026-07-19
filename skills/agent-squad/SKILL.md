@@ -46,7 +46,7 @@ Log: "⚠️ Context integrity check failed — rebuilt from semantic memory."
 - Each agent is delegated **deliberately** — by the user or by the main agent with explicit user approval.
 - Any agent can be called **at any time** for any project state.
 - **Bounded runs, not watchdogs**: A delegated agent runs in its own bounded context and returns its report as its final message — you do not need a timer to "check on" it, and there is no messaging a running agent. If an agent returns a PARTIAL/BLOCKED handoff, re-delegate a fresh agent with that handoff to continue. Never instruct an agent to schedule its own timer or spawn its own replacement.
-- **Exception — interactive phases**: Requirements honing with Rex is a turn-by-turn conversation with the user. A delegated agent cannot pause to ask the user and resume, so run interactive honing yourself (main session) following Rex's persona. All non-interactive agents are delegated.
+- **Exception — interactive phases**: Requirements honing with Rex is a turn-by-turn conversation with the user, as is lite's mini-requirements drafting (bgpdd-lite Phase 1). A delegated agent cannot pause to ask the user and resume, so run these interactive steps yourself (main session) — honing follows Rex's persona; lite drafting follows Rex's template rules. All non-interactive agents are delegated.
 
 ### 2. Context Window Discipline
 The main agent's context window is precious. It must never be filled with raw agent output or full subagent conversation transcripts.

@@ -18,7 +18,7 @@ This is the operational spine. Follow it as written.
 
 ### API Mode — Two Sanctioned Modes, Never Mixed
 
-The blueprint (Aria's `detailed-design.md`) declares which mode the project uses. Follow it. Never mix modes, never invent a third.
+The blueprint (Aria's `detailed-design.md`) — or, for lite-originated work, the mode constraint recorded in `requirements.md` — declares which mode the project uses. Follow it. Never mix modes, never invent a third.
 
 - **Mode A — CQRS + MediatR:** Commands/queries with pipeline behaviors for authorization, validation, and domain-event dispatch. Generic base controllers (`BaseController<T>`) map every result to the standardized `BaseResponse<T>` envelope from `BG.Infrastructure.Core` — via `ExecuteWithOKResponse` / `ExecuteWithOKCommandResponse` — so the frontend receives predictable contracts. Do not hand-roll a per-service response type.
 - **Mode B — REPR minimal APIs:** Request-Endpoint-Response with minimal APIs exclusively. Everything the route needs lives in the endpoint file. Reusable logic is extracted strictly as decoupled services. NO repository pattern in REPR mode — it is bloat here. REPR emits the **same** `BaseResponse<T>` envelope as Mode A (so the frontend sees one contract), via `.ToResult()` (`IResult` bridge) for success and a native `IExceptionHandler` for failures — not a base controller.

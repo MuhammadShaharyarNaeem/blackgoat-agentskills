@@ -15,7 +15,7 @@ blackgoat-agentskills/
 │   ├── agent-squad/
 │   │   ├── SKILL.md             #   The Orchestrator/delegation model
 │   │   └── base-persona.md      #   THE ONE shared base persona (universal invariants)
-│   ├── bgpdd-discovery|plan|build|shipping/SKILL.md   # PDD SOP pipelines
+│   ├── bgpdd-discovery|lite|plan|build|shipping/SKILL.md   # PDD SOP pipelines
 │   ├── bg-bugfix/SKILL.md       #   Lean bugfix SOP
 │   ├── <methodology>/SKILL.md   #   One SKILL.md per methodology
 │   └── <skill>/references/*.md  #   Progressive-disclosure deep dives
