@@ -76,3 +76,25 @@ python scripts/check_coverage.py --self-test
 ## Single contract authority
 
 The four pipeline coverage gates — `bgpdd-plan` Phase 3.5, `bgpdd-lite` Phase 2.5, `bgpdd-build` Phase 5 Step 2, and `bgpdd-shipping` Step 3.5 — reference this file as the single source of truth for the CLI's contract (invocation, JSON shape, exit codes, parsing rules). They do not restate the parsing rules inline; update them here only.
+
+## Pre-gate authoring conformance (smoke-test before you trust the verdict)
+
+The gate is only as trustworthy as its inputs' format. Before relying on a coverage verdict, run check_coverage.py against the ACTUAL requirements.md and test-report.md as a format smoke-test. Treat any of these as "artifacts not in parseable format," NOT as a real coverage result: exit 2 (structural failure / "no Must-Have requirements found"), every ID reported as "unknown requirement ID", or "zero status-bearing mentions". The fix is to correct the artifact to the documented format — **FR-n** bold IDs under MoSCoW headings in requirements.md, and Quinn Coverage Ledger lines (- FR-n: PASS — evidence) in test-report.md — never to fall back to eyeballing coverage by hand. A gate you bypass manually is not a gate.
+
+## check_dependency_tables.py
+
+A second pure-stdlib CLI (`scripts/check_dependency_tables.py`) that statically validates every agent's "## Methodology Dependencies" section. It checks (a) the section contains the canonical "NOT Skill-tool invocables" wording — the guard against a delegated agent invoking a dependency path through the Skill tool instead of reading it as a file — and (b) every `{PLUGIN_ROOT}` path in the section's table resolves to a real file. `agents/blackgoat.md` is excluded (exempt by design; see repo CLAUDE.md).
+
+### Invocation
+
+```bash
+python check_dependency_tables.py <skills_dir>
+```
+
+`<skills_dir>` is the plugin's `skills/` directory (i.e. `{PLUGIN_ROOT}`); `agents/` is located as its sibling directory.
+
+### Exit codes
+
+- **0** — every agent's Methodology Dependencies table is valid.
+- **1** — at least one violation; a per-violation report is printed to stdout.
+- **2** — usage error (wrong argument count, or `<skills_dir>` is not a directory).

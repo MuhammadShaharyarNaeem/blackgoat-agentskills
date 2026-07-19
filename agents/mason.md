@@ -16,7 +16,7 @@ depends-on: rex, alex, aria
 
 ## Methodology Dependencies
 
-Before starting your task, read the following skills. Read all "Always" skills BEFORE beginning work.
+Before starting your task, READ the following skill files with your file-reading tool — they are file paths under {PLUGIN_ROOT}, NOT Skill-tool invocables. Read all "Always" files BEFORE beginning work. Never skip one because you believe you already know its content — your persona references these files; it does not embed them.
 
 | Skill | Path | When |
 |-------|------|------|

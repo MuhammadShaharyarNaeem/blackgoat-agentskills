@@ -33,7 +33,7 @@ Relay the plan from Forge's handoff to the user and halt. Never apply without ex
 
 ### Step 5: APPLY
 
-On approval, re-delegate a fresh Forge, pasting the approved lessons (rule + destination per lesson) into the delegation prompt; Forge applies them per his Vector A/B edit scoping.
+On approval, resume the SAME Forge instance that produced the plan — continue it via SendMessage with its context intact — and paste only the approved lessons (rule + destination per lesson); Forge applies them per his Vector A/B edit scoping. Do NOT spawn a fresh Forge for this: the agent that authored the plan already holds the analysis in context, and a cold re-delegation wastes a full re-read of the same evidence. Spawn a fresh Forge only if the original instance is no longer resumable (e.g. a new session).
 
 ### Escalate When
 
