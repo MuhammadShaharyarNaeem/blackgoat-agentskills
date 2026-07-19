@@ -85,10 +85,13 @@ If *any* delegated agent (or you, the Orchestrator) exhibits the following behav
 ### Phase 2.5: Coverage Gate (Orchestrator)
 - **Delegated Agent**: None — the Orchestrator performs this check directly.
 - **Workflow**:
-  1. Read `.docs/{project-name}/requirements.md` and `.docs/{project-name}/implementation/plan.md`.
-  2. Verify every Must-Have `FR` and `NFR` ID maps to at least one task's "Requirements covered:" field in `plan.md`, and that every task in `plan.md` cites the requirement ID(s) it satisfies.
-  3. If any Must-Have `FR`/`NFR` is uncovered, or any task is missing its "Requirements covered:" field, re-delegate to **Alex** (a fresh delegation) with the specific gap — subject to the 2-round auto-fix bound in Global Error Recovery (§2). If unresolved after 2 rounds, halt and surface to the user.
-  4. Once coverage is confirmed, proceed to Phase 3.
+  1. Execute the coverage tool via a shell action, using the runtime's available Python 3 interpreter (`python` or `python3`):
+     `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --plan .docs/{project-name}/implementation/plan.md`
+     The full CLI contract (JSON shape, exit codes, parsing rules) lives in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
+  2. Read the JSON object from stdout. Exit code 0 = every Must-Have `FR`/`NFR` is covered — report any `warnings` and `uncovered_should` entries to the user as non-blocking notes, then proceed to Phase 3. Exit code 1 = the `uncovered` array lists the Must-Have gaps. Exit code 2 = an artifact failed its structural contract (e.g. no task blocks, no Must-Have IDs) — treat this as a defect in the artifact, not the tool.
+  3. On exit 1 or 2, re-delegate to **Alex** (a fresh delegation) quoting the exact `uncovered` IDs and `warnings` (or the `error` message) — subject to the 2-round auto-fix bound in Global Error Recovery (§2). If unresolved after 2 rounds, halt and surface to the user. After each fix, re-run step 1 to verify.
+  4. **Fallback (no Python runtime)**: If the script cannot run because no Python 3 interpreter is available, perform the check manually instead: read `.docs/{project-name}/requirements.md` and `.docs/{project-name}/implementation/plan.md`, verify every Must-Have FR and NFR ID maps to at least one task's "Requirements covered:" field in plan.md, and that every task cites the requirement ID(s) it satisfies; apply the same re-delegation rule as step 3.
+  5. Once coverage is confirmed, proceed to Phase 3.
 
 ### Phase 3: Handoff to Build (Orchestrator)
 - **Delegated Agent**: None — the Orchestrator performs this phase directly. No delegation, no halt.

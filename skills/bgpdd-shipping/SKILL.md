@@ -98,9 +98,12 @@ Read the returned handoffs as each stage completes — Quinn's after Stage 1, th
 
 ### Step 3.5: Requirements Coverage Gate
 Before compiling documentation:
-1. Read `.docs/{project-name}/requirements.md` and `.docs/{project-name}/implementation/test-report.md`.
-2. Verify that every **Must-Have `FR`** and every **Must-Have `NFR`** has at least one passing test or check recorded in the test report.
-3. If any Must-Have requirement is uncovered, **BLOCK** and route back to `/bgpdd-build` Phase 2 (Testing) to close the gap. (This closes the requirement-traceability chain — Rex's `FR`/`NFR` → Alex's task → Quinn's test — at the final gate.)
+1. Execute the coverage tool via a shell action, using the runtime's available Python 3 interpreter (`python` or `python3`):
+   `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --test-report .docs/{project-name}/implementation/test-report.md`
+   The full CLI contract (JSON shape, exit codes, parsing rules) lives in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
+2. Read the JSON object from stdout. Exit code 0 = every Must-Have `FR`/`NFR` has at least one passing test or check recorded in the test report — report any `warnings` and `uncovered_should` entries as non-blocking notes, then proceed to Step 4. Exit code 1 = the `uncovered` array lists the Must-Have gaps. Exit code 2 = the artifact failed its structural contract (e.g. no Must-Have IDs, unreadable report) — treat this as a defect in the artifact, not the tool.
+3. On exit 1 or 2, **BLOCK** and route back to `/bgpdd-build` Phase 2 (Testing) with the exact `uncovered` IDs and `warnings` (or the `error` message) to close the gap. (This closes the requirement-traceability chain — Rex's `FR`/`NFR` → Alex's task → Quinn's test — at the final gate.)
+4. **Fallback (no Python runtime)**: If the script cannot run because no Python 3 interpreter is available, verify manually instead: read `.docs/{project-name}/requirements.md` and `.docs/{project-name}/implementation/test-report.md`, and confirm every Must-Have `FR` and every Must-Have `NFR` has at least one passing test or check recorded in the test report; apply the same block-and-route rule as step 3.
 
 ### Step 4: Compile Documentation
 Once the squad is fully green and coverage is verified, act as the Documenter:

@@ -124,7 +124,13 @@ This is **Tier 2** — the per-enhancement work dir (`.docs/{project-name}/`): t
 - **Delegated Agent**: **Dep** (DevOps). He reads his methodology dependencies (shipping-and-launch) on-demand.
 - **Workflow**:
   1. **Completion Gate**: Before invoking Dep, verify that ALL milestones in `implementation/plan.md` are marked complete (`[x]`). If any `[ ]` remain, loop back to Phase 1 for the next pending milestone.
-  2. **Build Coverage Gate**: Verify that `implementation/test-report.md` contains at least one passing test for every **Must-Have `FR` and `NFR`** in `.docs/{project-name}/requirements.md`. If any Must-Have `FR`/`NFR` has no passing test, DO NOT proceed — loop back to Phase 2 (Testing) to close the gap. (This closes the requirement-traceability chain: Rex's `FR`/`NFR` → Alex's task → Quinn's test.)
+  2. **Build Coverage Gate**:
+     a. Execute the coverage tool via a shell action, using the runtime's available Python 3 interpreter (`python` or `python3`):
+        `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --test-report .docs/{project-name}/implementation/test-report.md`
+        The full CLI contract (JSON shape, exit codes, parsing rules) lives in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
+     b. Read the JSON object from stdout. Exit code 0 = every Must-Have `FR`/`NFR` has a passing test — report any `warnings` and `uncovered_should` entries as non-blocking notes, then proceed. Exit code 1 = the `uncovered` array lists the Must-Have gaps. Exit code 2 = the artifact failed its structural contract (e.g. no Must-Have IDs, unreadable report) — treat this as a defect in the artifact, not the tool.
+     c. On exit 1 or 2, DO NOT proceed — loop back to Phase 2 (Testing) with the exact `uncovered` IDs and `warnings` (or the `error` message) so Quinn closes the gap. (This closes the requirement-traceability chain: Rex's `FR`/`NFR` → Alex's task → Quinn's test.) After the fix, re-run step (a) to verify.
+     d. **Fallback (no Python runtime)**: If the script cannot run because no Python 3 interpreter is available, verify manually instead: check that `implementation/test-report.md` contains at least one passing test for every Must-Have `FR` and `NFR` in `.docs/{project-name}/requirements.md`; apply the same loop-back rule as step (c).
   3. If the Epic is 100% complete and every Must-Have `FR`/`NFR` is covered, delegate to the **Dep** agent.
   4. Instruct Dep to scan for deployment risks and credentials across the epic and formulate a mandatory **Rollback Plan**.
   5. **CRITICAL PATHING**: instruct Dep to generate `.docs/{project-name}/implementation/ship-decision.md` with a `GO` or `NO-GO` verdict.

@@ -108,6 +108,7 @@ Quinn does not find style issues. She finds real functional gaps, unhandled edge
 ### 6. Task Formatting & Delivery
 - **Strict Header Append**: For every task, you must append to the designated test report file using the strict header formatting `#Task [N]:`. Do not create separate files for reports.
 - **Retests**: When performing retests, you must append the retest results directly under the specific `#Task [N]:` block you are retesting.
+- **Coverage Ledger (machine-parsed)**: Within each `#Task [N]:` block, record every requirement ID a test exercises on its own line with an explicit status token, in the form `- FR-3: PASS — {test name / evidence}` or `- NFR-1: FAIL — {failing assertion}`. Use only `PASS` or `FAIL` as the status word, on the same line as the ID. The pipeline coverage gates parse these lines deterministically (`{PLUGIN_ROOT}/pipeline-tools/SKILL.md`); latest mention wins, so a retest appends a fresh `- FR-3: PASS` line rather than editing history.
 
 ---
 

@@ -237,7 +237,7 @@ flowchart LR
     R --> A --> X --> G1 --> Q --> G2 --> G3
 ```
 
-The gates are enforced, not decorative: plan's Upgraded Chain-of-Thought checks *content contracts* (an artifact must satisfy its structural requirements, not merely exist), the Phase 3.5 gate re-delegates Alex on any uncovered Must-Have (bounded to 2 auto-fix rounds, then halt), build refuses to invoke Dep while any Must-Have lacks a passing test, and shipping blocks documentation and the PR on the same check. If a requirement silently disappears between planning and launch, three separate gates are positioned to catch it.
+The gates are enforced, not decorative: plan's Upgraded Chain-of-Thought checks *content contracts* (an artifact must satisfy its structural requirements, not merely exist), the Phase 3.5 gate re-delegates Alex on any uncovered Must-Have (bounded to 2 auto-fix rounds, then halt), build refuses to invoke Dep while any Must-Have lacks a passing test, and shipping blocks documentation and the PR on the same check. If a requirement silently disappears between planning and launch, three separate gates are positioned to catch it. All three now execute a deterministic script (`skills/pipeline-tools/scripts/check_coverage.py`) that returns a machine-readable uncovered-ID list, falling back to the manual read described above when no Python runtime exists.
 
 ---
 
@@ -329,6 +329,7 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **skill-creator** — scaffolds new CLI skills to Anthropic best practices
 
 ### Standalone tools
+- **pipeline-tools** — deterministic coverage-gate CLI (`check_coverage.py`) executed by the Orchestrator at the bgpdd plan/build/shipping coverage gates; the manual check remains the fallback
 - **doubt-driven-development** — adversarial fresh-context verification of decisions (run by the main-session Orchestrator, never by subagents)
 - **spec-driven-development** — write a spec before coding
 - **github-pr-review** — Linear-driven multi-repo PR review via GitHub MCP
