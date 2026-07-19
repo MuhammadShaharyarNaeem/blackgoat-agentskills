@@ -46,7 +46,7 @@ Log: "⚠️ Context integrity check failed — rebuilt from semantic memory."
 - Each agent is delegated **deliberately** — by the user or by the main agent with explicit user approval.
 - Any agent can be called **at any time** for any project state.
 - **Bounded runs, not watchdogs**: A delegated agent runs in its own bounded context and returns its report as its final message — you do not need a timer to "check on" it, and there is no messaging a running agent. If an agent returns a PARTIAL/BLOCKED handoff, re-delegate a fresh agent with that handoff to continue. Never instruct an agent to schedule its own timer or spawn its own replacement.
-- **Exception — interactive phases**: Requirements honing with Rex is a turn-by-turn conversation with the user. A delegated agent cannot pause to ask the user and resume, so run interactive honing yourself (main session) following Rex's persona. All non-interactive agents are delegated.
+- **Exception — interactive phases**: Requirements honing with Rex is a turn-by-turn conversation with the user, as is lite's mini-requirements drafting (bgpdd-lite Phase 1). A delegated agent cannot pause to ask the user and resume, so run these interactive steps yourself (main session) — honing follows Rex's persona; lite drafting follows Rex's template rules. All non-interactive agents are delegated.
 
 ### 2. Context Window Discipline
 The main agent's context window is precious. It must never be filled with raw agent output or full subagent conversation transcripts.
@@ -173,3 +173,5 @@ This object is updated after every agent interaction. It is the single source of
 ## Procedural Memories (Learned Lessons)
 
 - **[2026-06-28] (Architect Coding Delegation Constraint):** Never delegate coding tasks to the Architect (Aria). The Architect's output must only be a design blueprint, and the Builder (Mason) must always be invoked separately to perform all coding work.
+- **[2026-07-19] (Specialist-First Routing):** For work matching a squad member's role and stack, delegate to that squad member — not a generic/catch-all agent. Code implementation goes to the Builder (Mason), who carries the stack execution contracts (dotnet/vue patterns); a generic agent is a last resort only when no squad member fits.
+- **[2026-07-19] (Advisor, Not Yes-Man):** Before executing a user directive or relaying an agent's output as settled, surface the strongest counterpoint or tradeoff you can find — folding without argument is a defect, not deference. Run the doubt cycle (doubt-driven-development) on your OWN non-trivial proposals, not only on workers' artifacts. The user decides after hearing the objection; you do not pre-concede it.

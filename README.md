@@ -15,7 +15,9 @@ The plugin is designed with a deliberate adoption gradient. Each step gives you 
 
 **Step 2 — Delegate one task to one agent.** Every squad member can be invoked ad hoc, at any project state: "have Luna review this diff", "have Cipher audit the auth routes", "have Quinn write tests for this module". The agent runs in isolation, does exactly its job, and returns a handoff. No pipeline required.
 
-**Step 3 — Run the full PDD pipeline** when a feature is big enough to warrant discovery, planning, staged building, and a gated launch. That's the rest of this README.
+**Step 3 — Run `/bgpdd-lite` for well-specified work.** The mid-weight lane: no honing Q&A, no Aria — you write mini-requirements with the Orchestrator (Rex's template, stable FR/NFR IDs), Alex plans, the coverage gate checks traceability, and the state file hands off to `/bgpdd-build`. A five-question fit check up front routes anything contested or cross-boundary to the full pipeline instead.
+
+**Step 4 — Run the full PDD pipeline** when a feature is big enough to warrant discovery, planning, staged building, and a gated launch. That's the rest of this README.
 
 ---
 
@@ -128,6 +130,9 @@ flowchart TD
         B1 --> B2["Aria: detailed-design.md"] --> B3["Alex: implementation/plan.md"]
         B3 --> B4["Phase 3.5 coverage gate"] --> B5["Game Tape checkpoint + write orchestrator-state.json"]
     end
+    subgraph S2L["Alt Session 2: /bgpdd-lite (well-specified work)"]
+        L1["Fit Check → mini-requirements (Orchestrator + user)"] --> L2["Alex: implementation/plan.md"] --> L3["Coverage gate + Game Tape + state file"]
+    end
     subgraph S3["Session 3: /bgpdd-build (auto optional)"]
         C1["Per-milestone loop: Mason, Quinn, Luna, Max - commit each green milestone"]
         C1 --> C2["Completion + coverage gates"] --> C3["Dep: ship-decision.md + doubt-driven check"]
@@ -138,7 +143,9 @@ flowchart TD
         D1 --> D2["Gates, docs, PR, launch readiness report"] --> D3["Forge: single end-of-epic run"]
     end
     S1 -- "Tier 1 knowledge base" --> S2
+    S1 -. "Tier 1 knowledge base (optional)" .-> S2L
     S2 -- "state file + plan" --> S3
+    S2L -- "state file + plan" --> S3
     S3 -- "state file + green epic" --> S4
 ```
 
@@ -146,6 +153,7 @@ Phase by phase:
 
 - **`/bgpdd-discovery` (Phase 0)** — brownfield only. The Orchestrator establishes the Target Scope (repos, branch, local paths) up front, Iris writes `context.md`, you name the APIs holding the feature's fragments (the SOP hard-halts rather than hallucinate a list; a single Scout can run a footprint search if you don't know), Scouts fan out in parallel, and Quinn synthesizes the cross-API overview plus a reverse-engineered QA baseline. Phase 5 offers an optional `/learn` run — discovery is global-tier and outside any epic, so no game tape exists to catch its lessons later.
 - **`/bgpdd-plan` (Phase 1)** — has a brownfield Pre-Flight Check that halts if the Tier 1 knowledge base is missing. Honing is **hybrid**: the live one-question-at-a-time Q&A runs in the main session (a delegated agent can't pause to ask you things), then an isolated Rex synthesizes `requirements.md` from the transcript. Aria designs, Alex plans, the Phase 3.5 gate checks coverage, and Phase 4 writes the game tape and the state file.
+- **`/bgpdd-lite` (Plan, lite)** — agents: Alex (+ Orchestrator mini-requirements). Produces `requirements.md`, `implementation/plan.md`, and `orchestrator-state.json` → hands off to `/bgpdd-build`. No honing, no Aria; the governing stack contract stands in for the blueprint, and the same coverage gate still applies.
 - **`/bgpdd-build` (Phase 2)** — the milestone loop, detailed below.
 - **`/bgpdd-shipping` (Phase 3)** — the Launch Squad, gates, PR, and the epic's single Forge run, detailed below.
 
@@ -291,6 +299,7 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **agent-squad** — the Orchestrator/delegation model itself; also home of `base-persona.md`, the one shared base persona
 - **bgpdd-discovery** — global context discovery (Iris, Scout, Quinn Mode A)
 - **bgpdd-plan** — design & architecture (Rex, Aria, Alex)
+- **bgpdd-lite** — mid-weight planning for well-specified work (Orchestrator mini-requirements + Alex; hands off to bgpdd-build)
 - **bgpdd-build** — execution (Mason, Quinn Mode B, Luna, Max, Dep)
 - **bgpdd-shipping** — verification & Launch Squad (Quinn Mode C, Cipher, Dep, Forge)
 - **bg-bugfix** — lean RCA → TDD → fix → blast-radius bugfix loop (no squad overhead)
@@ -353,7 +362,7 @@ The plugin's `.mcp.json` wires up four MCP servers used by the testing, review, 
 ## Using the Plugin
 
 1. **Brownfield? Run `/bgpdd-discovery` first** in its own session. Establish the Target Scope (repos, branch, paths), name the APIs when asked (or let a Scout search for the feature's footprint), and let the pipeline build the Tier 1 knowledge base under `.docs/summary/{feature}/`. Take the `/learn` offer at the end if the run had friction. Greenfield projects skip straight to planning.
-2. **Run `/bgpdd-plan` in a fresh session.** Answer the honing questions one at a time — this Q&A runs in the main session because delegated agents can't ask you anything. Approve each phase transition; the pipeline ends by writing `game-tape.md` evidence and `orchestrator-state.json`.
+2. **Run `/bgpdd-plan` in a fresh session.** Answer the honing questions one at a time — this Q&A runs in the main session because delegated agents can't ask you anything. Approve each phase transition; the pipeline ends by writing `game-tape.md` evidence and `orchestrator-state.json`. For well-specified work (a known pattern or contract), run **`/bgpdd-lite`** instead — its Fit Check confirms lite is appropriate, you draft mini-requirements with the Orchestrator, and Alex produces the same gated `plan.md` handoff without honing or architecture phases.
 3. **Run `/bgpdd-build` in a fresh session** (add `auto` to skip per-phase confirmations). The pipeline hydrates from the state file, establishes the working branch (default `feature/{project-name}`), loops the milestones, and commits each green one. Expect halts, not heroics, when a bound is hit.
 4. **Run `/bgpdd-shipping` in a fresh session.** The Launch Squad verifies, the gates check coverage, Step 4.5 opens the PR, and you get a Launch Readiness Report with the manual deploy commands — production deployment stays in your hands.
 5. **Approve Forge's proposals** at Step 7 (or from any `/learn` run) before anything is applied. Review artifacts anytime under `.docs/{project-name}/` (this cycle's work) and `.docs/summary/` (the durable knowledge base).

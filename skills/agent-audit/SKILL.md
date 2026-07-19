@@ -47,8 +47,9 @@ Once you understand the audit metrics, execute the audit following these steps:
 12. **Apply Metric 10 (Wake-Up Context Weight)**: Measure, don't guess. Count the words of the persona file PLUS every "Always"-loaded Methodology Dependency (e.g. `wc -w`). Flag any agent whose unconditional wake-up load exceeds ~2,500 words, and any methodology `SKILL.md` that is not a lean spine (`## Worker Execution Contract` + `references/` deep-dive).
 13. **Apply Metric 11 (Frontmatter & Metadata Hygiene)**: Check that frontmatter is internally consistent across the squad — `phase:` labels form one coherent, collision-free sequence, `model:` tiers exist and fit, `description:` matches what the file actually does, and `depends-on` names real agents.
 14. **Apply Metric 12 (Trigger Collision)**: Ensure worker methodologies do not carry end-user trigger language in their `description:` that competes with the orchestrator pipelines. Worker methodologies must self-identify as squad-internal execution contracts; user-facing triggers belong to the pipeline skills.
-15. **Apply Metric 13 (Cross-Pipeline Consistency)**: Ensure sibling orchestrator SOPs share the same hardening skeleton — Path Resolution, Global System Constraints, Global Error Recovery + circuit breaker, state hydration/persistence (`orchestrator-state.json`), and a Game Tape evidence checkpoint (per-phase pipelines) feeding the single end-of-epic agent-improvement run (bgpdd-shipping). Flag any pipeline missing pieces its siblings have.
+15. **Apply Metric 13 (Cross-Pipeline Consistency)**: Ensure sibling orchestrator SOPs share the same hardening skeleton — Path Resolution, Global System Constraints, Global Error Recovery + circuit breaker, state hydration/persistence (`orchestrator-state.json`), and a Game Tape evidence checkpoint (per-phase pipelines) feeding the single end-of-epic agent-improvement run (bgpdd-shipping). Flag any pipeline missing pieces its siblings have. Treat `orchestrator-state.json` as an inter-pipeline interface, not per-pipeline scratch: verify producer/consumer field-level completeness across sibling pipelines — every field a downstream step reads must exist in the schema the upstream pipeline writes (a field written by one pipeline and silently absent when a sibling reads it is a Blocker).
 16. **Apply Metric 14 (Model Assignment Fit)**: Ensure each agent's `model:` tier matches its task complexity — lightweight scanners on small/fast tiers, architecture/planning/code-writing/meta-editing agents on top tiers, everything else mid-tier.
+17. **Apply Metric 15 (Skill Content Validity & Cross-Skill Contract Coherence)**: Verify the skill's documented content is correct, not just well-structured — (a) every code sample compiles/runs against the real implementation (no undeclared dependencies or missing wiring/registration); (b) the skill is internally non-contradictory and no sample violates its own doctrine; (c) when two skills document opposite ends of one wire contract, both describe the SAME serialized wire shape and name the serialization policy (field names, casing, scalar-vs-object), not each side's source-language declaration shape.
 
 ## Output Format
 
@@ -72,6 +73,7 @@ Deliver your findings as a "Brutally Honest Audit Report". It MUST have three pa
    | 12 | Trigger Collision | … | … |
    | 13 | Cross-Pipeline Consistency | … | … |
    | 14 | Model Assignment Fit | … | … |
+   | 15 | Skill Content Validity & Cross-Skill Contract Coherence | … | … |
 
    Every metric gets a row. `N/A` is allowed only with a one-line reason. Only `FAIL` rows need a detailed prose section below.
 
@@ -84,4 +86,6 @@ For an example of the tone and structure, read:
 
 ## Verify (close the loop)
 
-After the surgery plan is applied, **re-run all 14 metrics against the patched files** and confirm every `FAIL` flips to `PASS`. Report any residual `FAIL`s explicitly — do not declare the audit complete while a Blocker remains.
+After the surgery plan is applied, **re-run all 15 metrics against the patched files** and confirm every `FAIL` flips to `PASS`. Report any residual `FAIL`s explicitly — do not declare the audit complete while a Blocker remains.
+
+- **Grep for stale references after any rename, reorder, or terminology change.** After applying any rename, reorder, or terminology change, grep the ENTIRE plugin tree for every occurrence of the old value (old name, ordering token, renamed term) before declaring surgery complete. A fact mirrored across persona prose, trigger anchors, coverage tables, and pipeline steps is only fixed when zero stale references remain — patching the canonical definition alone is not sufficient. Renames/reorders are the top source of residual FAILs that survive a first pass.

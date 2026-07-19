@@ -15,7 +15,7 @@ blackgoat-agentskills/
 │   ├── agent-squad/
 │   │   ├── SKILL.md             #   The Orchestrator/delegation model
 │   │   └── base-persona.md      #   THE ONE shared base persona (universal invariants)
-│   ├── bgpdd-discovery|plan|build|shipping/SKILL.md   # PDD SOP pipelines
+│   ├── bgpdd-discovery|lite|plan|build|shipping/SKILL.md   # PDD SOP pipelines
 │   ├── bg-bugfix/SKILL.md       #   Lean bugfix SOP
 │   ├── <methodology>/SKILL.md   #   One SKILL.md per methodology
 │   └── <skill>/references/*.md  #   Progressive-disclosure deep dives
@@ -54,6 +54,6 @@ blackgoat-agentskills/
 
 ## Validating a Change
 
-- Run the **`agent-audit`** skill against any agent/methodology you touched. It enforces the structural invariants via 14 heuristics: interface alignment, dependency conflict, role cohesion, escalation-path validity, token efficiency, DRY/contract reuse, orchestrator-vs-methodology collision, context/file bloat, ID traceability, wake-up context weight, frontmatter/metadata hygiene, trigger collision, cross-pipeline consistency, and model-assignment fit. Fill every row of its coverage table; every `FAIL` must flip to `PASS` before you're done.
+- Run the **`agent-audit`** skill against any agent/methodology you touched. It enforces the structural invariants via 15 heuristics: interface alignment, dependency conflict, role cohesion, escalation-path validity, token efficiency, DRY/contract reuse, orchestrator-vs-methodology collision, context/file bloat, ID traceability, wake-up context weight, frontmatter/metadata hygiene, trigger collision, cross-pipeline consistency, model-assignment fit, and skill content validity & cross-skill contract coherence. Fill every row of its coverage table; every `FAIL` must flip to `PASS` before you're done.
 - Independently confirm all `{PLUGIN_ROOT}` dependency paths resolve to existing files.
 - Grep the tree to confirm no `SKILL-CONTRACT.md` and no `base-persona-*` variant files were introduced.

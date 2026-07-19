@@ -90,7 +90,7 @@ Save the finalized plan to `.docs/{project-name}/implementation/plan.md`.
 Before starting implementation, you MUST read the following documents to understand the full context and architectural constraints. Do not proceed until you have read them.
 
 - [Requirements](file:///.docs/[project-name]/requirements.md)
-- [Architecture Blueprint](file:///.docs/[project-name]/design/detailed-design.md)
+- [Architecture Blueprint](file:///.docs/[project-name]/design/detailed-design.md) (when one exists; lite-originated plans link the governing stack contract(s) instead)
 
 ## Task List
 
