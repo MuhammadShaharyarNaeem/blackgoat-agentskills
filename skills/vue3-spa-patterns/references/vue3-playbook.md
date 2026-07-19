@@ -79,8 +79,17 @@ Do NOT extract on first use — inline logic in one component stays in that comp
 // api/http.ts — the ONE instance
 import axios from 'axios'
 
-// Backend's standardized envelope
-interface ApiResponse<T> { success: boolean; data: T; errors: string[] }
+// Backend's standardized envelope — mirrors the WIRE shape of BaseResponse<T> in
+// BG.Infrastructure.Core: C# PascalCase records serialize to camelCase under ASP.NET Core's
+// default JsonSerializerDefaults.Web (see dotnet-backend-patterns/references/response-and-errors.md)
+interface ApiNotification { code: string; message: string; propertyName?: string; actionHint?: string }
+interface BaseResponse<T> {
+  statusCode: number
+  isSuccess: boolean
+  data: T
+  dataContext?: Record<string, unknown>   // e.g. pagination
+  notifications: ApiNotification[]
+}
 
 export const http = axios.create({ baseURL: import.meta.env.VITE_API_URL })
 
@@ -95,10 +104,10 @@ http.interceptors.request.use((config) => {
 let refreshing: Promise<string> | null = null
 
 http.interceptors.response.use(
-  // Unwrap the Response Pattern: callers get `data`, never the envelope
+  // Unwrap the Response Pattern: callers get `Data`, never the envelope
   (res) => {
-    const body = res.data as ApiResponse<unknown>
-    if (body.success === false) return Promise.reject(new ApiError(body.errors))
+    const body = res.data as BaseResponse<unknown>
+    if (body.isSuccess === false) return Promise.reject(new ApiError(body.notifications))
     res.data = body.data
     return res
   },
@@ -116,6 +125,10 @@ http.interceptors.response.use(
   },
 )
 ```
+
+Each notification's `code` is a 6-digit ErrorCode whose TT segment (ErrorTypeCodes 01-05) tells the UI
+how to surface it — inline field error (01), popup (02), toast (03), redirect (04), or silent (05) —
+per `dotnet-backend-patterns/references/response-and-errors.md`.
 
 ```ts
 // BAD: ad-hoc clients scattered through components
