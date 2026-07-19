@@ -54,6 +54,7 @@ public abstract class BaseController<T> : ControllerBase where T : ControllerBas
 
     protected BaseController(IMediator mediator) => _mediator = mediator;
 
+    // DEPRECATED — do not call in new code; use ExecuteWithOKCommandResponse
     protected async Task<IActionResult> ExecuteWithOKResponse<TResponse>(IRequest<TResponse> request)
     {
         try { return BaseResponse<TResponse>.Success(await _mediator.Send(request, HttpContext.RequestAborted)).ToActionResult(); }

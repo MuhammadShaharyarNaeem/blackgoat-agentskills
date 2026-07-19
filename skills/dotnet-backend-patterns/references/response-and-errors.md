@@ -63,6 +63,8 @@ public readonly record struct ErrorCode
 
 **Code registries** — compose codes from these; do not invent magic numbers inline.
 
+**⚠️ The `MicroserviceCodes` (MM) values below are illustrative, from the BG reference implementation — `MicroserviceCodes` is per-project, never copied wholesale.** Every project defines its own `MicroserviceCodes` registry. Before minting any `ErrorCode`, discover the project's existing registry in its error-handling code — do not blindly reuse these values. A project with no microservices registers a single code: `{ProjectName} = 01`.
+
 ```csharp
 // MicroserviceCodes (MM)                 // ErrorTypeCodes (TT) — drives frontend UX behavior
 Authentication  = 01;                     Field_Validations    = 01;  // inline field error
