@@ -48,6 +48,8 @@ This is the operational spine. Follow it as written.
 **Estimated scope:** [Small: 1-2 files | Medium: 3-5 files | Large: 5+ files]
 ```
 
+**Task heading constraint:** The `[N]` in `## Task [N]:` MUST be a bare positive integer (`## Task 6:`) — never letter-suffixed or decorated (`## Task 6a:`, `## Task 6.1:` are invalid). When one requirement must be split across multiple tasks, give each task its own distinct integer number (e.g. Task 6 and Task 7), not sub-letters. The deterministic coverage gate matches only `## Task <integer>:`; any non-integer heading makes that entire task block invisible to the gate, silently dropping every requirement it was meant to cover.
+
 When the plan is built from a `requirements.md` with numbered `FR`/`NFR` IDs, every **Must-Have** requirement (`FR` and `NFR` IDs alike) must be covered by at least one task's "Requirements covered:" field — check this before finalizing the plan.
 
 **Step 5: Order and Checkpoint.** Arrange tasks so that:
@@ -134,6 +136,7 @@ Before starting implementation, confirm:
 - [ ] Every task cites the requirement ID(s) it covers, and every Must-Have requirement is covered by at least one task (FR and NFR)
 - [ ] Task dependencies are identified and ordered correctly
 - [ ] No task touches more than ~5 files
+- [ ] No task's guard conflicts with existing upstream handling of the same input. Before adding a validator/guard on any field, trace that field's full inbound path: if an upstream layer already sanitizes it (clamp, normalize, default, coerce, truncate), the new guard is unreachable dead code and any task asserting rejection of that input can never pass. When both a sanitizer and a rejecting validator are specified for one field, the plan must explicitly choose one policy (reject-with-error vs. silently-sanitize) and delete the other — never leave both.
 - [ ] Checkpoints exist between major phases
 - [ ] The plan has been surfaced for human review — via your `<handoff>` to the Orchestrator when delegated, or directly to the user when running in the main session
 
