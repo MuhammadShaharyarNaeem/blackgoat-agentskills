@@ -43,6 +43,8 @@ If *any* delegated agent (or you, the Orchestrator) exhibits the following behav
 
 **CRITICAL CIRCUIT BREAKER**: You must pass the following rule to every delegated agent in its prompt: "If you encounter the exact same error or test failure 3 times in a row, you MUST stop, document the failure state clearly in your `<handoff>` (what you tried and the exact error), and return immediately to escalate to the Orchestrator. Do NOT attempt a 4th fix."
 
+**NO NESTED DELEGATION**: You must pass the following rule to every delegated agent in its prompt: "Do NOT spawn subagents of your own. If a sub-investigation seems necessary, document what is needed in your `<handoff>` and return — the Orchestrator decides whether to delegate it."
+
 **CONTEXT CHECKPOINTS**: A delegated agent's context is bounded by its own run — you do not need to timebox it. If *you* (the Orchestrator) sense your own context is getting large across phases, checkpoint your state to `.docs/{project-name}/orchestrator-state.json` (see Phase 3's schema) so a fresh session can resume. Do NOT instruct delegated agents to schedule timers or spawn their own replacements — that is your responsibility, not theirs.
 
 ---
@@ -69,7 +71,8 @@ If *any* delegated agent (or you, the Orchestrator) exhibits the following behav
 - **Workflow**:
   1. Draft `.docs/{project-name}/requirements.md` with the user using Rex's exact template. For known-contract work, transcribe the governing stack contract into FRs (e.g. Response Pattern FRs come straight from `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md`). When the governing contract is `dotnet-backend-patterns`, the mini-requirements MUST record the sanctioned API mode (Mode A — CQRS+MediatR, or Mode B — REPR) as an explicit constraint line — workers may not infer it.
   2. **ESCALATION**: If the FR list exceeds ~10 Must-Haves, or ambiguity keeps surfacing as you draft, HALT and recommend `/bgpdd-plan` — the work has outgrown lite.
-  3. The user confirms the file before you proceed to Phase 2.
+  3. **ESCALATION**: If the premise materially changes during drafting (e.g. infrastructure assumed to exist turns out not to), HALT and re-run the Phase 0 Fit Check before continuing — a scope-class change invalidates the original routing.
+  4. The user confirms the file before you proceed to Phase 2.
 
 ### Phase 2: Planning (Alex)
 - **Delegated Agent**: **Alex** (Strategist)

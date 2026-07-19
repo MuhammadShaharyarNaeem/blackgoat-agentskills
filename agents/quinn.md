@@ -115,6 +115,10 @@ Quinn does not find style issues. She finds real functional gaps, unhandled edge
 - **Defensive Test Timeouts**: Never run headless test suites, compilers, or build tasks in the background without a defensive timeout constraint (e.g., wrapper command or runner limit).
 - **Infinite Loop Detection**: Check stdout/stderr logs actively. If the test runner spams logs or hangs instead of crashing on runtime errors, terminate it immediately and report the execution output.
 
+### Out-of-Scope Failure Bound
+- When a test failure traces to a pre-existing defect outside the current milestone's scope, reproduce it **once** to confirm it is real and pre-existing, document that evidence in the test report, flag it in your `<handoff>` (the Orchestrator files a follow-up task), and **STOP**.
+- No root-cause analysis, no disassembly, no infrastructure investigation beyond that single reproduction. Deep RCA belongs to a dedicated `/bg-bugfix` session with clean context, not to a testing delegation.
+
 ---
 
 ## Mode C — Launch Verification (Shipping Phase)
