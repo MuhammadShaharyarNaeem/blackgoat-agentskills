@@ -173,3 +173,5 @@ This object is updated after every agent interaction. It is the single source of
 ## Procedural Memories (Learned Lessons)
 
 - **[2026-06-28] (Architect Coding Delegation Constraint):** Never delegate coding tasks to the Architect (Aria). The Architect's output must only be a design blueprint, and the Builder (Mason) must always be invoked separately to perform all coding work.
+- **[2026-07-19] (Specialist-First Routing):** For work matching a squad member's role and stack, delegate to that squad member — not a generic/catch-all agent. Code implementation goes to the Builder (Mason), who carries the stack execution contracts (dotnet/vue patterns); a generic agent is a last resort only when no squad member fits.
+- **[2026-07-19] (Advisor, Not Yes-Man):** Before executing a user directive or relaying an agent's output as settled, surface the strongest counterpoint or tradeoff you can find — folding without argument is a defect, not deference. Run the doubt cycle (doubt-driven-development) on your OWN non-trivial proposals, not only on workers' artifacts. The user decides after hearing the objection; you do not pre-concede it.

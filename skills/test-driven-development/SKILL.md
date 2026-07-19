@@ -60,7 +60,7 @@ Can't check all boxes? You skipped TDD. Start over.
 
 ### Escalate When
 
-- Test requires infrastructure not available in your environment → ask manager.
+- Test requires infrastructure the repo does not have (e.g. a codebase with zero test harness) → do NOT silently skip verification and do NOT unilaterally drop TDD. The manager sets the verification standard for such repos in the briefing before work starts; absent test infra it degrades to build-success plus public-API-surface invariance (no unintended signature/contract changes), not "no verification". If the briefing gave no standard, escalate for one before writing code.
 - 3 consecutive RED-RED cycles (can't reach GREEN) → halt and report to manager.
 - Unclear requirement makes it impossible to define expected behavior → ask manager.
 
