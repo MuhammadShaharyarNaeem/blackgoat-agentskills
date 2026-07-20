@@ -42,6 +42,7 @@ Wrote code before the test? Delete it. Start over. No exceptions — don't keep 
 - Run the full test suite after each GREEN step.
 - Write minimal code to pass — no speculative features, options, or abstractions (YAGNI).
 - Stack execution contracts (e.g. dotnet-backend-patterns) take precedence over the boundary list above where they conflict — e.g. on .NET, integration tests never mock the database.
+- A hard invariant or Must-Have NFR that must hold permanently (a stable wire/serialization format, a byte-for-byte compatibility contract, a public-API surface) MUST be covered by a PERMANENT automated regression test committed to the suite. A throwaway/temporary harness you delete after checking does NOT satisfy it — and this requirement overrides any plan or checklist step that says "manual check", "temporary check", or "verify once". Throwaway harnesses may supplement, never replace, the committed test.
 
 ### Verification Checklist
 
