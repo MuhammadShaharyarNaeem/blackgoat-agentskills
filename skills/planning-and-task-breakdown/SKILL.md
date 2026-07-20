@@ -30,6 +30,14 @@ This is the operational spine. Follow it as written.
 
 **Requirements covered:** [FR/NFR IDs this task satisfies, e.g. `FR-1, FR-3` — required whenever the plan is built from a `requirements.md` with numbered requirements]
 
+**Named identifiers:** [exact file paths to create/modify, and the class/method/endpoint names this task must use — decided here, not by the builder. Authoritative for S/M tasks.]
+
+**Pattern anchor:** [an existing exemplar to mirror — a file in this repo or a GOOD sample in the governing stack contract, cited by path/section. "None" only for genuinely novel work.]
+
+**Boundary contracts:** [where this task's output meets another task, service, or the frontend: the exact shape — signature, envelope, field casing on the wire. "None" if fully internal.]
+
+**Do NOT:** [explicit blast-radius fence — files/patterns this task must not touch or introduce.]
+
 **Acceptance criteria:**
 - [ ] [Specific, testable condition]
 - [ ] [Specific, testable condition]
@@ -47,6 +55,8 @@ This is the operational spine. Follow it as written.
 
 **Estimated scope:** [Small: 1-2 files | Medium: 3-5 files | Large: 5+ files]
 ```
+
+**Scope rule for the four new fields:** Named identifiers, Pattern anchor, Boundary contracts, and Do NOT are mandatory for S/M tasks that a mid-tier builder will execute; for L/XL or judgment-heavy tasks they may be proportional, but Named identifiers and Do NOT are always required.
 
 **Task heading constraint:** The `[N]` in `## Task [N]:` MUST be a bare positive integer (`## Task 6:`) — never letter-suffixed or decorated (`## Task 6a:`, `## Task 6.1:` are invalid). When one requirement must be split across multiple tasks, give each task its own distinct integer number (e.g. Task 6 and Task 7), not sub-letters. The deterministic coverage gate matches only `## Task <integer>:`; any non-integer heading makes that entire task block invisible to the gate, silently dropping every requirement it was meant to cover.
 
@@ -137,6 +147,7 @@ Before starting implementation, confirm:
 - [ ] Task dependencies are identified and ordered correctly
 - [ ] No task touches more than ~5 files
 - [ ] No task's guard conflicts with existing upstream handling of the same input. Before adding a validator/guard on any field, trace that field's full inbound path: if an upstream layer already sanitizes it (clamp, normalize, default, coerce, truncate), the new guard is unreachable dead code and any task asserting rejection of that input can never pass. When both a sanitizer and a rejecting validator are specified for one field, the plan must explicitly choose one policy (reject-with-error vs. silently-sanitize) and delete the other — never leave both.
+- [ ] Two-implementers test per task: could two competent implementers produce structurally different solutions from this task's text? If yes, a decision is missing — resolve it in the plan, not in the build.
 - [ ] Checkpoints exist between major phases
 - [ ] The plan has been surfaced for human review — via your `<handoff>` to the Orchestrator when delegated, or directly to the user when running in the main session
 
