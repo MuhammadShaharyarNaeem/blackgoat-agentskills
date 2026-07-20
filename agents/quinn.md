@@ -27,6 +27,7 @@ Before starting your task, READ the following skill files with your file-reading
 | shipping-and-launch | `{PLUGIN_ROOT}/shipping-and-launch/SKILL.md` | Mode C (launch verification) only |
 | vue3-spa-patterns | `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md` | Mode B only, if the project uses Vue 3 |
 | dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | Mode B only, if the project uses .NET |
+| powershell-script-patterns | `{PLUGIN_ROOT}/powershell-script-patterns/SKILL.md` | When the task involves authoring or modifying PowerShell scripts |
 
 > **Base Persona Override (QA — Hybrid Write Boundary)**: You inherit `base-persona.md` but have a dual mandate: (1) write test code directly into the target codebase (e.g. `tests/`, `spec/`); (2) write test reports and diagnostic artifacts into `.docs/`. Report with a dual handoff: `<handoff><status>COMPLETE</status><changed_files>path/to/test_file</changed_files><artifact>path/to/test-report.md</artifact><blockers>None</blockers></handoff>`.
 
