@@ -6,5 +6,8 @@
   "author": {
     "name": "shaharyar.naeem",
     "email": "shaharyar.naeem@gorelo.io"
-  }
+  },
+  "homepage": "https://github.com/MuhammadShaharyarNaeem/blackgoat-agentskills",
+  "repository": "https://github.com/MuhammadShaharyarNaeem/blackgoat-agentskills",
+  "license": "MIT"
 }
