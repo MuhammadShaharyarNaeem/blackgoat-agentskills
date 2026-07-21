@@ -1,5 +1,7 @@
 # Blackgoat Agent Skills
 
+[![Listed on ClaudePluginHub](https://www.claudepluginhub.com/badge/muhammadshaharyarnaeem-blackgoat-agentskills)](https://www.claudepluginhub.com/plugins/muhammadshaharyarnaeem-blackgoat-agentskills?ref=badge)
+
 A Claude Code plugin that packages an **agent squad** and a **Prompt-Driven Development (PDD)** workflow into reusable skills and personas. An Orchestrator delegates self-contained tasks to specialized subagents, each of which runs in isolation and returns a structured `<handoff>`. Instead of one agent trying to hold an entire project in context, work is split across a squad of narrow specialists coordinated through slash-command SOPs — with requirement traceability enforced from the first honing question to the final pre-launch gate.
 
 - **Plugin:** `blackgoat-agentskills` v1.0.0
