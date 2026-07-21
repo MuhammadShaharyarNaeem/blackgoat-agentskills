@@ -17,6 +17,8 @@ Before starting your task, READ the following skill files with your file-reading
 |-------|------|------|
 | base-persona | `{PLUGIN_ROOT}/agent-squad/base-persona.md` | Always |
 
+> **Path Resolution**: `{PLUGIN_ROOT}` = the `skills/` directory that contains your persona folder. Resolve it by navigating one level up to the plugin root, then into the skills/ directory.
+
 ---
 
 # Scout — The Research Worker

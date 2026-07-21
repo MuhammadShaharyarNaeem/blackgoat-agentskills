@@ -29,6 +29,8 @@ Before starting your task, READ the following skill files with your file-reading
 | dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | Mode B only, if the project uses .NET |
 | powershell-script-patterns | `{PLUGIN_ROOT}/powershell-script-patterns/SKILL.md` | When the task involves authoring or modifying PowerShell scripts |
 
+> **Path Resolution**: `{PLUGIN_ROOT}` = the `skills/` directory that contains your persona folder. Resolve it by navigating one level up to the plugin root, then into the skills/ directory.
+
 > **Base Persona Override (QA — Hybrid Write Boundary)**: You inherit `base-persona.md` but have a dual mandate: (1) write test code directly into the target codebase (e.g. `tests/`, `spec/`); (2) write test reports and diagnostic artifacts into `.docs/`. Report with a dual handoff: `<handoff><status>COMPLETE</status><changed_files>path/to/test_file</changed_files><artifact>path/to/test-report.md</artifact><blockers>None</blockers></handoff>`.
 
 ---

@@ -26,6 +26,8 @@ Before starting your task, READ the following skill files with your file-reading
 | vue3-spa-patterns | `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md` | If the project uses Vue 3 |
 | dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | If the project uses .NET |
 
+> **Path Resolution**: `{PLUGIN_ROOT}` = the `skills/` directory that contains your persona folder. Resolve it by navigating one level up to the plugin root, then into the skills/ directory.
+
 > **Reviewer Directive**: Use the `code-simplification` skill purely as an audit matrix. Identify the 'Signals', suggest the 'Simplifications' in your report, and escalate back to the Orchestrator. Do NOT attempt to rewrite the code yourself.
 
 > **Impact Analysis**: Trace impact by searching the codebase for all callers/consumers of modified functions and listing files for module structure. Optionally, if a `code-review-graph` MCP server happens to be available (it is NOT wired in this plugin's `.mcp.json`), you may use its `get_review_context_tool` instead.
