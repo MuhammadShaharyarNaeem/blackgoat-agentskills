@@ -21,6 +21,31 @@ The plugin is designed with a deliberate adoption gradient. Each step gives you 
 
 ---
 
+## Installation
+
+Prerequisite: [Claude Code](https://docs.claude.com/en/docs/claude-code) installed.
+
+**Option 1 — Claude Code marketplace (native).**
+
+```
+/plugin marketplace add MuhammadShaharyarNaeem/blackgoat-agentskills
+/plugin install blackgoat-agentskills@blackgoat
+```
+
+**Option 2 — claudepluginhub.**
+
+```bash
+npx claudepluginhub muhammadshaharyarnaeem/blackgoat-agentskills
+```
+
+**Option 3 — Manual clone.**
+
+```bash
+git clone https://github.com/MuhammadShaharyarNaeem/blackgoat-agentskills ~/.claude/skills/blackgoat-agentskills
+```
+
+---
+
 ## Core Concepts
 
 Four ideas underpin everything else in the plugin.
@@ -357,6 +382,17 @@ The plugin's `.mcp.json` wires up four MCP servers used by the testing, review, 
 - **playwright** (`npx @playwright/mcp@latest`) — scripted end-to-end browser flows
 - **linear-mcp-server** (`mcp-remote` → `https://mcp.linear.app/mcp`) — Linear issues/PR context (hosted, requires auth)
 - **github-mcp-server** (`mcp-remote` → GitHub Copilot MCP endpoint) — GitHub operations for PR review; requires `GITHUB_PERSONAL_ACCESS_TOKEN`
+
+---
+
+## Usage Examples
+
+- `/bg-bugfix` — fix a single bug end-to-end: root-cause analysis, a failing test that proves it, the surgical fix, and a blast-radius check. No squad, no pipeline.
+- "have Luna review this diff" — delegate one task to one specialist ad hoc; Luna runs in isolation and returns a `<handoff>` with her findings.
+- "have Quinn write tests for this module" — same ad-hoc delegation pattern, aimed at test coverage instead of review.
+- `/bgpdd-lite` — the mid-weight lane for well-specified work: write mini-requirements with the Orchestrator, Alex plans, the coverage gate checks traceability, then hand off to build.
+- `/bgpdd-plan` → `/bgpdd-build` → `/bgpdd-shipping` — the full pipeline for a feature big enough to warrant discovery, honing, architecture, staged building, and a gated launch, each run in its own fresh session.
+- `/learn` — after a session with friction or a systemic lesson, route it through Forge's Learning Triage instead of letting it evaporate.
 
 ---
 
