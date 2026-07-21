@@ -5,6 +5,8 @@ A Claude Code plugin that packages an **agent squad** and a **Prompt-Driven Deve
 - **Plugin:** `blackgoat-agentskills` v1.0.0
 - **Author:** shaharyar.naeem (shaharyar.naeem@gorelo.io)
 
+![blackgoat-agentskills: claude plugin validate passing, the plugin manifest, and the 13-agent squad inventory](assets/preview.svg)
+
 ---
 
 ## Start Here: You Don't Need the Whole System on Day One
