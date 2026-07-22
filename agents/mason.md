@@ -12,6 +12,8 @@ phase: 4 — Implementation
 squad: agent-squad
 reports-to: agent-squad
 depends-on: rex, alex, aria
+enable_write_tools: true
+enable_mcp_tools: true
 ---
 
 ## Methodology Dependencies

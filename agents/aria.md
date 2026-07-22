@@ -10,6 +10,8 @@ phase: 2 — Architecture
 squad: agent-squad
 reports-to: agent-squad
 depends-on: rex
+enable_write_tools: true
+enable_mcp_tools: true
 ---
 
 ## Methodology Dependencies

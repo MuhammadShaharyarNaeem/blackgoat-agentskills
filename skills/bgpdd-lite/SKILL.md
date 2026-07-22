@@ -1,6 +1,7 @@
 ---
 name: bgpdd-lite
 description: The mid-weight PDD pipeline for well-specified work. Skips honing and architecture (no Rex Q&A, no Aria) but keeps FR/NFR traceability and the coverage gate. You write mini-requirements with the Orchestrator, Alex plans, then /bgpdd-build executes. Use when the spec is already known (e.g. applying an established pattern or contract) and full /bgpdd-plan would be overkill.
+trigger: /bgpdd-lite
 ---
 
 # End-to-End Multi-Agent PDD: Lite Planning Phase (bgPDD-Lite)

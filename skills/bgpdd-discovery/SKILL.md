@@ -1,6 +1,7 @@
 ---
 name: bgpdd-discovery
 description: Phase 0 of the Prompt-Driven Development SOP (Global Context Discovery). Uses Iris and Scout to research global tech stacks, reverse-engineer legacy QA, and map out APIs before detailed feature planning begins.
+trigger: /bgpdd-discovery
 ---
 
 # End-to-End Multi-Agent PDD: Global Discovery (bgPDD-Discovery)
@@ -100,6 +101,6 @@ already exists, the responsible agent must flag it so you can ask the user wheth
 ### Phase 5: Session Learning Offer (Orchestrator)
 - **Delegated Agent**: None — the Orchestrator performs this phase directly.
 - **Workflow**:
-  1. Discovery is global-tier and runs outside any epic — no `.docs/{project-name}/` exists, so there is no game tape to append to and no end-of-epic Forge run will see this session's evidence. Instead, offer the user an on-demand **`/learn`** run now to capture lessons (Did Iris miss any tech-stack details? Did a Scout struggle to map its API?) while this session's evidence is still alive.
+  1. Discovery is global-tier and runs outside any epic — no `.docs/{project-name}/` exists, so there is no game tape to append to and no end-of-epic Forge run will see this session's evidence. Instead, offer the user an on-demand **`/bgpdd-learn`** run now to capture lessons (Did Iris miss any tech-stack details? Did a Scout struggle to map its API?) while this session's evidence is still alive.
   2. If the user declines, simply summarize any run friction in your closing message — do NOT delegate Forge.
   3. The discovery pipeline is complete. Instruct the user to open a new chat session and run `/bgpdd-plan` to begin feature-level planning — it will consume the `.docs/summary/` knowledge base you just built.

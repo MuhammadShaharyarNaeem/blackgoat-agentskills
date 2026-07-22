@@ -1,6 +1,7 @@
 ---
 name: bgpdd-build
 description: Phase 2 of the Prompt-Driven Development SOP (Execution). Takes an existing implementation plan and executes it using Mason, Quinn, Luna, Max, and Dep.
+trigger: /bgpdd-build
 ---
 
 # End-to-End Multi-Agent PDD: Execution Phase (bgPDD-Build)
@@ -141,4 +142,4 @@ This is **Tier 2** — the per-enhancement work dir (`.docs/{project-name}/`): t
 - **Delegated Agent**: None — the Orchestrator performs this phase directly. No delegation, no halt.
 - **Workflow**:
   1. While your session context is still alive, append a `## bgpdd-build — [date]` section to `.docs/{project-name}/implementation/game-tape.md` (create the file if it does not exist). At most 10 bullets, covering: user corrections made, agent failures/retries, re-delegation rounds and why, circuit-breaker trips, gates that were rubber-stamped vs. genuinely exercised, and this session's id/transcript path if the runtime exposes it (Claude Code: `~/.claude/projects/<project-slug>/<session-id>.jsonl`).
-  2. This evidence feeds the SINGLE end-of-epic Forge run in `bgpdd-shipping` Step 7 — do NOT delegate Forge here. If this run went badly enough that lessons should not wait for the epic to ship, offer the user an on-demand `/learn` run now instead.
+  2. This evidence feeds the SINGLE end-of-epic Forge run in `bgpdd-shipping` Step 7 — do NOT delegate Forge here. If this run went badly enough that lessons should not wait for the epic to ship, offer the user an on-demand `/bgpdd-learn` run now instead.

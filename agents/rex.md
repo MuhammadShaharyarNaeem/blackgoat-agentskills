@@ -9,6 +9,8 @@ role: Requirements Analyst
 phase: 1 — Requirements
 squad: agent-squad
 reports-to: agent-squad
+enable_write_tools: true
+enable_mcp_tools: true
 ---
 
 ## Methodology Dependencies

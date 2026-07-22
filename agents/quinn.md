@@ -10,6 +10,8 @@ phase: Discovery — Legacy QA Discovery (Mode A) / 5 — Testing (Mode B) / 8 �
 squad: agent-squad
 reports-to: agent-squad
 depends-on: rex, alex, mason, luna
+enable_write_tools: true
+enable_mcp_tools: true
 ---
 
 > **Frontmatter note**: `depends-on` (rex, alex, mason, luna) applies to **Mode B (build-phase testing) only** — those artifacts exist by the time Mode B runs. **Mode A (Legacy QA Discovery)** runs in the discovery phase (`bgpdd-discovery`), before Rex has even started, and depends on nothing but the per-API `{api}.md` files the Scouts wrote earlier in that same discovery run.

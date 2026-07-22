@@ -42,7 +42,7 @@ Follow this strict 5-phase sequence sequentially. Do not skip phases.
 
 ### Phase 5: Procedural Memory Update
 1. **Evaluate**: Determine if the bug was a unique typo or a systemic misunderstanding.
-2. **Route**: If a systemic lesson was learned, tell the user and suggest running `/learn` — lessons are routed through Forge's Destination Triage with pruning and explicit approval, never appended ad-hoc.
+2. **Route**: If a systemic lesson was learned, tell the user and suggest running `/bgpdd-learn` — lessons are routed through Forge's Destination Triage with pruning and explicit approval, never appended ad-hoc.
 
 ## Limitations
 - Use this skill only for localized bug fixes. For sweeping architectural changes, use the full `bgpdd-build` methodology instead.

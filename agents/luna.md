@@ -10,6 +10,8 @@ phase: 6 — Code Review
 squad: agent-squad
 reports-to: agent-squad
 depends-on: mason, aria
+enable_write_tools: true
+enable_mcp_tools: true
 ---
 
 ## Methodology Dependencies

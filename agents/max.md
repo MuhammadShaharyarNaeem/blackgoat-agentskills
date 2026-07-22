@@ -10,6 +10,8 @@ phase: 7 — Refactoring
 squad: agent-squad
 reports-to: agent-squad
 depends-on: mason, luna, quinn
+enable_write_tools: true
+enable_mcp_tools: true
 ---
 
 ## Methodology Dependencies

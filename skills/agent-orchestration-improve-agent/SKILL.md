@@ -16,7 +16,7 @@ This workflow enables an agent (specifically the `forge` persona) to autonomousl
 - A build cycle has completed (successfully or unsuccessfully).
 - You need to analyze why a subagent failed, timed out, or produced bad code.
 - You need to update an agent's instructions so they don't repeat the same mistake.
-- The user invokes `/learn` after any session (Learning Triage mode) — not only pipeline-end improvement phases.
+- The user invokes `/bgpdd-learn` after any session (Learning Triage mode) — not only pipeline-end improvement phases.
 
 ## Do not use this skill when
 - You are actively writing code or designing architecture.
@@ -76,7 +76,7 @@ Before proposing a new rule, you MUST read the ENTIRE target agent's `SKILL.md` 
 
 ## Destination Triage (Learning Triage Mode)
 
-When invoked via `/learn` (or whenever a lesson's home is not predetermined), route each formulated rule to exactly ONE layer — this is the agent-audit Golden Rule (personas = WHO, skills = HOW) plus the Abstraction Rule (elevate → generalize → move) applied to learning:
+When invoked via `/bgpdd-learn` (or whenever a lesson's home is not predetermined), route each formulated rule to exactly ONE layer — this is the agent-audit Golden Rule (personas = WHO, skills = HOW) plus the Abstraction Rule (elevate → generalize → move) applied to learning:
 
 | Lesson is... | Destination |
 |---|---|
@@ -97,7 +97,7 @@ Every proposed lesson must name its destination and a one-line rationale for tha
 2. Format the file clearly, showing exactly which `SKILL.md` file you intend to modify, and the exact text you intend to append.
 3. Terminate your execution and report back to the Orchestrator that the proposal is ready for Human review.
 
-> **Learning Triage mode (`/learn`) exception**: skip the review artifact — return the formatted proposal directly in your `<handoff>` instead of writing `agent-improvements.md`. The Orchestrator relays it to the user.
+> **Learning Triage mode (`/bgpdd-learn`) exception**: skip the review artifact — return the formatted proposal directly in your `<handoff>` instead of writing `agent-improvements.md`. The Orchestrator relays it to the user.
 
 ---
 

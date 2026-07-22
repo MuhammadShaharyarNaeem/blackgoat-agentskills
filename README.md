@@ -11,7 +11,7 @@ A Claude Code plugin that packages an **agent squad** and a **Prompt-Driven Deve
 
 The plugin is designed with a deliberate adoption gradient. Each step gives you value on its own; none requires the previous one.
 
-**Step 1 — Fix one bug with `/bg-bugfix`.** One command, one bug, zero squad overhead. It walks a strict 5-phase sequence: root-cause analysis (no code edits allowed until the cause is stated), a failing test that *proves* the bug (TDD), the surgical fix, a blast-radius check on every consumer of what you touched, and finally an offer to route any systemic lesson through `/learn`. If you currently debug with ad-hoc prompts, this is the smallest possible taste of what disciplined gates feel like.
+**Step 1 — Fix one bug with `/bg-bugfix`.** One command, one bug, zero squad overhead. It walks a strict 5-phase sequence: root-cause analysis (no code edits allowed until the cause is stated), a failing test that *proves* the bug (TDD), the surgical fix, a blast-radius check on every consumer of what you touched, and finally an offer to route any systemic lesson through `/bgpdd-learn`. If you currently debug with ad-hoc prompts, this is the smallest possible taste of what disciplined gates feel like.
 
 **Step 2 — Delegate one task to one agent.** Every squad member can be invoked ad hoc, at any project state: "have Luna review this diff", "have Cipher audit the auth routes", "have Quinn write tests for this module". The agent runs in isolation, does exactly its job, and returns a handoff. No pipeline required.
 
@@ -108,7 +108,7 @@ Every agent lives in `agents/<name>.md` with frontmatter declaring its `role`, `
 | **Max** | Optimizer / Refactorer | sonnet | Build — Phase 7 (Refactoring, conditional) |
 | **Cipher** | Security Auditor | sonnet | Shipping — Phase 8 (Security) |
 | **Dep** | DevOps Engineer | sonnet | Build epic gate + Shipping — Phase 9 (Deployment) |
-| **Forge** | Meta-Engineer / System Coach | opus | End of epic (bgpdd-shipping Step 7); `/learn` on demand — always human-approved |
+| **Forge** | Meta-Engineer / System Coach | opus | End of epic (bgpdd-shipping Step 7); `/bgpdd-learn` on demand — always human-approved |
 
 Blurbs, in one line each: Iris scans repos and records the tech stack and Target Scope. Scout maps one feature's fragments inside one API and writes exactly one file. Rex turns a honing transcript into an ID'd, testable spec. Aria designs the data model, contracts, and file structure (design only — a learned squad rule forbids delegating coding to the Architect). Alex converts the blueprint into a dependency-ordered task plan where every task cites the requirements it covers. Mason writes the code, TDD-first, inside a strict blast radius. Quinn proves things work — by reverse-engineering legacy QA, by testing fresh builds, or by running the launch checklist. Luna reviews for correctness, readability, architecture, security, and performance without rewriting anything. Max refactors for clarity with tests staying green. Cipher hardens boundaries. Dep owns containers, CI/CD, rollback plans, and the GO/NO-GO verdict. Forge coaches the squad itself.
 
@@ -123,7 +123,7 @@ flowchart TD
     subgraph S1["Session 1: /bgpdd-discovery (brownfield only)"]
         A1["Iris: tech stack + Target Scope"] --> A2["Scouts in parallel: one per API group"]
         A2 --> A3["Orchestrator: synthesis gate"] --> A4["Quinn Mode A: overview + QA baseline"]
-        A4 --> A5["Phase 5: optional /learn offer"]
+        A4 --> A5["Phase 5: optional /bgpdd-learn offer"]
     end
     subgraph S2["Session 2: /bgpdd-plan"]
         B1["Hybrid honing: main session Q&A, then isolated Rex writes requirements.md"]
@@ -151,7 +151,7 @@ flowchart TD
 
 Phase by phase:
 
-- **`/bgpdd-discovery` (Phase 0)** — brownfield only. The Orchestrator establishes the Target Scope (repos, branch, local paths) up front, Iris writes `context.md`, you name the APIs holding the feature's fragments (the SOP hard-halts rather than hallucinate a list; a single Scout can run a footprint search if you don't know), Scouts fan out in parallel, and Quinn synthesizes the cross-API overview plus a reverse-engineered QA baseline. Phase 5 offers an optional `/learn` run — discovery is global-tier and outside any epic, so no game tape exists to catch its lessons later.
+- **`/bgpdd-discovery` (Phase 0)** — brownfield only. The Orchestrator establishes the Target Scope (repos, branch, local paths) up front, Iris writes `context.md`, you name the APIs holding the feature's fragments (the SOP hard-halts rather than hallucinate a list; a single Scout can run a footprint search if you don't know), Scouts fan out in parallel, and Quinn synthesizes the cross-API overview plus a reverse-engineered QA baseline. Phase 5 offers an optional `/bgpdd-learn` run — discovery is global-tier and outside any epic, so no game tape exists to catch its lessons later.
 - **`/bgpdd-plan` (Phase 1)** — has a brownfield Pre-Flight Check that halts if the Tier 1 knowledge base is missing. Honing is **hybrid**: the live one-question-at-a-time Q&A runs in the main session (a delegated agent can't pause to ask you things), then an isolated Rex synthesizes `requirements.md` from the transcript. Aria designs, Alex plans, the Phase 3.5 gate checks coverage, and Phase 4 writes the game tape and the state file.
 - **`/bgpdd-lite` (Plan, lite)** — agents: Alex (+ Orchestrator mini-requirements). Produces `requirements.md`, `implementation/plan.md`, and `orchestrator-state.json` → hands off to `/bgpdd-build`. No honing, no Aria; the governing stack contract stands in for the blueprint, and the same coverage gate still applies.
 - **`/bgpdd-build` (Phase 2)** — the milestone loop, detailed below.
@@ -284,12 +284,12 @@ flowchart TD
     F --> PR["agent-improvements.md proposals"]
     PR --> HA["HALT - explicit human approval required"]
     HA --> AP["Fresh Forge applies approved changes<br/>to SKILL.md / persona files"]
-    LN["/learn - mid-epic escape valve:<br/>Forge Learning Triage routes each lesson to<br/>project rules, a persona, or a methodology skill"] -.-> HA
+    LN["/bgpdd-learn - mid-epic escape valve:<br/>Forge Learning Triage routes each lesson to<br/>project rules, a persona, or a methodology skill"] -.-> HA
 ```
 
 Each pipeline ends with a cheap, no-halt Orchestrator step: append at most 10 bullets of evidence to `game-tape.md` while the session's context is still alive. Forge reads that file *first* at epic end, then the durable reports, then — under a hard filtered-read rule — greps targeted slices of session transcripts (user messages, correction phrases, `<handoff>` blocks, error patterns) without ever full-reading one. Nothing he proposes is applied without your explicit approval.
 
-When lessons shouldn't wait for the epic to ship — or when there is no epic at all, as in discovery's Phase 5 offer — **`/learn`** is the on-demand escape valve: same Forge, same approval gate, but the plan comes back inside his handoff and each lesson is triaged to the layer where it belongs.
+When lessons shouldn't wait for the epic to ship — or when there is no epic at all, as in discovery's Phase 5 offer — **`/bgpdd-learn`** is the on-demand escape valve: same Forge, same approval gate, but the plan comes back inside his handoff and each lesson is triaged to the layer where it belongs.
 
 ---
 
@@ -325,7 +325,7 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 ### Meta skills (operate on the plugin itself)
 - **agent-audit** — audits personas/dependencies against 14 structural heuristics
 - **agent-orchestration-improve-agent** — log parsing → procedural-memory generation (Forge's core methodology)
-- **learn** — `/learn`, the on-demand session-learning triage (Orchestrator + Forge)
+- **bgpdd-learn** — `/bgpdd-learn`, the on-demand session-learning triage (Orchestrator + Forge)
 - **skill-creator** — scaffolds new CLI skills to Anthropic best practices
 
 ### Standalone tools
@@ -362,8 +362,8 @@ The plugin's `.mcp.json` wires up four MCP servers used by the testing, review, 
 
 ## Using the Plugin
 
-1. **Brownfield? Run `/bgpdd-discovery` first** in its own session. Establish the Target Scope (repos, branch, paths), name the APIs when asked (or let a Scout search for the feature's footprint), and let the pipeline build the Tier 1 knowledge base under `.docs/summary/{feature}/`. Take the `/learn` offer at the end if the run had friction. Greenfield projects skip straight to planning.
+1. **Brownfield? Run `/bgpdd-discovery` first** in its own session. Establish the Target Scope (repos, branch, paths), name the APIs when asked (or let a Scout search for the feature's footprint), and let the pipeline build the Tier 1 knowledge base under `.docs/summary/{feature}/`. Take the `/bgpdd-learn` offer at the end if the run had friction. Greenfield projects skip straight to planning.
 2. **Run `/bgpdd-plan` in a fresh session.** Answer the honing questions one at a time — this Q&A runs in the main session because delegated agents can't ask you anything. Approve each phase transition; the pipeline ends by writing `game-tape.md` evidence and `orchestrator-state.json`. For well-specified work (a known pattern or contract), run **`/bgpdd-lite`** instead — its Fit Check confirms lite is appropriate, you draft mini-requirements with the Orchestrator, and Alex produces the same gated `plan.md` handoff without honing or architecture phases.
 3. **Run `/bgpdd-build` in a fresh session** (add `auto` to skip per-phase confirmations). The pipeline hydrates from the state file, establishes the working branch (default `feature/{project-name}`), loops the milestones, and commits each green one. Expect halts, not heroics, when a bound is hit.
 4. **Run `/bgpdd-shipping` in a fresh session.** The Launch Squad verifies, the gates check coverage, Step 4.5 opens the PR, and you get a Launch Readiness Report with the manual deploy commands — production deployment stays in your hands.
-5. **Approve Forge's proposals** at Step 7 (or from any `/learn` run) before anything is applied. Review artifacts anytime under `.docs/{project-name}/` (this cycle's work) and `.docs/summary/` (the durable knowledge base).
+5. **Approve Forge's proposals** at Step 7 (or from any `/bgpdd-learn` run) before anything is applied. Review artifacts anytime under `.docs/{project-name}/` (this cycle's work) and `.docs/summary/` (the durable knowledge base).

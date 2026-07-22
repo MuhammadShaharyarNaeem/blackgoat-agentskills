@@ -1,6 +1,7 @@
 ---
-name: learn
-description: "Captures lessons from the current session and routes them to the right layer — project rules file, agent persona, or methodology skill — via Forge's Learning Triage. Use after any session with corrections, failures, or repeated friction: trigger with /learn, 'capture lessons', 'what did we learn'. Squad-internal: run by the main-session Orchestrator, never by delegated subagents."
+name: bgpdd-learn
+description: "Captures lessons from the current session and routes them to the right layer — project rules file, agent persona, or methodology skill — via Forge's Learning Triage. Use after any session with corrections, failures, or repeated friction: trigger with /bgpdd-learn, 'capture lessons', 'what did we learn'. Squad-internal: run by the main-session Orchestrator, never by delegated subagents."
+trigger: /bgpdd-learn
 ---
 
 # Learn — Session Learning Triage
