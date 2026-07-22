@@ -19,6 +19,8 @@ To provide a lean, sequential methodology for fixing bugs without the bureaucrat
 
 Follow this strict 5-phase sequence sequentially. Do not skip phases.
 
+> **Conditional methodology loading**: If the bug involves a PowerShell script — a standalone `.ps1` or a script embedded in a host-language string (e.g. a C# string literal) — read `{PLUGIN_ROOT}/powershell-script-patterns/SKILL.md` before Phase 2 and follow its Worker Execution Contract (extract-test-re-embed, execution testing, external URL verification). `{PLUGIN_ROOT}` = this plugin's `skills/` directory (the directory containing this skill's folder). You are the main session, not a delegated subagent — where that contract says to escalate via `<handoff>` to the Orchestrator, ask the user directly instead.
+
 ### Phase 1: Root Cause Analysis (RCA)
 1. **Trace**: Use Grep and Read to trace the execution path.
 2. **Identify**: Isolate the specific mechanism of the failure.

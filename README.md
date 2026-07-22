@@ -1,9 +1,13 @@
 # Blackgoat Agent Skills
 
+[![Listed on ClaudePluginHub](https://www.claudepluginhub.com/badge/muhammadshaharyarnaeem-blackgoat-agentskills)](https://www.claudepluginhub.com/plugins/muhammadshaharyarnaeem-blackgoat-agentskills?ref=badge)
+
 A Claude Code plugin that packages an **agent squad** and a **Prompt-Driven Development (PDD)** workflow into reusable skills and personas. An Orchestrator delegates self-contained tasks to specialized subagents, each of which runs in isolation and returns a structured `<handoff>`. Instead of one agent trying to hold an entire project in context, work is split across a squad of narrow specialists coordinated through slash-command SOPs — with requirement traceability enforced from the first honing question to the final pre-launch gate.
 
 - **Plugin:** `blackgoat-agentskills` v1.0.0
 - **Author:** shaharyar.naeem (shaharyar.naeem@gorelo.io)
+
+![blackgoat-agentskills: claude plugin validate passing, the plugin manifest, and the 13-agent squad inventory](assets/preview.svg)
 
 ---
 
@@ -18,6 +22,31 @@ The plugin is designed with a deliberate adoption gradient. Each step gives you 
 **Step 3 — Run `/bgpdd-lite` for well-specified work.** The mid-weight lane: no honing Q&A, no Aria — you write mini-requirements with the Orchestrator (Rex's template, stable FR/NFR IDs), Alex plans, the coverage gate checks traceability, and the state file hands off to `/bgpdd-build`. A five-question fit check up front routes anything contested or cross-boundary to the full pipeline instead.
 
 **Step 4 — Run the full PDD pipeline** when a feature is big enough to warrant discovery, planning, staged building, and a gated launch. That's the rest of this README.
+
+---
+
+## Installation
+
+Prerequisite: [Claude Code](https://docs.claude.com/en/docs/claude-code) installed.
+
+**Option 1 — Claude Code marketplace (native).**
+
+```
+/plugin marketplace add MuhammadShaharyarNaeem/blackgoat-agentskills
+/plugin install blackgoat-agentskills@blackgoat
+```
+
+**Option 2 — claudepluginhub.**
+
+```bash
+npx claudepluginhub muhammadshaharyarnaeem/blackgoat-agentskills
+```
+
+**Option 3 — Manual clone.**
+
+```bash
+git clone https://github.com/MuhammadShaharyarNaeem/blackgoat-agentskills ~/.claude/skills/blackgoat-agentskills
+```
 
 ---
 
@@ -357,6 +386,17 @@ The plugin's `.mcp.json` wires up four MCP servers used by the testing, review, 
 - **playwright** (`npx @playwright/mcp@latest`) — scripted end-to-end browser flows
 - **linear-mcp-server** (`mcp-remote` → `https://mcp.linear.app/mcp`) — Linear issues/PR context (hosted, requires auth)
 - **github-mcp-server** (`mcp-remote` → GitHub Copilot MCP endpoint) — GitHub operations for PR review; requires `GITHUB_PERSONAL_ACCESS_TOKEN`
+
+---
+
+## Usage Examples
+
+- `/bg-bugfix` — fix a single bug end-to-end: root-cause analysis, a failing test that proves it, the surgical fix, and a blast-radius check. No squad, no pipeline.
+- "have Luna review this diff" — delegate one task to one specialist ad hoc; Luna runs in isolation and returns a `<handoff>` with her findings.
+- "have Quinn write tests for this module" — same ad-hoc delegation pattern, aimed at test coverage instead of review.
+- `/bgpdd-lite` — the mid-weight lane for well-specified work: write mini-requirements with the Orchestrator, Alex plans, the coverage gate checks traceability, then hand off to build.
+- `/bgpdd-plan` → `/bgpdd-build` → `/bgpdd-shipping` — the full pipeline for a feature big enough to warrant discovery, honing, architecture, staged building, and a gated launch, each run in its own fresh session.
+- `/learn` — after a session with friction or a systemic lesson, route it through Forge's Learning Triage instead of letting it evaporate.
 
 ---
 

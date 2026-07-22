@@ -20,6 +20,10 @@ When your task is complete:
 
 Do NOT attempt to "hand off" tasks to the next agent. The Orchestrator handles all routing and state transitions.
 
+## Handling Ambiguity & Requirement Confusion
+
+If a requirement, task, or blueprint is unclear, internally contradictory, or there is any real chance you would be guessing at what was intended, STOP and clear the confusion BEFORE writing code against a guessed interpretation. As an isolated subagent you cannot ask the user directly mid-task, so "ask" means: document the specific ambiguity and your candidate interpretations in your `<handoff>` and return immediately, letting the Orchestrator resolve it. A wrong guess that reaches implementation is far more expensive to unwind than a clarifying round-trip — never bury an assumption silently just to keep moving.
+
 ## Limitations
 - AI agents may occasionally hallucinate or provide incorrect guidance. Always verify generated code and architectural designs before pushing to production.
 - Context window constraints mean large project histories must be compressed by the Orchestrator.
