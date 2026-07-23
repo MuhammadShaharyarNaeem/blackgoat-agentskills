@@ -69,6 +69,9 @@ When the plan is built from a `requirements.md` with numbered `FR`/`NFR` IDs, ev
 3. Verification checkpoints occur after every 2-3 tasks
 4. High-risk tasks are early (fail fast)
 
+### Multi-Frontend Shared Component Dependency Rule
+For multi-frontend workspace architectures, initial Phase 1 / Foundation task breakdowns MUST include establishing shared package infrastructure (e.g. `packages/ui`) before application-level development. Application tasks MUST list completion of shared UI component primitives as explicit prerequisites.
+
 Add explicit checkpoints:
 
 ```markdown
@@ -148,6 +151,7 @@ Before starting implementation, confirm:
 - [ ] No task touches more than ~5 files
 - [ ] No task's guard conflicts with existing upstream handling of the same input. Before adding a validator/guard on any field, trace that field's full inbound path: if an upstream layer already sanitizes it (clamp, normalize, default, coerce, truncate), the new guard is unreachable dead code and any task asserting rejection of that input can never pass. When both a sanitizer and a rejecting validator are specified for one field, the plan must explicitly choose one policy (reject-with-error vs. silently-sanitize) and delete the other — never leave both.
 - [ ] Two-implementers test per task: could two competent implementers produce structurally different solutions from this task's text? If yes, a decision is missing — resolve it in the plan, not in the build.
+- [ ] Stack Blueprint Verification: Verify that all stack-mandated patterns (e.g., Resource project isolation, Response envelope `.ToResult()`, FluentValidation for .NET backend APIs) from active stack methodology skills are explicitly mapped to concrete implementation tasks.
 - [ ] Checkpoints exist between major phases
 - [ ] The plan has been surfaced for human review — via your `<handoff>` to the Orchestrator when delegated, or directly to the user when running in the main session
 
