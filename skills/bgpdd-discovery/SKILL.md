@@ -25,6 +25,7 @@ When you inject a resolved `base-persona.md` path into a delegation brief, it li
 - **Upgraded Chain-of-Thought**: Before transitioning between phases, you MUST explicitly verify that the required artifact exists.
   - *Format*: "Thinking: Phase X requires Y. Checking `.docs/summary/...`... File exists. Proceeding."
 - **Global Context Scope (Architectural Rule)**: The discovery agents (Iris, Scout, Echo) perform **project-scope** repository analysis. Their artifacts MUST be written under `.docs/summary/` (e.g., `.docs/summary/context.md`). Never let them output to a per-enhancement feature directory (`.docs/{project-name}/`) — that is Tier-2, owned by `bgpdd-plan`.
+- **Command Timeout Discipline (Anti-Hang)**: The 4-minute rule in `base-persona.md` applies to YOU as well. Every shell command you run directly MUST carry an explicit timeout of at most 4 minutes (240s). On a timeout: capture partial output, never re-run unchanged — one retry with a stated fix, or a single justified longer bound for a known-long operation. A second timeout on the same command is a failure under Global Error Recovery.
 
 ## 2. Global Error Recovery
 

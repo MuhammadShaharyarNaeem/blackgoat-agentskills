@@ -32,6 +32,7 @@ When you inject a resolved `base-persona.md` path into a delegation brief, it li
 - **Strict Progressive Disclosure (Working Memory)**: Never pass the entire project history or the full `.docs/` folder to a delegated agent. Extract and pass ONLY the specific "Working Memory" chunk they need for their current task. Overloading context causes downstream hallucination.
 - **File Artifacts**: All artifacts must use standard GitHub markdown and be saved under `.docs/{project-name}/`. This folder is the project's persistent **Semantic Memory**.
 - **Two-Tier Path Model**: **Tier 1** (`.docs/summary/{feature}/`) is the durable global knowledge base produced by `/bgpdd-discovery` — read-only for this pipeline. **Tier 2** (`.docs/{project-name}/`) is this enhancement's read-write workspace. Never write lite artifacts into Tier 1.
+- **Command Timeout Discipline (Anti-Hang)**: The 4-minute rule in `base-persona.md` applies to YOU as well. Every shell command you run directly (coverage gates, git operations, verification checks) MUST carry an explicit timeout of at most 4 minutes (240s). On a timeout: capture partial output, never re-run unchanged — one retry with a stated fix, or a single justified longer bound for a known-long operation. A second timeout on the same command is a failure under Global Error Recovery.
 
 ## 2. Global Error Recovery
 

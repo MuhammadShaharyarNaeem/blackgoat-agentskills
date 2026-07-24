@@ -34,6 +34,7 @@ When you inject a resolved `base-persona.md` path into a delegation brief, it li
   - *Format*: "Thinking: Phase X requires Y. Checking `.docs/{project-name}/Y`... File exists and is populated. Proceeding."
 - **Strict Progressive Disclosure (Working Memory)**: Never pass the entire project history or the full `.docs/` folder to a delegated agent. Extract and pass ONLY the specific "Working Memory" chunk they need. Overloading context causes downstream hallucination.
 - **File Artifacts**: All artifacts must use standard GitHub markdown and be saved under `.docs/{project-name}/`.
+- **Command Timeout Discipline (Anti-Hang)**: The 4-minute rule in `base-persona.md` applies to YOU as well. Every shell command you run directly (coverage gates, git operations, verification checks) MUST carry an explicit timeout of at most 4 minutes (240s). On a timeout: capture partial output, never re-run unchanged — one retry with a stated fix, or a single justified longer bound for a known-long operation. A second timeout on the same command is a failure under Global Safety Mechanisms.
 
 ## 2. Global Safety Mechanisms
 
