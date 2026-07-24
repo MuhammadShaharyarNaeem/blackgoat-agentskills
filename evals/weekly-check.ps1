@@ -126,6 +126,9 @@ foreach ($f in $changedFiles) {
     if ($f -match 'agents/vera\.md$' -or $f -match 'skills/shipping-and-launch/') {
         [void]$affectedEvals.Add('contract:vera-verification-shape')
     }
+    if ($f -match 'agents/dep\.md$' -or $f -match 'skills/shipping-and-launch/' -or $f -match 'skills/cloud-deploy-patterns/') {
+        [void]$affectedEvals.Add('contract:dep-ship-decision-shape')
+    }
     if ($f -match 'SKILL\.md$') {
         # Any SKILL.md's frontmatter `description` is what drives skill routing.
         [void]$affectedEvals.Add('trigger')

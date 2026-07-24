@@ -1,7 +1,7 @@
 {
   "name": "blackgoat-agentskills",
   "displayName": "Blackgoat Agent Skills",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Blackgoat's custom skills and agents (agent squad, PDD workflow, dev practices)",
   "author": {
     "name": "shaharyar.naeem",

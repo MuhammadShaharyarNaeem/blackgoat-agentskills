@@ -13,7 +13,7 @@
     <text x="24" y="138" fill="#c9d1d9"><tspan fill="#3fb950">$ </tspan>cat .claude-plugin/plugin.json</text>
     <text x="24" y="160" fill="#8b949e">{</text>
     <text x="24" y="182" fill="#8b949e">  <tspan fill="#79c0ff">"name"</tspan>: <tspan fill="#a5d6ff">"blackgoat-agentskills"</tspan>,</text>
-    <text x="24" y="204" fill="#8b949e">  <tspan fill="#79c0ff">"version"</tspan>: <tspan fill="#a5d6ff">"1.0.0"</tspan>,</text>
+    <text x="24" y="204" fill="#8b949e">  <tspan fill="#79c0ff">"version"</tspan>: <tspan fill="#a5d6ff">"1.1.0"</tspan>,</text>
     <text x="24" y="226" fill="#8b949e">  <tspan fill="#79c0ff">"license"</tspan>: <tspan fill="#a5d6ff">"MIT"</tspan>,</text>
     <text x="24" y="248" fill="#8b949e">  <tspan fill="#79c0ff">"repository"</tspan>: <tspan fill="#a5d6ff">"github.com/MuhammadShaharyarNaeem/blackgoat-agentskills"</tspan></text>
     <text x="24" y="270" fill="#8b949e">}</text>
