@@ -64,6 +64,14 @@ When multiple agents or sessions are available:
 - **Must be sequential:** Database migrations, shared state changes, dependency chains
 - **Needs coordination:** Features that share an API contract (define the contract first, then parallelize)
 
+## Break-It-Down-Further Triggers
+
+Break a task down further when any of these hold:
+- It needs more than one focused session (~2+ hours of agent work).
+- Its acceptance criteria won't fit in 3 or fewer bullets.
+- It touches two or more independent subsystems (e.g., auth and billing).
+- Its title needs "and" — a sign it is two tasks.
+
 ## Common Rationalizations
 
 | Rationalization | Reality |

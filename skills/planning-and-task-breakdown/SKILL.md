@@ -60,7 +60,7 @@ This is the operational spine. Follow it as written.
 
 **Task heading constraint:** The `[N]` in `## Task [N]:` MUST be a bare positive integer (`## Task 6:`) — never letter-suffixed or decorated (`## Task 6a:`, `## Task 6.1:` are invalid). When one requirement must be split across multiple tasks, give each task its own distinct integer number (e.g. Task 6 and Task 7), not sub-letters. The deterministic coverage gate matches only `## Task <integer>:`; any non-integer heading makes that entire task block invisible to the gate, silently dropping every requirement it was meant to cover.
 
-When the plan is built from a `requirements.md` with numbered `FR`/`NFR` IDs, every **Must-Have** requirement (`FR` and `NFR` IDs alike) must be covered by at least one task's "Requirements covered:" field — check this before finalizing the plan.
+When the plan is built from a `requirements.md` with numbered `FR`/`NFR` IDs, every **Must-Have** requirement (`FR` and `NFR` IDs alike) must be covered by at least one task's "Requirements covered:" field — check this before finalizing the plan. Coverage is many-to-one, not one-to-one: several `FR`/`NFR` IDs may — and often should — map to a single task when they describe steps of one coherent unit of work (list them together in that task's "Requirements covered:" field). A task is defined by being an independently implementable-and-verifiable unit of work, not by how many IDs it satisfies; minting one task per FR inflates task count, milestone count, and downstream build cost with zero traceability benefit.
 
 **Step 5: Order and Checkpoint.** Arrange tasks so that:
 
@@ -68,6 +68,8 @@ When the plan is built from a `requirements.md` with numbered `FR`/`NFR` IDs, ev
 2. Each task leaves the system in a working state
 3. Verification checkpoints occur after every 2-3 tasks
 4. High-risk tasks are early (fail fast)
+
+**Milestone economy**: Each milestone/phase boundary carries downstream execution cost — in a fan-out build pipeline every milestone is executed by a fresh multi-agent round (typically an implementer, a tester, and a reviewer), so N milestones expand into roughly 3×N delegations. Create only as many milestones as the dependency graph genuinely requires; for a small deliverable (a handful of tasks with a single verification point), use ONE milestone, and never split milestones for cosmetic organization. (This governs milestone/phase count, separate from the within-plan review checkpoints in this step.) **Parallelism is a scheduling optimization applied OVER natural task and milestone boundaries**: build-pipeline fan-out (see bgpdd-build) reduces wall-clock only — never split tasks or milestones to "unlock" parallelism; granularity is always decided by "independently implementable-and-verifiable unit of work".
 
 ### Multi-Frontend Shared Component Dependency Rule
 For multi-frontend workspace architectures, initial Phase 1 / Foundation task breakdowns MUST include establishing shared package infrastructure (e.g. `packages/ui`) before application-level development. Application tasks MUST list completion of shared UI component primitives as explicit prerequisites.
@@ -92,7 +94,7 @@ Add explicit checkpoints:
 | **L** | 5-8 | Multi-component feature | Search with filtering and pagination |
 | **XL** | 8+ | **Too large — break it down further** | — |
 
-If a task is L or larger, break it into smaller tasks. An agent performs best on S and M tasks. Break a task down further when: it needs more than one focused session (roughly 2+ hours of agent work); its acceptance criteria won't fit in 3 or fewer bullets; it touches two or more independent subsystems (e.g., auth and billing); or its title needs "and" (a sign it is two tasks).
+If a task is L or larger, break it into smaller tasks — an agent performs best on S and M tasks. The concrete break-it-down-further triggers are in the [planning deep dive](references/planning-deep-dive.md).
 
 ### Plan Document Output
 
@@ -148,6 +150,8 @@ Before starting implementation, confirm:
 - [ ] Every task has a verification step
 - [ ] Every task cites the requirement ID(s) it covers, and every Must-Have requirement is covered by at least one task (FR and NFR)
 - [ ] Task dependencies are identified and ordered correctly
+- [ ] Every task's `Dependencies:` and `Files likely touched:` fields are complete and authoritative — the build Orchestrator uses them as the machine-readable contract to compute conflict-free parallel execution groups. State `Dependencies:` as exact task numbers (or `None`). Under `Files likely touched:` list EVERY file the task will create or modify, not a representative sample — an omitted file can cause two colliding tasks to be scheduled in parallel. Whenever a plan may be executed with parallel fan-out, treat "likely touched" as "authoritative touched".
+- [ ] Work that requires a runnable environment (installing dependencies, starting a dev server, executing tests in a real runtime) declares an explicit environment-readiness precondition as its first task — dependencies installed, lockfile present, required tooling available. Never assume the environment is already provisioned; if provisioning needs a system-modifying action a worker cannot take, surface it as a prerequisite for the Orchestrator/human, not a silent assumption.
 - [ ] No task touches more than ~5 files
 - [ ] No task's guard conflicts with existing upstream handling of the same input. Before adding a validator/guard on any field, trace that field's full inbound path: if an upstream layer already sanitizes it (clamp, normalize, default, coerce, truncate), the new guard is unreachable dead code and any task asserting rejection of that input can never pass. When both a sanitizer and a rejecting validator are specified for one field, the plan must explicitly choose one policy (reject-with-error vs. silently-sanitize) and delete the other — never leave both.
 - [ ] Two-implementers test per task: could two competent implementers produce structurally different solutions from this task's text? If yes, a decision is missing — resolve it in the plan, not in the build.

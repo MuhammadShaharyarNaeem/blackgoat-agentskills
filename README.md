@@ -4,10 +4,10 @@
 
 A Claude Code plugin that packages an **agent squad** and a **Prompt-Driven Development (PDD)** workflow into reusable skills and personas. An Orchestrator delegates self-contained tasks to specialized subagents, each of which runs in isolation and returns a structured `<handoff>`. Instead of one agent trying to hold an entire project in context, work is split across a squad of narrow specialists coordinated through slash-command SOPs — with requirement traceability enforced from the first honing question to the final pre-launch gate.
 
-- **Plugin:** `blackgoat-agentskills` v1.0.0
+- **Plugin:** `blackgoat-agentskills` v1.1.0 — see [CHANGELOG.md](CHANGELOG.md)
 - **Author:** shaharyar.naeem (shaharyar.naeem@gorelo.io)
 
-![blackgoat-agentskills: claude plugin validate passing, the plugin manifest, and the 13-agent squad inventory](assets/preview.svg)
+![blackgoat-agentskills: claude plugin validate passing, the plugin manifest, and the 15-agent squad inventory](assets/preview.svg)
 
 ---
 
@@ -87,16 +87,16 @@ State lives on disk in two distinct scopes, and the pipelines are strict about w
 
 ```mermaid
 flowchart LR
-    D["/bgpdd-discovery<br/>(Iris, Scout, Quinn Mode A)"]
+    D["/bgpdd-discovery<br/>(Iris, Scout, Echo)"]
     P["/bgpdd-plan<br/>(Rex, Aria, Alex)"]
     B["/bgpdd-build<br/>(Mason, Quinn, Luna, Max, Dep)"]
-    S["/bgpdd-shipping<br/>(Quinn, Cipher, Dep, Forge)"]
+    S["/bgpdd-shipping<br/>(Vera, Cipher, Dep, Forge)"]
 
     subgraph T1["Tier 1: .docs/summary/ - global, durable, read-only downstream"]
         C1["context.md - tech stack + Target Scope (Iris)"]
         F2["feature-id/api.md - one map per API (Scout)"]
-        F1["feature-id/overview.md - cross-API synthesis (Quinn)"]
-        F3["feature-id/QA/code-workflow.md + manual-testing.md (Quinn)"]
+        F1["feature-id/overview.md - cross-API synthesis (Echo)"]
+        F3["feature-id/QA/code-workflow.md + manual-testing.md (Echo)"]
     end
 
     subgraph T2["Tier 2: .docs/project-name/ - per enhancement"]
@@ -128,18 +128,20 @@ Every agent lives in `agents/<name>.md` with frontmatter declaring its `role`, `
 | **Blackgoat** | The Liminal Pragmatist — the human author's orchestration persona | main session | Orchestration (all phases) |
 | **Iris** | System Architect (Discovery) — lightweight codebase discovery | haiku | Discovery |
 | **Scout** | Research Scout — disposable deep-dive into one assigned API/repo | sonnet | Discovery (spawned in parallel, one per API group) |
+| **Echo** | Legacy QA Analyst — reverse-engineers existing feature behavior | sonnet | Discovery |
 | **Rex** | Requirements Analyst | sonnet | Plan — Phase 1 (Requirements) |
 | **Aria** | System Architect | opus | Plan — Phase 2 (Architecture); Build advisor on blast-radius escalations |
 | **Alex** | Strategist & Planner | opus | Plan — Phase 3 (Planning) |
 | **Mason** | Builder | opus | Build — Phase 4 (Implementation) |
-| **Quinn** | QA Tester — three modes | sonnet | Discovery (Mode A: legacy QA) / Build (Mode B: testing) / Shipping (Mode C: launch verification) |
+| **Quinn** | QA Tester — build-phase testing | sonnet | Build — Phase 5 (Testing) |
 | **Luna** | Code Reviewer | sonnet | Build — Phase 6 (Code Review) |
 | **Max** | Optimizer / Refactorer | sonnet | Build — Phase 7 (Refactoring, conditional) |
-| **Cipher** | Security Auditor | sonnet | Shipping — Phase 8 (Security) |
+| **Vera** | Launch Verifier — pre-launch checklist verification | sonnet | Shipping — Phase 8 (Launch Verification) |
+| **Cipher** | Security Auditor | sonnet | Shipping — Phase 8 (Security); Build [SEC]-milestone reviews |
 | **Dep** | DevOps Engineer | sonnet | Build epic gate + Shipping — Phase 9 (Deployment) |
 | **Forge** | Meta-Engineer / System Coach | opus | End of epic (bgpdd-shipping Step 7); `/bgpdd-learn` on demand — always human-approved |
 
-Blurbs, in one line each: Iris scans repos and records the tech stack and Target Scope. Scout maps one feature's fragments inside one API and writes exactly one file. Rex turns a honing transcript into an ID'd, testable spec. Aria designs the data model, contracts, and file structure (design only — a learned squad rule forbids delegating coding to the Architect). Alex converts the blueprint into a dependency-ordered task plan where every task cites the requirements it covers. Mason writes the code, TDD-first, inside a strict blast radius. Quinn proves things work — by reverse-engineering legacy QA, by testing fresh builds, or by running the launch checklist. Luna reviews for correctness, readability, architecture, security, and performance without rewriting anything. Max refactors for clarity with tests staying green. Cipher hardens boundaries. Dep owns containers, CI/CD, rollback plans, and the GO/NO-GO verdict. Forge coaches the squad itself.
+Blurbs, in one line each: Iris scans repos and records the tech stack and Target Scope. Scout maps one feature's fragments inside one API and writes exactly one file. Echo reverse-engineers how an existing feature behaves today, from the Scouts' maps, before any requirements exist. Rex turns a honing transcript into an ID'd, testable spec. Aria designs the data model, contracts, and file structure (design only — a learned squad rule forbids delegating coding to the Architect). Alex converts the blueprint into a dependency-ordered task plan where every task cites the requirements it covers. Mason writes the code, TDD-first, inside a strict blast radius. Quinn proves the build-phase implementation works against the requirements. Luna reviews for correctness, readability, architecture, security, and performance without rewriting anything. Max refactors for clarity with tests staying green. Vera runs the pre-launch verification checklist against the finished codebase. Cipher hardens boundaries. Dep owns containers, CI/CD, rollback plans, and the GO/NO-GO verdict. Forge coaches the squad itself.
 
 ---
 
@@ -151,7 +153,7 @@ PDD runs as a chain of four slash-command SOPs. Each SOP is a *manager script*: 
 flowchart TD
     subgraph S1["Session 1: /bgpdd-discovery (brownfield only)"]
         A1["Iris: tech stack + Target Scope"] --> A2["Scouts in parallel: one per API group"]
-        A2 --> A3["Orchestrator: synthesis gate"] --> A4["Quinn Mode A: overview + QA baseline"]
+        A2 --> A3["Orchestrator: synthesis gate"] --> A4["Echo: overview + QA baseline"]
         A4 --> A5["Phase 5: optional /bgpdd-learn offer"]
     end
     subgraph S2["Session 2: /bgpdd-plan"]
@@ -168,7 +170,7 @@ flowchart TD
         C3 --> C4["Game Tape checkpoint + update state"]
     end
     subgraph S4["Session 4: /bgpdd-shipping"]
-        D1["Launch Squad: Quinn, then Cipher and Dep in parallel"]
+        D1["Launch Squad: Vera, then Cipher and Dep in parallel"]
         D1 --> D2["Gates, docs, PR, launch readiness report"] --> D3["Forge: single end-of-epic run"]
     end
     S1 -- "Tier 1 knowledge base" --> S2
@@ -180,7 +182,7 @@ flowchart TD
 
 Phase by phase:
 
-- **`/bgpdd-discovery` (Phase 0)** — brownfield only. The Orchestrator establishes the Target Scope (repos, branch, local paths) up front, Iris writes `context.md`, you name the APIs holding the feature's fragments (the SOP hard-halts rather than hallucinate a list; a single Scout can run a footprint search if you don't know), Scouts fan out in parallel, and Quinn synthesizes the cross-API overview plus a reverse-engineered QA baseline. Phase 5 offers an optional `/bgpdd-learn` run — discovery is global-tier and outside any epic, so no game tape exists to catch its lessons later.
+- **`/bgpdd-discovery` (Phase 0)** — brownfield only. The Orchestrator establishes the Target Scope (repos, branch, local paths) up front, Iris writes `context.md`, you name the APIs holding the feature's fragments (the SOP hard-halts rather than hallucinate a list; a single Scout can run a footprint search if you don't know), Scouts fan out in parallel, and Echo synthesizes the cross-API overview plus a reverse-engineered QA baseline. Phase 5 offers an optional `/bgpdd-learn` run — discovery is global-tier and outside any epic, so no game tape exists to catch its lessons later.
 - **`/bgpdd-plan` (Phase 1)** — has a brownfield Pre-Flight Check that halts if the Tier 1 knowledge base is missing. Honing is **hybrid**: the live one-question-at-a-time Q&A runs in the main session (a delegated agent can't pause to ask you things), then an isolated Rex synthesizes `requirements.md` from the transcript. Aria designs, Alex plans, the Phase 3.5 gate checks coverage, and Phase 4 writes the game tape and the state file.
 - **`/bgpdd-lite` (Plan, lite)** — agents: Alex (+ Orchestrator mini-requirements). Produces `requirements.md`, `implementation/plan.md`, and `orchestrator-state.json` → hands off to `/bgpdd-build`. No honing, no Aria; the governing stack contract stands in for the blueprint, and the same coverage gate still applies.
 - **`/bgpdd-build` (Phase 2)** — the milestone loop, detailed below.
@@ -222,7 +224,7 @@ flowchart TD
     H["Hydrate state + establish branch feature/project-name"] --> M["Mason builds next milestone<br/>(exact milestone text pasted into his briefing)"]
     M --> BR{"Blast radius beyond<br/>the active microservice?"}
     BR -- "yes" --> AR["Aria advisory + user approval,<br/>then a fresh Mason resumes"] --> Q
-    BR -- "no" --> Q["Quinn tests (Mode B)<br/>appends to test-report.md"]
+    BR -- "no" --> Q["Quinn tests<br/>appends to test-report.md"]
     Q --> QP{"Tests pass?"}
     QP -- "fail: rounds 1-3" --> MF["Fresh Mason (bugfix mode)<br/>with exact failing-test logs"] --> Q
     QP -- "fail after round 3" --> HALT1["HALT - surface milestone,<br/>fixes tried, failing logs"]
@@ -278,7 +280,7 @@ The gates are enforced, not decorative: plan's Upgraded Chain-of-Thought checks 
 flowchart TD
     S0["Step 0 - Hydration gates:<br/>state pipeline is bgpdd-build, milestones done,<br/>plan.md all checked, test-report.md exists"]
     S1["Step 1 - Read shipping-and-launch skill;<br/>paste exact checklist text into each briefing"]
-    ST1["Stage 1 - Quinn alone (Mode C):<br/>Code Quality, Performance, Accessibility"]
+    ST1["Stage 1 - Vera alone:<br/>Code Quality, Performance, Accessibility"]
     ST2["Stage 2 - Cipher and Dep in parallel:<br/>Security / Infra, Flags, Rollout, Monitoring"]
     S3{"All three handoffs green?"}
     FIX["Route failure to Mason or Max via /bgpdd-build<br/>max 2 fix-and-reverify rounds per area"]
@@ -296,7 +298,7 @@ flowchart TD
     S3 -- "green" --> S35 --> S4 --> S45 --> S5 --> S6 --> S65 --> S7
 ```
 
-Why two stages instead of three parallel agents? Quinn runs full builds and test suites that take file, build-output, and port locks; running scanners or infra verification concurrently against the same checkout causes lock collisions and flaky failures (especially on Windows). So Quinn runs alone first, then Cipher and Dep launch in a single parallel batch. Dep compiles the Emergency Rollback Plan and his GO/NO-GO verdict into `ship-decision.md`. Any red area may be routed back through `/bgpdd-build` for a fix — at most **2 fix-and-reverify rounds per area** before the pipeline halts and hands you the evidence. If the `github-pr-review` skill is available, Step 4.5 also offers an automated multi-repo PR review pass.
+Why two stages instead of three parallel agents? Vera runs full builds and test suites that take file, build-output, and port locks; running scanners or infra verification concurrently against the same checkout causes lock collisions and flaky failures (especially on Windows). So Vera runs alone first, then Cipher and Dep launch in a single parallel batch. Dep compiles the Emergency Rollback Plan and his GO/NO-GO verdict into `ship-decision.md`. Any red area may be routed back through `/bgpdd-build` for a fix — at most **2 fix-and-reverify rounds per area** before the pipeline halts and hands you the evidence. If the `github-pr-review` skill is available, Step 4.5 also offers an automated multi-repo PR review pass.
 
 ---
 
@@ -326,11 +328,11 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 
 ### SOP orchestrators (slash-command pipelines)
 - **agent-squad** — the Orchestrator/delegation model itself; also home of `base-persona.md`, the one shared base persona
-- **bgpdd-discovery** — global context discovery (Iris, Scout, Quinn Mode A)
+- **bgpdd-discovery** — global context discovery (Iris, Scout, Echo)
 - **bgpdd-plan** — design & architecture (Rex, Aria, Alex)
 - **bgpdd-lite** — mid-weight planning for well-specified work (Orchestrator mini-requirements + Alex; hands off to bgpdd-build)
-- **bgpdd-build** — execution (Mason, Quinn Mode B, Luna, Max, Dep)
-- **bgpdd-shipping** — verification & Launch Squad (Quinn Mode C, Cipher, Dep, Forge)
+- **bgpdd-build** — execution (Mason, Quinn, Luna, Max, Dep)
+- **bgpdd-shipping** — verification & Launch Squad (Vera, Cipher, Dep, Forge)
 - **bg-bugfix** — lean RCA → TDD → fix → blast-radius bugfix loop (no squad overhead)
 
 ### Methodology skills (execution contracts loaded by agents via their dependency tables)

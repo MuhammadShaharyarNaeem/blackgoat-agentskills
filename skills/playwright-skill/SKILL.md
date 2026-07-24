@@ -37,6 +37,8 @@ E2E tests verify real user flows through the browser. They are slow and expensiv
 ### Rules
 
 - Use **accessible selectors**: `role`, `text`, `label`, `placeholder` — **NOT** CSS classes or XPaths.
+- **Derive locators from the RENDERED DOM, never from component source.** Run the app and snapshot the accessibility tree to obtain selectors; do not transcribe `id`s/attributes off a component template during scouting or planning. UI frameworks that wrap native inputs (e.g. Quasar `QInput`/`QSelect` with `inheritAttrs: false`) strip or rewrite template `id`s, so a source-scouted `#id` looks authoritative but never renders. Confirm every scouted selector resolves against a live snapshot before it enters a plan or a spec.
+- **A guarded (conditionally-run) branch must prove it executed.** When a step runs only if an element is visible/present, a wrong guard — e.g. a `.a .b` descendant selector where the DOM carries compound `.a.b` — makes the branch silently no-op, and a green run can never falsify a branch that never ran. Emit a branch marker/log when the guarded path is taken and assert it fired, so a mis-scoped guard fails loudly instead of passing by omission.
 - Wait for elements before interacting: use `browser_wait_for` with reasonable timeouts.
 - **Never use a hard-coded `sleep`** — wait for a specific condition instead.
 - One user flow per test. Don't chain unrelated flows.
@@ -47,6 +49,7 @@ E2E tests verify real user flows through the browser. They are slow and expensiv
 
 - [ ] All critical user flows have E2E coverage
 - [ ] Tests use accessible selectors (not brittle CSS)
+- [ ] Every guarded/conditional branch proves it ran (branch marker asserted) — no silently-skipped path can pass by omission
 - [ ] No hard-coded sleeps
 - [ ] Tests clean up after themselves (no state leakage)
 - [ ] Tests pass on a clean environment

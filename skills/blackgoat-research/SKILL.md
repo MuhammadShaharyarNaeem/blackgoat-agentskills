@@ -1,6 +1,6 @@
 ---
 name: blackgoat-research
-description: Conducts codebase and technology research, documents findings, and develops the system architecture and detailed design document. Used during Phase 2 of Prompt-Driven Development.
+description: Guides Aria's codebase/technology research and the authoring of the detailed design document during bgpdd-plan Phase 2. Squad-internal execution contract loaded by Aria via her Methodology Dependencies table — user-facing triggers belong to the /bgpdd-plan pipeline.
 ---
 
 # Blackgoat Research
@@ -8,6 +8,13 @@ description: Conducts codebase and technology research, documents findings, and 
 ## Overview
 
 This skill enables collaborative technical research, technology analysis, and system architecture design. It guides the creation of research notes and detailed design documents before writing implementation code.
+
+## Modes
+
+Your Orchestrator's delegation brief tells you which mode applies — do not infer it.
+
+- **Mode 1 — Blueprint** (`bgpdd-plan` Phase 2, the default): execute the full Unified Workflow below (steps 1–6), producing `.docs/{project-name}/design/detailed-design.md`.
+- **Mode 2 — Scoped Advisory** (`bgpdd-build` Phase 1 blast-radius review): execute steps 1–3 only, scoped strictly to the blast-radius report in your brief, and return your architectural recommendation directly in your `<handoff>`. Do NOT create or modify `detailed-design.md` — the epic's blueprint is already signed off; skip steps 4–5 entirely.
 
 ## Unified Workflow
 

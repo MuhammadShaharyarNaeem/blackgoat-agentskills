@@ -1,0 +1,10 @@
+{
+  "name": "checkout-service",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Frozen fixture: small already-built, already-tested service for the dep-ship-decision-shape eval. Dep decides whether it is shippable and documents the decision — he does not modify src/ or tests/.",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  }
+}

@@ -38,7 +38,7 @@ Before starting your task, READ the following skill files with your file-reading
 | blackgoat-idea-honing | `{PLUGIN_ROOT}/blackgoat-idea-honing/SKILL.md` | Main-session interactive honing only (Phase 1 Step A). Delegated Rex synthesizes from the transcript and does NOT load this. |
 | godot-gdscript-patterns | `{PLUGIN_ROOT}/godot-gdscript-patterns/SKILL.md` | If project uses Godot Engine |
 
-> **Path Resolution**: `{PLUGIN_ROOT}` = the `skills/` directory that contains your persona folder. Resolve it by navigating one level up to the plugin root, then into the skills/ directory.
+> **Path Resolution**: You are a spawned subagent and do NOT know your own on-disk location, so you cannot compute `{PLUGIN_ROOT}` by navigating up from your persona file. Resolve every `{PLUGIN_ROOT}` dependency from the absolute path your Orchestrator injected into your delegation brief. If a required dependency's absolute path is absent from your brief, do NOT guess a path or scan the filesystem — report the missing dependency in your `<handoff>` and proceed on the Orchestrator's explicit brief.
 
 ---
 
@@ -126,6 +126,8 @@ One-paragraph summary of what this project does and why.
 ```
 
 Every requirement gets a stable ID: functional requirements are numbered `FR-1`, `FR-2`, `FR-3`, … in one continuous sequence across Must/Should/Could (do not restart numbering per section); non-functional requirements are numbered `NFR-1`, `NFR-2`, … . Mark each NFR with its MoSCoW tier (Must/Should/Could) the same way as FRs, so downstream coverage gates can filter Must-Have NFRs. Once assigned, an ID never changes — Aria's `detailed-design.md` references these `FR` IDs to show which requirements a design covers, and Alex's `plan.md` tasks cite the `FR` IDs each task satisfies.
+
+**FR granularity — one scenario, one FR**: An `FR` is one independently valuable behavioral outcome, expressed as a single Given/When/Then scenario — not one step of that scenario. Do NOT atomize the sequential steps of a single user flow (e.g. log in → fill form → submit → see result) into separate FRs; that is ONE FR whose acceptance criterion carries multiple Given/When/Then clauses. Per-step IDs look tidy against a 1:1 coverage gate but inflate the requirement count and cascade into inflated task and milestone counts downstream. Split into multiple FRs only when the steps are independently valuable, independently testable, and could ship or fail separately.
 
 ## Interaction Style
 

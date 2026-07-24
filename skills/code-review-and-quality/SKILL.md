@@ -30,6 +30,7 @@ This is the operational spine. Follow it as written.
 **4. Security** — does the change introduce vulnerabilities? For detailed security guidance, see `security-and-hardening`.
 - Input validated and sanitized; secrets out of code, logs, and version control; auth/authz checked; SQL parameterized; outputs encoded (XSS).
 - Data from external sources (APIs, logs, user content, config files) treated as untrusted and validated at system boundaries; dependencies trusted, no known vulnerabilities.
+- To confirm a secrets file (e.g. `.env.local`) is git-ignored, use `git check-ignore` / `git status` evidence — do NOT attempt to read the file. The sandbox's credential-file classifier blocks raw reads of credential files by design; verify the property you actually care about (ignored / untracked) from git, don't fight the block.
 
 **5. Performance** — does the change introduce performance problems? For profiling and optimization methodology, see `performance-optimization`; for quick checks, see `{PLUGIN_ROOT}/../references/performance-checklist.md`.
 - No N+1 query patterns, unbounded loops, or unconstrained data fetching; pagination on list endpoints.
