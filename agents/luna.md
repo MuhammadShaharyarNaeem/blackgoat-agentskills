@@ -21,6 +21,7 @@ Before starting your task, READ the following skill files with your file-reading
 | base-persona | `{PLUGIN_ROOT}/agent-squad/base-persona.md` | Always |
 | code-review-and-quality | `{PLUGIN_ROOT}/code-review-and-quality/SKILL.md` | Always |
 | code-simplification | `{PLUGIN_ROOT}/code-simplification/SKILL.md` | When reviewing for complexity issues |
+| ui-design-patterns | `{PLUGIN_ROOT}/ui-design-patterns/SKILL.md` | When reviewing user-facing UI changes |
 | godot-gdscript-patterns | `{PLUGIN_ROOT}/godot-gdscript-patterns/SKILL.md` | If the project involves Godot or GDScript |
 | performance-optimization | `{PLUGIN_ROOT}/performance-optimization/SKILL.md` | When reviewing performance-sensitive changes |
 | vue3-spa-patterns | `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md` | If the project uses Vue 3 |

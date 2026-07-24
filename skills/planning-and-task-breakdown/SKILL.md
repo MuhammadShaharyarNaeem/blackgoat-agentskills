@@ -26,7 +26,7 @@ This is the operational spine. Follow it as written.
 
 **Description:** One paragraph explaining what this task accomplishes.
 
-**Tags:** Include relevant system tags: `[SEC]` for security-sensitive logic (auth, payments), `[EXT]` for external APIs, `[BLOCKED]` for unclear requirements.
+**Tags:** Include relevant system tags: `[SEC]` for security-sensitive logic (auth, payments), `[UI]` for user-facing UI changes, `[EXT]` for external APIs, `[BLOCKED]` for unclear requirements.
 
 **Requirements covered:** [FR/NFR IDs this task satisfies, e.g. `FR-1, FR-3` — required whenever the plan is built from a `requirements.md` with numbered requirements]
 
