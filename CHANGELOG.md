@@ -12,7 +12,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - **Cipher build-phase lane**: `[SEC]`-tagged milestones get a parallel Cipher security review alongside Luna in `bgpdd-build` Phase 3.
 - **Vue 3 prevention-first contract** (`vue3-spa-patterns`): new Data Flow & Computation and Lifecycle & Reactivity Hygiene authoring rules (query-once/Map indexes, single-pass iteration, minimal reactivity, listener/timer teardown incl. `onDeactivated`, template refs, null-check discipline), plus `references/vue3-refactor-playbook.md` — the sequential zero-regression retrofit pass for legacy code.
 - **Memory Hygiene rule** (`agent-orchestration-improve-agent`): at 3+ accumulated Procedural Memories, Forge elevates/generalizes/moves them instead of appending.
-- **Contract evals**: `echo-qa-discovery-shape`, `vera-verification-shape`.
+- **Contract evals**: `echo-qa-discovery-shape`, `vera-verification-shape`, `dep-ship-decision-shape`.
 
 ### Changed
 - **Quinn** is now a single-purpose build-phase QA Tester (`phase: 5 — Testing`); the three-mode persona is retired. Delegations for discovery QA go to Echo, launch verification to Vera.
