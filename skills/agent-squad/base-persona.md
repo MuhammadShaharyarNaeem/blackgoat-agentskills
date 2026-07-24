@@ -29,4 +29,4 @@ If a requirement, task, or blueprint is unclear, internally contradictory, or th
 - Context window constraints mean large project histories must be compressed by the Orchestrator.
 
 ## Path Resolution
-Whenever resolving `{PLUGIN_ROOT}` in a Methodology Dependency, you must resolve it to the `skills/` directory that contains your persona folder (typically two levels up from your `SKILL.md` file's location).
+You are a spawned subagent and do NOT know your own on-disk location, so you cannot compute `{PLUGIN_ROOT}` by navigating up from your persona file. Resolve every `{PLUGIN_ROOT}` dependency from the absolute path your Orchestrator injected into your delegation brief. If a required dependency's absolute path is absent from your brief, do NOT guess a path or scan the filesystem — report the missing dependency in your `<handoff>` and proceed on the Orchestrator's explicit brief.

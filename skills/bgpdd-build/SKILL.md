@@ -16,6 +16,8 @@ Invoke with `/bgpdd-build` (add the `auto` argument for Autonomous Execution Mod
 
 Skill and agent paths use `{PLUGIN_ROOT}` as a placeholder for the plugin's `skills/` directory (agents live at `{PLUGIN_ROOT}/../agents/`). When this skill is invoked, its base directory is provided to you. List files to confirm a path exists before referencing it.
 
+When you inject a resolved `base-persona.md` path into a delegation brief, it lives at `{PLUGIN_ROOT}/agent-squad/base-persona.md` — inside the `agent-squad` skill folder, NOT the `agents/` folder. The `agents/` folder holds ONLY persona files (`rex.md`, `alex.md`, `scout.md`, …); base-persona is a skill, not a persona. Injecting `{PLUGIN_ROOT}/../agents/base-persona.md` is the recurring defect that makes every delegated agent flag base-persona as missing. Verify the base-persona path resolves to an existing file before delegating.
+
 ---
 
 ## 1. Global System Constraints
@@ -90,11 +92,17 @@ This is **Tier 2** — the per-enhancement work dir (`.docs/{project-name}/`): t
 - **Delegated Agent**: **Mason** (Builder). He reads his methodology dependencies (TDD, debugging, SDD) on-demand.
 - **Workflow**:
   1. Pick the next pending milestone from `implementation/plan.md`.
-  2. Delegate to the **Mason** agent. **CRITICAL CONTEXT HANDOFF**: copy the exact text of the active milestone from `plan.md` into the delegation prompt so he knows exactly what to build.
+  - **Parallel Fan-Out (within a milestone)**: A milestone's tasks need not be built by a single Mason. From the milestone's task list, compute conflict-free groups using each task's `Dependencies:` and `Files likely touched:` fields (guaranteed authoritative by the planning methodology). In ONE message, delegate as sibling Orchestrator-launched agents — NEVER nested subagents (§2) — every task whose dependencies are already satisfied AND whose file set does not overlap any other task in the group.
+    - **Dependency barrier**: never parallelize across a dependency edge or a milestone boundary. A later dependency group starts only after every task in the prior group has returned and passed its per-task verification.
+    - **File-overlap isolation**: if two otherwise-independent tasks unavoidably touch the same file, either serialize them or run them in separate git worktrees; when using worktrees, YOU (the Orchestrator) reconcile/merge the worktrees before the milestone's Quinn/Luna round, falling back to sequential if the merge is not clean.
+    - **Per-task verification still applies** before the milestone's shared Quinn (Phase 2) and Luna (Phase 3) round — fan-out changes who builds, not the verification chain.
+    - **Failure semantics**: if one parallel task fails or trips its circuit breaker, do NOT kill its siblings — they terminate on their own when they return. Collect all returned handoffs, then HALT before launching the next dependency group and surface the failed task for human intervention (per §2). No cascading kills.
+    - **Not a token optimization**: parallel fan-out reduces wall-clock only; it does not reduce token cost and is NEVER a reason to create more tasks or milestones — task boundaries and milestone count remain governed by the planning methodology (its many-to-one coverage and milestone-economy rules).
+  2. Delegate the milestone's ready tasks to one or more **Mason** agents per the Parallel Fan-Out rule (a single Mason for the whole milestone remains valid when the tasks are fully dependent or few). **CRITICAL CONTEXT HANDOFF**: copy the exact text of the active milestone (or the specific task) from `plan.md` into each delegation prompt so the builder knows exactly what to build.
   3. **STRICT BLAST RADIUS RULE**: Instruct Mason that *before* modifying any shared DTO or library, he MUST trace dependencies by searching the codebase for all consumers of the DTO/library. (Optionally, if a `code-review-graph` MCP server happens to be available — it is not wired in this plugin's `.mcp.json` — its impact tool may be used instead.) If the radius extends beyond his active microservice, he must document it in his handoff and return for architectural review.
   4. If the blast radius exceeds the active microservice:
      a. Notify the User: "Blast radius exceeds the current microservice boundary. Architectural review required."
-     b. Delegate to the **Aria** agent as a temporary advisor, passing her Mason's blast-radius report; ask for a scoped architectural recommendation.
+     b. Delegate to the **Aria** agent as a temporary advisor (**Mode 2 — Scoped Advisory** in her `blackgoat-research` methodology — she must NOT write or modify `detailed-design.md` in this mode), passing her Mason's blast-radius report; ask for a scoped architectural recommendation returned in her `<handoff>`.
      c. Present Aria's recommendation to the User for approval.
      d. After approval, delegate a **fresh Mason** agent, passing him Mason's prior handoff state and Aria's ruling.
   5. Read Mason's returned handoff and extract the strict `<changed_files>` XML list from it.

@@ -16,6 +16,8 @@ This Standard Operating Procedure (SOP) is the mid-weight lane between a bare si
 
 Skill and agent paths in this document use `{PLUGIN_ROOT}` as a placeholder for the plugin's `skills/` directory. When this skill is invoked, its base directory is provided to you; `{PLUGIN_ROOT}` is that `skills/` directory (the agents live at `{PLUGIN_ROOT}/../agents/`). List files to confirm a path exists before referencing it.
 
+When you inject a resolved `base-persona.md` path into a delegation brief, it lives at `{PLUGIN_ROOT}/agent-squad/base-persona.md` — inside the `agent-squad` skill folder, NOT the `agents/` folder. The `agents/` folder holds ONLY persona files (`rex.md`, `alex.md`, `scout.md`, …); base-persona is a skill, not a persona. Injecting `{PLUGIN_ROOT}/../agents/base-persona.md` is the recurring defect that makes every delegated agent flag base-persona as missing. Verify the base-persona path resolves to an existing file before delegating.
+
 ---
 
 ## 1. Global System Constraints
@@ -63,7 +65,7 @@ If *any* delegated agent (or you, the Orchestrator) exhibits the following behav
 - **Routing**:
   - Localized defect → route to **`/bg-bugfix`** instead.
   - A "yes" on question 1 (design decisions exist), OR 2+ "yes" across questions 3/5, OR the design is contested → **HALT** and route to **`/bgpdd-plan`** (and `/bgpdd-discovery` first if the work is brownfield and the feature is unmapped in `.docs/summary/`).
-  - Purely mechanical sweep with zero decisions AND no traceability need (question 4 = no) (e.g. a rename) → **no pipeline at all**: one Builder delegation plus a verification checklist (build green, repo-wide search for the old term returns zero hits).
+  - No design decisions to make (question 1 = no) AND the whole deliverable is small enough that one well-briefed build session can carry it from a single delegation prompt → **no pipeline at all**: one Builder delegation plus a verification checklist. This covers BOTH a mechanical sweep (e.g. a rename; verify build green + a repo-wide search for the old term returns zero hits) AND a zero-decision copy-adapt of an established in-repo pattern (e.g. cloning an existing spec/test against a new target; verify it runs / `--list`). Two discriminators decide it: (a) will a fresh session genuinely need durable FR/plan artifacts to build this, or does a good delegation prompt alone suffice? (b) are there 5+ independent acceptance criteria that multiple parties must agree on? If BOTH are "no", take the no-pipeline exit — even when the deliverable will be authored in a separate build session. Do NOT route into lite merely because a fresh build session follows; a good delegation prompt carries the context.
   - Otherwise → confirm the `{project-name}` work slug with the user AND — for brownfield work — the Tier-1 durable `{feature}` id (from `.docs/summary/`); record `null` for greenfield/unmapped work, so Phase 3's state write has a defined `feature` value. Then proceed to Phase 1.
 
 ### Phase 1: Mini-Requirements (Orchestrator + user, main session)

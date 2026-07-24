@@ -1,6 +1,6 @@
 ---
 name: blackgoat-idea-honing
-description: Guides interactive requirements gathering to systematically refine a rough concept into a structured requirements document. Used during Phase 1 of Prompt-Driven Development.
+description: Guides the interactive requirements Q&A that refines a rough concept into a structured requirements document during bgpdd-plan Phase 1. Squad-internal execution contract followed by the main-session Orchestrator (adopting Rex's persona) — user-facing triggers belong to the /bgpdd-plan pipeline.
 ---
 
 # Blackgoat Idea Honing
