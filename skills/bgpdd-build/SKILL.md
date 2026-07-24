@@ -120,7 +120,7 @@ This is **Tier 2** — the per-enhancement work dir (`.docs/{project-name}/`): t
 - **Workflow**:
   1. Delegate to the **Luna** agent, passing her the exact `<changed_files>` XML list from Mason so her scope is surgical.
   1b. **[SEC] Parallel Security Review**: if the active milestone contains `[SEC]`-tagged tasks, delegate **Cipher** in parallel with Luna in the same batch, passing him the same `<changed_files>` list, scoped to the security surface of those tasks. Treat any vulnerability finding in Cipher's handoff as a Critical blocker (step 4 routing).
-  2. Instruct Luna to run a 5-axis review: Correctness, Readability, Architecture, Security, Performance (tracing impact per the **Impact Analysis** directive in her persona).
+  2. Instruct Luna to run a 5-axis review: Correctness, Readability, Architecture, Security, Performance (tracing impact per the **Impact Analysis** directive in her persona). If the milestone contains `[UI]`-tagged tasks, additionally instruct her to run the **design-critique axis** from her `ui-design-patterns` dependency (inject the resolved skill path; screenshots via browser tooling when available).
   3. **CRITICAL PATHING**: instruct Luna to save findings to `.docs/{project-name}/implementation/review-report.md`.
   4. If Luna's or Cipher's handoff flags "Critical" or "Important" blockers (including any Cipher vulnerability finding per step 1b), delegate a fresh Mason agent to resolve them before proceeding.
 

@@ -351,6 +351,7 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **cloud-deploy-patterns** — provider-agnostic deploy baseline + AWS/Azure checklists (Dep, Cipher; conditional)
 - **dotnet-backend-patterns** — .NET solution segregation, CQRS/REPR, EF Core rules (conditional, several agents)
 - **vue3-spa-patterns** — Vue 3 Composition API, Pinia, Axios interceptor contract (conditional, several agents)
+- **ui-design-patterns** — committed visual direction, typography/spacing/color/motion discipline, anti-generic-AI rules, and Luna's design-critique review axis (Aria, Mason, Luna; conditional on user-facing UI)
 - **godot-gdscript-patterns** — Godot 4 GDScript patterns (conditional, several agents)
 
 ### Meta skills (operate on the plugin itself)
