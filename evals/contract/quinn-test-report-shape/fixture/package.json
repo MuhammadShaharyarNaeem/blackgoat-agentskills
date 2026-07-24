@@ -2,8 +2,8 @@
   "name": "password-reset-fixture",
   "private": true,
   "version": "1.0.0",
-  "description": "Frozen fixture: already-implemented password reset token module for the quinn-test-report-shape eval. Quinn (Mode B) writes and executes tests against this — she does not modify src/.",
+  "description": "Frozen fixture: already-implemented password reset token module for the quinn-test-report-shape eval. Quinn writes and executes tests against this — she does not modify src/.",
   "scripts": {
-    "test": "node --test tests/"
+    "test": "node --test"
   }
 }
