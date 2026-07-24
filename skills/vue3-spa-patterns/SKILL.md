@@ -16,9 +16,15 @@ This is the operational spine. Follow it as written.
 - Composition API with `<script setup lang="ts">` is the default authoring style for every new component. Do not use the Options API in new code.
 - Type all component boundaries: `defineProps<T>()` and `defineEmits<T>()` with explicit interfaces. No untyped or runtime-only prop declarations in new components.
 
+### Component Abstraction & Shared Packages
+
+- **Multi-Frontend Shared Component Package Rule**: In projects with multiple frontends (e.g. monorepos or multi-app workspaces), primitive UI controls (Buttons, Inputs, Dropdowns/Selects, Autocompletes, Date/Time Pickers) MUST be implemented in a shared UI component package or folder (e.g. `packages/ui` or `packages/shared-components`) to guarantee 100% visual, behavioral, and accessibility consistency across all frontends.
+- **Component Abstraction & Custom UI Controls**: Direct usage of un-wrapped raw native HTML input elements or un-wrapped third-party UI controls across application features is prohibited. All primitive controls MUST be wrapped/abstracted inside generic shared components within the shared component library.
+
 ### State Boundary (Architect's state-mutation boundary)
 
 - Shared state is mutated ONLY inside Pinia store actions. Components never write to store state directly — no `store.someField = x`, no `$patch` from a component. Components read state (via getters/`storeToRefs`) and call actions.
+- **Template `v-model` Store Prohibition**: Direct `v-model` binding in templates to Pinia store state properties (e.g., `v-model="store.someField"`) is strictly prohibited as it performs implicit state mutation outside store actions. Use explicit `:model-value` and `@update:model-value` event handlers, store actions, or local computed properties with getter/setter wrappers that call store actions.
 - Local, component-private state stays in `ref`/`reactive` inside the component. If two or more components need it, it belongs in a store.
 
 ### Reuse — Composables
@@ -38,7 +44,7 @@ This is the operational spine. Follow it as written.
 
 ### Routing & Performance
 
-- Route-level lazy loading (`() => import(...)`) for all non-critical views; only the entry/critical route is eagerly loaded.
+- **Routing Entry Eager Loading Rule**: Only the main root entry view (`/`) MAY be eagerly loaded; all other route components MUST be lazy-loaded using dynamic imports (`() => import(...)`).
 - Prefer `computed` over `watch` for derived state; use `watch` only for genuine side effects.
 - Use `shallowRef` for large structures where deep reactivity is not needed.
 - Add `v-memo` only with profiling evidence showing a real render hotspot — never speculatively.
@@ -70,10 +76,11 @@ The rules above make new code retrofit-free. For **existing** code written befor
 Before marking work complete:
 
 - [ ] All new components use `<script setup>` with typed `defineProps`/`defineEmits`
-- [ ] No component mutates shared state directly — all writes go through Pinia actions
+- [ ] In multi-frontend projects, all primitive UI controls reside in a shared UI package (`packages/ui`)
+- [ ] No component mutates shared state directly — all writes go through Pinia actions; no direct `v-model="store.someField"` bindings in templates
 - [ ] All HTTP traffic flows through the single shared Axios instance and its interceptors
 - [ ] Every interactive element added or touched carries a `data-test` ID
-- [ ] Non-critical routes are lazy-loaded
+- [ ] Only main entry route (`/`) is eagerly loaded; all other non-critical routes are lazy-loaded (`() => import(...)`)
 - [ ] No watcher exists where a `computed` would do; no `v-memo` without profiling evidence
 - [ ] Every listener/subscription/hub-join you added or touched has a matching teardown (`onUnmounted`, plus `onDeactivated` under keep-alive); every debounce/throttle/timer is cancelled on teardown
 - [ ] No `document.getElementById`/`querySelector` for component-owned DOM — template refs used instead

@@ -35,6 +35,10 @@ Iteratively guide the user through a series of questions to refine the initial c
   5. Append the user's answer/decision to your designated transcript artifact.
   6. Proceed to the next question.
 
+### Phase 1 Q&A Checklist
+
+- [ ] **Visual Design & Component Styling Requirement**: Explicitly inquire about visual styling requirements, UI design constraints, color schemes/themes, and whether multi-frontend applications require a centralized shared component library (e.g. `packages/ui` or `packages/shared-components`) for consistent UI controls (Buttons, Inputs, Dropdowns/Selects, Autocompletes, Date/Time Pickers). Document these as standard non-functional requirements in the normal `NFR-<n>` sequence, each with a MoSCoW tier.
+
 ### Step 3: Iteration & Completion Checkpoint
 
 Continue the interactive process until all critical uncertainties are resolved.

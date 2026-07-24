@@ -71,6 +71,9 @@ When the plan is built from a `requirements.md` with numbered `FR`/`NFR` IDs, ev
 
 **Milestone economy**: Each milestone/phase boundary carries downstream execution cost — in a fan-out build pipeline every milestone is executed by a fresh multi-agent round (typically an implementer, a tester, and a reviewer), so N milestones expand into roughly 3×N delegations. Create only as many milestones as the dependency graph genuinely requires; for a small deliverable (a handful of tasks with a single verification point), use ONE milestone, and never split milestones for cosmetic organization. (This governs milestone/phase count, separate from the within-plan review checkpoints in this step.) **Parallelism is a scheduling optimization applied OVER natural task and milestone boundaries**: build-pipeline fan-out (see bgpdd-build) reduces wall-clock only — never split tasks or milestones to "unlock" parallelism; granularity is always decided by "independently implementable-and-verifiable unit of work".
 
+### Multi-Frontend Shared Component Dependency Rule
+For multi-frontend workspace architectures, initial Phase 1 / Foundation task breakdowns MUST include establishing shared package infrastructure (e.g. `packages/ui`) before application-level development. Application tasks MUST list completion of shared UI component primitives as explicit prerequisites.
+
 Add explicit checkpoints:
 
 ```markdown
@@ -152,6 +155,7 @@ Before starting implementation, confirm:
 - [ ] No task touches more than ~5 files
 - [ ] No task's guard conflicts with existing upstream handling of the same input. Before adding a validator/guard on any field, trace that field's full inbound path: if an upstream layer already sanitizes it (clamp, normalize, default, coerce, truncate), the new guard is unreachable dead code and any task asserting rejection of that input can never pass. When both a sanitizer and a rejecting validator are specified for one field, the plan must explicitly choose one policy (reject-with-error vs. silently-sanitize) and delete the other — never leave both.
 - [ ] Two-implementers test per task: could two competent implementers produce structurally different solutions from this task's text? If yes, a decision is missing — resolve it in the plan, not in the build.
+- [ ] Stack Blueprint Verification: Verify that all stack-mandated patterns (e.g., Resource project isolation, Response envelope `.ToResult()`, FluentValidation for .NET backend APIs) from active stack methodology skills are explicitly mapped to concrete implementation tasks.
 - [ ] Checkpoints exist between major phases
 - [ ] The plan has been surfaced for human review — via your `<handoff>` to the Orchestrator when delegated, or directly to the user when running in the main session
 

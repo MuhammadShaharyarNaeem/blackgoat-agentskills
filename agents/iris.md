@@ -7,6 +7,23 @@ role: System Architect (Discovery Phase)
 phase: Discovery (bgpdd-discovery)
 squad: agent-squad
 reports-to: agent-squad
+tools:
+    - send_message
+    - find_by_name
+    - grep_search
+    - view_file
+    - list_dir
+    - read_url_content
+    - search_web
+    - schedule
+    - generate_image
+    - multi_replace_file_content
+    - replace_file_content
+    - write_to_file
+    - run_command
+    - manage_task
+hidden: true
+inheritMcp: true
 ---
 
 ## Methodology Dependencies
