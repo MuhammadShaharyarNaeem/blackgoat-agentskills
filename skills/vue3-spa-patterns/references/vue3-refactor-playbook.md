@@ -1,6 +1,6 @@
 # Vue 3 Refactor Playbook — Sequential Zero-Regression Pass
 
-The execution contract for a **refactor delegation** on Vue 3 + TypeScript files (`.vue` components, `.ts` composables, Options or Composition API). "Sequential" means: work through **every phase below** on the **entire** target file (or every file in the brief). Skipping is allowed only when documented under **Skipped** with a concrete reason (unclear types, needs sibling `.vue` changes, business-logic risk) — never because the first pass "felt enough."
+The execution contract for a **refactor delegation** on Vue 3 + TypeScript files (`.vue` components, `.ts` composables, Options or Composition API). These phases retrofit the authoring rules of `vue3-spa-patterns/SKILL.md` (Data Flow & Computation, Lifecycle & Reactivity Hygiene) onto **legacy code written before that contract** — new code follows the spine directly and never needs this pass. "Sequential" means: work through **every phase below** on the **entire** target file (or every file in the brief). Skipping is allowed only when documented under **Skipped** with a concrete reason (unclear types, needs sibling `.vue` changes, business-logic risk) — never because the first pass "felt enough."
 
 ## Safety Constraints (override everything below)
 
