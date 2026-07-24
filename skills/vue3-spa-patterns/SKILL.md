@@ -42,6 +42,18 @@ This is the operational spine. Follow it as written.
 - Prefer `computed` over `watch` for derived state; use `watch` only for genuine side effects.
 - Use `shallowRef` for large structures where deep reactivity is not needed.
 - Add `v-memo` only with profiling evidence showing a real render hotspot — never speculatively.
+- Query a dataset once per scope and derive from it: repeated store/entity queries or `.find()` in loops become computed `Map` indexes (`byId`, `groupBy`) with lookups.
+
+### Lifecycle & Reactivity Hygiene
+
+- Every add/join/subscribe (DOM/global listeners, real-time hub groups like SignalR, manual `watch()` handles, store subscriptions) is paired with its remove/leave/unsubscribe on the same target with the same stable function reference — in `onUnmounted`, and ALSO in `onDeactivated` when keep-alive can hide the view.
+- Every lodash `debounce`/`throttle` instance is `.cancel()`ed and every timer (`setTimeout`/`setInterval`/`requestAnimationFrame`) cleared on teardown; no deferred callback may touch services, DOM, or refs after unmount.
+- Component-owned DOM is reached via template `ref` + subtree queries, never `document.getElementById`/`querySelector` (globals are legitimate only for click-outside, focus traps, teleported nodes).
+- Merge watchers only when side-effect, gating, AND options are identical; keep value-specific or `oldVal`-dependent watchers separate.
+
+### Refactor Mode
+
+When the delegation is a **refactor pass** over existing Vue files, follow the sequential zero-regression contract in [references/vue3-refactor-playbook.md](references/vue3-refactor-playbook.md): a phased walk (inventory → loops → query indexes → watchers → reactivity → listeners → timers → DOM refs → null checks) with documented Skipped items and a mandatory phase-checklist report.
 
 ### Verification Checklist
 
@@ -53,6 +65,8 @@ Before marking work complete:
 - [ ] Every interactive element added or touched carries a `data-test` ID
 - [ ] Non-critical routes are lazy-loaded
 - [ ] No watcher exists where a `computed` would do; no `v-memo` without profiling evidence
+- [ ] Every listener/subscription/hub-join you added or touched has a matching teardown (`onUnmounted`, plus `onDeactivated` under keep-alive); every debounce/throttle/timer is cancelled on teardown
+- [ ] No `document.getElementById`/`querySelector` for component-owned DOM — template refs used instead
 
 ### Escalate When
 
@@ -65,3 +79,4 @@ Before marking work complete:
 Read on demand — not needed to execute the contract above:
 
 - [Vue 3 playbook](references/vue3-playbook.md) — GOOD/BAD code patterns: store action vs direct mutation, composable extraction, the full Axios interceptor setup with refresh-token queueing, `data-test` usage, lazy routes, and the computed-vs-watch anti-pattern.
+- [Vue 3 refactor playbook](references/vue3-refactor-playbook.md) — the sequential zero-regression refactor pass: per-phase rules (loops, query indexes, watcher dedupe, reactivity removal, listener/timer cleanup, DOM refs, null checks), safety constraints, and the required Skipped/phase-checklist report format.
