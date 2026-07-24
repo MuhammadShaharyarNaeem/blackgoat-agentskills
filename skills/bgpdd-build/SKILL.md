@@ -108,7 +108,7 @@ This is **Tier 2** — the per-enhancement work dir (`.docs/{project-name}/`): t
   5. Read Mason's returned handoff and extract the strict `<changed_files>` XML list from it.
 
 ### Phase 2: Testing
-- **Delegated Agent**: **Quinn** (QA Tester). She reads her methodology dependencies (debugging, playwright) on-demand.
+- **Delegated Agent**: **Quinn** (QA Tester). She reads her methodology dependencies (TDD, debugging; playwright for browser/E2E) per her dependency table.
 - **Workflow**:
   1. Delegate to the **Quinn** agent. **CRITICAL CONTEXT HANDOFF**: pass her the exact text of the active milestone and the `<changed_files>` list from Mason. **CRITICAL PATHING**: instruct her to append results to `.docs/{project-name}/implementation/test-report.md`.
   2. Instruct Quinn to design and directly execute the test strategy for the newly built code.
@@ -118,14 +118,15 @@ This is **Tier 2** — the per-enhancement work dir (`.docs/{project-name}/`): t
 - **Delegated Agent**: **Luna** (Reviewer). She reads her methodology dependencies on-demand.
 - **Workflow**:
   1. Delegate to the **Luna** agent, passing her the exact `<changed_files>` XML list from Mason so her scope is surgical.
+  1b. **[SEC] Parallel Security Review**: if the active milestone contains `[SEC]`-tagged tasks, delegate **Cipher** in parallel with Luna in the same batch, passing him the same `<changed_files>` list, scoped to the security surface of those tasks. Treat any vulnerability finding in Cipher's handoff as a Critical blocker (step 4 routing).
   2. Instruct Luna to run a 5-axis review: Correctness, Readability, Architecture, Security, Performance (tracing impact per the **Impact Analysis** directive in her persona).
   3. **CRITICAL PATHING**: instruct Luna to save findings to `.docs/{project-name}/implementation/review-report.md`.
-  4. If Luna's handoff flags "Critical" or "Important" blockers, delegate a fresh Mason agent to resolve them before proceeding.
+  4. If Luna's or Cipher's handoff flags "Critical" or "Important" blockers (including any Cipher vulnerability finding per step 1b), delegate a fresh Mason agent to resolve them before proceeding.
 
 ### Phase 4: Optimization & Refactoring
 - **Delegated Agent**: **Max** (Optimizer). He reads his methodology dependencies on-demand.
 - **Workflow**:
-  1. **Conditional Invocation**: ONLY invoke Max IF Luna's review contains **Suggestion**-level findings (simplification/refactor suggestions from her code-simplification audit), or if the user explicitly requests optimization. Otherwise, skip this phase.
+  1. **Conditional Invocation**: ONLY invoke Max IF Luna's review contains **Suggestion**-level findings (simplification/refactor suggestions from her code-simplification audit) OR performance findings below Critical/Important (Luna defers perf micro-optimization to Max), or if the user explicitly requests optimization. Otherwise, skip this phase.
   2. Delegate to the **Max** agent, passing him the exact `<changed_files>` XML list so his scope is surgical.
   3. Instruct Max to refactor for clarity without behavioral changes, then run regression tests to guarantee stability (or you re-delegate to a Quinn agent to run the suite).
 

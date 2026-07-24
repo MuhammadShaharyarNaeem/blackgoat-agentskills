@@ -64,7 +64,7 @@ When communicating with the user during a phase transition checkpoint, adhere to
 This pipeline uses two distinct memory scopes. Do not conflate them.
 
 **Tier 1 — Global project knowledge base** (`.docs/summary/`): built by the **`/bgpdd-discovery`**
-pipeline (Iris, Scout, Quinn) at **project scope** and **persisted across enhancement cycles**. This
+pipeline (Iris, Scout, Echo) at **project scope** and **persisted across enhancement cycles**. This
 skill (`bgpdd-plan`) **consumes** it — it does not produce it; run `/bgpdd-discovery` first for
 brownfield work (see the Pre-Flight Check below). It is indexed by durable feature id (`{feature}`,
 e.g. `slide`) so the next time a feature is touched, its map already exists.
@@ -72,11 +72,11 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
 .docs/summary/
 ├── context.md                     # Project-wide tech-stack context + Target Scope (Iris) — one file
 └── {feature}/                     # Durable per-feature knowledge base (e.g. slide/)
-    ├── overview.md                #   Synthesized cross-API overview (Quinn)
+    ├── overview.md                #   Synthesized cross-API overview (Echo)
     ├── {api}.md                   #   Per-API feature-fragment maps, one per API (Scout)
     └── QA/
-        ├── code-workflow.md       #   Mermaid sequence diagrams & execution paths (Quinn)
-        └── manual-testing.md      #   Reverse-engineered manual test cases (Quinn)
+        ├── code-workflow.md       #   Mermaid sequence diagrams & execution paths (Echo)
+        └── manual-testing.md      #   Reverse-engineered manual test cases (Echo)
 ```
 
 **Tier 2 — Per-enhancement work dir** (`.docs/{project-name}/`): the isolated artifacts for
@@ -104,7 +104,7 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
 
 ### Pre-Flight Check: Global Context Verification (Brownfield only)
 - **Delegated Agent**: None — the Orchestrator performs this check directly.
-- **Purpose**: This skill **consumes** the Tier-1 knowledge base but no longer produces it — global discovery (Iris → Scout → Quinn) now lives in the standalone **`/bgpdd-discovery`** pipeline. Verify that discovery has already run before planning against an existing system.
+- **Purpose**: This skill **consumes** the Tier-1 knowledge base but no longer produces it — global discovery (Iris → Scout → Echo) now lives in the standalone **`/bgpdd-discovery`** pipeline. Verify that discovery has already run before planning against an existing system.
 - **Workflow**:
   1. Determine whether this is brownfield (modifying an existing system) or greenfield (new project). If greenfield, skip this check entirely and go to Phase 1.
   2. **Brownfield**: check that the Tier-1 `.docs/summary/context.md` exists, and — for the feature being enhanced — that `.docs/summary/{feature}/overview.md` exists.

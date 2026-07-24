@@ -1,6 +1,6 @@
 ---
 name: bgpdd-shipping
-description: "Phase 3 of the Prompt-Driven Development SOP (Verification & Deployment). Orchestrates a dedicated Launch Squad (Quinn, Cipher, and Dep) to execute the pre-launch checklist, harden the application, and orchestrate the final rollout."
+description: "Phase 3 of the Prompt-Driven Development SOP (Verification & Deployment). Orchestrates a dedicated Launch Squad (Vera, Cipher, and Dep) to execute the pre-launch checklist, harden the application, and orchestrate the final rollout."
 trigger: /bgpdd-shipping
 ---
 
@@ -35,7 +35,7 @@ When you inject a resolved `base-persona.md` path into a delegation brief, it li
 
 ## Global System Constraints
 
-- **Strict Delegation**: You are a MANAGER. You MUST NOT roleplay the Launch Squad's work yourself — this collapses your context window. For each step, delegate to the named agent (e.g. Quinn). The agent runs to completion in its own context and returns its `<handoff>` summary as its final message — that returned text is what you read to continue. You cannot message a running agent; each delegation is a single self-contained task.
+- **Strict Delegation**: You are a MANAGER. You MUST NOT roleplay the Launch Squad's work yourself — this collapses your context window. For each step, delegate to the named agent (e.g. Vera). The agent runs to completion in its own context and returns its `<handoff>` summary as its final message — that returned text is what you read to continue. You cannot message a running agent; each delegation is a single self-contained task.
 - **Phase Transitions**: Never advance to the next step until the user explicitly types 'proceed', 'approved', or similar confirmation.
 - **Upgraded Chain-of-Thought**: Before each step, explicitly verify the required artifact exists.
   - *Format*: "Thinking: Step X requires Y. Checking `.docs/{project-name}/Y`... File exists and is populated. Proceeding."
@@ -78,12 +78,12 @@ Read the full `shipping-and-launch` skill located at `{PLUGIN_ROOT}/shipping-and
 ### Step 2: Delegate the Launch Squad
 Delegate to the following three agents in **two stages**. Each prompt MUST (a) include the exact checklist section text pasted from `shipping-and-launch`, (b) name the skill path `{PLUGIN_ROOT}/shipping-and-launch/SKILL.md` so the agent can consult it, and (c) include the CRITICAL CIRCUIT BREAKER rule verbatim. Each agent returns its pass/fail `<handoff>` as its final message.
 
-- **Stage 1 — Quinn alone**: Delegate Quinn first and wait for her handoff before starting Stage 2. Quinn runs full builds and test suites that take file, build-output, and port locks; running scanners or infra verification concurrently against the same checkout causes lock collisions and flaky failures (especially on Windows).
-- **Stage 2 — Cipher and Dep in parallel**: After Quinn's handoff returns, delegate Cipher and Dep **in parallel** — start both delegations in a single batch.
+- **Stage 1 — Vera alone**: Delegate Vera first and wait for her handoff before starting Stage 2. Vera runs full builds and test suites that take file, build-output, and port locks; running scanners or infra verification concurrently against the same checkout causes lock collisions and flaky failures (especially on Windows).
+- **Stage 2 — Cipher and Dep in parallel**: After Vera's handoff returns, delegate Cipher and Dep **in parallel** — start both delegations in a single batch.
 
-1. **Quinn (QA & Performance)** — delegate to the **Quinn** agent (Stage 1)
+1. **Vera (QA & Performance)** — delegate to the **Vera** agent (Stage 1)
    - **Assignment**: `Code Quality`, `Performance`, and `Accessibility` checklists.
-   - **Prompt**: "This is Mode C — Launch Verification (not Mode A or B). Execute the Code Quality, Performance, and Accessibility sections of the `shipping-and-launch` skill (`{PLUGIN_ROOT}/shipping-and-launch/SKILL.md`) against the current codebase. [Paste the exact checklist section text here.] Run all tests, linters, and accessibility checks. Report back with a final pass/fail."
+   - **Prompt**: "Execute the Code Quality, Performance, and Accessibility sections of the `shipping-and-launch` skill (`{PLUGIN_ROOT}/shipping-and-launch/SKILL.md`) against the current codebase. [Paste the exact checklist section text here.] Run all tests, linters, and accessibility checks. Report back with a final pass/fail."
 
 2. **Cipher (Security Auditor)** — delegate to the **Cipher** agent (Stage 2)
    - **Assignment**: `Security` checklist.
@@ -94,7 +94,7 @@ Delegate to the following three agents in **two stages**. Each prompt MUST (a) i
    - **Prompt**: "Execute the Infrastructure, Feature Flags, and Monitoring sections of the `shipping-and-launch` skill (`{PLUGIN_ROOT}/shipping-and-launch/SKILL.md`). [Paste the exact checklist section text here.] Verify production environment variables and define the Staged Rollout sequence. Compile the Emergency Rollback Plan and your `GO`/`NO-GO` verdict into `.docs/{project-name}/implementation/ship-decision.md`. Report back with your findings."
 
 ### Step 3: Wait and Block
-Read the returned handoffs as each stage completes — Quinn's after Stage 1, then Cipher's and Dep's after Stage 2. All three must be in hand before you proceed.
+Read the returned handoffs as each stage completes — Vera's after Stage 1, then Cipher's and Dep's after Stage 2. All three must be in hand before you proceed.
 - If any agent reports a failure (e.g., failing tests, high vulnerabilities), you must **BLOCK** the deployment and inform the user of the specific failure.
 - You may route the failure to Mason or Max via `/bgpdd-build` to fix the issue, but you cannot proceed until the Launch Squad is fully green.
 - **Fix-routing bound**: At most **2 fix-and-reverify rounds per failing checklist area**. If an area is still failing after 2 rounds, **HALT** — surface the area, both fix attempts, and the failing evidence to the user. Do NOT route a third time.

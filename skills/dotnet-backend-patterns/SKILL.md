@@ -67,7 +67,7 @@ Before marking work complete:
 - [ ] Every read-only query has `AsNoTracking()` and projects to a DTO where a subset suffices
 - [ ] No cascade delete introduced on critical records; concurrency handled where writes race
 - [ ] All async methods propagate `CancellationToken`; no sync-over-async
-- [ ] Integration tests against the real Dev DB cover DB-crossing behavior — zero mocked `DbContext`. (Builders do not author these — verify they exist or flag the gap to the Orchestrator; QA (Quinn, in her testing mode) authors them.)
+- [ ] Integration tests against the real Dev DB cover DB-crossing behavior — zero mocked `DbContext`. (Builders do not author these — verify they exist or flag the gap to the Orchestrator; QA (Quinn) authors them.)
 - [ ] Every response (both modes) is a `BaseResponse<T>` envelope from BG.Core; failures are structured `Error`s (registry-composed `ErrorCode`) in `Notifications`, mapped once via `ToActionResult<T>()` (Mode A) or `ToResult<T>()` + `IExceptionHandler` (Mode B) — no bare payloads, no ad-hoc status codes
 - [ ] Dependencies point inward (DIP): `Core`/`Domain` defines interfaces, `Infrastructure` implements, concretes bind only at the composition root; no framework/IO types leak into `Domain`/`Core`; no `NotImplementedException` interface members
 
