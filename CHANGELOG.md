@@ -3,6 +3,12 @@
 All notable changes to the `blackgoat-agentskills` plugin are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **`ui-design-patterns` skill**: UI design execution contract — committed visual direction (tokens + signature element) before code, typography/spacing/color/motion discipline, surface modes, category-defaults-to-refuse (anti-generic-AI aesthetics), full state coverage, UX copy rules, and `references/design-critique.md` (Luna's screenshot-driven Nielsen-heuristic review axis). Loaded conditionally by Aria, Mason, and Luna. Adapted from Anthropic's frontend-design skill and pbakaus/impeccable (Apache-2.0).
+- **`[UI]` task tag** in `planning-and-task-breakdown`; `bgpdd-build` Phase 3 instructs Luna to run the design-critique axis on `[UI]`-tagged milestones.
+
 ## [1.1.0] — 2026-07-24
 
 ### Added

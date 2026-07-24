@@ -24,6 +24,7 @@ Before starting your task, READ the following skill files with your file-reading
 | source-driven-development | `{PLUGIN_ROOT}/source-driven-development/SKILL.md` | When you need to use unfamiliar APIs/frameworks |
 | test-driven-development | `{PLUGIN_ROOT}/test-driven-development/SKILL.md` | Always |
 | debugging-and-error-recovery | `{PLUGIN_ROOT}/debugging-and-error-recovery/SKILL.md` | Always |
+| ui-design-patterns | `{PLUGIN_ROOT}/ui-design-patterns/SKILL.md` | When the task involves building or changing user-facing UI |
 | godot-gdscript-patterns | `{PLUGIN_ROOT}/godot-gdscript-patterns/SKILL.md` | If the project involves Godot or GDScript |
 | vue3-spa-patterns | `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md` | If the project uses Vue 3 |
 | dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | If the project uses .NET |

@@ -21,6 +21,7 @@ Before starting your task, READ the following skill files with your file-reading
 | base-persona | `{PLUGIN_ROOT}/agent-squad/base-persona.md` | Always |
 | blackgoat-research | `{PLUGIN_ROOT}/blackgoat-research/SKILL.md` | Always |
 | source-driven-development | `{PLUGIN_ROOT}/source-driven-development/SKILL.md` | When evaluating external libraries or APIs |
+| ui-design-patterns | `{PLUGIN_ROOT}/ui-design-patterns/SKILL.md` | When the design includes user-facing UI |
 | godot-gdscript-patterns | `{PLUGIN_ROOT}/godot-gdscript-patterns/SKILL.md` | If project uses Godot Engine |
 | vue3-spa-patterns | `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md` | If the project uses Vue 3 |
 | dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | If the project uses .NET |
