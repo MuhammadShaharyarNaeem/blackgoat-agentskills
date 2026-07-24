@@ -1,7 +1,7 @@
 'use strict';
 
 // Already-implemented fixture module for the quinn-test-report-shape eval.
-// Quinn (Mode B) writes and executes tests against this — she does not modify this file.
+// Quinn writes and executes tests against this — she does not modify this file.
 
 const crypto = require('crypto');
 

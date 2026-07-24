@@ -13,14 +13,14 @@
     <text x="24" y="138" fill="#c9d1d9"><tspan fill="#3fb950">$ </tspan>cat .claude-plugin/plugin.json</text>
     <text x="24" y="160" fill="#8b949e">{</text>
     <text x="24" y="182" fill="#8b949e">  <tspan fill="#79c0ff">"name"</tspan>: <tspan fill="#a5d6ff">"blackgoat-agentskills"</tspan>,</text>
-    <text x="24" y="204" fill="#8b949e">  <tspan fill="#79c0ff">"version"</tspan>: <tspan fill="#a5d6ff">"1.0.0"</tspan>,</text>
+    <text x="24" y="204" fill="#8b949e">  <tspan fill="#79c0ff">"version"</tspan>: <tspan fill="#a5d6ff">"1.1.0"</tspan>,</text>
     <text x="24" y="226" fill="#8b949e">  <tspan fill="#79c0ff">"license"</tspan>: <tspan fill="#a5d6ff">"MIT"</tspan>,</text>
     <text x="24" y="248" fill="#8b949e">  <tspan fill="#79c0ff">"repository"</tspan>: <tspan fill="#a5d6ff">"github.com/MuhammadShaharyarNaeem/blackgoat-agentskills"</tspan></text>
     <text x="24" y="270" fill="#8b949e">}</text>
 
     <text x="24" y="314" fill="#c9d1d9"><tspan fill="#3fb950">$ </tspan>ls agents/</text>
-    <text x="24" y="336" fill="#c9d1d9">alex   aria   blackgoat   cipher   dep   forge   iris</text>
-    <text x="24" y="358" fill="#c9d1d9">luna   mason   max   quinn   rex   scout   <tspan fill="#6e7681">← 13 specialists</tspan></text>
+    <text x="24" y="336" fill="#c9d1d9">alex   aria   blackgoat   cipher   dep   echo   forge   iris</text>
+    <text x="24" y="358" fill="#c9d1d9">luna   mason   max   quinn   rex   scout   vera   <tspan fill="#6e7681">← 15 specialists</tspan></text>
 
     <text x="24" y="402" fill="#c9d1d9"><tspan fill="#3fb950">$ </tspan>ls skills/ | wc -l</text>
     <text x="24" y="424" fill="#c9d1d9">34   <tspan fill="#6e7681">← SOP pipelines, methodology contracts &amp; standalone tools</tspan></text>

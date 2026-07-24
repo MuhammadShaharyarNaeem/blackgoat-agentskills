@@ -1,0 +1,9 @@
+{
+  "name": "greeting-fixture",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Frozen fixture: small already-built module for the vera-verification-shape eval. Vera verifies the checklist against this — she does not modify src/ or tests/.",
+  "scripts": {
+    "test": "node --test"
+  }
+}

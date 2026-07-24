@@ -43,6 +43,28 @@ This is the operational spine. Follow it as written.
 - Use `shallowRef` for large structures where deep reactivity is not needed.
 - Add `v-memo` only with profiling evidence showing a real render hotspot — never speculatively.
 
+### Data Flow & Computation
+
+These rules apply to every line you author AND any existing line you modify — greenfield or brownfield. Code written under them never needs the retrofit pass.
+
+- **Query once per dataset per scope**: never repeat the same store/entity query (Pinia getter chains, Vuex-ORM `Entity.query()`/`.all()`/`.where()`) or the same transform in loops, computed, or watchers — take one snapshot and derive from it.
+- **Indexes over scans**: a `.find()`/`.filter()` inside a loop is a design smell at authoring time — build a computed `Map` index (`byId: ComputedRef<Map<Id, Entity>>`, `grouped: ComputedRef<Map<Key, Entity[]>>`) and use `map.get(id)`. Indexes stay reactive to store changes; no manual caches without invalidation.
+- **Single-pass iteration**: never filter/iterate the same array repeatedly (especially inside an outer loop — N×M scans). One `filter()` predicate with early returns, or one `for` loop that builds results. Precompute repeated values (lowercased query strings, `Set`s, parsed JSON) once.
+- **Pure data helpers at the second occurrence**: extract `toIdMap`/`groupBy`/`indexBy` when the same transform appears twice — stateless helpers are cheaper than composables, so they extract earlier than the Rule of Three that governs composables.
+- **Minimal reactivity**: wrap a value in `ref`/`computed` only when something reactive consumes it (template, watcher, reactive side-effect). Constants and pure derivations of non-reactive inputs are plain `const`.
+- **One intentional presence check**: match the check to the type — `value != null` covers null+undefined; a bare truthy check only when `0`, `false`, and `""` are impossible or already invalid; never truthy-check an ID typed `string | number`. Don't stack redundant null/empty checks.
+
+### Lifecycle & Reactivity Hygiene
+
+- Every add/join/subscribe (DOM/global listeners, real-time hub groups like SignalR, manual `watch()` handles, store subscriptions) is paired with its remove/leave/unsubscribe on the same target with the same stable function reference — in `onUnmounted`, and ALSO in `onDeactivated` when keep-alive can hide the view. Never register with an anonymous inline handler that can't be removed; mount/activate paths must not register twice without prior cleanup.
+- Every lodash `debounce`/`throttle` instance is `.cancel()`ed and every timer (`setTimeout`/`setInterval`/`requestAnimationFrame`) cleared on teardown; no deferred callback may touch services, DOM, or refs after unmount.
+- Component-owned DOM is reached via template `ref` + subtree queries, never `document.getElementById`/`querySelector` (globals are legitimate only for click-outside, focus traps, teleported nodes).
+- One side effect, one watcher: never write two watchers invoking the same side effect — share a single `run()` wrapper. Merge watchers only when side-effect, gating, AND options are identical; keep value-specific or `oldVal`-dependent watchers separate.
+
+### Refactor Mode (legacy code only)
+
+The rules above make new code retrofit-free. For **existing** code written before this contract, a refactor delegation follows the sequential zero-regression procedure in [references/vue3-refactor-playbook.md](references/vue3-refactor-playbook.md) — the phased walk that retrofits these same rules with documented Skipped items and a mandatory phase-checklist report.
+
 ### Verification Checklist
 
 Before marking work complete:
@@ -53,6 +75,10 @@ Before marking work complete:
 - [ ] Every interactive element added or touched carries a `data-test` ID
 - [ ] Non-critical routes are lazy-loaded
 - [ ] No watcher exists where a `computed` would do; no `v-memo` without profiling evidence
+- [ ] Every listener/subscription/hub-join you added or touched has a matching teardown (`onUnmounted`, plus `onDeactivated` under keep-alive); every debounce/throttle/timer is cancelled on teardown
+- [ ] No `document.getElementById`/`querySelector` for component-owned DOM — template refs used instead
+- [ ] No repeated queries/scans: datasets queried once per scope, `Map` indexes instead of `.find()` in loops, no same-array multi-pass filtering
+- [ ] No `ref`/`computed` wrapping a value nothing reactive consumes; no stacked redundant null/empty checks
 
 ### Escalate When
 
@@ -65,3 +91,4 @@ Before marking work complete:
 Read on demand — not needed to execute the contract above:
 
 - [Vue 3 playbook](references/vue3-playbook.md) — GOOD/BAD code patterns: store action vs direct mutation, composable extraction, the full Axios interceptor setup with refresh-token queueing, `data-test` usage, lazy routes, and the computed-vs-watch anti-pattern.
+- [Vue 3 refactor playbook](references/vue3-refactor-playbook.md) — the sequential zero-regression refactor pass: per-phase rules (loops, query indexes, watcher dedupe, reactivity removal, listener/timer cleanup, DOM refs, null checks), safety constraints, and the required Skipped/phase-checklist report format.

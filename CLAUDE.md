@@ -10,7 +10,7 @@ blackgoat-agentskills/
 ├── .mcp.json                    # MCP servers: chrome-devtools, playwright, linear, github
 ├── agents/                      # One .md persona per squad member (WHO)
 │   ├── blackgoat.md             #   Orchestrator persona
-│   ├── rex, aria, alex, mason, luna, max, quinn, cipher, dep, forge, iris, scout
+│   ├── rex, aria, alex, mason, luna, max, quinn, echo, vera, cipher, dep, forge, iris, scout
 ├── skills/                      # One folder per skill (HOW)
 │   ├── agent-squad/
 │   │   ├── SKILL.md             #   The Orchestrator/delegation model

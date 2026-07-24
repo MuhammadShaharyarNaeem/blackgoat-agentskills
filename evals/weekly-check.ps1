@@ -120,6 +120,15 @@ foreach ($f in $changedFiles) {
     if ($f -match 'agents/quinn\.md$' -or $f -match 'skills/test-driven-development/' -or $f -match 'skills/debugging-and-error-recovery/') {
         [void]$affectedEvals.Add('contract:quinn-test-report-shape')
     }
+    if ($f -match 'agents/echo\.md$' -or $f -match 'skills/bgpdd-discovery/') {
+        [void]$affectedEvals.Add('contract:echo-qa-discovery-shape')
+    }
+    if ($f -match 'agents/vera\.md$' -or $f -match 'skills/shipping-and-launch/') {
+        [void]$affectedEvals.Add('contract:vera-verification-shape')
+    }
+    if ($f -match 'agents/dep\.md$' -or $f -match 'skills/shipping-and-launch/' -or $f -match 'skills/cloud-deploy-patterns/') {
+        [void]$affectedEvals.Add('contract:dep-ship-decision-shape')
+    }
     if ($f -match 'SKILL\.md$') {
         # Any SKILL.md's frontmatter `description` is what drives skill routing.
         [void]$affectedEvals.Add('trigger')

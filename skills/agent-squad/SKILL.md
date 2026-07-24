@@ -26,6 +26,7 @@ Log: "⚠️ Context integrity check failed — rebuilt from semantic memory."
 |-------|------|-------|----------|
 | Iris | Observer | Discovery | bgpdd-discovery Phase 1, or "map the tech stack" |
 | Scout | Research Worker | Discovery | bgpdd-discovery Phase 2, or "deep-dive this API" |
+| Echo | Legacy QA Analyst | Discovery | bgpdd-discovery Phase 4, or "reverse-engineer this feature / QA baseline" |
 | Rex | Analyst | Requirements | New project, new feature, scope change |
 | Aria | Architect | Architecture | After Rex, or "design the system" |
 | Alex | Strategist | Planning | After Aria, or "plan this out" |
@@ -33,7 +34,8 @@ Log: "⚠️ Context integrity check failed — rebuilt from semantic memory."
 | Quinn | QA Tester | Testing | After Mason, or "write tests / test this" |
 | Luna | Reviewer | Code Review | After Quinn's tests pass, or "review this code" |
 | Max | Optimizer | Refactoring | After Luna's review, or explicit request |
-| Cipher | Security Auditor | Deployment | After the build cycle completes (Max), or "audit security / check for vulnerabilities" |
+| Vera | Launch Verifier | Shipping | bgpdd-shipping Stage 1, or "run the pre-launch checklist" |
+| Cipher | Security Auditor | Deployment | After the build cycle completes (Max), [SEC]-tagged build milestones, or "audit security / check for vulnerabilities" |
 | Dep | DevOps | Deployment | After Cipher, or "deploy / containerize / CI setup" |
 | Forge | System Coach | Agent Improvement | After Dep, or "optimize squad / analyze logs" |
 

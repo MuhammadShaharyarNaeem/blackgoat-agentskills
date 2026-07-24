@@ -1,11 +1,11 @@
 # Case: quinn-test-report-shape
 
 ## Purpose
-Guards against Quinn (Mode B) producing a `test-report.md` that pipeline-tools' test-mode
+Guards against Quinn producing a `test-report.md` that pipeline-tools' test-mode
 parser can't extract coverage from: missing `#Task [N]:` headers, missing or malformed
 Coverage Ledger lines (`- FR-n: PASS — {evidence}`), or IDs mentioned only in prose
 without a `PASS`/`FAIL` status token (per `skills/pipeline-tools/SKILL.md`, such mentions
-are not counted as covered and only warn). A report with the wrong shape makes the Mode B
+are not counted as covered and only warn). A report with the wrong shape makes the test-mode
 coverage gate fail-closed on real, working requirements — indistinguishable from an
 actual regression unless someone manually eyeballs the report.
 
@@ -14,7 +14,7 @@ actual regression unless someone manually eyeballs the report.
   `.docs/password-reset/requirements.md` (3 Must FRs, 1 Must NFR) and `plan.md` (3
   tasks, each citing the FR/NFR it covers), plus `src/passwordReset.js` (an
   already-implemented password-reset token module) and `package.json` (`npm test` wired
-  to `node --test tests/`) at the fixture root. Quinn does not implement `src/` — it
+  to `node --test`) at the fixture root. Quinn does not implement `src/` — it
   already works; her job is only to write and run tests against it.
 - Copies to: `.` (the fixture root is copied straight onto the temp working copy's
   root, preserving its internal `.docs/password-reset/` nesting).
@@ -23,7 +23,7 @@ actual regression unless someone manually eyeballs the report.
 Run from the temp working copy's root:
 
 ```powershell
-claude -p "Act as Quinn (Mode B) per agents/quinn.md. Read .docs/password-reset/requirements.md and .docs/password-reset/plan.md. Write unit tests into tests/ against the existing src/passwordReset.js (do not modify src/), run them, and append your results to .docs/password-reset/test-report.md using the strict #Task [N]: header and Coverage Ledger format from agents/quinn.md section 6 (one line per exercised requirement ID, e.g. '- FR-1: PASS - {test name}')." --permission-mode acceptEdits
+claude -p "Act as Quinn per agents/quinn.md. Read .docs/password-reset/requirements.md and .docs/password-reset/plan.md. Write unit tests into tests/ against the existing src/passwordReset.js (do not modify src/), run them, and append your results to .docs/password-reset/test-report.md using the strict #Task [N]: header and Coverage Ledger format from agents/quinn.md section 6 (one line per exercised requirement ID, e.g. '- FR-1: PASS - {test name}')." --permission-mode acceptEdits
 ```
 
 ## Pass Criteria (checked by `grade.ps1 -TargetDir <temp copy root>`)
