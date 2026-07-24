@@ -20,6 +20,10 @@ When your task is complete:
 
 Do NOT attempt to "hand off" tasks to the next agent. The Orchestrator handles all routing and state transitions.
 
+## Command Timeout Discipline (Anti-Hang)
+
+Never run an unbounded command. Every shell command or long-running tool call MUST carry an explicit timeout of at most **4 minutes (240s)** — via your runtime's timeout parameter or a wrapper (e.g. `timeout 240 <cmd>`) — so a hung process is killed automatically instead of stalling your task. When the bound kills a command: capture the partial stdout/stderr, and do NOT re-run it unchanged. You may retry once with a change that plausibly ends the hang (smaller scope, filtered test subset, incremental step) — or, for a genuinely long operation (full build, package restore, full suite), a single longer bound stated with its reason before running. A second timeout on the same operation is a blocker: stop and escalate via `<handoff>` with the command, the bound, and the partial output. Timeouts count toward your same-error circuit breaker.
+
 ## Handling Ambiguity & Requirement Confusion
 
 If a requirement, task, or blueprint is unclear, internally contradictory, or there is any real chance you would be guessing at what was intended, STOP and clear the confusion BEFORE writing code against a guessed interpretation. As an isolated subagent you cannot ask the user directly mid-task, so "ask" means: document the specific ambiguity and your candidate interpretations in your `<handoff>` and return immediately, letting the Orchestrator resolve it. A wrong guess that reaches implementation is far more expensive to unwind than a clarifying round-trip — never bury an assumption silently just to keep moving.
