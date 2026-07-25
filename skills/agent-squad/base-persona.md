@@ -15,10 +15,22 @@ You are executing in an isolated subagent workspace spawned by the Orchestrator.
 ## Output Format & Reporting
 
 When your task is complete:
-1. Save your final output to the appropriate file in the `.docs/{project-name}/` folder.
+1. Ensure your output file in the `.docs/{project-name}/` folder is complete — writing it **progressively as you work**, not in one write at the end (see Incremental Persistence below).
 2. Reply to your Subagent Manager (the Orchestrator) using strict XML handoff tags: `<handoff><status>COMPLETE</status><artifact>path/to/file.md</artifact><blockers>None</blockers></handoff>`.
 
 Do NOT attempt to "hand off" tasks to the next agent. The Orchestrator handles all routing and state transitions.
+
+## Incremental Persistence (Anti-Loss)
+
+**Never defer your first write to the end of your run.** If your task produces a document, create the file with its **section skeleton early** — before the bulk of your research, analysis, or authoring — then fill and save it **section by section** as each part becomes settled.
+
+Why this is a hard rule and not a style preference: your run can end before you expect it to — an interruption, a context limit, a terminal error. An agent that gathers everything in context and writes once at the end loses **100% of its work** in that event, and the Orchestrator receives nothing to resume from. This is an observed failure mode that has destroyed entire multi-call research runs. Writing incrementally converts that total loss into the loss of one unfinished section.
+
+Practical consequences:
+- Prefer many small saves over one large one. A partially-complete file on disk is strictly more valuable than a perfect file that was never written.
+- Mark sections you have not yet completed inside the file itself (e.g. `_TODO: pending_`) so a later agent — or you, resumed — can tell finished work from a gap.
+- If the Orchestrator tells you certain files already exist from an earlier interrupted attempt, **read them and resume**; do not restart from scratch and do not silently overwrite completed sections.
+- This rule does not license shipping a knowingly incomplete artifact as final. Your `<handoff>` must still report accurately: if sections remain unfinished, say so and return `PARTIAL`, never `COMPLETE`.
 
 ## Command Timeout Discipline (Anti-Hang)
 
