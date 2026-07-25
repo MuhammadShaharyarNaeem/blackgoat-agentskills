@@ -52,15 +52,17 @@ git clone https://github.com/MuhammadShaharyarNaeem/blackgoat-agentskills ~/.cla
 
 ## Core Concepts
 
-Four ideas underpin everything else in the plugin.
+Five ideas underpin everything else in the plugin.
 
 **1. Orchestrator-only delegation.** The Orchestrator (the `agent-squad` model, fronted by the Blackgoat persona) is the single point of contact with the user. It never builds, reviews, or tests anything itself — it understands what the user wants, delegates to the right specialist, reads the returned `<handoff>`, and relays a compressed summary back. This prevents "context collapse": one context window trying to hold requirements, design, code, tests, and review simultaneously.
 
-**2. Subagent isolation.** A delegated agent runs to completion in its own bounded context. It **cannot pause to ask the user mid-task**, and it **cannot spawn further subagents**. Its `<handoff>` arrives as its final message; there is no messaging a running agent and no "kill" step. Consequence: any genuinely interactive step (like turn-by-turn requirements honing) must run in the main session, and all routing, re-delegation, and error recovery belong to the Orchestrator alone.
+**2. Subagent isolation.** A delegated agent runs to completion in its own bounded context. It **cannot pause to ask the user mid-task**, and it **cannot spawn further subagents**. Its `<handoff>` arrives as its final message, and there is no "kill" step. Consequence: any genuinely interactive step (like turn-by-turn requirements honing) must run in the main session, and all routing, re-delegation, and error recovery belong to the Orchestrator alone.
 
-**3. Working-memory chunking.** The Orchestrator never passes full project history to an agent. Each briefing contains only the specific "Working Memory" chunk that agent needs — e.g., the exact text of one milestone from `plan.md`, or one checklist section pasted verbatim. Overloading a subagent's context causes downstream hallucination, so the SOPs forbid it explicitly.
+**3. Background delegation.** Agents are always launched in the **background**, never as a blocking call, and independent delegations go out in a single message so they run concurrently. A blocking delegation makes the Orchestrator unreachable for the agent's whole run — you cannot ask a question, correct a bad brief, or stop work heading the wrong way, and a long phase is indistinguishable from a hang. The Orchestrator is notified on completion, so sequential phase ordering still holds. Paired with this: **incremental persistence** — every agent writes its artifact section by section (and commits code as it goes) rather than saving once at the end, so an interruption costs one unfinished section instead of the entire run.
 
-**4. Artifacts by reference.** Agents save full reports to `.docs/` files; the Orchestrator keeps only a compressed summary (status, 2–3 key outputs, blockers) in active context and passes file *paths*, not file *contents*, to the next agent. The `.docs/` tree is the durable record; context windows are cache.
+**4. Working-memory chunking.** The Orchestrator never passes full project history to an agent. Each briefing contains only the specific "Working Memory" chunk that agent needs — e.g., the exact text of one milestone from `plan.md`, or one checklist section pasted verbatim. Overloading a subagent's context causes downstream hallucination, so the SOPs forbid it explicitly.
+
+**5. Artifacts by reference.** Agents save full reports to `.docs/` files; the Orchestrator keeps only a compressed summary (status, 2–3 key outputs, blockers) in active context and passes file *paths*, not file *contents*, to the next agent. The `.docs/` tree is the durable record; context windows are cache.
 
 ```mermaid
 sequenceDiagram

@@ -7,6 +7,12 @@ description: Main agent orchestrator that coordinates a specialized squad of age
 
 The Main Agent is the single point of contact between the user and the squad. It never builds, reviews, or tests code itself. Its job is to act as a strict **Delegation Manager**: it understands what the user wants, delegates to the right agent, reads that agent's structured report (returned as the delegation's final message), and relays a clean summary back to the user. This completely eliminates "Context Collapse".
 
+> **Scope — read this first.** This skill governs **ad-hoc squad use**: the user invokes the squad directly ("use the squad", "delegate this to Mason") without running a `bgpdd-*` pipeline. It is the only place the roster, routing triggers, briefing format and relay format are defined for that case.
+>
+> **When a `bgpdd-*` pipeline is running, that pipeline's own Global System Constraints and Global Error Recovery sections are authoritative and this file is not loaded.** The pipelines deliberately inline the orchestration rules they need, and they refine several of them per phase — so do not add a dependency on this file from a pipeline, and do not treat rules here as overriding a pipeline's own. If a rule here and a rule in the active pipeline disagree, the pipeline wins.
+>
+> Note that `agent-squad/base-persona.md` is a **separate, universally-loaded** file: every persona lists it as an "Always" methodology dependency, in pipeline runs and ad-hoc runs alike. Cross-cutting rules for *subagents* belong there, not here.
+
 ### Context Integrity Check (Internal)
 
 At the start of every response, silently verify you can answer these three questions from memory (do NOT print them):

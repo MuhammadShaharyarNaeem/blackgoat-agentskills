@@ -6,8 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 ## [Unreleased]
 
 ### Added
+- **Background Execution (mandatory)** across all five pipeline Orchestrators (`bgpdd-discovery`, `bgpdd-plan`, `bgpdd-lite`, `bgpdd-build`, `bgpdd-shipping`): delegated agents are always launched in the background, never as a blocking call, and independent delegations are launched in a single message so they run concurrently. A blocking delegation makes the Orchestrator unreachable for the agent's entire run — the user cannot ask a question, correct a bad brief, or stop work heading the wrong way, and a long phase is indistinguishable from a hang. Orchestrators must also refuse to guess, predict, or fabricate a still-running agent's results.
+- **Incremental Persistence (Anti-Loss)** in `agent-squad/base-persona.md` — therefore inherited by all 14 personas in every pipeline: create the output file with its section skeleton early, then fill and save section by section; mark unfinished sections in-file; resume from existing files rather than restarting or overwriting; and report `PARTIAL` rather than `COMPLETE` when sections remain. Reinforced with delegation-brief rules in all five pipelines, phrased per pipeline (document sections for discovery/plan/lite, code commits plus reports for build/shipping).
+- **Scout-then-Aria split for `bgpdd-plan` Phase 2**, with a stated trigger (a large design surface — e.g. a full API contract *plus* costed infrastructure options *plus* a design system), a "do not split by reflex" guard for small features, and the rule that research Scouts write bounded per-topic files to `research/` which Aria then consumes so the work is not orphaned.
+- **Scout strategy for `bgpdd-lite` Phase 2**: since lite has no design phase to absorb research, ground truth that is in neither `requirements.md` nor the governing stack contract is gathered by Scouts before Alex plans — with the tie-in that research surfacing *decisions* rather than *facts* is the signal lite was the wrong lane.
+- **Scope block on `agent-squad/SKILL.md`** declaring it governs ad-hoc squad use, that a running `bgpdd-*` pipeline's own constraints are authoritative and this file is not loaded, that the pipeline wins on any disagreement, and that cross-cutting *subagent* rules belong in `base-persona.md` instead.
 - **`ui-design-patterns` skill**: UI design execution contract — committed visual direction (tokens + signature element) before code, typography/spacing/color/motion discipline, surface modes, category-defaults-to-refuse (anti-generic-AI aesthetics), full state coverage, UX copy rules, and `references/design-critique.md` (Luna's screenshot-driven Nielsen-heuristic review axis). Loaded conditionally by Aria, Mason, and Luna. Adapted from Anthropic's frontend-design skill and pbakaus/impeccable (Apache-2.0).
 - **`[UI]` task tag** in `planning-and-task-breakdown`; `bgpdd-build` Phase 3 instructs Luna to run the design-critique axis on `[UI]`-tagged milestones.
+
+### Changed
+- **README Core Concepts** is now five ideas rather than four, adding **Background delegation** (with incremental persistence as its paired rule).
+
+### Fixed
+- **Removed the stale "you cannot message a running agent" claim** from all five pipelines and from README Core Concept 2. The runtime does support continuing an already-spawned agent, so the pipelines now prefer sending a follow-up message to an existing agent over re-briefing a fresh one when work must continue with its context intact.
+- **`base-persona.md`'s "When your task is complete: save your final output"** wording actively taught deferred writing — the exact behaviour that loses an entire run on interruption. Step 1 now requires progressive writing and points at the new Incremental Persistence section.
+- `bgpdd-shipping` and `bgpdd-discovery` were missing the delegation-durability rules their sibling pipelines received, which would have shipped contradictory delegation guidance inside one release.
 
 ## [1.1.0] — 2026-07-24
 
