@@ -67,6 +67,7 @@ This prevents authors from treating all feedback as mandatory and wasting time o
 
 ### Rules
 
+- **Remediation fidelity: a fix is verified against the RULE the finding protects, not the finding's literal text.** When you re-review a remediation, first name the rule the original finding was enforcing, then check the fix against *that*. A remediation which satisfies the finding's wording while violating its underlying rule is rejected, not approved — closing a "missing route" finding by adding a placeholder route, silencing a failing assertion by loosening it, satisfying a "no untyped boundary" finding with `any` behind a cast. These are the natural output of an author optimizing for the sentence you wrote, and they read as compliant at a glance: the finding is literally addressed, which is exactly why only the rule can catch them. If the fix trades the finding for a fresh instance of the same defect class, say so and keep the finding open.
 - **Dead code:** After any change, identify orphaned or unreachable code and list it explicitly.
   **Ask before deleting:** "Should I remove these now-unused elements: [list]?"
 - **Dependencies:** Prefer standard library and existing utilities over new dependencies — every dependency is a liability.
