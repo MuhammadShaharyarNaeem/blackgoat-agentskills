@@ -15,6 +15,7 @@ This is the operational spine. Follow it as written.
 
 - Composition API with `<script setup lang="ts">` is the default authoring style for every new component. Do not use the Options API in new code.
 - Type all component boundaries: `defineProps<T>()` and `defineEmits<T>()` with explicit interfaces. No untyped or runtime-only prop declarations in new components.
+- Typecheck with `vue-tsc --noEmit` (installed as a devDependency), never plain `tsc` — only `vue-tsc` validates both `<script>` and `<template>` blocks.
 
 ### Component Abstraction & Shared Packages
 
@@ -25,6 +26,7 @@ This is the operational spine. Follow it as written.
 
 - Shared state is mutated ONLY inside Pinia store actions. Components never write to store state directly — no `store.someField = x`, no `$patch` from a component. Components read state (via getters/`storeToRefs`) and call actions.
 - **Template `v-model` Store Prohibition**: Direct `v-model` binding in templates to Pinia store state properties (e.g., `v-model="store.someField"`) is strictly prohibited as it performs implicit state mutation outside store actions. Use explicit `:model-value` and `@update:model-value` event handlers, store actions, or local computed properties with getter/setter wrappers that call store actions.
+- **Complex State Two-Way Binding Rule**: When using two-way data binding (like `v-model`) to complex reactive state (like arrays or objects), never bind directly to the root reference; bind to specific properties or use explicit event handlers to prevent overwriting the reference with a primitive value.
 - Local, component-private state stays in `ref`/`reactive` inside the component. If two or more components need it, it belongs in a store.
 
 ### Reuse — Composables

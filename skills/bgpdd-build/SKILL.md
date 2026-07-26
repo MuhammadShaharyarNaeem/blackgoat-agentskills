@@ -22,39 +22,34 @@ When you inject a resolved `base-persona.md` path into a delegation brief, it li
 
 ## 1. Global System Constraints
 
-- **Strict Delegation**: You are a MANAGER. You MUST NOT roleplay the phases yourself — this collapses your context window. For each phase, delegate to the named agent (e.g. Mason). The agent runs to completion in its own context and returns its `<handoff>` summary — that returned text is what you read to continue.
-  - **Background Execution (MANDATORY)**: Always launch delegated agents in the **background**. Never force a synchronous/blocking run. A blocking delegation makes you unreachable for the agent's entire run — the user cannot ask a question, correct a bad brief, or stop work heading the wrong way, and a long phase becomes indistinguishable from a hang. You are notified on completion, so sequential phase ordering still holds: launch, stay responsive, continue when the notification arrives. If the user asks about progress before that notification, say the agent is still running — never guess, predict, or fabricate its results.
-  - **Launch independent delegations concurrently**: when a phase needs two or more agents whose work does not depend on each other, launch them **in a single message** so they run in parallel instead of one after another.
-  - Each delegation is otherwise self-contained. If your runtime offers a way to send a follow-up message to an already-spawned agent, prefer that to re-briefing a fresh agent when you need to continue work with its context intact.
+> ### MANDATORY FIRST READ — the Orchestrator Contract
+>
+> **Before Phase 1, you MUST read `{PLUGIN_ROOT}/agent-squad/orchestrator-contract.md` in full.** It carries the cross-cutting Orchestrator rules this pipeline depends on and deliberately does NOT restate: delegation discipline and **background execution**, progressive disclosure, phase-transition confirmation, command-timeout discipline, the full error-recovery skeleton (halt-and-escalate, circuit breaker, no nested delegation, incremental persistence, context checkpoints, bounded autonomous rejection), and your role boundaries.
+>
+> Those rules are **not optional and not summarized here**. Running this pipeline without having read that file means operating without a circuit breaker, without the anti-work-loss rules, and without background execution — proceeding on that basis is non-compliant, not a shortcut. If the file does not resolve, STOP and report the broken path; do not improvise the rules from memory. **This is most critical in Auto Mode (§3)**, where an unattended run has nobody watching to catch a lost phase.
+
+The sections below carry ONLY this pipeline's refinements on top of that contract.
+
+- **Strict Delegation — this pipeline's agents**: Mason (Phase 1), Quinn (Phase 2), Luna (Phase 3), Max (Phase 4), Dep (Phase 5). You MUST NOT roleplay the phases yourself.
 - **Prerequisites**: Do NOT run unless `.docs/{project-name}/implementation/plan.md` exists and is fully populated.
 - **Hydration Phase**: Before Phase 1, read `.docs/{project-name}/orchestrator-state.json` (if it exists) to restore context from the planning phase. The file follows the schema defined in `bgpdd-plan` Phase 4 (fields: `schema`, `project_name`, `feature`, `pipeline`, `branch`, `phase_completed`, `milestone_cursor`, `artifacts`, `blockers`, `updated`). At hydration, once the working branch is established (see Git Workflow below), record it in the `branch` field. After each milestone completes its Build→Test→Review→Refactor cycle, update the state file: set `pipeline` to `"bgpdd-build"` and `milestone_cursor` to the next pending milestone (or `null` when all milestones are complete).
 - **Git Workflow**:
   - At hydration, establish the working branch: ask the user for the repo's branch-naming convention if unknown; default to `feature/{project-name}`. Create it if it does not exist. NEVER build directly on the default branch (main/master).
   - After each milestone goes green (Phase 2 tests pass, and any Phase 3/4 fixes are re-verified), YOU (the Orchestrator) commit the milestone's changes on the working branch with a message citing the milestone name and the `FR`/`NFR` IDs it covers. Committing is pipeline state management, not application-code writing — it does not violate your no-coding rule.
-  - A worker that cannot finish in one run commits its partial work to the same working branch before returning its handoff (this makes the CONTEXT CHECKPOINTS rule in §2 explicit — same branch, commit before returning).
-- **Phase Transitions**: Never start a new phase until the user explicitly types 'proceed', 'approved', or similar confirmation (except in Auto Mode — see §3).
+  - A worker that cannot finish in one run commits its partial work to the same working branch before returning its handoff (this makes the Orchestrator Contract's CONTEXT CHECKPOINTS rule concrete for this pipeline — same branch, commit before returning; see §2).
+- **Phase Transitions**: Never start a new phase until the user explicitly types 'proceed', 'approved', or similar confirmation — **except in Auto Mode (§3)**, this pipeline's sanctioned suspension of the contract's confirmation rule.
 - **Upgraded Chain-of-Thought**: Before transitioning between phases, explicitly verify the required artifact exists.
   - *Format*: "Thinking: Phase X requires Y. Checking `.docs/{project-name}/Y`... File exists and is populated. Proceeding."
-- **Strict Progressive Disclosure (Working Memory)**: Never pass the entire project history or the full `.docs/` folder to a delegated agent. Extract and pass ONLY the specific "Working Memory" chunk they need. Overloading context causes downstream hallucination.
 - **File Artifacts**: All artifacts must use standard GitHub markdown and be saved under `.docs/{project-name}/`.
-- **Command Timeout Discipline (Anti-Hang)**: The 4-minute rule in `base-persona.md` applies to YOU as well. Every shell command you run directly (coverage gates, git operations, verification checks) MUST carry an explicit timeout of at most 4 minutes (240s). On a timeout: capture partial output, never re-run unchanged — one retry with a stated fix, or a single justified longer bound for a known-long operation. A second timeout on the same command is a failure under Global Safety Mechanisms.
 
 ## 2. Global Safety Mechanisms
 
-If *any* delegated agent (or you, the Orchestrator) exhibits the following behaviors:
-1. Gets stuck in a continuous tool-call loop without making progress.
-2. Hallucinates a file path that does not exist.
-3. Fails to complete its objective after 3 consecutive attempts.
+**The error-recovery skeleton lives in the Orchestrator Contract (§2)** — halt-and-escalate triggers, the circuit breaker you pass to every agent, no-nested-delegation, incremental persistence, context checkpoints, and 2-round bounded autonomous rejection. Read it there; it is not restated here.
 
-**ACTION**: You MUST immediately halt execution, output a structured state summary of what went wrong, and request explicit human intervention. Do not guess or bypass the failure silently. (A delegated agent terminates on its own when it returns — there is no separate "kill" step; simply stop delegating and escalate.)
-
-**CRITICAL CIRCUIT BREAKER**: You must pass the following rule to every delegated agent in its prompt: "If you encounter the exact same error or test failure 3 times in a row, you MUST stop, document the failure state clearly in your `<handoff>` (what you tried and the exact error), and return immediately to escalate to the Orchestrator. Do NOT attempt a 4th fix."
-
-**NO NESTED DELEGATION**: You must pass the following rule to every delegated agent in its prompt: "Do NOT spawn subagents of your own. If a sub-investigation seems necessary, document what is needed in your `<handoff>` and return — the Orchestrator decides whether to delegate it."
-
-**INCREMENTAL PERSISTENCE**: You must pass the following rule to every delegated agent in its prompt: "Persist your work as you go — commit code to the working branch and write documents section by section. Do NOT complete all work and write or commit only at the end." An agent that defers persistence until the end loses **everything** if it is interrupted or hits a context limit, and the Orchestrator receives nothing to resume from — an observed failure mode that has destroyed entire multi-call runs. This is the same rule as `base-persona.md`'s Incremental Persistence section and it reinforces the partial-work commit requirement in §1. When you re-delegate after an interruption, tell the agent exactly what already exists (files, commits) so it resumes rather than restarting or overwriting finished work. **This matters most in Auto Mode (§3)**, where an unattended run may proceed for a long time with nobody watching to restart a lost phase.
-
-**CONTEXT CHECKPOINTS**: A delegated agent's context is bounded by its own run — you do not timebox it, and you must NOT instruct agents to schedule timers or spawn their own replacements. If a worker cannot finish in one run, it commits its partial work to the working branch (see Git Workflow in §1) and returns a `<handoff>` describing the remaining work; **you** then re-delegate a fresh agent with that handoff. If *your own* context grows large, checkpoint to `.docs/{project-name}/orchestrator-state.json` so a fresh session can resume.
+This pipeline's refinements, because it is the only pipeline where workers write code:
+- **Incremental persistence includes committing.** The instruction you pass every agent must cover code as well as documents: partial work is committed to the working branch (see Git Workflow in §1) before the agent returns, which is what makes the contract's rule enforceable here rather than aspirational.
+- **Resumption after interruption** must state exactly what already exists — files *and* commits — so the fresh agent resumes rather than restarting or overwriting finished work.
+- **Auto Mode raises the stakes on all of the above (§3)**: an unattended run may proceed a long time with nobody watching to restart a lost phase.
 
 ## 3. Auto Mode (Optional Argument)
 

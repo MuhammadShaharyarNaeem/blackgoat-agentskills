@@ -31,6 +31,7 @@ Pick the mode per surface (not per product) and design for what the visitor's su
 
 ### Execution Rules (authoring — Mason)
 
+- **No placeholder/empty wrappers**: Never scaffold empty HTML wrappers (e.g., `<div class="Wrapper"></div>`) for components; fully implement the logic and markup required by the specification so QA checks run against the true implementation.
 - **Typography carries the personality**: deliberate pairing, a clear scale with obvious size/weight steps, body measure 65–75ch, display ≤6rem, tracking no tighter than −0.04em (−0.02 to −0.03em usually reads better). Run the real copy at every breakpoint; fix what overflows.
 - **Spacing is rhythm**: tight within groups, generous between them; more space above a heading than below it. Verify computed values, not intentions.
 - **Color**: contrast ≥4.5:1 for body/placeholder text, ≥3:1 for large text. On colored surfaces, tint secondary text from that hue or the foreground — never plain gray. The accent is spent deliberately, not sprayed.

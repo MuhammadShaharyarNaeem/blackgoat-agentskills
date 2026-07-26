@@ -73,6 +73,7 @@ After fetching, extract the key patterns and note any deprecation warnings or mi
 Write code that matches what the documentation shows:
 
 - Use the API signatures from the docs, not from memory
+- Never guess framework-specific component tags or props (e.g. Quasar or Vuetify components) — verify the exact names and API usage in the official documentation before writing the code
 - If the docs show a new way to do something, use the new way
 - If the docs deprecate a pattern, don't use the deprecated version
 - If the docs don't cover something, flag it as unverified

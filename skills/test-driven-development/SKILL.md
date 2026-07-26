@@ -33,6 +33,7 @@ Wrote code before the test? Delete it. Start over. No exceptions — don't keep 
 
 ### Rules
 
+- **No dummy assertions or stub tests**: Never write dummy assertions like `expect(true).toBe(true)` or skip mounting child components in testing environments; tests must rigorously mount, exercise, and assert the full state, style variations, and behavior of the target component or function.
 - One logical assertion / one behavior per test.
 - Test names describe behavior: `"should reject empty email"` not `"test validateInput"`. If the name needs "and", split the test.
 - Use AAA structure: Arrange → Act → Assert.
@@ -43,6 +44,7 @@ Wrote code before the test? Delete it. Start over. No exceptions — don't keep 
 - Write minimal code to pass — no speculative features, options, or abstractions (YAGNI).
 - Stack execution contracts (e.g. dotnet-backend-patterns) take precedence over the boundary list above where they conflict — e.g. on .NET, integration tests never mock the database.
 - A hard invariant or Must-Have NFR that must hold permanently (a stable wire/serialization format, a byte-for-byte compatibility contract, a public-API surface) MUST be covered by a PERMANENT automated regression test committed to the suite. A throwaway/temporary harness you delete after checking does NOT satisfy it — and this requirement overrides any plan or checklist step that says "manual check", "temporary check", or "verify once". Throwaway harnesses may supplement, never replace, the committed test.
+- **Network Client Mocking Rule**: When mocking network clients in unit tests, ensure the mocked return structure exactly matches the post-middleware/post-interceptor structure that the application receives at runtime, not the raw HTTP envelope.
 
 ### Verification Checklist
 

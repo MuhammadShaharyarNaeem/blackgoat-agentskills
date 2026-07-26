@@ -20,39 +20,28 @@ When you inject a resolved `base-persona.md` path into a delegation brief, it li
 
 ## 1. Global System Constraints
 
-- **Strict Delegation**: You are a MANAGER. For non-interactive phases you MUST NOT roleplay the agent's work yourself — this collapses your context window. Instead, delegate to the named agent (e.g. Aria). Pass the agent the specific "Working Memory" chunk it needs in the prompt. The agent runs to completion in its own context and returns its `<handoff>` summary — that returned text is what you read to continue.
-  - **Background Execution (MANDATORY)**: Always launch delegated agents in the **background**. Never force a synchronous/blocking run. A blocking delegation makes you unreachable for the agent's entire run — the user cannot ask a question, correct a bad brief, or stop work heading the wrong way, and a long phase becomes indistinguishable from a hang. You are notified on completion, so sequential phase ordering still holds: launch, stay responsive, continue when the notification arrives. If the user asks about progress before that notification, say the agent is still running — never guess, predict, or fabricate its results.
-  - **Launch independent delegations concurrently**: when a phase needs two or more agents whose work does not depend on each other, launch them **in a single message** so they run in parallel instead of one after another.
-  - Each delegation is otherwise self-contained. If your runtime offers a way to send a follow-up message to an already-spawned agent, prefer that to re-briefing a fresh agent when you need to continue work with its context intact.
+> ### MANDATORY FIRST READ — the Orchestrator Contract
+>
+> **Before Phase 1, you MUST read `{PLUGIN_ROOT}/agent-squad/orchestrator-contract.md` in full.** It carries the cross-cutting Orchestrator rules this pipeline depends on and deliberately does NOT restate: delegation discipline and **background execution**, progressive disclosure, phase-transition confirmation, command-timeout discipline, the full error-recovery skeleton (halt-and-escalate, circuit breaker, no nested delegation, incremental persistence, context checkpoints, bounded autonomous rejection), and your role boundaries.
+>
+> Those rules are **not optional and not summarized here**. Running this pipeline without having read that file means operating without a circuit breaker, without the anti-work-loss rules, and without background execution — proceeding on that basis is non-compliant, not a shortcut. If the file does not resolve, STOP and report the broken path; do not improvise the rules from memory.
+
+The sections below carry ONLY this pipeline's refinements on top of that contract.
+
+- **Strict Delegation — this pipeline's agents**: Rex (Phase 1 Step B), Aria (Phase 2), Alex (Phase 3), and optionally Scout (Phase 2 research split). For non-interactive phases you MUST NOT roleplay the agent's work yourself.
   - **EXCEPTION — Phase 1 (Honing)**: Requirements honing is interactive (turn-by-turn Q&A with the user). A delegated agent cannot pause to ask the user and resume, so **you (the main session) run Phase 1 yourself** following Rex's persona as the behavioral spec. See Phase 1 below.
-- **Phase Transitions**: Never start a new phase until the user explicitly types 'proceed', 'approved', or similar confirmation.
 - **Upgraded Chain-of-Thought**: Before transitioning between phases, you MUST explicitly verify that the required artifact exists AND satisfies its content contract — existence and non-emptiness alone are not sufficient. Content contracts:
   - `requirements.md`: has at least one Must-Have requirement carrying an `FR` ID and a Given/When/Then acceptance criterion.
   - `detailed-design.md`: explicitly references the `FR` IDs it addresses (the design must show which requirements it covers).
   - `plan.md`: every task cites the requirement ID(s) it satisfies (a "Requirements covered:" field), and every task carries a verification step.
   - *Format*: "Thinking: Phase X requires Y. Checking `.docs/{project-name}/Y`... File exists and satisfies its content contract [state which check(s) passed]. Proceeding."
-- **Strict Progressive Disclosure (Working Memory)**: Never pass the entire project history or the full `.docs/` folder to a delegated agent. Extract and pass ONLY the specific "Working Memory" chunk they need for their current task. Overloading context causes downstream hallucination.
 - **File Artifacts**: All artifacts must use standard GitHub markdown and be saved under `.docs/{project-name}/`. This folder is the project's persistent **Semantic Memory**.
-- **Command Timeout Discipline (Anti-Hang)**: The 4-minute rule in `base-persona.md` applies to YOU as well. Every shell command you run directly (coverage gates, git operations, verification checks) MUST carry an explicit timeout of at most 4 minutes (240s). On a timeout: capture partial output, never re-run unchanged — one retry with a stated fix, or a single justified longer bound for a known-long operation. A second timeout on the same command is a failure under Global Error Recovery.
 
 ## 2. Global Error Recovery
 
-If *any* delegated agent (or you, the Orchestrator) exhibits the following behaviors:
-1. Gets stuck in a continuous tool-call loop without making progress.
-2. Hallucinates a file path that does not exist.
-3. Fails to complete its objective after 3 consecutive attempts.
+**The error-recovery skeleton lives in the Orchestrator Contract (§2)** — halt-and-escalate triggers, the circuit breaker you pass to every agent, no-nested-delegation, incremental persistence, context checkpoints, and 2-round bounded autonomous rejection. Read it there; it is not restated here.
 
-**ACTION**: You MUST immediately halt execution, output a structured state summary of what went wrong, and request explicit human intervention. Do not attempt to guess or bypass the failure silently. (There is no "kill" step — a delegated agent terminates on its own when it returns; simply stop delegating and escalate.)
-
-**AUTONOMOUS REJECTION**: If an agent reports a blocking flaw in a previous agent's artifact, re-delegate to the previous agent (a fresh delegation) with the rejection notes so it fixes the artifact automatically. **Bound this to 2 rounds per artifact**: track how many auto-fix rounds a given artifact (e.g. `requirements.md`) has been through. If, after 2 rounds, the flaw is still unresolved, halt and surface the artifact, the flaw, and both attempts to the user rather than re-delegating a third time. Do not halt before that unless human input is explicitly required.
-
-**CRITICAL CIRCUIT BREAKER**: You must pass the following rule to every delegated agent in its prompt: "If you encounter the exact same error or test failure 3 times in a row, you MUST stop, document the failure state clearly in your `<handoff>` (what you tried and the exact error), and return immediately to escalate to the Orchestrator. Do NOT attempt a 4th fix."
-
-**NO NESTED DELEGATION**: You must pass the following rule to every delegated agent in its prompt: "Do NOT spawn subagents of your own. If a sub-investigation seems necessary, document what is needed in your `<handoff>` and return — the Orchestrator decides whether to delegate it."
-
-**INCREMENTAL PERSISTENCE**: You must pass the following rule to every delegated agent that produces a document: "Create your output file with its section skeleton EARLY, then fill and save it section by section as you go. Do NOT complete all research or analysis first and write only at the end." An agent that defers its first write until the end loses **everything** if it is interrupted — this is a real, observed failure mode that has cost entire multi-call research runs. Incremental writing turns an interruption into the loss of one section rather than the whole delegation. When you re-delegate after an interruption, tell the agent which files already exist so it resumes instead of restarting.
-
-**CONTEXT CHECKPOINTS**: A delegated agent's context is bounded by its own run — you do not need to timebox it. If *you* (the Orchestrator) sense your own context is getting large across many phases, checkpoint your state to `.docs/{project-name}/orchestrator-state.json` (see Phase 4) so a fresh session can resume. Do NOT instruct delegated agents to schedule timers or spawn their own replacements — that is your responsibility, not theirs.
+This pipeline's only refinement: the artifacts subject to the 2-round bound are `requirements.md`, `detailed-design.md`, and `plan.md` — track the round count per artifact, and after 2 rounds surface the flaw and both attempts to the user rather than re-delegating a third time.
 
 ## 3. Few-Shot Handoff Examples
 

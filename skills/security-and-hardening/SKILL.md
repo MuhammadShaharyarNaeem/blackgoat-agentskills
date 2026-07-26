@@ -44,6 +44,7 @@ If you can't name the trust boundaries for a feature, you're not ready to secure
 - **Set security headers** (CSP, HSTS, X-Frame-Options, X-Content-Type-Options)
 - **Use httpOnly, secure, sameSite cookies** for sessions
 - **Run `npm audit`** (or equivalent) before every release
+- **Mask PII in UI**: Never render sensitive Personally Identifiable Information (PII) in plain text in UI components; always apply a UI-level masking function or component before rendering.
 
 #### Ask First (Requires Human Approval)
 
