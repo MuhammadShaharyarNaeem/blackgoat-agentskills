@@ -78,11 +78,17 @@ Before proposing a new rule, you MUST read the ENTIRE target agent's `SKILL.md` 
 
 When invoked via `/bgpdd-learn` (or whenever a lesson's home is not predetermined), route each formulated rule to exactly ONE layer — this is the agent-audit Golden Rule (personas = WHO, skills = HOW) plus the Abstraction Rule (elevate → generalize → move) applied to learning:
 
+**Generalize BEFORE routing, not after.** Strip the framework, then the role, from the draft rule and route what remains:
+- If the rule would hold for *any* agent doing this task, it is HOW, not WHO — route it to the methodology skill, never a persona. Persona destinations are the exception, reserved for judgment, boundaries, and escalation behavior genuinely specific to that one role.
+- If the rule would hold beyond the framework that surfaced it, route it to the framework-agnostic skill (e.g. `ui-design-patterns`, `test-driven-development`), never a framework playbook (`vue3-spa-patterns`, `dotnet-backend-patterns`) — a general rule parked in a framework playbook silently stops applying on every other stack.
+- Only what survives both strips with framework- or project-specifics intact routes to the playbook or project layer.
+
 | Lesson is... | Destination |
 |---|---|
 | Project-specific and not generalizable (names this repo's files, stack quirks, local conventions) | The target project's `.agents/AGENTS.md` (or the project's `CLAUDE.md`) |
 | About WHO an agent is — judgment, boundaries, escalation behavior | That agent's `agents/<name>.md`, `## Procedural Memories` section |
 | About HOW a task is done, role-agnostic | The methodology skill: contract-level rules in the SKILL.md spine, rationale in its `references/` deep-dive |
+| About how the **Orchestrator** orchestrates — cross-cutting delegation, error recovery, or role-boundary behavior spanning more than one pipeline | `skills/agent-squad/orchestrator-contract.md`, as a contract rule in the relevant section (never inlined into a pipeline, never `base-persona.md` — that file is subagent-scoped) |
 | Already covered by an existing rule, or a one-off with no recurrence risk | Discard (Pruning Protocol) |
 
 Every proposed lesson must name its destination and a one-line rationale for that layer. In Learning Triage mode, the proposal is returned in your `<handoff>` — do not write a proposal file; only approved lessons are ever written to their destination files. (Pipeline improvement phases still use `agent-improvements.md` as their review artifact.) If a lesson seems to belong at two layers, generalize it until it belongs at one.
@@ -108,7 +114,7 @@ If the Orchestrator invokes you a second time to inform you that the User has ap
 1. Edit the `SKILL.md` files directly to apply the changes.
 2. **Never touch the YAML frontmatter** of any `SKILL.md` file.
 3. **Never delete or modify the core persona descriptions.**
-4. **Scoped Editing (Vector A — runtime rules)**: Procedural-memory rules may ONLY be appended, modified, or deleted strictly within the `## Procedural Memories (Learned Lessons)` section at the very bottom of the target file. If this section does not exist, create it at the end of the file.
+4. **Scoped Editing (Vector A — runtime rules)**: In *persona* files (`agents/<name>.md`) and project rules files, procedural-memory rules may ONLY be appended, modified, or deleted strictly within the `## Procedural Memories (Learned Lessons)` section at the very bottom of the target file. If this section does not exist, create it at the end of the file — and never create it empty: a `## Procedural Memories` heading with no rule under it is placeholder scaffolding and must not be written. In *methodology skills*, an approved lesson lands as a contract-level rule inside the relevant rules list of the SKILL.md spine (per Destination Triage), NOT in a Procedural Memories section — skills carry contracts, not memories.
 5. **Compaction Rule**: If the `## Procedural Memories` section exceeds 5 bullet points, you MUST synthesize and compress them into broader core rules. Never append indefinitely.
 6. **Memory Hygiene (Abstraction Rule)**: When a persona's `## Procedural Memories` section has accumulated 3 or more entries, do NOT append another — apply the Abstraction Rule instead: elevate universal engineering rules into the persona's Responsibilities (undated), generalize framework-specific lessons into language-agnostic principles, and move irreducible project-specific rules to that project's `.agents/AGENTS.md`. Dated memories are a staging area, not a permanent home.
 7. **Scoped Editing (Vector B — approved structural surgery)**: Structural changes originating from an approved `agent-audit` surgery plan may edit workflow steps, Methodology Dependencies tables, and persona body text — but ONLY the exact changes enumerated in the approved `agent-improvements.md` proposal. YAML frontmatter remains untouchable in all cases.

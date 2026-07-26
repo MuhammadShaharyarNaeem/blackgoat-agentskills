@@ -130,26 +130,24 @@ This project handles all communication with the outside world.
 ```text
 Solution/
 ├── YourApp.Api/
-│   ├── Program.cs                          # Composition Root (DI, Middleware, Route registration)
+│   ├── Program.cs                          # Composition Root (registers global services and calls MapFeatureEndpoints)
 │   ├── Filters/                            # Global Endpoint Filters
 │   │   ├── ValidationFilter.cs
-│   │   └── LoggingFilter.cs
-│   ├── Endpoints/                           # All Vertical Slices live here
+│   │   └── ValidationFilterExtensions.cs
+│   ├── Endpoints/                           # Modular slices live here
 │   │   ├── Customers/
-│   │   │   ├── CreateCustomer/
-│   │   │   │   ├── CreateCustomerEndpoint.cs    # Request + Response + Handler
-│   │   │   │   └── CreateCustomerValidator.cs   # FluentValidation rules
-│   │   │   ├── GetCustomerById/
-│   │   │   │   └── GetCustomerByIdEndpoint.cs
-│   │   │   └── BanCustomer/
-│   │   │       ├── BanCustomerEndpoint.cs
-│   │   │       └── BanCustomerValidator.cs
+│   │   │   ├── CustomersEndpointsExtension.cs  # NEW: Maps all customer module routes collectively
+│   │   │   ├── CreateCustomerEndpoint.cs       # Request + Response + Handler
+│   │   │   ├── GetCustomerByIdEndpoint.cs
+│   │   │   └── BanCustomerEndpoint.cs
 │   │   └── Orders/
-│   │       └── CreateOrder/
-│   │           ├── CreateOrderEndpoint.cs
-│   │           └── CreateOrderValidator.cs
+│   │       ├── OrdersEndpointsExtension.cs     # NEW: Maps all order module routes collectively
+│   │       └── CreateOrderEndpoint.cs
+│   ├── Validators/                         # Standalone FluentValidation request validators
+│   │   ├── CreateCustomerValidator.cs
+│   │   └── CreateOrderValidator.cs
 │   └── Extensions/                         # Route registration helpers
-│       └── EndpointExtensions.cs
+│       └── EndpointExtensions.cs           # Central registry: maps '/api/v1' route group and loads module routes
 │
 ├── Gorelo.Integrations.REPR.Core/
 │   ├── Enums/
@@ -187,52 +185,45 @@ Solution/
 Every endpoint file follows this exact structure:
 
 ```csharp
-// File: Features/{Domain}/{FeatureName}/{FeatureName}Endpoint.cs
+// File: Endpoints/{Module}/{Verb}{Entity}Endpoint.cs
+// Example: Endpoints/Orders/CreateOrderEndpoint.cs
 
-namespace YourApp.Api.Features.{Domain}.{FeatureName};
+namespace YourApp.Api.Endpoints.Orders;
 
 // 1. Request Model (owned by this endpoint only)
-public record {FeatureName}Request(/* properties */);
+public record CreateOrderRequest(Guid CustomerId, List<string> ItemIds);
 
 // 2. Response Model (owned by this endpoint only)
-public record {FeatureName}Response(/* properties */);
+public record CreateOrderResponse(Guid OrderId, string Status);
 
 // 3. Static Endpoint Class
-public static class {FeatureName}Endpoint
+public static class CreateOrderEndpoint
 {
-    // 4. Route Registration
-    public static void Map{FeatureName}Endpoint(this IEndpointRouteBuilder app)
-    {
-        app.Map{HttpVerb}("route", HandleAsync)
-           .WithName("{FeatureName}")
-           .WithTags("{Domain}")
-           .AddValidation<{FeatureName}Request>();  // Pipeline filter
-    }
-
-    // 5. Handler — all dependencies injected as method parameters
-    private static async Task<IResult> HandleAsync(
-        {FeatureName}Request request,
+    // 4. Handler — all dependencies injected as method parameters
+    public static async Task<IResult> HandleAsync(
+        CreateOrderRequest request,
         AppDbContext db,
         // other dependencies...
         CancellationToken ct)
     {
         // Business logic here
-        var response = new {FeatureName}Response(/* ... */);
-        return BaseResponse<{FeatureName}Response>.Success(response).ToResult();
+        var response = new CreateOrderResponse(Guid.NewGuid(), "Pending");
+        return BaseResponse<CreateOrderResponse>.Success(response).ToResult();
     }
 }
 ```
 
-### 3.2 Naming Conventions
+### 3.2 Naming & Mapping Conventions
 
 | Element | Convention | Example |
 |---|---|---|
 | Endpoint Class | `{Verb}{Entity}Endpoint` | `CreateOrderEndpoint` |
-| Request Record | `{Verb}{Entity}Request` | `CreateOrderRequest` |
+| Request Record | `{Verb}{Entity}Request` or `{Verb}{Entity}Query` | `CreateOrderRequest` |
 | Response Record | `{Verb}{Entity}Response` | `CreateOrderResponse` |
-| Validator Class | `{Verb}{Entity}Validator` | `CreateOrderValidator` |
-| Folder Name | `{Verb}{Entity}` | `CreateOrder/` |
-| Route Registration | `Map{Verb}{Entity}Endpoint` | `MapCreateOrderEndpoint()` |
+| Validator Class | `{Verb}{Entity}RequestValidator` or `{Verb}{Entity}QueryValidator` | `CreateOrderRequestValidator` |
+| Directory Path | `Endpoints/{Module}/` | `Endpoints/Orders/` |
+| Route Mapping File | `{Module}EndpointsExtension.cs` | `OrdersEndpointsExtension.cs` |
+| Route Registration Method | `Map{Module}Endpoints(this IEndpointRouteBuilder builder)` | `MapOrdersEndpoints(...)` |
 
 ### 3.3 Inviolable Rules
 
@@ -449,11 +440,8 @@ builder.Services.AddScoped<CreateOrderService>();
 
 var app = builder.Build();
 
-// Route Registration
-app.MapCreateOrderEndpoint();
-app.MapGetCustomerByIdEndpoint();
-app.MapBanCustomerEndpoint();
-// ... one line per feature
+// Central Route Registration
+app.MapFeatureEndpoints();
 
 app.Run();
 ```
@@ -519,15 +507,15 @@ Use this checklist when converting an existing codebase:
 ### Phase 1: Foundation
 - [ ] Create `Filters/ValidationFilter.cs` in the API project.
 - [ ] Create `Filters/ValidationFilterExtensions.cs`.
-- [ ] Create the `Features/` folder in the API project.
+- [ ] Create the `Endpoints/` folder in the API project.
 
 ### Phase 2: Tracer Bullet (One Feature)
 - [ ] Pick one simple Controller action (e.g., `GET /api/customers/{id}`).
-- [ ] Create `Features/Customers/GetCustomerById/GetCustomerByIdEndpoint.cs`.
+- [ ] Create `Endpoints/Customers/GetCustomerByIdEndpoint.cs`.
 - [ ] Move the Request/Response DTOs into the endpoint file.
 - [ ] Move the handler logic from the MediatR Handler (or BLL Service) into `HandleAsync`.
 - [ ] Replace any Repository call with a direct `DbContext` call.
-- [ ] Register the route in `Program.cs`.
+- [ ] Register the route inside `CustomersEndpointsExtension.cs`, which is mapped to the centralized versioned route group in `EndpointExtensions.cs`.
 - [ ] **DO NOT delete or modify** the old Controller action, MediatR Command, or Handler in the declared legacy project. Leave them completely intact.
 - [ ] Test the new endpoint.
 
@@ -554,7 +542,7 @@ Use this checklist when converting an existing codebase:
 
 | Scenario | Where Does It Go? |
 |---|---|
-| A new API feature | `Api/Features/{Domain}/{FeatureName}/` or `Api/Endpoints/{Domain}/` |
+| A new API feature | `Api/Endpoints/{Module}/` |
 | A database entity | `Core/Entities/` |
 | An enum or value object | `Core/Enums/` or `Core/ValueObjects/` |
 | A business rule on an entity | Inside the entity class in `Core/Entities/` |
