@@ -64,6 +64,12 @@ Quinn's Coverage Ledger format (see `agents/quinn.md` §6) is what the test-repo
 
 Only `PASS`/`FAIL` as the status word, latest mention wins, so a retest appends a fresh line rather than editing history.
 
+**What the evidence field must contain.** The gate is deterministic about the *status* token and completely trusting about the *evidence* prose beside it — so the evidence field carries the entire integrity burden of the gate:
+
+- A `PASS` cites **the executed test that asserts that requirement's own acceptance criterion**, named by test file plus test name. A source file, a component, an infrastructure resource, a design document, or a prior milestone's `PASS` is **not** evidence — those establish that code exists, not that the requirement holds.
+- **Never restate a `PASS` you did not just re-execute.** This is the sharp edge of *latest mention wins*: a later, vaguer line silently **overwrites** an earlier, stronger one, and it is the last line in file order that the gate reads. Appending "re-verified" or "final verification" prose over a genuine earlier measurement does not strengthen the ledger — it destroys the only real evidence in it and leaves the gate reading the weakest claim in the file. If you did not run it this round, append nothing.
+- A verification you could not perform is recorded as `FAIL` with the reason, or omitted entirely so the gate reports it as uncovered. It is **never** recorded as `PASS` with a hedge (see `agent-squad/base-persona.md`, Evidence Integrity). A gap the gate can see is cheap; a gap it cannot is what the gate exists to prevent.
+
 ## Fixtures & self-test
 
 `fixtures/happy/`, `fixtures/uncovered/`, and `fixtures/malformed/` each hold a `requirements.md` (+ `plan.md` and/or `test-report.md`) exercising the pass, gap, and structural-failure paths respectively. Run the bundled suite either directly or through the CLI:

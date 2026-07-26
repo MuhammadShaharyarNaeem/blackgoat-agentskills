@@ -6,7 +6,7 @@ The procedure for reviewing user-facing UI changes. You are an auditor: think li
 
 1. Resolve the target: the changed components/views from the `<changed_files>` list, plus the routes/surfaces that render them.
 2. **Screenshots when browser tooling is available** (playwright / chrome-devtools MCP): navigate to each affected surface, capture at desktop AND mobile widths, and capture the non-happy states you can reach (empty, loading, error, disabled). A finding tied to a screenshot outranks a finding inferred from source.
-3. When no browser tooling is available, review from source + computed reasoning and say so in the report header: `Evidence: source-only (no browser tooling)`. Never present source-inferred visual claims as observed.
+3. When no browser tooling is available — or the app is unbuilt, or it will not boot — say so in the report header (`Evidence: source-only (no browser tooling)`) and apply the one-directional rule: **source reading can FAIL a rendered check but can never PASS one.** Report every check on a computed or rendered property (contrast ratio, spacing rhythm, type scale at breakpoints, focus visibility, state coverage, whether a token resolves) as `NOT VERIFIED — no rendered output`, and raise the missing evidence as a blocker on the review. Do NOT mark such a check satisfied, and do not tick a craft-floor box you inferred: a correct token *reference* in source still renders wrong if the token is undefined, overridden, or the stylesheet never loads. Recording *"uses the correct hairline"* from a source read, over a file that hardcodes the hex value, is the failure this rule exists to prevent — the axis ran, returned a clean pass, and the surface was wrong on screen. Source-visible defects (a hardcoded literal where the system mandates a token, a missing `:focus-visible`, an absent empty state) are still real findings — report those.
 4. Read the committed direction (the tokens/signature section of `detailed-design.md`, or the brief) — conformance to it is what you review, not your own preferences.
 
 ## 2. Design-Specificity Verdict
@@ -40,7 +40,7 @@ Report the table with a one-line key issue per scored row.
 
 ## 5. Mechanical Craft-Floor Checks
 
-Verify on the built result (computed values / screenshots, not intentions). Each failure is a finding:
+Verify on the built result (computed values / screenshots, not intentions). Each failure is a finding — and with no built result, each of these is `NOT VERIFIED`, never a pass (§1.3):
 
 - Contrast: body/placeholder ≥4.5:1, large text ≥3:1; secondary text on colored surfaces tinted, never plain gray.
 - Type: body measure 65–75ch; obvious scale/weight steps; real copy survives every breakpoint without overflow.

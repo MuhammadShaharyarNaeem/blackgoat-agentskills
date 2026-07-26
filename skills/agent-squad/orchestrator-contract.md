@@ -64,6 +64,20 @@ If *any* delegated agent (or you, the Orchestrator) exhibits the following:
 
 ---
 
-## 4. Where Orchestrator Lessons Land
+## 4. State Hydration & Persistence
+
+Your state file (typically `.docs/{project-name}/orchestrator-state.json`) is an inter-pipeline interface, not private scratch. These rules govern how you read it, what you may write into it, and what must be true before you advance it.
+
+- **Green is not evidence.** Never advance a cursor, close a gate, or mark a unit of work complete on a returned `COMPLETE` status alone. A handoff reports what an agent *believes*, and every verification artifact in the pipeline — test report, review report, audit report — is a document *about* the software rather than the software itself, satisfiable by a sufficiently confident sentence. Before persisting an advance, **independently observe that unit's declared runtime exit criterion yourself**: run the command, read the actual output. If the unit declared no such criterion, that absence *is* the defect — stop and get one; never advance on aggregate green ("all tasks done, tests pass, review approved"). Your error-recovery machinery in §2 detects *repeated failure* and is structurally blind to *first-time silently-wrong green*; this rule is the only thing covering that case.
+
+- **A cursor is a resume hint, never the authority.** The authoritative next unit of work is the **first unchecked item in the plan document's own order** — not the value stored in the state file. Re-derive it from the plan at every hydration, and again after any edit to the plan. If the plan contains unchecked work *earlier* than the stored cursor, the cursor is **stale**: reset it to that earlier item and surface the discrepancy to the user before proceeding. A stored cursor read as "resume forward from here" silently skips every unit inserted behind it — which is how a whole round of corrective work becomes inert while every artifact on disk still looks correct.
+
+- **`blockers` is an append-only ledger, not a status field.** Append an entry for every unresolved Critical/Important finding, every BLOCKED or skipped verification, and every named proxy substitution an agent reported (see `base-persona.md`, Evidence Integrity) — each with its unit of work and the evidence. Remove an entry only once its fix is verified under the green-is-not-evidence rule above. **No unit may be marked complete while its entries stand.** An empty array asserts *verified none*; it must never mean *not checked*. A state file that reports health it never established is worse than no state file, because it outlives the session that could have corrected it.
+
+- **Evidence checkpoints fire at every state persistence, not at pipeline end.** Whenever you persist a state advance, append that unit's evidence to the game tape (`.docs/{project-name}/implementation/game-tape.md`) in the same step — user corrections, agent failures and retries, re-delegation rounds and why, circuit-breaker trips, and which gates were genuinely exercised versus rubber-stamped. A checkpoint conditioned on pipeline *completion* is not a checkpoint: the context that produced the evidence is gone long before the pipeline ends, and a run that never reaches its end leaves no record at all.
+
+---
+
+## 5. Where Orchestrator Lessons Land
 
 This file is the durable home for cross-cutting Orchestrator rules. An approved lesson about *how the Orchestrator orchestrates* lands here as a contract rule in the relevant section above — generalized and undated, the way methodology skills carry contracts. It does not land in a pipeline (which would re-create the duplication this file exists to remove), and it does not land in `base-persona.md` (which is subagent-scoped). Lessons that apply to only one pipeline's phases belong in that pipeline.

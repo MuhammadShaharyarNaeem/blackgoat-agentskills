@@ -39,7 +39,7 @@ This is the operational spine. Follow it as written.
 **Do NOT:** [explicit blast-radius fence — files/patterns this task must not touch or introduce.]
 
 **Acceptance criteria:**
-- [ ] [Specific, testable condition]
+- [ ] [Specific, testable condition — an *observable effect*, see the rule below]
 - [ ] [Specific, testable condition]
 
 **Verification:**
@@ -55,6 +55,8 @@ This is the operational spine. Follow it as written.
 
 **Estimated scope:** [Small: 1-2 files | Medium: 3-5 files | Large: 5+ files]
 ```
+
+**Acceptance criteria assert observable effects, never the existence of code.** Every criterion must name an effect observable at the boundary the requirement is actually about — *"the endpoint responds `409` with `{code}` on a replayed id"*, not *"the handler typechecks"*; *"navigating to `/x` renders the results table"*, not *"the page component exists"*; *"a request is issued to the B2 endpoint with the tokenised reference"*, not *"the B2 endpoint is documented"*; *"the mock engine returns a populated response for every operation the flow calls"*, not *"the mock engine compiles"*. A criterion satisfiable by code compiling, a file existing, a symbol being defined, or a type checking is **not a criterion** — those are all true of code that is never reached at runtime, and nothing in the toolchain will fail on unreached code. This is distinct from the cross-boundary declaration check in the Verification list below: that one catches things that fail at *resolve* time; this one catches things that fail at *run* time, silently, in front of the user. When you cannot express a criterion as an observable effect, you do not yet understand what the task is for — resolve that before writing the task.
 
 **Scope rule for the four new fields:** Named identifiers, Pattern anchor, Boundary contracts, and Do NOT are mandatory for S/M tasks that a mid-tier builder will execute; for L/XL or judgment-heavy tasks they may be proportional, but Named identifiers and Do NOT are always required.
 
@@ -80,9 +82,13 @@ Add explicit checkpoints:
 ## Checkpoint: After Tasks 1-3
 - [ ] All tests pass
 - [ ] Application builds without errors
-- [ ] Core user flow works end-to-end
+- [ ] RUNTIME EXIT CRITERION — run `[exact command]`; expect `[exact observable output]`
 - [ ] Review with human before proceeding
 ```
+
+**Every milestone and checkpoint declares at least one runtime exit criterion, written as the command plus the expected observable output.** "Core user flow works end-to-end" is the right *shape* and useless as written — it names no command, so it is satisfied by whoever reads it deciding that it probably does. Write the thing someone must actually run and what they must actually see.
+
+**Aggregate green is not an exit criterion.** "All tasks complete, tests pass, review approved" is a summary of other people's reports, not an observation of the system. And a milestone whose exit condition *mixes* an unfakeable criterion with an aggregate-green one **will close on the aggregate** — that is the observed failure, not a hypothetical: the unfakeable half is the expensive half, so it is the half that gets deferred, while the cheap half goes green and advances the milestone. If a unit of work needs both, they are two gates, not one condition with two clauses. Split them, and put the unfakeable one last so nothing advances past it.
 
 ### Task Sizing
 
@@ -117,13 +123,14 @@ Before starting implementation, you MUST read the following documents to underst
 
 ### Checkpoint: Foundation
 - [ ] Tests pass, builds clean
+- [ ] Runtime exit criterion: run `[command]` → expect `[observable output]`
 
 ### Phase 2: Core Features
 - [ ] Task 3: ...
 - [ ] Task 4: ...
 
 ### Checkpoint: Core Features
-- [ ] End-to-end flow works
+- [ ] Runtime exit criterion: run `[command]` → expect `[observable output]`
 
 ### Phase 3: Polish
 - [ ] Task 5: ...
@@ -147,6 +154,7 @@ Before starting implementation, you MUST read the following documents to underst
 Before starting implementation, confirm:
 
 - [ ] Every task has acceptance criteria
+- [ ] Every acceptance criterion names an **observable effect**, not the existence, compilation, or type-correctness of the code that produces it (see the rule in Step 4). Scan for the tell-tale verbs — "exists", "is defined", "compiles", "typechecks", "is documented", "is declared" — and rewrite every one as the effect it was meant to guarantee.
 - [ ] Every task has a verification step
 - [ ] Every task cites the requirement ID(s) it covers, and every Must-Have requirement is covered by at least one task (FR and NFR)
 - [ ] Task dependencies are identified and ordered correctly
@@ -160,7 +168,7 @@ Before starting implementation, confirm:
   - **Worked example — no task's guard conflicts with existing upstream handling of the same input.** Before adding a validator/guard on any field, trace that field's full inbound path: if an upstream layer already sanitizes it (clamp, normalize, default, coerce, truncate), the new guard is unreachable dead code and any task asserting rejection of that input can never pass. When both a sanitizer and a rejecting validator are specified for one field, the plan must explicitly choose one policy (reject-with-error vs. silently-sanitize) and delete the other — never leave both.
 - [ ] Two-implementers test per task: could two competent implementers produce structurally different solutions from this task's text? If yes, a decision is missing — resolve it in the plan, not in the build.
 - [ ] Stack Blueprint Verification: Verify that all stack-mandated patterns (e.g., Resource project isolation, Response envelope `.ToResult()`, FluentValidation for .NET backend APIs) from active stack methodology skills are explicitly mapped to concrete implementation tasks.
-- [ ] Checkpoints exist between major phases
+- [ ] Checkpoints exist between major phases, and every milestone/checkpoint carries a runtime exit criterion stated as command + expected observable output — with no gate mixing an unfakeable criterion and an aggregate-green one in a single condition (see Step 5)
 - [ ] The plan has been surfaced for human review — via your `<handoff>` to the Orchestrator when delegated, or directly to the user when running in the main session
 
 ### Escalate When

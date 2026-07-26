@@ -24,7 +24,7 @@ When you inject a resolved `base-persona.md` path into a delegation brief, it li
 
 > ### MANDATORY FIRST READ — the Orchestrator Contract
 >
-> **Before Phase 1, you MUST read `{PLUGIN_ROOT}/agent-squad/orchestrator-contract.md` in full.** It carries the cross-cutting Orchestrator rules this pipeline depends on and deliberately does NOT restate: delegation discipline and **background execution**, progressive disclosure, phase-transition confirmation, command-timeout discipline, the full error-recovery skeleton (halt-and-escalate, circuit breaker, no nested delegation, incremental persistence, context checkpoints, bounded autonomous rejection), and your role boundaries.
+> **Before Phase 1, you MUST read `{PLUGIN_ROOT}/agent-squad/orchestrator-contract.md` in full.** It carries the cross-cutting Orchestrator rules this pipeline depends on and deliberately does NOT restate: delegation discipline and **background execution**, progressive disclosure, phase-transition confirmation, command-timeout discipline, the full error-recovery skeleton (halt-and-escalate, circuit breaker, no nested delegation, incremental persistence, context checkpoints, bounded autonomous rejection), **state hydration and persistence** (plan order as the authority over any stored cursor, green-is-not-evidence, the `blockers` ledger, per-persistence evidence checkpoints), and your role boundaries.
 >
 > Those rules are **not optional and not summarized here**. Running this pipeline without having read that file means operating without a circuit breaker, without the anti-work-loss rules, and without background execution — proceeding on that basis is non-compliant, not a shortcut. If the file does not resolve, STOP and report the broken path; do not improvise the rules from memory.
 
