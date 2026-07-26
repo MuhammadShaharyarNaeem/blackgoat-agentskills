@@ -165,4 +165,25 @@ public sealed class BaseResponseExceptionHandler : IExceptionHandler
 
 **Wire format.** The org's APIs use stock serialization (`JsonSerializerDefaults.Web`): C# PascalCase members serialize to **camelCase** JSON (`isSuccess`, `data`, `notifications`). Frontend contracts must use camelCase — see the Vue 3 playbook's interceptor (vue3-spa-patterns/references/vue3-playbook.md §4). Do not set `PropertyNamingPolicy = null`.
 
-⚠️ `ErrorCode` is a `readonly record struct` — without a `JsonConverter<ErrorCode>` it serializes as an object (`{"value":"010103",...}`), not the 6-digit string frontends slice for the TT segment. Add a string round-trip `JsonConverter<ErrorCode>` to BG.Core alongside `ToResult` (not yet present).
+⚠️ `ErrorCode` is a `readonly record struct` — without a `JsonConverter<ErrorCode>` it serializes as an object (`{"value":"010103",...}`), not the 6-digit string frontends slice for the TT segment. Add this string round-trip converter to BG.Core alongside `ToResult` (not yet present):
+
+```csharp
+// BG.Infrastructure.Core/ErrorHandling/ErrorCodeJsonConverter.cs
+public sealed class ErrorCodeJsonConverter : JsonConverter<ErrorCode>
+{
+    public override ErrorCode Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+        new(reader.GetString()!);                    // validates 6 digits
+
+    public override void Write(Utf8JsonWriter writer, ErrorCode value, JsonSerializerOptions options) =>
+        writer.WriteStringValue(value.Value);        // "010103"
+}
+```
+
+**Register it via the attribute ON the type — not in serializer options:**
+
+```csharp
+[JsonConverter(typeof(ErrorCodeJsonConverter))]
+public readonly record struct ErrorCode { /* as in §2 */ }
+```
+
+The envelope is serialized through **three different paths** — MVC's `ObjectResult` (Mode A), `Results.Json` (Mode B success), and `WriteAsJsonAsync` (the exception handler) — each resolving its own `JsonSerializerOptions`. Only the `[JsonConverter]` attribute on the type itself covers all three; an options-level registration would have to be repeated per path and silently misses any it skips.

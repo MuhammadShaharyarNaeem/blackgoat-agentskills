@@ -168,7 +168,6 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
   "feature": "slide",
   "pipeline": "bgpdd-plan",
   "branch": null,
-  "phase_completed": 4,
   "milestone_cursor": null,
   "artifacts": {
     "requirements": ".docs/{project-name}/requirements.md",

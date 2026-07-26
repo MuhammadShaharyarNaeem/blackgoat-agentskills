@@ -1,6 +1,6 @@
 ---
 name: planning-and-task-breakdown
-description: Breaks work into ordered tasks. Use when you have a spec or clear requirements and need to break work into implementable tasks. Use when a task feels too large to start, when you need to estimate scope, or when parallel work is possible. Squad-internal execution contract loaded by agents via their Methodology Dependencies table.
+description: Squad-internal execution contract for breaking a spec or requirements set into ordered, implementable tasks with acceptance criteria and verification — loaded by agents via their Methodology Dependencies table; user-facing planning triggers belong to the /bgpdd-plan and /bgpdd-lite pipelines.
 ---
 
 # Planning and Task Breakdown
@@ -57,7 +57,7 @@ This is the operational spine. Follow it as written.
 **Estimated scope:** [Small: 1-2 files | Medium: 3-5 files | Large: 5+ files]
 ```
 
-**Acceptance criteria assert observable effects, never the existence of code.** Every criterion must name an effect observable at the boundary the requirement is actually about — *"the endpoint responds `409` with `{code}` on a replayed id"*, not *"the handler typechecks"*; *"navigating to `/x` renders the results table"*, not *"the page component exists"*; *"a request is issued to the B2 endpoint with the tokenised reference"*, not *"the B2 endpoint is documented"*; *"the mock engine returns a populated response for every operation the flow calls"*, not *"the mock engine compiles"*. A criterion satisfiable by code compiling, a file existing, a symbol being defined, or a type checking is **not a criterion** — those are all true of code that is never reached at runtime, and nothing in the toolchain will fail on unreached code. This is distinct from the cross-boundary declaration check in the Verification list below: that one catches things that fail at *resolve* time; this one catches things that fail at *run* time, silently, in front of the user. When you cannot express a criterion as an observable effect, you do not yet understand what the task is for — resolve that before writing the task.
+**Acceptance criteria assert observable effects, never the existence of code.** Every criterion must name an effect observable at the boundary the requirement is actually about — *"the endpoint responds `409` with `{code}` on a replayed id"*, not *"the handler typechecks"*. A criterion satisfiable by code compiling, a file existing, a symbol being defined, or a type checking is **not a criterion** — those are all true of code that is never reached at runtime, and nothing in the toolchain will fail on unreached code. When you cannot express a criterion as an observable effect, you do not yet understand what the task is for — resolve that before writing the task. (More example pairs and the resolve-time vs run-time distinction: [planning deep dive](references/planning-deep-dive.md).)
 
 **A task that authors a gate must also specify how that gate is proven to fail.** A check script, contract checker, scanner, or state-matrix assertion is trusted only once it has been observed rejecting a deliberate violation, so the plan writes that negative half into the task's Verification: the violation to introduce, the command, and the failure it must produce. Omit it and a hollow gate is indistinguishable from a real one — both are green, and the plan has bought a green light rather than a check. (The builder-side obligation is the negative-half proof rule in `test-driven-development`.)
 
@@ -80,15 +80,7 @@ When the plan is built from a `requirements.md` with numbered `FR`/`NFR` IDs, ev
 ### Multi-Frontend Shared Component Dependency Rule
 For multi-frontend workspace architectures, initial Phase 1 / Foundation task breakdowns MUST include establishing shared package infrastructure (e.g. `packages/ui`) before application-level development. Application tasks MUST list completion of shared UI component primitives as explicit prerequisites.
 
-Add explicit checkpoints:
-
-```markdown
-## Checkpoint: After Tasks 1-3
-- [ ] All tests pass
-- [ ] Application builds without errors
-- [ ] RUNTIME EXIT CRITERION — run `[exact command]`; expect `[exact observable output]`
-- [ ] Review with human before proceeding
-```
+Add an explicit `## Checkpoint:` block after every 2-3 tasks, containing at minimum: all tests pass, application builds without errors, a `RUNTIME EXIT CRITERION` line (run `[exact command]`; expect `[exact observable output]`), and review with human before proceeding. Full example block in the [planning deep dive](references/planning-deep-dive.md).
 
 **Every milestone and checkpoint declares at least one runtime exit criterion, written as the command plus the expected observable output.** "Core user flow works end-to-end" is the right *shape* and useless as written — it names no command, so it is satisfied by whoever reads it deciding that it probably does. Write the thing someone must actually run and what they must actually see.
 
@@ -108,50 +100,13 @@ If a task is L or larger, break it into smaller tasks — an agent performs best
 
 ### Plan Document Output
 
-Save the finalized plan to `.docs/{project-name}/implementation/plan.md`.
+Save the finalized plan to `.docs/{project-name}/implementation/plan.md`. Required structure — the full template walkthrough is in the [planning deep dive](references/planning-deep-dive.md):
 
-```markdown
-# Implementation Plan: [Feature/Project Name]
-
-## Reference Documents
-Before starting implementation, you MUST read the following documents to understand the full context and architectural constraints. Do not proceed until you have read them.
-
-- [Requirements](file:///.docs/[project-name]/requirements.md)
-- [Architecture Blueprint](file:///.docs/[project-name]/design/detailed-design.md) (when one exists; lite-originated plans link the governing stack contract(s) instead)
-
-## Task List
-
-### Phase 1: Foundation
-- [ ] Task 1: ...
-- [ ] Task 2: ...
-
-### Checkpoint: Foundation
-- [ ] Tests pass, builds clean
-- [ ] Runtime exit criterion: run `[command]` → expect `[observable output]`
-
-### Phase 2: Core Features
-- [ ] Task 3: ...
-- [ ] Task 4: ...
-
-### Checkpoint: Core Features
-- [ ] Runtime exit criterion: run `[command]` → expect `[observable output]`
-
-### Phase 3: Polish
-- [ ] Task 5: ...
-- [ ] Task 6: ...
-
-### Checkpoint: Complete
-- [ ] All acceptance criteria met
-- [ ] Ready for review
-
-## Risks and Mitigations
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| [Risk] | [High/Med/Low] | [Strategy] |
-
-## Open Questions
-- [Question needing human input]
-```
+- `# Implementation Plan: [Feature/Project Name]` title.
+- `## Reference Documents` — instructs the builder to read the Requirements (`.docs/{project-name}/requirements.md`) and the Architecture Blueprint (`.docs/{project-name}/design/detailed-design.md`, when one exists; lite-originated plans link the governing stack contract(s) instead) before proceeding.
+- `## Task List` — tasks grouped into phases, each phase followed by its `### Checkpoint:` block carrying a runtime exit criterion (run `[command]` → expect `[observable output]`).
+- `## Risks and Mitigations` — table of risk / impact (High/Med/Low) / mitigation.
+- `## Open Questions` — questions needing human input.
 
 ### Verification
 
@@ -187,4 +142,4 @@ Before starting implementation, confirm:
 
 Read on demand — not needed to execute the contract above:
 
-- [Planning deep dive](references/planning-deep-dive.md) — when (not) to use this skill, a worked dependency-graph example, horizontal-vs-vertical slicing examples, parallelization guidance, the Common Rationalizations table, and red flags.
+- [Planning deep dive](references/planning-deep-dive.md) — when (not) to use this skill, a worked dependency-graph example, horizontal-vs-vertical slicing examples, parallelization guidance, the full plan-document template and checkpoint example blocks, the Common Rationalizations table, and red flags.

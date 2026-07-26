@@ -74,10 +74,10 @@ This prevents authors from treating all feedback as mandatory and wasting time o
 
 ### The Review Report
 
-Save the review report to `.docs/{project-name}/implementation/review-report.md`. If this is part of the `bgpdd-build` pipeline, explicitly flag any "Critical" or "Important" blockers that the Builder (Mason) must resolve before the next phase.
+This template is the **single owner** of the review report format — reviewer personas (Luna) defer to it. Save the review report to `.docs/{project-name}/implementation/review-report.md`, **appending** one `## Review:` section per review — never overwrite earlier reviews. If this is part of the `bgpdd-build` pipeline, explicitly flag any "Critical" or "Important" blockers that the Builder (Mason) must resolve before the next phase.
 
 ```markdown
-## Review: [PR/Change title]
+## Review: [Milestone/Task title]
 
 ### Context
 - [ ] I understand what this change does and why
@@ -116,11 +116,12 @@ Save the review report to `.docs/{project-name}/implementation/review-report.md`
 - [ ] Manual verification done (if applicable)
 
 ### Verdict
-- [ ] **Approve** — Ready to merge
-- [ ] **Request changes** — Issues must be addressed
+**Verdict:** Approve | Request Changes
 ```
 
-**`Approve` is unavailable while any Critical or Important finding stands in the same report.** Before writing the verdict, re-read every finding you just wrote *in that report*. Each Critical and Important one must either be absent or carry an explicit `RESOLVED` marker naming the fix and the evidence that verified it. If even one stands unresolved, the verdict is `Request changes`. There is no "approve with notes", no closing summary that outranks the findings above it, and no verdict carried over from a previous round. A report that states *"the app will fail to render these components"* and then *"Approve — all blockers resolved"* is not a review; it is two documents that never met. The findings are the review — the verdict is arithmetic over them, not a separate judgement.
+**The `**Verdict:**` line is mandatory and machine-read.** Every `## Review:` section ends with exactly one line of the form `**Verdict:** Approve` or `**Verdict:** Request Changes` — the `bgpdd-build` gate reads the latest Verdict for the current milestone, so the exact token is required: no variants (`Approved`, `LGTM`, `approve with notes`), no prose in place of the token.
+
+**`Approve` is unavailable while any Critical or Important finding stands in the same report.** Before writing the verdict, re-read every finding you just wrote *in that report section*. Each Critical and Important one must either be absent or carry an explicit `RESOLVED` marker naming the fix and the evidence that verified it. If even one stands unresolved, the verdict is `Request Changes`. There is no "approve with notes", no closing summary that outranks the findings above it, and no verdict carried over from a previous round. A report that states *"the app will fail to render these components"* and then *"Approve — all blockers resolved"* is not a review; it is two documents that never met. The findings are the review — the verdict is arithmetic over them, not a separate judgement.
 
 ### Verification Checklist
 
@@ -128,7 +129,7 @@ After review is complete:
 
 - [ ] All Critical issues are resolved
 - [ ] All Important issues are resolved or explicitly deferred with justification
-- [ ] The verdict is consistent with the findings in the same report — no `Approve` while an unresolved Critical or Important finding stands anywhere above it
+- [ ] The verdict is consistent with the findings in the same report — no `Approve` while an unresolved Critical or Important finding stands anywhere above it — and is written as the exact machine-read token (`**Verdict:** Approve` or `**Verdict:** Request Changes`)
 - [ ] Tests pass
 - [ ] Build succeeds
 - [ ] The verification story is documented (what changed, how it was verified)
