@@ -9,9 +9,13 @@ The Main Agent is the single point of contact between the user and the squad. It
 
 > **Scope — read this first.** This skill governs **ad-hoc squad use**: the user invokes the squad directly ("use the squad", "delegate this to Mason") without running a `bgpdd-*` pipeline. It is the only place the roster, routing triggers, briefing format and relay format are defined for that case.
 >
-> **When a `bgpdd-*` pipeline is running, that pipeline's own Global System Constraints and Global Error Recovery sections are authoritative and this file is not loaded.** The pipelines deliberately inline the orchestration rules they need, and they refine several of them per phase — so do not add a dependency on this file from a pipeline, and do not treat rules here as overriding a pipeline's own. If a rule here and a rule in the active pipeline disagree, the pipeline wins.
+> **When a `bgpdd-*` pipeline is running, this file is not loaded** — the pipeline's own sections are authoritative for its phases. Do not add a dependency on this file from a pipeline, and do not treat rules here as overriding a pipeline's own. If a rule here and a rule in the active pipeline disagree, the pipeline wins.
 >
-> Note that `agent-squad/base-persona.md` is a **separate, universally-loaded** file: every persona lists it as an "Always" methodology dependency, in pipeline runs and ad-hoc runs alike. Cross-cutting rules for *subagents* belong there, not here.
+> **You must still read `agent-squad/orchestrator-contract.md` for ad-hoc use.** Two sibling files in this folder are loaded everywhere, and cross-cutting rules belong in them rather than here:
+> - **`agent-squad/orchestrator-contract.md`** — cross-cutting rules for the **Orchestrator**: delegation discipline and background execution, progressive disclosure, phase-transition confirmation, command-timeout discipline, error recovery and the circuit breaker, incremental persistence, and role boundaries. Every `bgpdd-*` pipeline reads it as a mandatory first read; ad-hoc squad use obeys it too. It exists so those rules live in ONE place instead of being inlined per pipeline — five near-identical copies is why a stale claim once survived in three files at once. **Never restate a contract rule here or in a pipeline.**
+> - **`agent-squad/base-persona.md`** — cross-cutting rules for **subagents**: every persona lists it as an "Always" methodology dependency, in pipeline runs and ad-hoc runs alike.
+>
+> This file's remaining job is narrow and ad-hoc-only: the roster, the routing triggers, the briefing and relay formats, and the project state object.
 
 ### Context Integrity Check (Internal)
 
@@ -42,7 +46,7 @@ Log: "⚠️ Context integrity check failed — rebuilt from semantic memory."
 | Max | Optimizer | Refactoring | After Luna's review, or explicit request |
 | Vera | Launch Verifier | Shipping | bgpdd-shipping Stage 1, or "run the pre-launch checklist" |
 | Cipher | Security Auditor | Deployment | After the build cycle completes (Max), [SEC]-tagged build milestones, or "audit security / check for vulnerabilities" |
-| Dep | DevOps | Deployment | After Cipher, or "deploy / containerize / CI setup" |
+| Dep | DevOps | Deployment | After/with Cipher (parallel in shipping Stage 2), or "deploy / containerize / CI setup" |
 | Forge | System Coach | Agent Improvement | After Dep, or "optimize squad / analyze logs" |
 
 ---
@@ -53,7 +57,7 @@ Log: "⚠️ Context integrity check failed — rebuilt from semantic memory."
 - You MUST delegate to the squad members as separate agents. Never attempt to sequentially roleplay their phases yourself.
 - Each agent is delegated **deliberately** — by the user or by the main agent with explicit user approval.
 - Any agent can be called **at any time** for any project state.
-- **Bounded runs, not watchdogs**: A delegated agent runs in its own bounded context and returns its report as its final message — you do not need a timer to "check on" it, and there is no messaging a running agent. If an agent returns a PARTIAL/BLOCKED handoff, re-delegate a fresh agent with that handoff to continue. Never instruct an agent to schedule its own timer or spawn its own replacement.
+- **Bounded delegation (default model)**: Under this plugin's default fire-and-forget delegation model, a delegated agent runs in its own bounded context and returns its report as its final message — you do not need a timer to "check on" it, and you do not message a running agent. If an agent returns a PARTIAL/BLOCKED handoff, re-delegate a fresh agent with that handoff to continue. **Runtime exception**: some runtimes use long-lived subagents that require an explicit watchdog/terminate lifecycle — where a runtime contract says so (e.g. `AGENTS.md` under Antigravity), follow it. Either way, lifecycle management is the Orchestrator's job: never instruct an agent to schedule its own timer or spawn its own replacement.
 - **Exception — interactive phases**: Requirements honing with Rex is a turn-by-turn conversation with the user, as is lite's mini-requirements drafting (bgpdd-lite Phase 1). A delegated agent cannot pause to ask the user and resume, so run these interactive steps yourself (main session) — honing follows Rex's persona; lite drafting follows Rex's template rules. All non-interactive agents are delegated.
 
 ### 2. Context Window Discipline
@@ -115,7 +119,7 @@ Artifacts available to read in your workspace:
 ```
 
 ### 5. Agent Termination
-A delegated agent terminates on its own when it returns — its `<handoff>` (with `<status>COMPLETE</status>`) arrives as the delegation's final message. There is no separate "kill" step and no ghost processes to clean up. Simply read the returned handoff and proceed.
+Under this plugin's default delegation model, a delegated agent terminates on its own when it returns — its `<handoff>` (with `<status>COMPLETE</status>`) arrives as the delegation's final message, and there is no separate "kill" step. Simply read the returned handoff and proceed. **Runtime exception**: runtimes with long-lived subagents require the Orchestrator to watchdog and explicitly terminate them — where a runtime contract (e.g. `AGENTS.md`) says so, follow that lifecycle instead.
 
 ---
 
@@ -178,8 +182,20 @@ This object is updated after every agent interaction. It is the single source of
 - AI agents may occasionally hallucinate or provide incorrect guidance. Always verify generated code and architectural designs before pushing to production.
 - Context window constraints mean large project histories must be compressed by the Orchestrator.
 
-## Procedural Memories (Learned Lessons)
+## Procedural Memories — migrated
 
-- **[2026-06-28] (Architect Coding Delegation Constraint):** Never delegate coding tasks to the Architect (Aria). The Architect's output must only be a design blueprint, and the Builder (Mason) must always be invoked separately to perform all coding work.
-- **[2026-07-19] (Specialist-First Routing):** For work matching a squad member's role and stack, delegate to that squad member — not a generic/catch-all agent. Code implementation goes to the Builder (Mason), who carries the stack execution contracts (dotnet/vue patterns); a generic agent is a last resort only when no squad member fits.
-- **[2026-07-19] (Advisor, Not Yes-Man):** Before executing a user directive or relaying an agent's output as settled, surface the strongest counterpoint or tradeoff you can find — folding without argument is a defect, not deference. Run the doubt cycle (doubt-driven-development) on your OWN non-trivial proposals, not only on workers' artifacts. The user decides after hearing the objection; you do not pre-concede it.
+All six accumulated memories were cross-cutting Orchestrator rules that applied during pipeline runs too, yet this file is not loaded during a pipeline — so they were unreachable exactly when they mattered. They have been generalized and elevated into **`agent-squad/orchestrator-contract.md`**, which IS loaded everywhere:
+
+| Former memory | Now lives in the contract as |
+|---|---|
+| Architect Coding Delegation Constraint | §3 Role Boundaries — never delegate coding to the Architect |
+| Strict Orchestration Boundary under Subagent Tool Friction | §3 Role Boundaries — you never write application code |
+| Specialist-First Routing | §1 Delegation construction — route to the matching squad member |
+| Verbatim Persona & Tool Capability Delegation Standard | §1 Delegation construction — inject persona verbatim, declare capabilities |
+| Advisor, Not Yes-Man | §3 Role Boundaries — advisor, not yes-man |
+| Capture Systemic Lessons on Correction | §3 Role Boundaries — capture systemic lessons on correction |
+
+Future Orchestrator lessons land in the contract as rules, not here. This file takes only memories genuinely specific to **ad-hoc** squad use.
+
+
+

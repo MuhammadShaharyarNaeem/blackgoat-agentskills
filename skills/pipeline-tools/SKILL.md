@@ -64,6 +64,12 @@ Quinn's Coverage Ledger format (see `agents/quinn.md` §6) is what the test-repo
 
 Only `PASS`/`FAIL` as the status word, latest mention wins, so a retest appends a fresh line rather than editing history.
 
+**What the evidence field must contain.** The gate is deterministic about the *status* token and completely trusting about the *evidence* prose beside it — so the evidence field carries the entire integrity burden of the gate:
+
+- A `PASS` cites **the executed test that asserts that requirement's own acceptance criterion**, named by test file plus test name. A source file, a component, an infrastructure resource, a design document, or a prior milestone's `PASS` is **not** evidence — those establish that code exists, not that the requirement holds.
+- **Never restate a `PASS` you did not just re-execute.** This is the sharp edge of *latest mention wins*: a later, vaguer line silently **overwrites** an earlier, stronger one, and it is the last line in file order that the gate reads. Appending "re-verified" or "final verification" prose over a genuine earlier measurement does not strengthen the ledger — it destroys the only real evidence in it and leaves the gate reading the weakest claim in the file. If you did not run it this round, append nothing.
+- A verification you could not perform is recorded as `FAIL` with the reason, or omitted entirely so the gate reports it as uncovered. It is **never** recorded as `PASS` with a hedge (see `agent-squad/base-persona.md`, Evidence Integrity). A gap the gate can see is cheap; a gap it cannot is what the gate exists to prevent.
+
 ## Fixtures & self-test
 
 `fixtures/happy/`, `fixtures/uncovered/`, and `fixtures/malformed/` each hold a `requirements.md` (+ `plan.md` and/or `test-report.md`) exercising the pass, gap, and structural-failure paths respectively. Run the bundled suite either directly or through the CLI:
@@ -80,6 +86,8 @@ The four pipeline coverage gates — `bgpdd-plan` Phase 3.5, `bgpdd-lite` Phase 
 ## Pre-gate authoring conformance (smoke-test before you trust the verdict)
 
 The gate is only as trustworthy as its inputs' format. Before relying on a coverage verdict, run check_coverage.py against the ACTUAL requirements.md and test-report.md as a format smoke-test. Treat any of these as "artifacts not in parseable format," NOT as a real coverage result: exit 2 (structural failure / "no Must-Have requirements found"), every ID reported as "unknown requirement ID", or "zero status-bearing mentions". The fix is to correct the artifact to the documented format — **FR-n** bold IDs under MoSCoW headings in requirements.md, and Quinn Coverage Ledger lines (- FR-n: PASS — evidence) in test-report.md — never to fall back to eyeballing coverage by hand. A gate you bypass manually is not a gate.
+
+**Count definitions, not mentions.** When you verify an artifact's structure with a text search rather than this tool — how many requirements exist, whether every ID carries a tier, whether a document is complete — anchor the pattern on the *definition-line* form (e.g. `- [ ] **FR-n**` under a MoSCoW heading), never on the bare ID token. Cross-references, prose citations, and downstream task fields all contain the same tokens, so a bare-ID count silently inflates: an observed run counted 131 `FR-` matches against 74 actual definitions. An inflated count can make an incomplete or malformed artifact appear to pass. Report unique-ID counts derived from definition lines only, and when a count disagrees with the artifact's own declared total, treat the disagreement itself as the finding — never pick whichever number agrees with the outcome you expect. A check that counts ID *mentions* rather than ID *definitions* can pass a malformed artifact, which makes it worse than no check at all.
 
 ## check_dependency_tables.py
 

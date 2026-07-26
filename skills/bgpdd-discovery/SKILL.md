@@ -20,32 +20,26 @@ When you inject a resolved `base-persona.md` path into a delegation brief, it li
 
 ## 1. Global System Constraints
 
-- **Strict Delegation**: You are a MANAGER. You MUST NOT roleplay the discovery work yourself — this collapses your context window. Instead, delegate to the named agent (Iris, Scout, Echo). Pass each agent only the specific "Working Memory" chunk it needs in the prompt. The agent runs to completion in its own context and returns its `<handoff>` summary — that returned text is what you read to continue.
-  - **Background Execution (MANDATORY)**: Always launch delegated agents in the **background**. Never force a synchronous/blocking run. A blocking delegation makes you unreachable for the agent's entire run — the user cannot ask a question, correct a bad brief, or stop work heading the wrong way, and a long phase becomes indistinguishable from a hang. You are notified on completion, so sequential phase ordering still holds: launch, stay responsive, continue when the notification arrives. If the user asks about progress before that notification, say the agent is still running — never guess, predict, or fabricate its results.
-  - **Launch independent delegations concurrently**: this pipeline's Scout fan-out is the canonical case — when several agents' work does not depend on each other, launch them **in a single message** so they run in parallel instead of one after another.
-  - Each delegation is otherwise self-contained. If your runtime offers a way to send a follow-up message to an already-spawned agent, prefer that to re-briefing a fresh agent when you need to continue work with its context intact.
-- **Phase Transitions**: Never start a new phase until the user explicitly types 'proceed', 'approved', or similar confirmation.
+> ### MANDATORY FIRST READ — the Orchestrator Contract
+>
+> **Before Phase 1, you MUST read `{PLUGIN_ROOT}/agent-squad/orchestrator-contract.md` in full.** It carries the cross-cutting Orchestrator rules this pipeline depends on and deliberately does NOT restate: delegation discipline and **background execution**, progressive disclosure, phase-transition confirmation, command-timeout discipline, the full error-recovery skeleton (halt-and-escalate, circuit breaker, no nested delegation, incremental persistence, context checkpoints, bounded autonomous rejection), **state hydration and persistence** (plan order as the authority over any stored cursor, green-is-not-evidence, the `blockers` ledger, per-persistence evidence checkpoints), and your role boundaries.
+>
+> Those rules are **not optional and not summarized here**. Running this pipeline without having read that file means operating without a circuit breaker, without the anti-work-loss rules, and without background execution — proceeding on that basis is non-compliant, not a shortcut. If the file does not resolve, STOP and report the broken path; do not improvise the rules from memory.
+
+The sections below carry ONLY this pipeline's refinements on top of that contract.
+
+- **Strict Delegation — this pipeline's agents**: Iris (Phase 1), Scout (Phase 2), Echo (Phase 4). You MUST NOT roleplay the discovery work yourself.
+  - **Concurrency matters most here**: this pipeline's Scout fan-out is the canonical parallel case — launch independent Scouts in a single message.
+  - **Incremental persistence matters acutely here**: discovery agents are research-heavy and accumulate many tool calls before they have anything to say, so a deferred first write costs the entire run. Emphasize the contract's rule in every discovery brief.
 - **Upgraded Chain-of-Thought**: Before transitioning between phases, you MUST explicitly verify that the required artifact exists.
   - *Format*: "Thinking: Phase X requires Y. Checking `.docs/summary/...`... File exists. Proceeding."
 - **Global Context Scope (Architectural Rule)**: The discovery agents (Iris, Scout, Echo) perform **project-scope** repository analysis. Their artifacts MUST be written under `.docs/summary/` (e.g., `.docs/summary/context.md`). Never let them output to a per-enhancement feature directory (`.docs/{project-name}/`) — that is Tier-2, owned by `bgpdd-plan`.
-- **Command Timeout Discipline (Anti-Hang)**: The 4-minute rule in `base-persona.md` applies to YOU as well. Every shell command you run directly MUST carry an explicit timeout of at most 4 minutes (240s). On a timeout: capture partial output, never re-run unchanged — one retry with a stated fix, or a single justified longer bound for a known-long operation. A second timeout on the same command is a failure under Global Error Recovery.
 
 ## 2. Global Error Recovery
 
-If *any* delegated agent (or you, the Orchestrator) exhibits the following behaviors:
-1. Gets stuck in a continuous tool-call loop without making progress.
-2. Hallucinates a file path that does not exist.
-3. Fails to complete its objective after 3 consecutive attempts.
+**The error-recovery skeleton lives in the Orchestrator Contract (§2)** — halt-and-escalate triggers, the circuit breaker you pass to every agent, no-nested-delegation, incremental persistence, context checkpoints, and 2-round bounded autonomous rejection. Read it there; it is not restated here.
 
-**ACTION**: You MUST immediately halt execution, output a structured state summary of what went wrong, and request explicit human intervention. Do not attempt to guess or bypass the failure silently. (There is no "kill" step — a delegated agent terminates on its own when it returns; simply stop delegating and escalate.)
-
-**CRITICAL CIRCUIT BREAKER**: You must pass the following rule to every delegated agent in its prompt: "If you encounter the exact same error or test failure 3 times in a row, you MUST stop, document the failure state clearly in your `<handoff>` (what you tried and the exact error), and return immediately to escalate to the Orchestrator. Do NOT attempt a 4th fix."
-
-**NO NESTED DELEGATION**: You must pass the following rule to every delegated agent in its prompt: "Do NOT spawn subagents of your own. If a sub-investigation seems necessary, document what is needed in your `<handoff>` and return — the Orchestrator decides whether to delegate it."
-
-**INCREMENTAL PERSISTENCE**: You must pass the following rule to every delegated agent in its prompt: "Create your output file with its section skeleton EARLY, then fill and save it section by section as you go. Do NOT complete all research first and write only at the end." An agent that defers its first write until the end loses **everything** if it is interrupted or hits a context limit — an observed failure mode that has destroyed entire multi-call research runs. This matters acutely here: discovery agents are research-heavy and accumulate many tool calls before they have anything to say. When you re-delegate after an interruption, tell the agent which files already exist so it resumes rather than restarting.
-
-**CONTEXT CHECKPOINTS**: A delegated agent's context is bounded by its own run — you do not need to timebox it. If *you* (the Orchestrator) sense your own context is getting large across many phases, checkpoint your state to a scratch file so a fresh session can resume. Do NOT instruct delegated agents to schedule timers or spawn their own replacements — that is your responsibility, not theirs.
+This pipeline's only refinement: it has no `orchestrator-state.json`, so checkpoint your own state to a scratch file if your context grows large.
 
 ---
 

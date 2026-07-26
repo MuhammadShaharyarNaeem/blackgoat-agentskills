@@ -31,6 +31,7 @@ Pick the mode per surface (not per product) and design for what the visitor's su
 
 ### Execution Rules (authoring — Mason)
 
+- **No placeholder/empty wrappers**: Never scaffold empty HTML wrappers (e.g., `<div class="Wrapper"></div>`) for components; fully implement the logic and markup required by the specification so QA checks run against the true implementation.
 - **Typography carries the personality**: deliberate pairing, a clear scale with obvious size/weight steps, body measure 65–75ch, display ≤6rem, tracking no tighter than −0.04em (−0.02 to −0.03em usually reads better). Run the real copy at every breakpoint; fix what overflows.
 - **Spacing is rhythm**: tight within groups, generous between them; more space above a heading than below it. Verify computed values, not intentions.
 - **Color**: contrast ≥4.5:1 for body/placeholder text, ≥3:1 for large text. On colored surfaces, tint secondary text from that hue or the foreground — never plain gray. The accent is spent deliberately, not sprayed.
@@ -38,6 +39,7 @@ Pick the mode per surface (not per product) and design for what the visitor's su
 - **Depth & elevation**: declare elevation once — border OR shadow, not both (a 1px border under a wide soft shadow is the ghost card). Shadows carry an offset and soft blur; a zero-offset colored halo is decoration.
 - **Motion**: one authored moment, not scattered effects and not the same entrance on every section. Exponential ease-out from an already-visible default; respect `prefers-reduced-motion`. No bounce easing by default.
 - **States are the design**: hover, focus-visible, disabled, loading, error, and empty states are designed, not defaulted. An empty screen is an invitation to act; an error names the problem and the recovery.
+- **Font substitution that changes meaning, not just appearance, must never `swap`**: `font-display: swap` renders the fallback until the webfont arrives, which is correct when substitution costs you only the *look* of the text. It is wrong whenever the glyphs are semantically load-bearing — an icon ligature font being the canonical case, since the swap window paints the ligature's **source text** (`arrow_forward`, `account_circle`) to the user on every cold load, on every page. Use `block` or `optional` for those faces and keep `swap` for body and display text. Decide this per face by asking what the fallback actually shows the user, not by copying one `@font-face` rule across all of them.
 - **Quality floor**: responsive down to mobile, keyboard focus visible, real content and working controls — built without announcing the checklist.
 
 ### Category Defaults to Refuse
@@ -67,7 +69,11 @@ Before marking UI work complete:
 
 ### Review Mode (Luna — design critique)
 
-When a review delegation covers UI work, run the design-critique axis in [references/design-critique.md](references/design-critique.md): screenshot-driven when browser tooling is available, Nielsen-heuristic scoring, a design-specificity verdict, and the mechanical craft-floor checks — findings labeled with the standard Critical/Important/Suggestion/Nit taxonomy. Audit only; rewrites route to Mason or Max via the Orchestrator.
+When a review delegation covers UI work, run the design-critique axis in [references/design-critique.md](references/design-critique.md): screenshot-driven — see the evidence rule below — Nielsen-heuristic scoring, a design-specificity verdict, and the mechanical craft-floor checks — findings labeled with the standard Critical/Important/Suggestion/Nit taxonomy. Audit only; rewrites route to Mason or Max via the Orchestrator.
+
+**A design critique without rendered output does not pass rendered properties.** This axis is defined on the built result (see this skill's opening line: *checked on the built result, not the intention*), so its evidence is a screenshot or a computed-style read from a real browser. When browser tooling is unavailable, the app is unbuilt, or it will not boot, every check on a computed or rendered property — contrast ratio, spacing rhythm, type scale at breakpoints, focus visibility, state coverage, whether a token actually resolves — is reported as `NOT VERIFIED — no rendered output` and raised as a blocker on the review, never quietly marked satisfied.
+
+Source reading is a strictly one-directional instrument here: it can **fail** a check but never **pass** one. A hardcoded literal where the design system mandates a token, a missing `:focus-visible` rule, an absent empty state — all source-visible defects, so report them. But source cannot tell you what the user saw: a correct token reference still renders wrong if the token is undefined, overridden, or the stylesheet never loads. Recording *"uses the correct hairline"* from a source read while the file hardcodes the hex value is the exact failure this rule exists to prevent — the critique ran, produced a clean pass, and the surface was wrong on screen.
 
 ### Escalate When
 

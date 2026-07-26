@@ -119,12 +119,15 @@ Save the review report to `.docs/{project-name}/implementation/review-report.md`
 - [ ] **Request changes** — Issues must be addressed
 ```
 
+**`Approve` is unavailable while any Critical or Important finding stands in the same report.** Before writing the verdict, re-read every finding you just wrote *in that report*. Each Critical and Important one must either be absent or carry an explicit `RESOLVED` marker naming the fix and the evidence that verified it. If even one stands unresolved, the verdict is `Request changes`. There is no "approve with notes", no closing summary that outranks the findings above it, and no verdict carried over from a previous round. A report that states *"the app will fail to render these components"* and then *"Approve — all blockers resolved"* is not a review; it is two documents that never met. The findings are the review — the verdict is arithmetic over them, not a separate judgement.
+
 ### Verification Checklist
 
 After review is complete:
 
 - [ ] All Critical issues are resolved
 - [ ] All Important issues are resolved or explicitly deferred with justification
+- [ ] The verdict is consistent with the findings in the same report — no `Approve` while an unresolved Critical or Important finding stands anywhere above it
 - [ ] Tests pass
 - [ ] Build succeeds
 - [ ] The verification story is documented (what changed, how it was verified)
