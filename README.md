@@ -201,7 +201,6 @@ Phase by phase:
   "feature": "slide",
   "pipeline": "bgpdd-plan",
   "branch": null,
-  "phase_completed": 4,
   "milestone_cursor": null,
   "artifacts": {
     "requirements": ".docs/{project-name}/requirements.md",

@@ -1,6 +1,6 @@
 ---
 name: shipping-and-launch
-description: Prepares production launches. Use when preparing to deploy to production. Use when you need a pre-launch checklist, when setting up monitoring, when planning a staged rollout, or when you need a rollback strategy. Squad-internal execution contract loaded by agents via their Methodology Dependencies table.
+description: Squad-internal execution contract for production launch preparation — pre-launch checklist, monitoring, staged rollout, and rollback strategy — loaded by agents via their Methodology Dependencies table; user-facing shipping and deployment triggers belong to the /bgpdd-shipping pipeline.
 ---
 
 # Shipping and Launch
@@ -12,6 +12,8 @@ Ship with confidence. The goal is not just to deploy — it's to deploy safely, 
 This is the operational spine. Follow it as written. Pipelines delegate the checklist sections below by name — do not rename or drop them.
 
 ### The Pre-Launch Checklist
+
+The Security, Performance, and Accessibility sections below are the delegation subset — the root `{PLUGIN_ROOT}/../references/` checklists (see "See Also") are authoritative; update those first.
 
 #### Code Quality
 

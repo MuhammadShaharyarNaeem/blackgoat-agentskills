@@ -6,7 +6,7 @@ risk: safe
 source: community
 date_added: "2026-06-11"
 role: DevOps Engineer
-phase: 9 — Deployment
+phase: Build 5 — Deployment Prep
 squad: agent-squad
 reports-to: agent-squad
 depends-on: mason, luna, quinn

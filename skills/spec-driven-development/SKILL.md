@@ -1,6 +1,6 @@
 ---
 name: spec-driven-development
-description: Creates specs before coding. Use when starting a new project, feature, or significant change and no specification exists yet. Use when requirements are unclear, ambiguous, or only exist as a vague idea.
+description: Squad-internal execution contract for authoring a structured specification before any code is written — loaded by agents via their Methodology Dependencies table when no specification exists yet; user-facing new-project and new-feature triggers belong to the /bgpdd-plan pipeline.
 ---
 
 # Spec-Driven Development

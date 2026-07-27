@@ -40,6 +40,8 @@ private static async Task<IResult> Handle(AppDbContext db, CancellationToken ct)
     => Results.Ok(await db.Orders.AsNoTracking().CountAsync(ct));
 ```
 
+> The inline `Results.Ok(...)` above predates the Response Pattern and illustrates *token propagation*, not the wire contract — in real endpoints, wrap the payload in `BaseResponse<T>` and emit via `.ToResult()` (see [response-and-errors.md](response-and-errors.md)).
+
 ```csharp
 // BAD: sync-over-async and swallowed token
 var count = db.Orders.CountAsync().Result;      // deadlock risk

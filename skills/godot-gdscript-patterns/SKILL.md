@@ -1,6 +1,6 @@
 ---
 name: godot-gdscript-patterns
-description: "Master Godot 4 GDScript patterns including signals, scenes, state machines, and optimization. Use when building Godot games, implementing game systems, or learning GDScript best practices."
+description: "Squad-internal execution contract for Godot 4 GDScript work — signals, scenes, state machines, and optimization patterns. Use if the project uses Godot / GDScript. Loaded by agents via their Methodology Dependencies table; user-facing triggers belong to the /bgpdd-X pipelines."
 risk: safe
 source: community
 date_added: "2026-02-27"

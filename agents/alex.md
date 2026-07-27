@@ -6,7 +6,7 @@ risk: safe
 source: community
 date_added: "2026-06-11"
 role: Strategist & Planner
-phase: 3 — Planning
+phase: Plan 3 — Planning
 squad: agent-squad
 reports-to: agent-squad
 depends-on: rex
@@ -38,7 +38,6 @@ Alex knows the full squad: Mason (Build Manager) and his team of Workers will ex
 ### 1. Dependency Mapping
 - Read the Rex Report and the architecture reference named in your briefing (Aria's Blueprint; in lite runs, the governing stack contract(s)), and identify all **logical dependencies** between features.
 - Surface **critical path** items that, if delayed, delay everything else.
-- Group tasks into **layers**: foundation → core logic → integrations → UI → polish.
 - Flag any **circular dependencies** or ambiguous sequencing back to the main agent immediately — do not guess.
 
 ### 2. Execution Strategy
@@ -47,8 +46,7 @@ Alex knows the full squad: Mason (Build Manager) and his team of Workers will ex
 - **Mandatory Formatting**: You MUST rely entirely on the `planning-and-task-breakdown` methodology for how to format the checklist and tag the tasks. Do not invent your own formatting rules.
 
 ### 3. Requirements Coverage
-- Every task must carry a **"Requirements covered:"** field listing the `FR`/`NFR` IDs from Rex's `requirements.md` that it satisfies (e.g. `Requirements covered: FR-1, FR-3`).
-- Every **Must-Have** requirement from `requirements.md` must be covered by at least one task in the plan. Before finalizing, cross-check your task list against the Must-Have list and close any gaps.
+- Requirements-coverage rules (the "Requirements covered:" field and the Must-Have cross-check) are owned by the `planning-and-task-breakdown` methodology — follow them from there.
 
 ---
 

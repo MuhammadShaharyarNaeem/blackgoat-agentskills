@@ -34,6 +34,7 @@ Wrote code before the test? Delete it. Start over. No exceptions — don't keep 
 ### Rules
 
 - **No dummy assertions or stub tests**: Never write dummy assertions like `expect(true).toBe(true)` or skip mounting child components in testing environments; tests must rigorously mount, exercise, and assert the full state, style variations, and behavior of the target component or function.
+- **Negative-half proof — no gate or test is trusted until it has been observed FAILING on a deliberate violation.** This is RED applied to everything that renders a verdict, including the checks that are not themselves TDD output: a lint or contract-check script, an accessibility scan, a state-matrix assertion, a CI job. Introduce the violation the gate exists to catch, run it, capture the non-zero exit or failure output, then revert. Record that capture alongside the passing run. Until you have done this, a hollow assertion and a real one are **indistinguishable** — both are green, and the green half is the half that proves nothing. `--passWithNoTests`, a scanner configured with no rules enabled, and an assertion that merely checks a wrapper exists all pass this way, permanently and silently.
 - One logical assertion / one behavior per test.
 - Test names describe behavior: `"should reject empty email"` not `"test validateInput"`. If the name needs "and", split the test.
 - Use AAA structure: Arrange → Act → Assert.
@@ -47,8 +48,10 @@ Wrote code before the test? Delete it. Start over. No exceptions — don't keep 
 - **Mock Fidelity Rule** (supersedes the narrower "Network Client Mocking Rule"): a mock is derived from the authoritative contract, never authored from the consumer's expectations. Two things must hold, and the second is the one that bites:
   - **Shape**: the mocked return must match the **post-middleware/post-interceptor** structure the application actually receives at runtime, not the raw HTTP envelope.
   - **Field identity**: field names, casing, nullability, and nesting come from the contract artifact — the API spec, schema, or frozen interface definition. A mock whose field names you cannot trace back to that artifact is not a test of the code; it is a test of the mock, and it will pass for exactly as long as production is broken. This is how a consumer invents a parallel vocabulary (`pricing.retailTotal` for `retailTotal`, `departureTime` for `departureUtc`) and gets green tests over code that cannot work: the mock and the consumer agree with each other and neither agrees with the server. Weak typing at the boundary (`any`, untyped destructuring) removes the last mechanism that would have caught it, so a contract boundary must be typed from the contract too.
+  - **Fixture identity**: the rule covers **seeded state**, not only mocked responses. Any fixture that pre-populates application state for a test — auth storage-state, cookies, cached entities, feature flags — must derive its storage mechanism *and* its exact keys from the application's own accessor code, never from the test framework's default idiom. Test tooling ships an opinionated default (dump everything to `localStorage`); if the application reads from somewhere else, the fixture writes into a location nothing reads and the test proves nothing about the authenticated path.
   - Where no contract artifact exists, capture one real response first and derive the mock from that. "I read the calling code and matched it" is the failure mode, not the method.
 - **Closed-set assertions pin exact cardinality and membership**: when a test asserts anything about a set that is meant to be closed — an exemption or allowlist, a route table, enum members, registered handlers or providers, a public export surface — assert its **exact length and its exact members** (`=== n` plus the membership check), never `<=`, `>=`, or "contains". A set that can grow without failing a test *will* grow, and the growth is invisible precisely because the test still passes. The assertion's job is to force a human decision on every future addition.
+- **A feature is not done until a test reaches it through its real composition root.** New units must be registered where the application actually resolves them — route table, DI container, module export, plugin/handler registry — and the test that authorizes the feature must arrive through that entry point, not by importing the unit directly. A unit test that constructs the component by hand passes identically whether or not the application can ever reach it, so it cannot falsify the most common integration defect: the thing was built, and nothing points at it.
 
 ### Verification Checklist
 
@@ -56,6 +59,7 @@ Before marking work complete:
 
 - [ ] Every behavior from the requirements has a corresponding test
 - [ ] Watched each test fail before implementing, and it failed for the expected reason
+- [ ] Every gate or check script authored or touched has been observed failing on a deliberate violation, with the failure output captured (negative-half proof)
 - [ ] Wrote minimal code to pass each test
 - [ ] All tests pass (`GREEN`), output pristine (no errors, warnings)
 - [ ] No test depends on another test's state or execution order

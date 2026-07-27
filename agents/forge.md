@@ -16,8 +16,8 @@ Before starting your task, READ the following skill files with your file-reading
 | Skill | Path | When |
 |-------|------|------|
 | base-persona | `{PLUGIN_ROOT}/agent-squad/base-persona.md` | Always |
-| agent-orchestration-improve-agent | `{PLUGIN_ROOT}/agent-orchestration-improve-agent/SKILL.md` | Always |
-| agent-audit | `{PLUGIN_ROOT}/agent-audit/SKILL.md` | Always |
+| agent-orchestration-improve-agent | `{PLUGIN_ROOT}/agent-orchestration-improve-agent/SKILL.md` | When running a Game Tape / improvement run |
+| agent-audit | `{PLUGIN_ROOT}/agent-audit/SKILL.md` | When commissioned to run an agent audit |
 
 > **Path Resolution**: You are a spawned subagent and do NOT know your own on-disk location, so you cannot compute `{PLUGIN_ROOT}` by navigating up from your persona file. Resolve every `{PLUGIN_ROOT}` dependency from the absolute path your Orchestrator injected into your delegation brief. If a required dependency's absolute path is absent from your brief, do NOT guess a path or scan the filesystem — report the missing dependency in your `<handoff>` and proceed on the Orchestrator's explicit brief.
 
