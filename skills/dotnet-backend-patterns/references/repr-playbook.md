@@ -438,7 +438,13 @@ builder.Services.AddValidatorsFromAssemblyContaining<Program>();
 // Feature-specific services (only when extracted from endpoint)
 builder.Services.AddScoped<CreateOrderService>();
 
+// Centralized failure path: exception → BaseResponse envelope (see response-and-errors.md §5)
+builder.Services.AddExceptionHandler<BaseResponseExceptionHandler>();
+builder.Services.AddProblemDetails();
+
 var app = builder.Build();
+
+app.UseExceptionHandler();
 
 // Central Route Registration
 app.MapFeatureEndpoints();
@@ -597,7 +603,9 @@ namespace Gorelo.Integrations.REPR.API.Endpoints.Pax8
             IPax8AuthCacheService cacheService,
             ITopicSender topicSender,
             IHttpClientFactory httpClientFactory,
-            ILogger<CreatePax8OAuthEndpoint> logger,
+            // Static classes can't be generic type arguments (CS0718) — use the
+            // slice-owned request record as the logger category instead.
+            ILogger<CreatePax8OAuthRequest> logger,
             CancellationToken ct)
         {
             // 1. Retrieve ServiceProviderId & TechnicianId cleanly from custom Endpoint Filter

@@ -91,6 +91,18 @@ interface BaseResponse<T> {
   notifications: ApiNotification[]
 }
 
+// Typed error rejected to callers — carries the envelope's notifications, never the raw envelope
+export class ApiError extends Error {
+  constructor(public notifications: ApiNotification[]) {
+    super(notifications[0]?.message ?? 'Request failed')
+    this.name = 'ApiError'
+  }
+}
+
+function isEnvelope(body: unknown): body is BaseResponse<unknown> {
+  return typeof body === 'object' && body !== null && 'isSuccess' in body && 'notifications' in body
+}
+
 export const http = axios.create({ baseURL: import.meta.env.VITE_API_URL })
 
 // Auth header centralized
@@ -104,9 +116,11 @@ http.interceptors.request.use((config) => {
 let refreshing: Promise<string> | null = null
 
 http.interceptors.response.use(
-  // Unwrap the Response Pattern: callers get `Data`, never the envelope
+  // Unwrap the Response Pattern: callers get `data`, never the envelope
   (res) => {
     const body = res.data as BaseResponse<unknown>
+    // Defensive only: the backend emits failures with a non-2xx status (rejected handler below),
+    // so this guards against a misbehaving 2xx-with-isSuccess:false response slipping through.
     if (body.isSuccess === false) return Promise.reject(new ApiError(body.notifications))
     res.data = body.data
     return res
@@ -121,7 +135,11 @@ http.interceptors.response.use(
       original.headers.Authorization = `Bearer ${newToken}`
       return http(original) // replay
     }
-    return Promise.reject(error)
+    // Backend failures arrive HERE (non-2xx + BaseResponse body): unwrap the envelope so
+    // callers get a typed ApiError whose notifications drive the UI (TT segment, below).
+    const body = error.response?.data
+    if (isEnvelope(body)) return Promise.reject(new ApiError(body.notifications))
+    return Promise.reject(error) // network / non-envelope error: reject as-is
   },
 )
 ```

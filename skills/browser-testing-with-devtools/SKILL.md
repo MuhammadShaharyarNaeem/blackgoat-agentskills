@@ -1,6 +1,6 @@
 ---
 name: browser-testing-with-devtools
-description: Tests in real browsers via Chrome DevTools MCP. Use when building or debugging anything that runs in a browser. Use when you need to inspect the DOM, capture console errors, analyze network requests, profile performance, or verify visual output with real runtime data. Requires the chrome-devtools MCP server to be configured.
+description: Squad-internal execution contract for verifying browser behavior with real runtime data via Chrome DevTools MCP — loaded by agents via their Methodology Dependencies table when a task needs DOM inspection, console/network capture, performance profiling, or visual verification. Requires the chrome-devtools MCP server to be configured; user-facing build and bugfix triggers belong to the /bgpdd-build and /bg-bugfix pipelines.
 ---
 
 # Browser Testing with DevTools

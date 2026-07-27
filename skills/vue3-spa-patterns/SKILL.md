@@ -33,6 +33,7 @@ This is the operational spine. Follow it as written.
 
 - Extract shared logic into composables (`useXxx`) applying the Rule of Three: extract on the third occurrence, not speculatively on the first.
 - A composable owns its own state and returns a narrow, typed surface. It never reaches into component internals.
+- **Decide a composable's scope explicitly, and place its effects accordingly.** State and effects that belong to *each caller* are created inside the composable body; state and effects that must exist **once per application** (a single watcher on global/persisted state, one media-query listener, one storage sync) are created at **module scope**, outside the exported function, and the function only returns handles to them. A singleton effect registered inside the body silently multiplies with every call site — the leak has no error, no warning, and no failing test; it only shows up as duplicated side effects under load.
 
 ### HTTP Layer
 
@@ -43,6 +44,7 @@ This is the operational spine. Follow it as written.
 ### Testability
 
 - Every interactive DOM element (buttons, inputs, links, selects, toggles) carries a `data-test` ID so Playwright E2E selectors survive styling and layout changes. This is mandatory, not optional polish.
+- Every routed view/page carries a stable `data-test` ID on its **root element**, naming the page (not its content). Interactive-element IDs prove a control exists; the page-root ID is what lets an E2E assertion prove *which page actually rendered* — without it, a navigation test cannot distinguish the target page from a 404 or a fallback route, and will pass on both.
 
 ### Routing & Performance
 
@@ -78,10 +80,12 @@ The rules above make new code retrofit-free. For **existing** code written befor
 Before marking work complete:
 
 - [ ] All new components use `<script setup>` with typed `defineProps`/`defineEmits`
+- [ ] `vue-tsc --noEmit` has been **executed** and is clean — including unused imports/vars. `vite build` does not typecheck; a build that succeeds proves nothing about type validity.
 - [ ] In multi-frontend projects, all primitive UI controls reside in a shared UI package (`packages/ui`)
 - [ ] No component mutates shared state directly — all writes go through Pinia actions; no direct `v-model="store.someField"` bindings in templates
 - [ ] All HTTP traffic flows through the single shared Axios instance and its interceptors
-- [ ] Every interactive element added or touched carries a `data-test` ID
+- [ ] The 401 path performs silent refresh + queued replay as specified — **no** page reload, forced logout, storage wipe, or hardcoded/stub token as a fallback.
+- [ ] Every interactive element added or touched carries a `data-test` ID, and every routed view added or touched carries a page-naming `data-test` ID on its root element
 - [ ] Only main entry route (`/`) is eagerly loaded; all other non-critical routes are lazy-loaded (`() => import(...)`)
 - [ ] No watcher exists where a `computed` would do; no `v-memo` without profiling evidence
 - [ ] Every listener/subscription/hub-join you added or touched has a matching teardown (`onUnmounted`, plus `onDeactivated` under keep-alive); every debounce/throttle/timer is cancelled on teardown

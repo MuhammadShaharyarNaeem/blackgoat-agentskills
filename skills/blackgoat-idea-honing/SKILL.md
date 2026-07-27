@@ -46,5 +46,5 @@ Iteratively guide the user through a series of questions to refine the initial c
 Continue the interactive process until all critical uncertainties are resolved.
 - Once requirements are clear, summarize the current specifications.
 - Explicitly ask the user if they feel the requirements clarification is complete.
-- Upon receiving confirmation, immediately generate your final output artifacts as strictly defined by your core persona instructions.
+- Upon receiving confirmation, the transcript is final — this skill ends there. Your caller's pipeline defines who synthesizes the requirements document from the finalized transcript.
 
