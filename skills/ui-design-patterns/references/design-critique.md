@@ -64,4 +64,4 @@ Verify on the built result (computed values / screenshots, not intentions). Each
 
 ## 7. Report
 
-Append to the same review report file, inside your `#Task [N] Review:` block, as a `### Design Critique` subsection: the evidence line (screenshots or source-only), the specificity verdict, the heuristic table, then findings grouped by severity — every finding with a file/surface, the evidence, and one concrete fix. Summarize only the verdict + Critical/Important counts in your `<handoff>`.
+Append to the same review report file, inside your `## Review:` block (format owned by code-review-and-quality), as a `### Design Critique` subsection: the evidence line (screenshots or source-only), the specificity verdict, the heuristic table, then findings grouped by severity — every finding with a file/surface, the evidence, and one concrete fix. Summarize only the verdict + Critical/Important counts in your `<handoff>`.

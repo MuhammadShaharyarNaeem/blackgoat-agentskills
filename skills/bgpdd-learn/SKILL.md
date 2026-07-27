@@ -8,6 +8,18 @@ trigger: /bgpdd-learn
 
 Every working session generates lessons — user corrections, agent failures, friction that repeats — and most of them evaporate when the session ends. This skill captures them on demand and routes each one to the layer where it belongs: the project's rules file, an agent persona, or a methodology skill. The Orchestrator gathers evidence in the main session, then delegates analysis and routing to Forge in Learning Triage mode. Nothing is applied without explicit user approval.
 
+## Path Resolution
+
+Skill paths use `{PLUGIN_ROOT}` as a placeholder for the plugin's `skills/` directory. When this skill is invoked, its base directory is provided to you. List files to confirm a path exists before referencing it.
+
+## Global System Constraints
+
+> ### MANDATORY FIRST READ — the Orchestrator Contract
+>
+> **Before Step 1, you MUST read `{PLUGIN_ROOT}/agent-squad/orchestrator-contract.md` in full.** It carries the cross-cutting Orchestrator rules this skill depends on and deliberately does NOT restate — the ones exercised when delegating and resuming Forge: delegation discipline and **background execution**, the circuit breaker you pass to every delegated agent, no nested delegation, and incremental persistence.
+>
+> Those rules are **not optional and not summarized here**. Running this skill without having read that file means delegating Forge without a circuit breaker and without background execution — proceeding on that basis is non-compliant, not a shortcut. If the file does not resolve, STOP and report the broken path; do not improvise the rules from memory.
+
 ## Orchestrator Execution Contract
 
 This skill runs in the main session, never inside a delegated subagent.
@@ -46,6 +58,6 @@ On approval, resume the SAME Forge instance that produced the plan — continue 
 
 ## Relationship to Other Skills
 
-- **Reuses** `agent-orchestration-improve-agent` Phases 2–5 and **extends** it with the Destination Triage rubric.
+- **Reuses** the `agent-orchestration-improve-agent` analyze/apply contract, including its Destination Triage rubric.
 - **Supersedes** ad-hoc rule appending, such as bg-bugfix's old Phase 5.
 - **Complements** the per-phase Game Tape checkpoints and the single end-of-epic Forge run (bgpdd-shipping Step 7); it is the mid-epic escape valve when lessons should not wait for the epic to ship.

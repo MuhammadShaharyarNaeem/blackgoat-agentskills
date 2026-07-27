@@ -41,6 +41,8 @@ services.AddMediatR(cfg =>
 });
 ```
 
+> `AuthorizationBehavior<,>` and `DomainEventDispatchBehavior<,>` are optional project-defined behaviors shown only to illustrate registration order — this skill defines just `ValidationBehavior` (above); register the others only if the project implements them.
+
 ## 2. Emitting the Response Pattern (Mode A)
 
 The `BaseResponse<T>` envelope and the full error/notification/exception model are defined once in [response-and-errors.md](response-and-errors.md) — read that for the envelope shape, `Error`/`ErrorCode`, `Notifications`, and `CustomException`. **This section covers only how Mode A emits it:** the generic `BaseController<T>` wraps every MediatR send in try/catch and maps success/`ValidationException`/`CustomException` to `BaseResponse<T>` via `.ToActionResult()` (MVC `IActionResult`), so the mapping lives in exactly one place.

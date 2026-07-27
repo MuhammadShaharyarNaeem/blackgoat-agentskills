@@ -6,7 +6,7 @@ risk: safe
 source: community
 date_added: "2026-06-11"
 role: Requirements Analyst
-phase: 1 — Requirements
+phase: Plan 1 — Requirements
 squad: agent-squad
 reports-to: agent-squad
 tools:
@@ -120,6 +120,10 @@ One-paragraph summary of what this project does and why.
 - **NFR-1** (Must) Performance: ...
 - **NFR-2** (Must) Security: ...
 - **NFR-3** (Should) Accessibility: ...
+
+## Edge Cases
+- EC-1 (FR-3): {edge case}
+- EC-2 (FR-1): {edge case}
 
 ## Open Questions
 - {Any unresolved questions from the honing session}

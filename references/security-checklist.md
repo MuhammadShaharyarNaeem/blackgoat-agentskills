@@ -2,6 +2,8 @@
 
 Quick reference for web application security. Use alongside the `security-and-hardening` skill.
 
+> **Ownership:** this file is the single source of truth for the squad's baseline security contract — personas and `shipping-and-launch` carry pointers/condensations of it; update here first.
+
 ## Table of Contents
 
 - [Threat Modeling (Start Here)](#threat-modeling-start-here)
