@@ -3,7 +3,7 @@
 All notable changes to the `blackgoat-agentskills` plugin are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [1.2.0] — 2026-07-27
 
 ### Added
 - **Background Execution (mandatory)** across all five pipeline Orchestrators (`bgpdd-discovery`, `bgpdd-plan`, `bgpdd-lite`, `bgpdd-build`, `bgpdd-shipping`): delegated agents are always launched in the background, never as a blocking call, and independent delegations are launched in a single message so they run concurrently. A blocking delegation makes the Orchestrator unreachable for the agent's entire run — the user cannot ask a question, correct a bad brief, or stop work heading the wrong way, and a long phase is indistinguishable from a hang. Orchestrators must also refuse to guess, predict, or fabricate a still-running agent's results.

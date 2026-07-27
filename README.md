@@ -131,16 +131,16 @@ Every agent lives in `agents/<name>.md` with frontmatter declaring its `role`, `
 | **Iris** | System Architect (Discovery) — lightweight codebase discovery | haiku | Discovery |
 | **Scout** | Research Scout — disposable deep-dive into one assigned API/repo | sonnet | Discovery (spawned in parallel, one per API group) |
 | **Echo** | Legacy QA Analyst — reverse-engineers existing feature behavior | sonnet | Discovery |
-| **Rex** | Requirements Analyst | sonnet | Plan — Phase 1 (Requirements) |
-| **Aria** | System Architect | opus | Plan — Phase 2 (Architecture); Build advisor on blast-radius escalations |
-| **Alex** | Strategist & Planner | opus | Plan — Phase 3 (Planning) |
-| **Mason** | Builder | opus | Build — Phase 4 (Implementation) |
-| **Quinn** | QA Tester — build-phase testing | sonnet | Build — Phase 5 (Testing) |
-| **Luna** | Code Reviewer | sonnet | Build — Phase 6 (Code Review) |
-| **Max** | Optimizer / Refactorer | sonnet | Build — Phase 7 (Refactoring, conditional) |
-| **Vera** | Launch Verifier — pre-launch checklist verification | sonnet | Shipping — Phase 8 (Launch Verification) |
-| **Cipher** | Security Auditor | sonnet | Shipping — Phase 8 (Security); Build [SEC]-milestone reviews |
-| **Dep** | DevOps Engineer | sonnet | Build epic gate + Shipping — Phase 9 (Deployment) |
+| **Rex** | Requirements Analyst | sonnet | Plan 1 — Requirements |
+| **Aria** | System Architect | opus | Plan 2 — Architecture; Build advisor on blast-radius escalations |
+| **Alex** | Strategist & Planner | opus | Plan 3 — Planning |
+| **Mason** | Builder | opus | Build 1 — Implementation |
+| **Quinn** | QA Tester — build-phase testing | sonnet | Build 2 — Testing |
+| **Luna** | Code Reviewer | sonnet | Build 3 — Code Review |
+| **Max** | Optimizer / Refactorer | opus | Build 4 — Refactoring (conditional) |
+| **Vera** | Launch Verifier — pre-launch checklist verification | sonnet | Shipping — Verification (parallel with Cipher) |
+| **Cipher** | Security Auditor | sonnet | Shipping — Security (parallel with Vera); Build [SEC]-milestone reviews |
+| **Dep** | DevOps Engineer | sonnet | Build 5 — Deployment Prep + epic gate; Shipping rollout |
 | **Forge** | Meta-Engineer / System Coach | opus | End of epic (bgpdd-shipping Step 7); `/bgpdd-learn` on demand — always human-approved |
 
 Blurbs, in one line each: Iris scans repos and records the tech stack and Target Scope. Scout maps one feature's fragments inside one API and writes exactly one file. Echo reverse-engineers how an existing feature behaves today, from the Scouts' maps, before any requirements exist. Rex turns a honing transcript into an ID'd, testable spec. Aria designs the data model, contracts, and file structure (design only — a learned squad rule forbids delegating coding to the Architect). Alex converts the blueprint into a dependency-ordered task plan where every task cites the requirements it covers. Mason writes the code, TDD-first, inside a strict blast radius. Quinn proves the build-phase implementation works against the requirements. Luna reviews for correctness, readability, architecture, security, and performance without rewriting anything. Max refactors for clarity with tests staying green. Vera runs the pre-launch verification checklist against the finished codebase. Cipher hardens boundaries. Dep owns containers, CI/CD, rollback plans, and the GO/NO-GO verdict. Forge coaches the squad itself.
@@ -212,7 +212,7 @@ Phase by phase:
 }
 ```
 
-`feature` is the durable Tier 1 id (`null` for greenfield). `pipeline` records the last writer. `branch` and `milestone_cursor` are owned by build: the working branch established at hydration, and the next pending milestone. Shipping's Step 0 refuses to run if `pipeline` isn't `"bgpdd-build"` or milestones remain open, and its Step 6 deletes the file once the lifecycle completes — `game-tape.md` alone survives as the epic's durable record.
+`feature` is the durable Tier 1 id (`null` for greenfield). `pipeline` records the last writer. `branch` and `milestone_cursor` are owned by build: the working branch established at hydration, and the next pending milestone. Shipping's Step 0 refuses to run if `pipeline` isn't `"bgpdd-build"` (or `"bgpdd-shipping"` from a prior checkpointed shipping session), if milestones remain open, or if the `blockers` ledger has standing entries (Step 0.4), and its Step 6 deletes the file once the lifecycle completes — `game-tape.md` alone survives as the epic's durable record.
 
 ---
 
