@@ -15,6 +15,7 @@ This is the operational spine. Follow it as written.
 
 Before any UI code exists, a compact direction must be committed — in `detailed-design.md` for pipeline work, or stated in the brief for ad-hoc work:
 
+- **Candidate sourcing (design DB tool)**: when the brief pins no direction, you SHOULD first query the vendored design database for 2–3 candidate styles, palettes, and font pairings before committing anything: `python <this skill's resolved path>/tools/design-db/scripts/search.py "<product/surface description>" --domain style` (also `--domain color|typography|ux`; stdlib-only Python 3). Its results are candidate input, never authority — every pick still passes the generic-default check and every rule in this contract, and **this contract wins over any database recommendation** (the DB freely suggests looks this skill refuses by default, e.g. glass effects). If no Python 3 runtime is available, skip the query and commit the direction from the brief and these rules alone.
 - **Tokens**: 4–6 named palette values; 2–3 type roles (a characterful display face used with restraint, a complementary body face, a utility face for data/captions if needed); a spacing scale.
 - **Layout concept**: one-sentence prose description of the composition.
 - **Signature**: the single element this surface will be remembered by. Spend boldness there; keep everything around it quiet.
@@ -90,3 +91,5 @@ Read on demand — not needed to execute the contract above:
 ## Attribution
 
 Adapted for this squad from [Anthropic's frontend-design skill](https://github.com/anthropics/skills) and [pbakaus/impeccable](https://github.com/pbakaus/impeccable) (Apache-2.0). Impeccable's command/detector orchestration is intentionally not carried over — orchestration belongs to the squad's Orchestrator, not to a methodology.
+
+The `tools/design-db/` search tool (BM25 CSV database of UI styles, palettes, font pairings, and UX guidelines) is vendored from [nextlevelbuilder/ui-ux-pro-max-skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) (MIT — see `tools/design-db/LICENSE`). Only its data and search scripts are carried over: its self-activating skill surface, doctrine, and design-system generator are intentionally not adopted — this contract remains the sole authority on what ships, and the DB is consulted only as candidate input during Design Direction.

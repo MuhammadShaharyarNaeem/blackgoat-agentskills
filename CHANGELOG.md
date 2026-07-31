@@ -3,6 +3,15 @@
 All notable changes to the `blackgoat-agentskills` plugin are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Design DB tool** (`ui-design-patterns/tools/design-db/`): the CSV design database + stdlib-only BM25 search from [nextlevelbuilder/ui-ux-pro-max-skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) (MIT), vendored as a queryable tool with NO skill/trigger surface of its own. Consumed at exactly one pipeline point: `bgpdd-plan` Phase 2 step 3b injects the search-script path into Aria's brief for `[UI]` work, and `ui-design-patterns`' new **Candidate sourcing** rule has her query it for 2–3 candidate styles/palettes/font pairings before committing the visual direction — with the explicit precedence that the house contract wins over any database recommendation, and a no-Python fallback (commit from the brief and house rules alone). Deliberately NOT adopted: the upstream skill's self-activating description (trigger collision with the pipelines), its doctrine (recommends looks the house contract refuses by default), its design-system generator, and any new UI agent — direction stays Aria's, execution Mason's, critique Luna's.
+
+### Removed
+- **Parallel Fan-Out within a milestone** (`bgpdd-build` Phase 1) and its planning-side contract (`planning-and-task-breakdown`: the "authoritative for conflict-free parallel execution groups" reading of `Dependencies:`/`Files likely touched:`, and the parallelism clause of Milestone economy). Observed failure: parallel Masons committing to the shared working branch moved HEAD under their siblings, and each verification round then re-verified the entire moving diff instead of one task's changes — multiplying token cost for a wall-clock gain the pipeline doesn't need. A milestone is now again the unit of delegation: one Mason builds its tasks in plan order, one Quinn/Luna round verifies the milestone's diff once. (Read-only parallel lanes are unaffected: discovery Scout fan-out, Luna+Cipher `[SEC]` reviews, shipping Stage 2.)
+- **`Files likely touched:` task field** (`planning-and-task-breakdown` template, Verification checklist, and all cross-references). Its only structural consumer was the removed fan-out conflict computation, and it duplicated `Named identifiers:`, which already requires exact file paths to create/modify. `Dependencies:` remains as the ordering contract.
+
 ## [1.2.0] — 2026-07-27
 
 ### Added
