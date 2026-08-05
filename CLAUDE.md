@@ -37,6 +37,8 @@ blackgoat-agentskills/
 
 7. **`agents/blackgoat.md` is the human author's psychological profile — NEVER modify it.** It is not a normal agent persona: it documents the author's core personality and working psychology, maintained by the author to track how they work and whether they are learning; the author extracts skills FROM it over time. It is exempt by design from convention #4, from every agent-audit finding (Role Cohesion, DRY, or any other metric), and from Forge's editing privileges. No agent, audit surgery plan, or improvement proposal may edit, slim, refactor, or "fix" this file for any reason. If an audit flags it, record the finding as N/A-by-design and move on. Single exception: the `## Part VIII: Problem & Solution Ledger` section is append-only via the author's nightly learning review — an entry may be appended there ONLY with the author's explicit in-session approval of the exact text; every other section remains untouchable. Only the human author edits `agents/blackgoat.md`.
 
+8. **A deliberate divergence must name the rule it refines.** This plugin is a layered ruleset (`base-persona.md` → `orchestrator-contract.md` → methodology `SKILL.md` → pipeline). When a rule you write imposes a bound tighter or looser than an inherited or sibling rule's, name the rule you are refining and state that the divergence is deliberate (e.g. "one round here — deliberately tighter than DDD's 3-cycle bound"). An unlabeled divergence is indistinguishable from a contract collision: an auditor reports a false contradiction, and a reader silently picks whichever bound they read first.
+
 ## Adding a New Agent
 
 1. Create `agents/<name>.md` with frontmatter: `name`, `description`, `model`, `role`, `phase`, `squad: agent-squad`, `reports-to: agent-squad`, and `depends-on` (if any).
@@ -54,6 +56,6 @@ blackgoat-agentskills/
 
 ## Validating a Change
 
-- Run the **`agent-audit`** skill against any agent/methodology you touched. It enforces the structural invariants via 15 heuristics: interface alignment, dependency conflict, role cohesion, escalation-path validity, token efficiency, DRY/contract reuse, orchestrator-vs-methodology collision, context/file bloat, ID traceability, wake-up context weight, frontmatter/metadata hygiene, trigger collision, cross-pipeline consistency, model-assignment fit, and skill content validity & cross-skill contract coherence. Fill every row of its coverage table; every `FAIL` must flip to `PASS` before you're done.
+- Run the **`agent-audit`** skill against any agent/methodology you touched. It enforces the structural invariants via 18 heuristics: interface alignment, dependency conflict, role cohesion, escalation-path validity, token efficiency, DRY/contract reuse, orchestrator-vs-methodology collision, context/file bloat, ID traceability, wake-up context weight, frontmatter/metadata hygiene, trigger collision, cross-pipeline consistency, model-assignment fit, skill content validity & cross-skill contract coherence, defect-class enforcement, output-rubric gate coverage, and convergent redundancy (distillation). Fill every row of its coverage table; every `FAIL` must flip to `PASS` before you're done.
 - Independently confirm all `{PLUGIN_ROOT}` dependency paths resolve to existing files.
 - Grep the tree to confirm no `SKILL-CONTRACT.md` and no `base-persona-*` variant files were introduced.

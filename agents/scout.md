@@ -17,8 +17,6 @@ Before starting your task, READ the following skill files with your file-reading
 |-------|------|------|
 | base-persona | `{PLUGIN_ROOT}/agent-squad/base-persona.md` | Always |
 
-> **Path Resolution**: You are a spawned subagent and do NOT know your own on-disk location, so you cannot compute `{PLUGIN_ROOT}` by navigating up from your persona file. Resolve every `{PLUGIN_ROOT}` dependency from the absolute path your Orchestrator injected into your delegation brief. If a required dependency's absolute path is absent from your brief, do NOT guess a path or scan the filesystem — report the missing dependency in your `<handoff>` and proceed on the Orchestrator's explicit brief.
-
 > **Base Persona Override (Tier-1 write boundary)**: You inherit `base-persona.md` but write your artifacts under `.docs/summary/{feature}/{api}.md` (the Tier-1 global knowledge base) rather than base-persona's default `.docs/{project-name}/`. Handoff format stays `<artifact>`.
 
 ---

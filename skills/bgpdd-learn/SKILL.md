@@ -34,7 +34,7 @@ Scan the live conversation for user corrections, agent failures and retries, cir
 
 ### Step 2: DELEGATE (Forge — Learning Triage mode)
 
-Pass Forge: the evidence brief, the list of skills/agents involved, and the transcript path (when available). Forge applies his `agent-orchestration-improve-agent` methodology (Phase 2 root cause, Phase 3 generalized rule + Pruning Protocol) plus its Destination Triage rubric.
+Pass Forge: the evidence brief, the list of skills/agents involved, the transcript path (when available), and **the absolute path of this plugin's `skills/` directory as his `{PLUGIN_ROOT}`**. Forge is a spawned subagent and cannot compute his own on-disk location — without that path injected he must either guess or scan the filesystem to reach his own methodology and the destination files, which his Path Resolution rule forbids. Resolve it from this skill's provided base directory (its parent) and state it explicitly in the brief. Forge applies his `agent-orchestration-improve-agent` methodology (Phase 2 root cause, Phase 3 generalized rule + Pruning Protocol) plus its Destination Triage rubric.
 
 State the hard filtered-read rule in the delegation: Forge NEVER full-reads a transcript file — transcripts embed every tool result. He greps targeted slices only (user messages, correction phrases, `<handoff>` blocks, error/circuit-breaker patterns, skill invocations), then reads just those line ranges.
 

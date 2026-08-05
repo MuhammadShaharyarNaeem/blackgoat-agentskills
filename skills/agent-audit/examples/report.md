@@ -4,6 +4,8 @@ I have run the static analysis heuristics against `mason/SKILL.md` and his inher
 
 ## Coverage Table
 
+*This example predates Metrics 16–18 and is illustrative of tone and structure only — a real report must fill every row through Metric 18.*
+
 | # | Metric | Verdict | Severity |
 |---|--------|---------|----------|
 | 1 | Interface Alignment | FAIL | Blocker |

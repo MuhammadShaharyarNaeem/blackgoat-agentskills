@@ -47,7 +47,8 @@ The contract already *is* these principles applied; keep them explicit so they a
 - Every read-only query uses `AsNoTracking()`. No exceptions.
 - Project to DTOs (`Select(x => new Dto {...})`) instead of hydrating full entities when only a subset is needed.
 - No cascade deletes on critical records — configure `DeleteBehavior.Restrict` and handle removal explicitly.
-- Handle concurrency explicitly (rowversion/concurrency token + `DbUpdateConcurrencyException` handling) where concurrent writes are possible.
+- Handle concurrency explicitly where concurrent writes are possible — optimistic via rowversion/concurrency token + `DbUpdateConcurrencyException` handling; pessimistic via row locks (`SELECT ... FOR UPDATE`) taken inside an explicit transaction.
+- **Keep the transaction span in-process.** Nothing between `BeginTransactionAsync` and `CommitAsync` may await an out-of-process dependency — no `HttpClient`, supplier SDK, gateway, or broker call. Locking a row that is shared across all callers (a global settlement, clearing, or sequence account) and then awaiting a remote call serializes the whole endpoint at that remote's latency. Where the span existed to make a locked check-then-write atomic, it is replaced by a committed reservation before the call and a second short transaction after it — never merely by widening the gap between check and write.
 
 ### Async Discipline
 
@@ -66,6 +67,7 @@ Before marking work complete:
 - [ ] The API mode matches the blueprint; no mode mixing (no repositories in REPR, no ad-hoc endpoints in CQRS)
 - [ ] Every read-only query has `AsNoTracking()` and projects to a DTO where a subset suffices
 - [ ] No cascade delete introduced on critical records; concurrency handled where writes race
+- [ ] No `BeginTransactionAsync` / `FOR UPDATE` span awaits an out-of-process call; any check-then-write invariant that lost its span is carried by a committed reservation
 - [ ] All async methods propagate `CancellationToken`; no sync-over-async
 - [ ] Integration tests against the real Dev DB cover DB-crossing behavior — zero mocked `DbContext`. (Builders do not author these — verify they exist or flag the gap to the Orchestrator; QA (Quinn) authors them.)
 - [ ] Every response (both modes) is a `BaseResponse<T>` envelope from BG.Core; failures are structured `Error`s (registry-composed `ErrorCode`) in `Notifications`, mapped once via `ToActionResult<T>()` (Mode A) or `ToResult<T>()` + `IExceptionHandler` (Mode B) — no bare payloads, no ad-hoc status codes

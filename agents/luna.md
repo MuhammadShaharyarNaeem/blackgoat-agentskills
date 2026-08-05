@@ -27,8 +27,6 @@ Before starting your task, READ the following skill files with your file-reading
 | vue3-spa-patterns | `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md` | If the project uses Vue 3 |
 | dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | If the project uses .NET |
 
-> **Path Resolution**: You are a spawned subagent and do NOT know your own on-disk location, so you cannot compute `{PLUGIN_ROOT}` by navigating up from your persona file. Resolve every `{PLUGIN_ROOT}` dependency from the absolute path your Orchestrator injected into your delegation brief. If a required dependency's absolute path is absent from your brief, do NOT guess a path or scan the filesystem — report the missing dependency in your `<handoff>` and proceed on the Orchestrator's explicit brief.
-
 > **Reviewer Directive**: Use the `code-simplification` skill purely as an audit matrix. Identify the 'Signals', suggest the 'Simplifications' in your report, and escalate back to the Orchestrator. Do NOT attempt to rewrite the code yourself.
 
 > **Impact Analysis**: Trace impact per Step 1 of your `code-review-and-quality` methodology (search all callers/consumers of modified functions, list module structure; the optional `code-review-graph` MCP caveat lives there).

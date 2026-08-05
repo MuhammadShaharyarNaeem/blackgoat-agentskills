@@ -28,11 +28,11 @@ When you inject a resolved `base-persona.md` path into a delegation brief, it li
 
 The sections below carry ONLY this pipeline's refinements on top of that contract.
 
-- **Strict Delegation — this pipeline's agents**: Rex (Phase 1 Step B), Aria (Phase 2), Alex (Phase 3), and optionally Scout (Phase 2 research split). For non-interactive phases you MUST NOT roleplay the agent's work yourself.
+- **Strict Delegation — this pipeline's agents**: Rex (Phase 1 Step B), Aria (Phase 2), Alex (Phase 3), and optionally Scout (Phase 2 research split). Phase 2.5 (Adversarial Design Review) is Orchestrator-run — no delegated agent. For non-interactive phases you MUST NOT roleplay the agent's work yourself.
   - **EXCEPTION — Phase 1 (Honing)**: Requirements honing is interactive (turn-by-turn Q&A with the user). A delegated agent cannot pause to ask the user and resume, so **you (the main session) run Phase 1 yourself** following Rex's persona as the behavioral spec. See Phase 1 below.
 - **Upgraded Chain-of-Thought**: Before transitioning between phases, you MUST explicitly verify that the required artifact exists AND satisfies its content contract — existence and non-emptiness alone are not sufficient. Content contracts:
   - `requirements.md`: has at least one Must-Have requirement carrying an `FR` ID and a Given/When/Then acceptance criterion.
-  - `detailed-design.md`: explicitly references the `FR` IDs it addresses (the design must show which requirements it covers).
+  - `detailed-design.md`: explicitly references the `FR` IDs it addresses (the design must show which requirements it covers) AND contains a `## Divergence & Supersession Register`; `requirements.md` carries a matching supersession annotation for every superseded FR.
   - `plan.md`: every task cites the requirement ID(s) it satisfies (a "Requirements covered:" field), and every task carries a verification step.
   - *Format*: "Thinking: Phase X requires Y. Checking `.docs/{project-name}/Y`... File exists and satisfies its content contract [state which check(s) passed]. Proceeding."
 - **File Artifacts**: All artifacts must use standard GitHub markdown and be saved under `.docs/{project-name}/`. This folder is the project's persistent **Semantic Memory**.
@@ -41,7 +41,7 @@ The sections below carry ONLY this pipeline's refinements on top of that contrac
 
 **The error-recovery skeleton lives in the Orchestrator Contract (§2)** — halt-and-escalate triggers, the circuit breaker you pass to every agent, no-nested-delegation, incremental persistence, context checkpoints, and 2-round bounded autonomous rejection. Read it there; it is not restated here.
 
-This pipeline's only refinement: the artifacts subject to the 2-round bound are `requirements.md`, `detailed-design.md`, and `plan.md` — track the round count per artifact, and after 2 rounds surface the flaw and both attempts to the user rather than re-delegating a third time.
+This pipeline's refinements: the artifacts subject to the 2-round bound are `requirements.md`, `detailed-design.md`, and `plan.md` — track the round count per artifact, and after 2 rounds surface the flaw and both attempts to the user rather than re-delegating a third time. Phase 2.5 is tighter still: the design gets exactly **one** doubt-driven revision round (deliberately below DDD's own 3-cycle bound), then escalate. Note: `requirements.md` is legitimately mutated in Phase 2 by Aria — supersession annotations only.
 
 ## 3. Few-Shot Handoff Examples
 
@@ -84,7 +84,8 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
 ├── requirements.md        # Finalized specification (Phase 1, Rex synthesis)
 ├── research/              # Technical research & findings (Aria)
 ├── design/                # System designs & Mermaid diagrams (Aria)
-│   └── detailed-design.md
+│   ├── detailed-design.md
+│   └── design-review.md   # Phase 2.5 findings (Orchestrator)
 ├── implementation/        # Checklists (Alex)
 │   ├── plan.md            # Dependency-mapped task list
 │   └── game-tape.md       # Per-phase evidence checkpoints (Orchestrator, Phase 4)
@@ -130,12 +131,27 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
   3. **CRITICAL PATHING**: Instruct Aria that she MUST write the final blueprint exactly to `.docs/{project-name}/design/detailed-design.md`.
   3b. **[UI] Design-direction sourcing**: if the requirements include user-facing UI, inject into Aria's brief the resolved paths to both `{PLUGIN_ROOT}/ui-design-patterns/SKILL.md` and its design-DB search tool (`{PLUGIN_ROOT}/ui-design-patterns/tools/design-db/scripts/search.py`), so she can source candidate directions per that skill's **Candidate sourcing** rule before committing the visual direction in the blueprint.
   4. Read Aria's returned handoff.
-  5. **Iteration Checkpoint**: Present Aria's design to the user and explicitly offer to bounce back to Phase 1 if research uncovered new questions.
+  5. **Iteration Checkpoint**: After Phase 2.5 completes, present Aria's design to the user **together with the Phase 2.5 gate findings** (`design/design-review.md`), and explicitly offer to bounce back to Phase 1 if research or the review uncovered new questions.
 
 - **Splitting Phase 2 when the design surface is large** (recommended for substantial greenfield builds): Aria doing open-ended external research *and* authoring the full blueprint in one run is the phase most likely to exhaust its context or return thin on exactly the part the user cares most about. When the surface is large — e.g. a complete API contract **plus** costed infrastructure options **plus** a design system — split it:
   1. Spawn one or more **Scout** agents for the *bounded research* questions (the Orchestrator may spawn Scout; Aria may not). Give each Scout a single topic and its own output file under `.docs/{project-name}/research/`. Launch them **concurrently in one message**. Tell each Scout explicitly that it is researching, not designing — no architecture, no component or endpoint design.
   2. Then delegate **Aria** to author `.docs/{project-name}/design/detailed-design.md`, instructing her to read those research files as inputs so the Scout work is consumed, not orphaned.
   Keep `detailed-design.md` as the single authoritative blueprint Alex decomposes; research files are supporting detail it references. For a small or well-bounded feature, one Aria delegation remains correct — do not split by reflex.
+
+### Phase 2.5: Adversarial Design Review (Orchestrator)
+- **Delegated Agent**: None — YOU (the Orchestrator) run the Doubt-Driven Development cycle (`{PLUGIN_ROOT}/doubt-driven-development/SKILL.md`) on `detailed-design.md` before the design stands.
+- **Workflow**:
+  1. Run the doubt cycle **per-section** — the design exceeds DDD's one-read unit, so honor its decomposition rule. Always extract: every money-moving sequence, every state machine, every read-then-decide gate.
+  2. Each DOUBT prompt carries this fixed attack list **verbatim**, in addition to DDD's adversarial prompt:
+     1. **Crash windows** — for each sequence that moves money and calls an external system, enumerate "process dies after step N" for every N; each must name a recovery mechanism (sweeper / reconciliation / idempotent retry).
+     2. **Reversals** — every journal entry / money movement has a defined reversal or an explicit "irreversible, because…".
+     3. **Races** — every read-then-decide gate (quota, balance, rate) names its serialization mechanism and a two-concurrent-requests test.
+     4. **Trust-boundary amounts** — any externally-supplied number that moves money is validated against an internal record.
+     5. **State-machine self-consistency** — every compensation/failure path only performs transitions its own state machine permits; and any declared set of numbered assertions, invariants, or allow-lists is walked as a set — every pair mutually satisfiable, every member referentially valid.
+     6. **Config knobs** — every brief "must be configurable" maps to a named options key referenced by the algorithm that uses it (not a literal).
+  3. Write the findings to `.docs/{project-name}/design/design-review.md`.
+  4. Send the findings to **Aria** as ONE revision round (see §2 — this bound is deliberately tighter than DDD's 3-cycle bound). Unresolved Blockers escalate to the user at the Iteration Checkpoint.
+  5. **Verify the fixes, not just the design.** One revision round does not mean one verification: when Aria returns the revised design, check each Blocker's fix is actually present, AND re-read the clauses the fix touched for regressions. A fix round produces a new artifact, not a patch — verbatim requirement clauses a fix rewrites (auth posture, endpoint bindings, identifier bindings) are the highest-regression-risk surface in this pipeline, and an observed run regressed a verbatim FR clause and mis-bound three endpoint ids inside the very round that fixed something else. This pass restores the re-loop that tightening the bound to one round removed; it is NOT a new adversarial cycle and does NOT count against that bound. Skip it and the gate's own output is the only text in the pipeline that nothing reviews.
 
 ### Phase 3: Planning (Alex)
 - **Delegated Agent**: **Alex** (Strategist)
