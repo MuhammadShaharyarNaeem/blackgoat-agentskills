@@ -130,5 +130,5 @@ This is my learning mechanism. Append-only, dated entries. Entries are added onl
 
 ### [2026-07-25] Build pipelines were running 1+ hour on avoidable serialization
 - **Problem:** PDD build pipelines were taking at least an hour per run, driven by two avoidable causes: tasks split into unnecessarily fine units even when a single task would do (e.g., an ~80-line Playwright spec broken apart for its own sake), and Mason always running serially even when tasks in a milestone had no conflict.
-- **Solution:** (1) Coarser task granularity — don't split a task just to have more tasks; a small, self-contained unit of work stays one task in the plan. (2) Multi-agent orchestration within a milestone — when tasks don't conflict, run multiple Masons in parallel instead of working the list one at a time.
-- **Review:** After the next 3–5 PDD builds — compare wall-clock time against the ~1hr baseline, and confirm the "no conflict" check actually held (no clobbered files from parallel Masons).
+- **Solution:** (1) Coarser task granularity — don't split a task just to have more tasks; a small, self-contained unit of work stays one task in the plan. (2) Dependency-graph-ordered execution within a milestone — order the task list by the dependency graph so a single Mason moves through it without backtracking, instead of an arbitrary order.
+- **Review:** After the next 3–5 PDD builds — compare wall-clock time against the ~1hr baseline, and confirm task ordering actually followed the dependency graph (no rework from out-of-order execution).

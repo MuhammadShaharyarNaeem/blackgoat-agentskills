@@ -295,7 +295,7 @@ public static class ValidationFilterExtensions
 The same pattern applies to any cross-cutting concern:
 
 - **`LoggingFilter`** — Log request/response timing.
-- **`TransactionFilter`** — Wrap the handler in a database transaction and auto-commit/rollback.
+- **`TransactionFilter`** — Wrap the handler in a database transaction and auto-commit/rollback. **Apply it only to handlers whose work is entirely in-process database work.** The filter's span covers the whole handler, so any outbound HTTP, SDK, or queue call the handler makes executes *inside* the transaction, holding a pooled connection and every locked row for the remote round-trip. A handler that must call an external dependency does not get this filter — it manages its own short transactions on either side of the call.
 - **`AuthorizationFilter`** — Custom per-endpoint authorization checks.
 
 ---

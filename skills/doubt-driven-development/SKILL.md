@@ -46,7 +46,7 @@ If you doubt every keystroke, you ship nothing. The skill applies only to non-tr
 This skill is designed for the **main-session orchestrator**, where Step 3 (DOUBT, detailed below) can spawn a fresh-context reviewer.
 
 - **Do NOT add this skill to a persona's `skills:` frontmatter.** A persona that follows Step 3 would spawn another persona — the orchestration anti-pattern explicitly forbidden by `the orchestration patterns defined in agent-squad/SKILL.md` ("personas do not invoke other personas"). 
-  - In the bgPDD pipelines, the **Orchestrator** runs the doubt cycle itself (e.g. `bgpdd-build` Phase 5 runs it on Dep's ship plan after Dep returns). Delegated subagents never spawn reviewers.
+  - In the bgPDD pipelines, the **Orchestrator** runs the doubt cycle itself (e.g. `bgpdd-build` Phase 5 runs it on Dep's ship plan after Dep returns; `bgpdd-plan` Phase 2.5 runs it per-section on Aria's `detailed-design.md` as the design review). Delegated subagents never spawn reviewers.
 - **If you find yourself applying this skill from inside a subagent context** (where your agent framework prevents nested subagent spawn): the preferred path is to surface to the user that doubt-driven cannot run nested and let the main session handle it. As a last resort only, a degraded self-questioning fallback exists — rewrite ARTIFACT + CONTRACT as a fresh self-prompt with a hard mental separator from your prior reasoning, and walk Steps 1–5. This is **not fresh-context review** (you carry your own context with you), so flag the result as degraded and prefer escalation whenever the user is reachable.
 
 ### The Process

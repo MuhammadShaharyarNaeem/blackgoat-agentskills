@@ -15,6 +15,8 @@ This is the operational spine. Follow it as written. Pipelines delegate the chec
 
 The Security, Performance, and Accessibility sections below are the delegation subset — the root `{PLUGIN_ROOT}/../references/` checklists (see "See Also") are authoritative; update those first.
 
+**The sections below are a floor, not the whole checklist.** Where the project has a numbered requirements set, every Must-Have FR and NFR additionally gets its own row, cited by ID, each carrying the evidence that verified it. A requirement with no row is not a pass — it is an unperformed check, and the recommendation is `NO-GO` until it has one. Enumerate from the requirements document, never from the built feature list: requirements expressed as *qualities* rather than features (accessibility, contrast, performance, theming, responsiveness) are exactly the ones a feature-shaped review cannot see and a generic template silently omits.
+
 #### Code Quality
 
 - [ ] All tests pass (unit, integration, e2e)
@@ -189,6 +191,10 @@ Every deployment needs a rollback plan before it happens:
 ### Documenting the Ship Decision
 
 If running within the `bgpdd-build` or `bgpdd-shipping` pipelines, save your final Rollback Strategy and Launch Checklist to `.docs/{project-name}/implementation/ship-decision.md` with a final `GO` or `NO-GO` recommendation.
+
+The decision certifies **one exact tree state**: record the commit SHA it was taken against and confirm the working tree is clean at the moment of the verdict. Uncommitted changes at verdict time are a `NO-GO`, not a footnote. Any change landing afterward invalidates the artifact — reissue the decision against the new SHA rather than leaving a document that certifies a tree no longer on disk.
+
+**Reconcile against the ledger before you write the verdict, and reproduce it.** The pipeline's persisted state file (`.docs/{project-name}/orchestrator-state.json` or its equivalent) carries the run's open blocker entries; read it and copy **every open entry verbatim** into the decision document. An open entry forces `NO-GO` unless the user has explicitly waived that specific entry, and a waiver is recorded beside the entry it waives — never inferred from silence, an elapsed phase, or another agent's confidence that the item is minor. Writing `blockers: None` asserts that you read the ledger and found it empty; it is never a default value, never a summary of your own view of the build, and never a statement about the blockers *you personally* encountered. The same holds for the checklist beside it: **a verification the checklist never performed is an unperformed check, not a pass** — no aggregate phrasing ("all features, NFRs, and gates complete") converts an absent row into a satisfied one, and a summary sentence that outruns the rows above it is the defect this section exists to prevent.
 
 ### See Also
 
