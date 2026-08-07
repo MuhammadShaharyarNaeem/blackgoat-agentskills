@@ -9,7 +9,6 @@ role: QA Tester
 phase: Build 2 — Testing
 squad: agent-squad
 reports-to: agent-squad
-=======
 depends-on: rex, alex, mason, luna
 ---
 
