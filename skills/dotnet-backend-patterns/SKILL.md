@@ -13,7 +13,7 @@ This is the operational spine. Follow it as written.
 
 ### Solution Segregation
 
-- Segregate the solution into distinct projects: `Domain` (pure logic, zero dependencies), `Application`/`Core` (use cases, MediatR handlers), `API` (endpoints/controllers), `Infrastructure` (EF Core, external APIs).
+- Segregate the solution into distinct projects: `Domain` (pure logic, zero dependencies), `Application` (use cases, MediatR handlers), `API` (endpoints/controllers), `Infrastructure` (EF Core, external APIs).
 - Third-party packages are isolated in their own projects so they can be reused across solutions. `Domain` references nothing.
 
 ### API Mode — Two Sanctioned Modes, Never Mixed
@@ -58,6 +58,15 @@ The contract already *is* these principles applied; keep them explicit so they a
 
 - Integration tests run against the real Dev DB. Mocking `DbContext` (or its providers) is forbidden — a test against a mocked database proves nothing.
 - Unit-level TDD stays at function scope: pure logic in `Domain`/`Application` gets fast unit tests; anything crossing the database boundary is an integration test against the Dev DB.
+
+### Build & Test Log Discipline
+
+- When a Python 3 runtime is available, run builds and test runs through `{PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py` — the full log lands on disk, and only errors-with-context plus a tail enter the transcript. Invocation shape:
+  `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --log <path> -- dotnet build` (same shape for `dotnet test`). `run_quiet.py` defaults to a 240s timeout — pass an explicit `--timeout` (e.g. 900) for integration suites hitting the real Dev DB. Treat exit 124 with a `TIMEOUT:` header as a harness result to escalate — never record it as a test FAIL.
+- No Python 3 runtime available → fall back to `dotnet build -nologo -v:q -clp:"ErrorsOnly;Summary"` and `dotnet test -nologo --logger "console;verbosity=quiet"`.
+- Never paste a full build/test log into a report. Cite the log path plus the relevant excerpt.
+- A full-verbosity rerun (`-v:normal`/`-v:detailed`, or dropping `--logger "console;verbosity=quiet"`) is for diagnosing only what the filtered output cannot localize — not the default way to read results.
+- Deliberate divergence (convention #8): the no-Python fallback above is tighter than `run_quiet.py`'s no-information-lost guarantee above — `-clp:ErrorsOnly` suppresses warnings outright at the MSBuild level rather than merely filtering them from the transcript, so they are not recoverable from a log afterward. This is deliberate: warning review stays with the reviewer axis (code-review-and-quality) and CI either way, never agent transcripts, so nothing the agent needed is lost.
 
 ### Verification Checklist
 

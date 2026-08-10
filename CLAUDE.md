@@ -10,7 +10,7 @@ blackgoat-agentskills/
 ├── .mcp.json                    # MCP servers: chrome-devtools, playwright, linear, github
 ├── agents/                      # One .md persona per squad member (WHO)
 │   ├── blackgoat.md             #   Orchestrator persona
-│   ├── rex, aria, alex, mason, luna, max, quinn, echo, vera, cipher, dep, forge, iris, scout
+│   ├── rex, aria, alex, mason, nova, luna, max, quinn, echo, vera, cipher, dep, forge, iris, scout
 ├── skills/                      # One folder per skill (HOW)
 │   ├── agent-squad/
 │   │   ├── SKILL.md             #   The Orchestrator/delegation model
@@ -39,6 +39,8 @@ blackgoat-agentskills/
 
 8. **A deliberate divergence must name the rule it refines.** This plugin is a layered ruleset (`base-persona.md` → `orchestrator-contract.md` → methodology `SKILL.md` → pipeline). When a rule you write imposes a bound tighter or looser than an inherited or sibling rule's, name the rule you are refining and state that the divergence is deliberate (e.g. "one round here — deliberately tighter than DDD's 3-cycle bound"). An unlabeled divergence is indistinguishable from a contract collision: an auditor reports a false contradiction, and a reader silently picks whichever bound they read first.
 
+9. **A violated prose rule converts to a mechanical gate, not stronger prose.** Rules whose compliance is counting or a launch-time decision may stay prose. A rule that asks the Orchestrator or an agent to restrain itself at the moment it most wants to proceed (committing, approving, marking complete) must be enforced by an artifact that has to be run or opened — a pipeline-tools script, a file read the gate names, a checkable evidence citation. When an audit or game tape shows a prose rule was violated while in force, do not re-word it or bold it: convert it. Existing conversions: `check_coverage.py`, `check_commit_gate.py` (with `--require-rendered-evidence` and `--verify-tree`), `next_milestone.py` (stale-cursor detection), `update_state.py` (evidence-gated blocker removal).
+
 ## Adding a New Agent
 
 1. Create `agents/<name>.md` with frontmatter: `name`, `description`, `model`, `role`, `phase`, `squad: agent-squad`, `reports-to: agent-squad`, and `depends-on` (if any).
@@ -57,5 +59,5 @@ blackgoat-agentskills/
 ## Validating a Change
 
 - Run the **`agent-audit`** skill against any agent/methodology you touched. It enforces the structural invariants via 18 heuristics: interface alignment, dependency conflict, role cohesion, escalation-path validity, token efficiency, DRY/contract reuse, orchestrator-vs-methodology collision, context/file bloat, ID traceability, wake-up context weight, frontmatter/metadata hygiene, trigger collision, cross-pipeline consistency, model-assignment fit, skill content validity & cross-skill contract coherence, defect-class enforcement, output-rubric gate coverage, and convergent redundancy (distillation). Fill every row of its coverage table; every `FAIL` must flip to `PASS` before you're done.
-- Independently confirm all `{PLUGIN_ROOT}` dependency paths resolve to existing files.
-- Grep the tree to confirm no `SKILL-CONTRACT.md` and no `base-persona-*` variant files were introduced.
+- Independently confirm all `{PLUGIN_ROOT}` dependency paths resolve to existing files — `python skills/pipeline-tools/scripts/check_dependency_tables.py skills` is the sanctioned way to run this check.
+- Grep the tree to confirm no `SKILL-CONTRACT.md` and no `base-persona-{builder,devops,meta,qa}` variant files were introduced (exclude `references/` — `skills/agent-squad/references/base-persona-rationale.md` is a legitimate rationale doc, not a variant).

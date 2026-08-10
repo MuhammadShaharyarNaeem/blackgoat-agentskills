@@ -1,12 +1,12 @@
 # Design Critique — Luna's Review Axis for UI Work
 
-The procedure for reviewing user-facing UI changes. You are an auditor: think like a design director, report like a reviewer. You never rewrite — findings route to Mason or Max via the Orchestrator. You run in one context (squad rule: no nested delegation); compensate for the single perspective by gathering **evidence before judgment** and scoring against fixed rubrics rather than taste.
+The procedure for reviewing user-facing UI changes. You are an auditor: think like a design director, report like a reviewer. You never rewrite — findings route to the milestone's builder (Mason for [API], Nova for [UI]) via the Orchestrator. You run in one context (squad rule: no nested delegation); compensate for the single perspective by gathering **evidence before judgment** and scoring against fixed rubrics rather than taste.
 
 ## 1. Gather Evidence First
 
 1. Resolve the target: the changed components/views from the `<changed_files>` list, plus the routes/surfaces that render them.
 2. **Screenshots when browser tooling is available** (playwright / chrome-devtools MCP): navigate to each affected surface, capture at desktop AND mobile widths, and capture the non-happy states you can reach (empty, loading, error, disabled). A finding tied to a screenshot outranks a finding inferred from source.
-3. When no browser tooling is available — or the app is unbuilt, or it will not boot — say so in the report header (`Evidence: source-only (no browser tooling)`) and apply the one-directional rule: **source reading can FAIL a rendered check but can never PASS one.** Report every check on a computed or rendered property (contrast ratio, spacing rhythm, type scale at breakpoints, focus visibility, state coverage, whether a token resolves) as `NOT VERIFIED — no rendered output`, and raise the missing evidence as a blocker on the review. Do NOT mark such a check satisfied, and do not tick a craft-floor box you inferred: a correct token *reference* in source still renders wrong if the token is undefined, overridden, or the stylesheet never loads. Recording *"uses the correct hairline"* from a source read, over a file that hardcodes the hex value, is the failure this rule exists to prevent — the axis ran, returned a clean pass, and the surface was wrong on screen. Source-visible defects (a hardcoded literal where the system mandates a token, a missing `:focus-visible`, an absent empty state) are still real findings — report those.
+3. When no browser tooling is available — or the app is unbuilt, or it will not boot — say so in the report header (`Evidence: source-only (no browser tooling)`) and apply the one-directional rule: **source reading can FAIL a rendered check but can never PASS one.** This header form deliberately does not satisfy the commit gate — on a `[UI]` milestone the Orchestrator HALTs to the user rather than committing on source-only evidence. Report every check on a computed or rendered property (contrast ratio, spacing rhythm, type scale at breakpoints, focus visibility, state coverage, whether a token resolves) as `NOT VERIFIED — no rendered output`, and raise the missing evidence as a blocker on the review. Do NOT mark such a check satisfied, and do not tick a craft-floor box you inferred: a correct token *reference* in source still renders wrong if the token is undefined, overridden, or the stylesheet never loads. Recording *"uses the correct hairline"* from a source read, over a file that hardcodes the hex value, is the failure this rule exists to prevent — the axis ran, returned a clean pass, and the surface was wrong on screen. Source-visible defects (a hardcoded literal where the system mandates a token, a missing `:focus-visible`, an absent empty state) are still real findings — report those.
 4. Read the committed direction (the tokens/signature section of `detailed-design.md`, or the brief) — conformance to it is what you review, not your own preferences.
 
 ## 2. Design-Specificity Verdict
@@ -38,7 +38,7 @@ Report the table with a one-line key issue per scored row.
 - Any form/flow that asks for information the system already has → flag.
 - Any screen where the primary action is not visually primary → flag.
 
-## 5. Mechanical Craft-Floor Checks
+## 5. Rendered-Property Checks
 
 Verify on the built result (computed values / screenshots, not intentions). Each failure is a finding — and with no built result, each of these is `NOT VERIFIED`, never a pass (§1.3):
 
@@ -52,6 +52,8 @@ Verify on the built result (computed values / screenshots, not intentions). Each
 - `data-test` IDs present on interactive elements (cross-contract with `vue3-spa-patterns` when the project is Vue).
 - Nothing from the SKILL.md "Category Defaults to Refuse" list appears without the brief earning it.
 
+Also run the full craft floor from [references/component-mechanics.md](component-mechanics.md) (Luna loads it on `[UI]` reviews per her dependency table) — report each item you cannot verify as `NOT VERIFIED — no rendered output` with its CM-id.
+
 ## 6. Severity Mapping (into your standard taxonomy)
 
 | Finding class | Severity |
@@ -64,4 +66,4 @@ Verify on the built result (computed values / screenshots, not intentions). Each
 
 ## 7. Report
 
-Append to the same review report file, inside your `## Review:` block (format owned by code-review-and-quality), as a `### Design Critique` subsection: the evidence line (screenshots or source-only), the specificity verdict, the heuristic table, then findings grouped by severity — every finding with a file/surface, the evidence, and one concrete fix. Summarize only the verdict + Critical/Important counts in your `<handoff>`.
+Append to the same review report file, inside your `## Review:` block (format owned by code-review-and-quality), as a `### Design Critique` subsection: the evidence line, the specificity verdict, the heuristic table, then findings grouped by severity — every finding with a file/surface, the evidence, and one concrete fix. On a rendered run, the evidence line is a `Rendered evidence: <path>[, <path>]` line citing the screenshot/computed-value files you saved under `.docs/{project-name}/implementation/evidence/review/` (a markdown image ref `![...](path)` is the accepted alternative) — this exact token is machine-read by `check_commit_gate.py --require-rendered-evidence`, no variants. `{PLUGIN_ROOT}/pipeline-tools/SKILL.md` is the grammar's single authority; this section cites it rather than restating it. On a source-only run, use the header form from §1.3 instead (see there for what it does and does not satisfy). Summarize only the verdict + Critical/Important counts in your `<handoff>`.
