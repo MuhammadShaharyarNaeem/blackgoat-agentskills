@@ -237,6 +237,63 @@ class TestBoundaryContractsLint(unittest.TestCase):
         self.assertEqual(failures, [])
 
 
+class TestConsumesProvidesSentenceBreakTruncation(unittest.TestCase):
+    """Reproduces the observed prose-after-machine-line false positives.
+
+    A real Alex plan wrote a machine-parseable `provides:`/`consumes:` line
+    with explanatory prose trailing it on the same physical line (no `;`, no
+    newline separating list from prose). Comma-splitting the raw text turned
+    that prose's commas into fake identifiers (`4`, `5`, `not`, ...).
+    """
+
+    def test_consumes_none_with_trailing_sentence_yields_zero_identifiers(self):
+        # Observed line: "provides: api.mode.ruling; consumes: none. The
+        # ruling is a single string token read by Tasks 3, 4, 5."
+        field_text = (
+            "**Boundary contracts:** provides: api.mode.ruling; "
+            "consumes: none. The ruling is a single string token read by "
+            "Tasks 3, 4, 5.\n"
+        )
+        consumes, provides = cc._contract_identifiers(field_text)
+        self.assertEqual(consumes, [])
+        self.assertEqual(provides, ["api.mode.ruling"])
+        self.assertNotIn("4", consumes)
+        self.assertNotIn("5", consumes)
+
+    def test_provides_list_with_trailing_prose_and_emdash_yields_only_real_identifiers(self):
+        # Observed shape: a provides: list followed by prose containing its
+        # own comma and an em-dash aside ("not the SQL file — the seed...");
+        # the prose's "not" must never be comma-split into a fake identifier.
+        field_text = (
+            "**Boundary contracts:** provides: db.fixtures.customera, "
+            "db.fixtures.customerb, api.mode.ruling. The two fixture "
+            "identifiers name **live rows in the Dev DB**, not the SQL "
+            "file — the seed script only inserts them.\n"
+        )
+        consumes, provides = cc._contract_identifiers(field_text)
+        self.assertEqual(consumes, [])
+        self.assertEqual(
+            provides,
+            ["db.fixtures.customera", "db.fixtures.customerb", "api.mode.ruling"],
+        )
+        self.assertNotIn("not", provides)
+
+    def test_lint_boundary_contracts_ignores_trailing_prose_end_to_end(self):
+        # Integration path: the trailing-prose line must not manufacture a
+        # consumed identifier that then fails the consumes-provides lint.
+        failures = cc.lint_boundary_contracts(
+            cc.split_task_blocks(
+                "## Task 1: Ruling\n"
+                "**Boundary contracts:** provides: api.mode.ruling; "
+                "consumes: none. The ruling is a single string token read "
+                "by Tasks 3, 4, 5.\n\n"
+                "## Task 3: Consumer\n"
+                "**Boundary contracts:** consumes: api.mode.ruling\n"
+            )
+        )
+        self.assertEqual(failures, [])
+
+
 class TestPathHygieneLint(unittest.TestCase):
     def _lint(self, plan_text):
         return cc.lint_path_hygiene(cc.split_task_blocks(plan_text))

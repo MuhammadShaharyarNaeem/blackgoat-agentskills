@@ -52,6 +52,11 @@ CONTRACT_TOKEN_RE = re.compile(
 )
 IDENTIFIER_RE = re.compile(r"[A-Za-z0-9_./-]+")
 EMPTY_VALUES = {"none", "n/a", "na", "nothing", "-", "tbd"}
+# A keyword's identifier list ends where prose begins. An internal dot inside
+# an identifier (`api.mode.ruling`) is never followed by whitespace, so `. `
+# (dot+whitespace) is a safe sentence-break terminator; ` — ` (space-emdash-
+# space) is the other observed prose-introduction shape.
+SENTENCE_BREAK_RE = re.compile(r"\.\s|\s—\s")
 
 # --- design-mode lint vocabulary -----------------------------------------
 REGISTER_HEADING_RE = re.compile(
@@ -291,12 +296,26 @@ def _boundary_contract_text(block):
     return "\n".join(collected) if capturing else None
 
 
+def _truncate_at_sentence_break(text):
+    """Cut a keyword's raw identifier-list text at the first sentence break.
+
+    A machine-parseable `provides:`/`consumes:` line is sometimes followed by
+    explanatory prose on the same physical line (no `;`, no newline, no next
+    keyword). That prose's own commas would otherwise get comma-split into
+    fake identifiers. Terminators: `. ` (dot+whitespace) and ` — `
+    (space-emdash-space) — see SENTENCE_BREAK_RE.
+    """
+    match = SENTENCE_BREAK_RE.search(text)
+    return text[: match.start()] if match else text
+
+
 def _contract_identifiers(field_text):
     """Return (consumes, provides) lists of normalized identifiers."""
     result = {"consumes": [], "provides": []}
     for match in CONTRACT_TOKEN_RE.finditer(field_text):
         keyword = match.group(1).lower()
-        for part in match.group(2).split(","):
+        list_text = _truncate_at_sentence_break(match.group(2))
+        for part in list_text.split(","):
             token_match = IDENTIFIER_RE.search(part.replace("`", " "))
             if not token_match:
                 continue
