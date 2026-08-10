@@ -56,7 +56,7 @@ This pipeline's only refinement: agents here touch a shipping-ready codebase, so
 ## Path Model
 
 - **Tier 1 (global knowledge base)**: `.docs/summary/{feature}/` — produced ONLY by `/bgpdd-discovery`. Read-only in this pipeline.
-- **Tier 2 (per-enhancement workspace)**: `.docs/{project-name}/` — this pipeline's read-write workspace (plan.md, test-report.md, ship-decision.md, game-tape.md, orchestrator-state.json). Never write shipping artifacts to Tier 1.
+- **Tier 2 (per-enhancement workspace)**: `.docs/{project-name}/` — this pipeline's read-write workspace (plan.md, test-report.md, verification-report.md, security-report.md, ship-decision.md, game-tape.md, orchestrator-state.json). Never write shipping artifacts to Tier 1.
 
 ---
 
@@ -81,11 +81,13 @@ Delegate to the following three agents in **two stages**. Each prompt MUST (a) i
 
 1. **Vera (QA & Performance)** — delegate to the **Vera** agent (Stage 1)
    - **Assignment**: `Code Quality`, `Performance`, and `Accessibility` checklists.
-   - **Prompt**: "Execute the Code Quality, Performance, and Accessibility sections of the `shipping-and-launch` skill (`{PLUGIN_ROOT}/shipping-and-launch/SKILL.md`) against the current codebase. [Paste the exact checklist section text here.] Run all tests, linters, and accessibility checks. Report back with a final pass/fail."
+   - **Prompt**: "Execute the Code Quality, Performance, and Accessibility sections of the `shipping-and-launch` skill (`{PLUGIN_ROOT}/shipping-and-launch/SKILL.md`) against the current codebase. [Paste the exact checklist section text here.] Run all tests, linters, and accessibility checks. Write your per-item report to `.docs/{project-name}/implementation/verification-report.md` per your persona's Verification Report contract, ending in the machine-read `**Verdict:**` line. Report back with a final pass/fail."
+   - **CRITICAL PATHING**: Vera's report path above is mandatory — the Step 3 Report Gate reads that file, not her handoff.
 
 2. **Cipher (Security Auditor)** — delegate to the **Cipher** agent (Stage 2)
    - **Assignment**: `Security` checklist.
-   - **Prompt**: "Execute the Security section of the `shipping-and-launch` skill (`{PLUGIN_ROOT}/shipping-and-launch/SKILL.md`) against the current codebase. [Paste the exact checklist section text here.] Scan for vulnerabilities, check CORS and headers, and verify auth routes. Report back with a final pass/fail."
+   - **Prompt**: "Execute the Security section of the `shipping-and-launch` skill (`{PLUGIN_ROOT}/shipping-and-launch/SKILL.md`) against the current codebase. [Paste the exact checklist section text here.] Scan for vulnerabilities, check CORS and headers, and verify auth routes. Append your audit round to `.docs/{project-name}/implementation/security-report.md` per your persona's Security Report contract, ending in the machine-read `**Verdict:**` line. Report back with a final pass/fail."
+   - **CRITICAL PATHING**: Cipher's report path above is mandatory — the Step 3 Report Gate reads that file, not his handoff.
 
 3. **Dep (DevOps Engineer)** — delegate to the **Dep** agent (Stage 2)
    - **Assignment**: `Infrastructure`, `Feature Flag Strategy`, `Staged Rollout`, and `Monitoring`.
@@ -93,9 +95,15 @@ Delegate to the following three agents in **two stages**. Each prompt MUST (a) i
 
 ### Step 3: Wait and Block
 Read the returned handoffs as each stage completes — Vera's after Stage 1, then Cipher's and Dep's after Stage 2. All three must be in hand before you proceed.
+- **Report Gate (mechanical)**: a "pass" in Vera's or Cipher's handoff is a claim, not evidence — the report file is the evidence, and you verify it with the gate tool, never by accepting the handoff at face value. Once their handoffs are in hand, execute the gate via a shell action, using the runtime's available Python 3 interpreter (`python` or `python3`), once per report:
+  `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_agent_report.py --report .docs/{project-name}/implementation/verification-report.md`
+  `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_agent_report.py --report .docs/{project-name}/implementation/security-report.md`
+  The full CLI contract (JSON shape, exit codes, parsing rules) lives in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`. Exit code 0 = the report's verdict is a machine-read `Pass` backed by evidenced check lines and zero Critical findings — proceed. Exit code 1 = **BLOCK**: the JSON body names the failing/blocked/unrun/unevidenced items and Critical findings — route per the failure rules below. Exit code 2 = the report is missing or structurally non-conforming — treat this as a defect in the agent's artifact, not the tool: route back to that agent to produce a conforming report (this counts as a fix-and-reverify round).
+  - **Fallback (no Python runtime)**: If the script cannot run because no Python 3 interpreter is available, verify manually instead: read each report's latest verdict-bearing section and confirm the `**Verdict:**` line is exactly `Pass`, every check line carries an exit code or an explicit `NOT RUN`/`BLOCKED` reason, no line reads FAIL/BLOCKED/NOT RUN, and no `- **Critical**` finding stands; apply the same block-and-route rule.
 - If any agent reports a failure (e.g., failing tests, high vulnerabilities), you must **BLOCK** the deployment and inform the user of the specific failure.
 - You may route the failure to the milestone's builder via `/bgpdd-build` to fix the issue, but you cannot proceed until the Launch Squad is fully green.
 - **Fix-routing bound**: At most **2 fix-and-reverify rounds per failing checklist area**. If an area is still failing after 2 rounds, **HALT** — surface the area, both fix attempts, and the failing evidence to the user. Do NOT route a third time.
+- After any fix round, the re-verifying agent appends a fresh report section and you re-run the Report Gate — a verdict written against the pre-fix code never carries forward.
 
 ### Step 3.5: Requirements Coverage Gate
 Before compiling documentation:

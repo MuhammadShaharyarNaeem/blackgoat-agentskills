@@ -10,9 +10,11 @@ unresolved `TODO` comment in `src/`) so the grader can check she reports them as
 instead of ignoring or fixing them, while the genuinely passing test suite must be
 reported as PASS.
 
-Vera writes no artifact file by default — her deliverable is the handoff — but her
-persona allows the brief to name one, and this brief does, so the file-based grader has
-something to inspect.
+Vera's standing deliverable is `verification-report.md` (per her persona's Verification
+Report contract; the default path is `.docs/{project-name}/implementation/`), and her
+override lets a brief name a different artifact path or format — this brief does both
+(`.docs/verification-report.md`, a simplified line grammar), so the file-based grader
+has a deterministic file to inspect.
 
 ## Frozen Input
 - Fixture dir: `fixture/` — a tiny already-built node module: `src/greeting.js`

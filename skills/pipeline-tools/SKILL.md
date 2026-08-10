@@ -1,6 +1,6 @@
 ---
 name: pipeline-tools
-description: "Deterministic stdlib-Python CLI family for the PDD pipelines: check_coverage.py verifies every Must-Have FR/NFR in requirements.md is covered by plan.md tasks, by passing tests in test-report.md, or by an in-place supersession annotation in detailed-design.md; check_commit_gate.py makes the bgpdd-build milestone commit gate machine-run (verdict, staleness, blockers, optional working-tree verification) and can perform the commit itself on a pass; next_milestone.py derives the next pending milestone from plan.md without a full re-read; run_quiet.py runs builds/tests, logging the full output to disk and surfacing only errors-with-context and a tail; update_state.py is the sanctioned read-modify-write path for orchestrator-state.json; and check_dependency_tables.py statically validates every agent's Methodology Dependencies table. Squad-internal: executed by the Orchestrator directly at the bgpdd pipeline gates, not delegated to agents."
+description: "Deterministic stdlib-Python CLI family for the PDD pipelines: check_coverage.py verifies every Must-Have FR/NFR in requirements.md is covered by plan.md tasks, by passing tests in test-report.md, or by an in-place supersession annotation in detailed-design.md; check_commit_gate.py makes the bgpdd-build milestone commit gate machine-run (verdict, staleness, blockers, optional working-tree verification) and can perform the commit itself on a pass; check_agent_report.py verifies a durable agent report (Cipher's security-report.md, Vera's verification-report.md) backs its Pass verdict with evidenced check lines and zero Critical findings; next_milestone.py derives the next pending milestone from plan.md without a full re-read; run_quiet.py runs builds/tests, logging the full output to disk and surfacing only errors-with-context and a tail; update_state.py is the sanctioned read-modify-write path for orchestrator-state.json; and check_dependency_tables.py statically validates every agent's Methodology Dependencies table. Squad-internal: executed by the Orchestrator directly at the bgpdd pipeline gates, not delegated to agents."
 ---
 
 # pipeline-tools
@@ -191,6 +191,60 @@ python check_commit_gate.py --self-test
   - **Directory-shaped porcelain entries.** `git status --porcelain`'s default mode collapses an entirely-untracked directory into a single `?? <dir>/` line rather than listing the files inside it. A porcelain path ending in `/` is parsed as a **directory entry**, not a file, and is normalized with its trailing slash restored before comparison: it is allowed iff that normalized directory is `.docs/` or begins with `.docs/`, **or** at least one declared `--changed-files` path lies under that directory prefix (a declared file's own never-before-tracked directory collapses the same way — the file itself never appears as its own porcelain line). Otherwise it is an undeclared edit, appended to `undeclared_changes` **with its trailing slash preserved** so the report is honest about naming a directory rather than a file. Fixed 2026-08-09: naively normalizing a directory-shaped path (`Path(".docs/").resolve()` strips the trailing slash to `.docs`) broke both the `.docs/` carve-out's `startswith` prefix test and a declared file's own directory match.
 
 `bgpdd-build`'s commit gate references this section as its single contract authority and does not restate these parsing rules inline.
+
+## check_agent_report.py
+
+A pure-stdlib CLI (`scripts/check_agent_report.py`) that makes an agent's pass/secure verdict machine-verifiable instead of a face-value handoff read: it gates the durable reports Cipher (`security-report.md`) and Vera (`verification-report.md`) write, checking that the latest verdict-bearing section carries the exact `**Verdict:** Pass` token, that every check line cites its execution evidence (an exit code) or an explicit `NOT RUN`/`BLOCKED` reason, and that no Critical finding stands. This is the same verdict-is-arithmetic-over-findings principle `code-review-and-quality` enforces on Luna's `**Verdict:** Approve`, applied to the Launch Squad's reports. Deliberately terse by design: the evidence contract is command + exit code + counts per line — the gate never requires (and the report must never contain) full scanner output or log dumps.
+
+### Invocation
+
+```bash
+python check_agent_report.py --report <path>
+python check_agent_report.py --self-test
+```
+
+### JSON output shape
+
+```json
+{
+  "report": "<path as given>",
+  "section": "Security Audit: Shipping — 2026-08-11",
+  "verdict": "Pass",
+  "checks": 5,
+  "passed": 5,
+  "failed": [],
+  "blocked": [],
+  "not_run": [],
+  "unevidenced": [],
+  "critical_findings": 0,
+  "warnings": [],
+  "result": "PASS",
+  "error": null
+}
+```
+
+### Exit codes
+
+- **0** — gate passed: verdict is exactly `Pass`, at least one check line exists, every check line is `PASS` and evidenced, and zero Critical findings stand.
+- **1** — gate failed; the JSON body names the cause (`verdict` not `"Pass"` — including a `Fail` verdict and an unparseable latest verdict token, which fail-safes to no-verdict — a non-empty `failed`/`blocked`/`not_run`/`unevidenced`, a non-zero `critical_findings`, or zero check lines).
+- **2** — usage error, a missing/empty/unreadable report, or no `## ` section containing a `**Verdict:**` line (structurally not a conforming agent report).
+
+### Parsing rules (condensed)
+
+- **Gated section**: the report splits on level-2 (`## `) headings; the **LAST** section containing a `**Verdict:**` line is gated — each audit/verification round appends a fresh section, so the last one is the current round (the same last-matching-section rule `check_commit_gate.py` uses). Text before the first `## ` heading is preamble and never gated. Within the section, the **LAST** `**Verdict:**` line wins and must be the exact token `Pass` or `Fail`; an unparseable latest line fail-safes to no-verdict rather than falling back to an earlier line.
+- **Check lines**: a list item of the form `- <name>: <STATUS> <rest>` where `<name>` contains no colon and `<STATUS>` — exactly `PASS`, `FAIL`, `BLOCKED`, or `NOT RUN`, uppercase — immediately follows the first colon. Anything else is prose and ignored. Duplicate names within the section deduplicate with **latest mention wins**, mirroring the coverage-ledger convention.
+- **Evidence**: a `PASS` or `FAIL` line must cite its exit code (`exit <N>`, case-insensitive, `exit code <N>` tolerated) — the terse proof an execution happened; a `NOT RUN` or `BLOCKED` line must carry a non-empty reason. A line missing either lands in `unevidenced` and fails the gate.
+- **Findings**: a list item starting `- **Critical**` in the gated section counts as a standing Critical finding; any count above zero fails the gate regardless of the verdict token. Lower severities (Important, Suggestion, Nit, FYI) are the report author's routing signal, not this gate's.
+- **Zero check lines** is a gate failure (exit 1), not a structural error — a report that proves nothing is an evidence failure, not a tool failure (the same rule as test mode's zero status-bearing mentions).
+
+The producer-side grammar lives in `agents/cipher.md` §4 and `agents/vera.md` (Verification Report); `bgpdd-shipping` Step 3 references this section as the single contract authority.
+
+### Fixtures & self-test
+
+- `fixtures/agent-report-happy/` — a `security-report.md` and a `verification-report.md`, all lines evidenced and `PASS`, verdict `Pass`; both exit **0**.
+- `fixtures/agent-report-sad/` — a `security-report.md` whose `Pass` verdict stands over a failing scanner, an unevidenced `PASS`, a `NOT RUN` item, and a Critical finding (exit **1**); a `verification-report.md` with an honest `Fail` verdict over FAIL/BLOCKED items (still exit **1** — the gate is green-or-blocked, honesty routes, it does not pass); and `no-verdict.md`, a report with no verdict-bearing section (exit **2**).
+
+`python scripts/check_agent_report.py --self-test` runs a bundled in-process `unittest` suite (temp files) covering the happy path, each failure cause, last-section and last-verdict-line precedence, duplicate-name latest-wins, lowercase-status-is-prose, and the three structural errors.
 
 ## next_milestone.py
 
