@@ -9,7 +9,7 @@ The squad's skills and personas are written **runtime-neutral** -- they say "del
 
 ## When this applies
 
-Whenever you invoke a `bgpdd-*` pipeline (`/bgpdd-plan`, `/bgpdd-build`, `/bgpdd-discovery`, `/bgpdd-shipping`, `/bgpdd-lite`, `/bgpdd-learn`) or delegate to any squad member: Rex, Aria, Alex, Mason, Luna, Max, Quinn, Echo, Vera, Cipher, Dep, Forge, Iris, Scout.
+Whenever you invoke a `bgpdd-*` pipeline (`/bgpdd-plan`, `/bgpdd-build`, `/bgpdd-discovery`, `/bgpdd-shipping`, `/bgpdd-lite`, `/bgpdd-learn`) or delegate to any squad member: Rex, Aria, Alex, Mason, Nova, Luna, Max, Quinn, Echo, Vera, Cipher, Dep, Forge, Iris, Scout.
 
 ## Load the orchestration model first
 
@@ -29,12 +29,23 @@ Do **not** use bare built-in Explore (or similar generic catch-alls) when the sq
 
 ## Subagent lifecycle -- bounded, background when available
 
+### Cursor capability matrix
+
+- **Background notify available**: launch delegated agents in the background; stay responsive; continue on the completion notification.
+- **No background / no notify**: warn the user *before* launching that you will be unreachable, roughly for how long and how much scope; split long phases into several short bounded delegations rather than one long blocking run.
+- **No warm continuation**: if the runtime cannot resume the same spawned agent, re-delegate a **fresh** agent with the prior handoff — never invent a resume path.
+- **Custom agents preferred**: use plugin-registered custom agents by squad name; Task/generic subagent only as a last resort when a named custom agent is unavailable (still load the persona verbatim).
+
 Follow `orchestrator-contract.md`:
 
 - Launch delegated agents in the **background** when the runtime can notify on completion; stay responsive; continue on the notification.
 - **Fallback** when notify-on-complete / true background is missing: tell the user *before* launching that you will be unreachable, roughly for how long and how much scope; split long phases into several short bounded delegations rather than one long blocking run.
 - Delegations are **bounded**: the worker returns a handoff and terminates. There is no kill step. On PARTIAL/BLOCKED, re-delegate a **fresh** agent with that handoff -- do not instruct workers to schedule their own timers or spawn replacements.
 - Pass the circuit-breaker, no-nested-delegation, and incremental-persistence rules verbatim per the orchestrator contract.
+
+## Model override — Grok
+
+Ignore any `model:` frontmatter in `agents/*.md` that names `opus`, `sonnet`, or `haiku`. Under Cursor in this plugin, always use **Grok** (the current chat's Grok model). Do not switch a delegated agent to Claude Opus/Sonnet/Haiku because a persona file says so.
 
 ## Tool mapping (neutral verb to Cursor tool)
 

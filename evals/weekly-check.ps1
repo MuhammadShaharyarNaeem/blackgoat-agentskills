@@ -120,14 +120,25 @@ foreach ($f in $changedFiles) {
     if ($f -match 'agents/quinn\.md$' -or $f -match 'skills/test-driven-development/' -or $f -match 'skills/debugging-and-error-recovery/') {
         [void]$affectedEvals.Add('contract:quinn-test-report-shape')
     }
-    if ($f -match 'agents/echo\.md$' -or $f -match 'skills/bgpdd-discovery/') {
+    if ($f -match 'agents/echo\.md$' -or $f -match 'agents/iris\.md$' -or $f -match 'agents/scout\.md$' -or $f -match 'skills/bgpdd-discovery/') {
         [void]$affectedEvals.Add('contract:echo-qa-discovery-shape')
     }
-    if ($f -match 'agents/vera\.md$' -or $f -match 'skills/shipping-and-launch/') {
+    if ($f -match 'agents/vera\.md$' -or $f -match 'skills/shipping-and-launch/' -or $f -match 'skills/bgpdd-shipping/') {
         [void]$affectedEvals.Add('contract:vera-verification-shape')
     }
-    if ($f -match 'agents/dep\.md$' -or $f -match 'skills/shipping-and-launch/' -or $f -match 'skills/cloud-deploy-patterns/') {
+    if ($f -match 'agents/dep\.md$' -or $f -match 'agents/cipher\.md$' -or $f -match 'skills/shipping-and-launch/' -or $f -match 'skills/cloud-deploy-patterns/' -or $f -match 'skills/bgpdd-shipping/') {
         [void]$affectedEvals.Add('contract:dep-ship-decision-shape')
+    }
+    if ($f -match 'agents/nova\.md$') {
+        # Nova has no dedicated contract eval yet — skill-routing still covers builder frontmatter/description changes via trigger.
+        [void]$affectedEvals.Add('trigger')
+    }
+    if ($f -match 'skills/bgpdd-learn/') {
+        [void]$affectedEvals.Add('trigger')
+    }
+    if ($f -match 'skills/pipeline-tools/') {
+        # pipeline-tools is mechanical (no LLM contract eval) — flag trigger only when SKILL.md description changes routing surface.
+        [void]$affectedEvals.Add('trigger')
     }
     if ($f -match 'SKILL\.md$') {
         # Any SKILL.md's frontmatter `description` is what drives skill routing.

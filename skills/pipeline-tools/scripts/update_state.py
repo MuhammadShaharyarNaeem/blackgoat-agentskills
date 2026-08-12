@@ -11,7 +11,8 @@ Usage:
     python update_state.py --state <path> \
         [--init --project-name <name>] \
         [--set-cursor <title|null>] [--set-pipeline <name>] \
-        [--set-branch <name>] [--set-artifact <name>=<path>] \
+        [--set-feature <feature|null>] [--set-branch <name>] \
+        [--set-artifact <name>=<path>] \
         [--add-blocker "<text>"] \
         [--resolve-blocker "<substring>" --evidence "<text>"]
     python update_state.py --self-test
@@ -57,6 +58,7 @@ def validate_actions(args):
         args.set_cursor is not None,
         args.set_pipeline is not None,
         args.set_branch is not None,
+        args.set_feature is not None,
         bool(args.set_artifact),
         bool(args.add_blocker),
         args.resolve_blocker is not None,
@@ -70,6 +72,23 @@ def validate_actions(args):
             "once its fix is verified")
     if args.init and not args.project_name:
         raise GateError("--init requires --project-name")
+
+
+def coerce_schema(state, warnings):
+    """Normalize legacy numeric schema 1 → string \"1\" (plan/README drift)."""
+    schema = state.get("schema")
+    if schema == 1 or schema == "1":
+        if schema != SCHEMA_VERSION:
+            warnings.append(
+                f'coerced schema {schema!r} → {SCHEMA_VERSION!r} '
+                f'(authority: SCHEMA_VERSION string)')
+        state["schema"] = SCHEMA_VERSION
+    elif schema is None:
+        state["schema"] = SCHEMA_VERSION
+        warnings.append(f'schema missing; set to {SCHEMA_VERSION!r}')
+    elif schema != SCHEMA_VERSION:
+        raise GateError(
+            f"unsupported schema version {schema!r}; expected {SCHEMA_VERSION!r}")
 
 
 def load_state(path, init, project_name):
@@ -86,6 +105,7 @@ def load_state(path, init, project_name):
             raise GateError(f"state file is not valid JSON: {exc}")
         if not isinstance(state, dict):
             raise GateError("state file does not contain a JSON object")
+        coerce_schema(state, warnings)
         if init:
             warnings.append("--init is a no-op: state file already exists")
         return state, warnings
@@ -144,6 +164,8 @@ def apply_updates(args):
         state["pipeline"] = args.set_pipeline
     if args.set_branch is not None:
         state["branch"] = args.set_branch
+    if args.set_feature is not None:
+        state["feature"] = None if args.set_feature == "null" else args.set_feature
     for spec in args.set_artifact:
         name, value = parse_artifact_spec(spec)
         state.setdefault("artifacts", {})[name] = value
@@ -176,6 +198,10 @@ def build_parser():
     parser.add_argument("--set-cursor")
     parser.add_argument("--set-pipeline")
     parser.add_argument("--set-branch")
+    parser.add_argument(
+        "--set-feature",
+        help='Tier-1 durable feature id, or the literal "null" for greenfield',
+    )
     parser.add_argument("--set-artifact", action="append", default=[])
     parser.add_argument("--add-blocker", action="append", default=[])
     parser.add_argument("--resolve-blocker")
@@ -218,8 +244,8 @@ def run_self_test():
     def ns(state_path, **overrides):
         base = dict(state=str(state_path), init=False, project_name=None,
                     set_cursor=None, set_pipeline=None, set_branch=None,
-                    set_artifact=[], add_blocker=[], resolve_blocker=None,
-                    evidence=None)
+                    set_feature=None, set_artifact=[], add_blocker=[],
+                    resolve_blocker=None, evidence=None)
         base.update(overrides)
         return argparse.Namespace(**base)
 
@@ -274,6 +300,23 @@ def run_self_test():
                              set_cursor="M1"))
             state, _ = apply_updates(ns(self.state_path, set_cursor="null"))
             self.assertIsNone(state["milestone_cursor"])
+
+        def test_set_feature_and_null(self):
+            apply_updates(ns(self.state_path, init=True, project_name="demo",
+                             set_feature="slide"))
+            state, _ = apply_updates(ns(self.state_path, set_feature="null"))
+            self.assertIsNone(state["feature"])
+
+        def test_coerces_numeric_schema_1(self):
+            self.state_path.write_text(json.dumps({
+                "schema": 1, "project_name": "demo", "feature": None,
+                "pipeline": "", "branch": None, "milestone_cursor": None,
+                "artifacts": {}, "blockers": [],
+            }), encoding="utf-8")
+            state, warnings = apply_updates(ns(self.state_path,
+                                               set_pipeline="bgpdd-plan"))
+            self.assertEqual(state["schema"], "1")
+            self.assertTrue(any("coerced schema" in w for w in warnings))
 
         def test_add_blocker_appends_preserving_existing(self):
             apply_updates(ns(self.state_path, init=True, project_name="demo",

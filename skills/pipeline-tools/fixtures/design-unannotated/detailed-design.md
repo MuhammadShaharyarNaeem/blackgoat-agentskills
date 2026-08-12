@@ -2,7 +2,7 @@
 
 ## 4. Export Delivery
 
-The export artifact is delivered by a short-lived signed download link.
+The export artifact (FR-1) is delivered by a short-lived signed download link (NFR-1).
 
 ## 17. Divergence & Supersession Register
 

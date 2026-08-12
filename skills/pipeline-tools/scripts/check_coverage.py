@@ -514,6 +514,25 @@ def requirement_blocks(text):
     return {req_id: "\n".join(parts) for req_id, parts in blocks.items()}
 
 
+def lint_fr_citations(design_text, must_have):
+    """Every Must-Have FR/NFR ID must appear at least once in the design body.
+
+    Deliberately distinct from supersession-annotation lint: this only
+    proves citation presence, not that the design covers the requirement.
+    """
+    failures = []
+    for req_id in must_have:
+        if req_id not in design_text:
+            failures.append({
+                "check": "fr-citation",
+                "task": req_id,
+                "detail": (
+                    f"Must-Have {req_id} is never cited in detailed-design.md"
+                ),
+            })
+    return failures
+
+
 def lint_supersession_annotations(requirements_text, rows, known_ids):
     """Every register row's subject requirement must be annotated in requirements.md.
 
@@ -652,8 +671,9 @@ def build_report(mode, requirements_path, target_path):
                 f"unknown requirement ID {unknown_id} cited in design register"
             )
         report["warnings"].extend(design_warnings)
-        report["lint_failures"] = lint_supersession_annotations(
-            requirements_text, rows, known_ids
+        report["lint_failures"] = (
+            lint_supersession_annotations(requirements_text, rows, known_ids)
+            + lint_fr_citations(target_text, must_have)
         )
         report["result"] = "FAIL" if report["lint_failures"] else "PASS"
         return report

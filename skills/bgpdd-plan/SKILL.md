@@ -22,9 +22,7 @@ When you inject a resolved `base-persona.md` path into a delegation brief, it li
 
 > ### MANDATORY FIRST READ — the Orchestrator Contract
 >
-> **Before Phase 1, you MUST read `{PLUGIN_ROOT}/agent-squad/orchestrator-contract.md` in full.** It carries the cross-cutting Orchestrator rules this pipeline depends on and deliberately does NOT restate: delegation discipline and **background execution**, phase-transition confirmation, command-timeout discipline, the full error-recovery skeleton (halt-and-escalate, circuit breaker, no nested delegation, incremental persistence, context checkpoints, bounded autonomous rejection), **state hydration and persistence** (plan order as the authority over any stored cursor, a-terminal-status-is-not-evidence, the `blockers` ledger, per-persistence evidence checkpoints), and your role boundaries.
->
-> Those rules are **not optional and not summarized here**. Running this pipeline without having read that file means operating without a circuit breaker, without the anti-work-loss rules, and without background execution — proceeding on that basis is non-compliant, not a shortcut. If the file does not resolve, STOP and report the broken path; do not improvise the rules from memory.
+> **Before Phase 1, you MUST read `{PLUGIN_ROOT}/agent-squad/orchestrator-contract.md` in full.** Do not improvise those rules from memory. If the file does not resolve, STOP and report the broken path.
 
 The sections below carry ONLY this pipeline's refinements on top of that contract.
 
@@ -143,8 +141,9 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
 - **Workflow**:
   1. **Supersession-annotation lint (mechanical pre-step)**: Before the adversarial pass, execute the coverage tool via a shell action, using the runtime's available Python 3 interpreter (`python` or `python3`):
      `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --design .docs/{project-name}/design/detailed-design.md`
-     This lints that every superseded FR/NFR named in the design's `## Divergence & Supersession Register` carries its matching in-place supersession annotation in `requirements.md`. The full CLI contract (JSON shape, exit codes, parsing rules) lives in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`. Read the JSON object from stdout and fix any reported gap before proceeding to step 2.
-     **Fallback (no Python runtime)**: manually verify each Divergence & Supersession Register row has its in-place `requirements.md` annotation.
+     This is the **supersession-annotation lint** — not full FR→design coverage. It checks that every FR/NFR named in the design's `## Divergence & Supersession Register` carries its matching in-place supersession annotation in `requirements.md`. The full CLI contract (JSON shape, exit codes, parsing rules) lives in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`. Read the JSON object from stdout and fix any reported `lint_failures` (including `supersession-annotation`, and `fr-citation` when the script emits it) before proceeding.
+     **If Python is unavailable: HALT** and surface the missing interpreter — do not substitute a manual judgment path for a mechanical gate.
+  1b. **FR/NFR citation check (Orchestrator)**: Independently verify that every Must-Have `FR`/`NFR` ID from `requirements.md` appears at least once in `detailed-design.md` (a citation, not necessarily a register row). If `check_coverage` design mode already reports `fr-citation` entries in `lint_failures`, treat those as authoritative and fix them; otherwise perform this citation scan yourself before the adversarial pass. An uncited Must-Have is a design gap — route back to Aria (counts as the Phase 2.5 revision round if unresolved).
   2. Run the doubt cycle **per-section** — the design exceeds DDD's one-read unit, so honor its decomposition rule. Always extract: every money-moving sequence, every state machine, every read-then-decide gate.
   3. Each DOUBT prompt carries this fixed attack list **verbatim**, in addition to DDD's adversarial prompt:
      1. **Crash windows** — for each sequence that moves money and calls an external system, enumerate "process dies after step N" for every N; each must name a recovery mechanism (sweeper / reconciliation / idempotent retry).
@@ -173,7 +172,7 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
      The full CLI contract (JSON shape, exit codes, parsing rules) lives in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
   2. Read the JSON object from stdout. Exit code 0 = every Must-Have `FR`/`NFR` is covered — report any `warnings` and `uncovered_should` entries to the user as non-blocking notes, then proceed to Phase 4. Exit code 1 = the `uncovered` array lists the Must-Have gaps. Exit code 2 = an artifact failed its structural contract (e.g. no task blocks, no Must-Have IDs) — treat this as a defect in the artifact, not the tool.
   3. On exit 1 or 2, re-delegate to **Alex** (a fresh delegation) quoting the exact `uncovered` IDs and `warnings` (or the `error` message) — subject to the existing 2-round auto-fix bound. If unresolved after 2 rounds, halt and surface to the user. After each fix, re-run step 1 to verify.
-  4. **Fallback (no Python runtime)**: If the script cannot run because no Python 3 interpreter is available, perform the check manually instead: read `.docs/{project-name}/requirements.md` and `.docs/{project-name}/implementation/plan.md`, verify every Must-Have FR and NFR ID maps to at least one task's "Requirements covered:" field in plan.md, and that every task cites the requirement ID(s) it satisfies; apply the same re-delegation rule as step 3.
+  4. **If Python is unavailable: HALT** and surface the missing interpreter — do not substitute a manual judgment path for a mechanical gate.
   5. Once coverage is confirmed, proceed to Phase 4.
 
 ### Phase 4: Game Tape Checkpoint (Orchestrator)
@@ -181,10 +180,21 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
 - **Workflow**:
   1. While your session context is still alive, append a `## bgpdd-plan — [date]` section to `.docs/{project-name}/implementation/game-tape.md` (create the file if it does not exist). At most 10 bullets, covering: user corrections made, agent failures/retries, re-delegation rounds and why, circuit-breaker trips, gates that were rubber-stamped vs. genuinely exercised, and this session's id/transcript path if the runtime exposes it (Claude Code: `~/.claude/projects/<project-slug>/<session-id>.jsonl`).
   2. This evidence feeds the SINGLE end-of-epic Forge run in `bgpdd-shipping` Step 7 — do NOT delegate Forge here. If this run went badly enough that lessons should not wait for the epic to ship, offer the user an on-demand `/bgpdd-learn` run now instead.
-  3. **State Persistence**: Before concluding, write your orchestrator state to `.docs/{project-name}/orchestrator-state.json`. The `bgpdd-build` workflow reads this to hydrate itself. Use exactly this shape:
+  3. **State Persistence**: Before concluding, write orchestrator state via `update_state.py` — never hand-edit JSON. Schema authority is `update_state.py` (schema version string `"1"`). If Python is unavailable: HALT and surface the missing interpreter.
+     ```bash
+     python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py \
+       --state .docs/{project-name}/orchestrator-state.json \
+       --init --project-name "{project-name}" \
+       --set-pipeline bgpdd-plan \
+       --set-feature <feature|null> \
+       --set-artifact requirements=.docs/{project-name}/requirements.md \
+       --set-artifact design=.docs/{project-name}/design/detailed-design.md \
+       --set-artifact plan=.docs/{project-name}/implementation/plan.md
+     ```
+     Field notes: `feature` is the Tier-1 durable feature id from `.docs/summary/{feature}/` (`null` for greenfield). `pipeline` is the last pipeline that wrote the state. `milestone_cursor` and `branch` stay `null` until `bgpdd-build` owns them. Downstream pipelines hydrate from the resulting shape (documentation only — do not recreate by hand):
 ```json
 {
-  "schema": 1,
+  "schema": "1",
   "project_name": "slide-enhancement",
   "feature": "slide",
   "pipeline": "bgpdd-plan",
@@ -199,5 +209,4 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
   "updated": "<ISO-8601 timestamp>"
 }
 ```
-     Field notes: `feature` is the Tier-1 durable feature id from `.docs/summary/{feature}/` (`null` for greenfield). `pipeline` is the last pipeline that wrote the state. `milestone_cursor` is owned by `bgpdd-build` — the next pending milestone in `plan.md`; leave it `null` until build starts. `blockers` is an array of open blocker strings. `branch` is owned by `bgpdd-build` — the working branch established at build hydration; `bgpdd-shipping` Step 4.5 pushes this branch; `null` until build starts. Downstream pipelines (`bgpdd-build`, `bgpdd-shipping`) hydrate from this exact shape.
   4. Prompt the user to open a new chat session and trigger `/bgpdd-build` to execute the code.

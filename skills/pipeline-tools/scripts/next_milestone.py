@@ -145,10 +145,15 @@ def derive_next(milestones):
         }
 
     next_m = pending[0]
-    result = "MIXED" if next_m["domain"] == "MIXED" else "NEXT"
-    if next_m["domain"] == "UNTAGGED":
-        warnings.append(
-            f"milestone {next_m['title']!r} has no [UI]/[API] task tags")
+    # UNTAGGED is a planning defect like MIXED: build cannot route Mason vs Nova.
+    if next_m["domain"] in ("MIXED", "UNTAGGED"):
+        result = "MIXED"
+        if next_m["domain"] == "UNTAGGED":
+            warnings.append(
+                f"milestone {next_m['title']!r} has no [UI]/[API] task tags "
+                f"— treat as planning defect (halt for re-tag), same as MIXED")
+    else:
+        result = "NEXT"
     warnings += next_m.get("warnings", [])
 
     return {
@@ -470,12 +475,12 @@ Notes about the checkpoint.
             self.assertEqual(r["next_milestone"]["domain"], "MIXED")
             self.assertEqual(EXIT_CODES[r["result"]], 1)
 
-        def test_untagged_warns_but_passes(self):
+        def test_untagged_is_planning_defect_like_mixed(self):
             r = self._run(self._plan(UNTAGGED_PLAN))
-            self.assertEqual(r["result"], "NEXT")
+            self.assertEqual(r["result"], "MIXED")
             self.assertEqual(r["next_milestone"]["domain"], "UNTAGGED")
             self.assertTrue(any("UI" in w and "API" in w for w in r["warnings"]))
-            self.assertEqual(EXIT_CODES[r["result"]], 0)
+            self.assertEqual(EXIT_CODES[r["result"]], 1)
 
         def test_stale_cursor(self):
             plan = self._plan(HAPPY_PLAN)

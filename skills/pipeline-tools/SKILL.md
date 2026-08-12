@@ -1,6 +1,6 @@
 ---
 name: pipeline-tools
-description: "Deterministic stdlib-Python CLI family for the PDD pipelines: check_coverage.py verifies every Must-Have FR/NFR in requirements.md is covered by plan.md tasks, by passing tests in test-report.md, or by an in-place supersession annotation in detailed-design.md; check_commit_gate.py makes the bgpdd-build milestone commit gate machine-run (verdict, staleness, blockers, optional working-tree verification) and can perform the commit itself on a pass; check_agent_report.py verifies a durable agent report (Cipher's security-report.md, Vera's verification-report.md) backs its Pass verdict with evidenced check lines and zero Critical findings; next_milestone.py derives the next pending milestone from plan.md without a full re-read; run_quiet.py runs builds/tests, logging the full output to disk and surfacing only errors-with-context and a tail; update_state.py is the sanctioned read-modify-write path for orchestrator-state.json; and check_dependency_tables.py statically validates every agent's Methodology Dependencies table. Squad-internal: executed by the Orchestrator directly at the bgpdd pipeline gates, not delegated to agents."
+description: "Deterministic stdlib-Python CLI family for the PDD pipelines: check_coverage.py verifies every Must-Have FR/NFR in requirements.md is covered by plan.md tasks, by passing tests in test-report.md, or by an in-place supersession annotation in detailed-design.md; check_commit_gate.py makes the bgpdd-build milestone commit gate machine-run (verdict, staleness, blockers, optional working-tree verification) and can perform the commit itself on a pass; check_agent_report.py verifies a durable agent report (Cipher's security-report.md, Vera's verification-report.md) backs its Pass verdict with evidenced check lines and zero Critical findings; check_ship_decision.py gates Dep's ship-decision.md GO/NO-GO; check_blockers.py gates an empty blockers array in orchestrator-state.json; next_milestone.py derives the next pending milestone from plan.md without a full re-read; run_quiet.py runs builds/tests, logging the full output to disk and surfacing only errors-with-context and a tail; update_state.py is the sanctioned read-modify-write path for orchestrator-state.json; and check_dependency_tables.py statically validates every agent's Methodology Dependencies table. Squad-internal: executed by the Orchestrator directly at the bgpdd pipeline gates, not delegated to agents."
 ---
 
 # pipeline-tools
@@ -43,8 +43,8 @@ The tool always prints exactly one JSON object to stdout (diagnostics go to stde
 
 - `mode` is `"plan"`, `"test"` or `"design"`.
 - `uncovered` and `lint_failures` are the **two gating arrays**: `uncovered` holds Must-Have coverage gaps, `lint_failures` holds lint violations. Either one non-empty ⇒ `"result": "FAIL"`. `uncovered_should` is informational and never affects exit code.
-- `lint_failures` entries are always `{"check", "task", "detail"}`. `check` is one of `literal-count`, `consumes-provides`, `path-hygiene` (plan mode) or `supersession-annotation` (design mode); `detail` is the author-facing message. `task` names the offending unit: the task number as a string in plan mode, the **register row's identifier** (`SUP-01`, `DIV-10`, …) in design mode. The array is always present and always empty in test mode (test mode runs no lints).
-- **Design mode computes no coverage.** `covered`, `uncovered` and `uncovered_should` are always empty; `must_have` / `should_have` are still populated (design mode still requires a parseable requirements.md and still exits 2 on one with zero Must-Haves). Only `lint_failures` gates.
+- `lint_failures` entries are always `{"check", "task", "detail"}`. `check` is one of `literal-count`, `consumes-provides`, `path-hygiene` (plan mode) or `supersession-annotation` / `fr-citation` (design mode — `fr-citation` when the script emits Must-Have IDs missing from the design); `detail` is the author-facing message. `task` names the offending unit: the task number as a string in plan mode, the **register row's identifier** (`SUP-01`, `DIV-10`, …) or the missing FR/NFR id for `fr-citation` in design mode. The array is always present and always empty in test mode (test mode runs no lints).
+- **Design mode is supersession-lint + fr-citation, not full FR→design coverage.** `covered`, `uncovered` and `uncovered_should` are always empty for the coverage arrays; `must_have` / `should_have` are still populated (design mode still requires a parseable requirements.md and still exits 2 on one with zero Must-Haves). Only `lint_failures` gates. Every Must-Have ID must appear at least once in the design text (`fr-citation`); register rows must route to matching in-place supersession annotations (`supersession-annotation`). Citation presence is not proof the design satisfies the requirement.
 - On error: `"result": "ERROR"`, `"error"` holds the message, other arrays hold whatever was parsed before the failure.
 - ID arrays are naturally sorted (`FR-2` before `FR-10`).
 
@@ -185,7 +185,7 @@ python check_commit_gate.py --self-test
 
 - **Milestone matching**: case-insensitive **word-boundary** match — the full milestone title, OR its leading identifier (the text before the first `:`/`—`), must appear as a whole token (not immediately preceded or followed by an alphanumeric character) against `## Review:` headings in the review report. A bare substring is not enough: `M1` no longer matches a section titled `M10`. The **LAST** matching section wins. Within that section, the **LAST** `**Verdict:**` line wins and must be the exact token `Approve` or `Request Changes`; an unparseable latest line fail-safes to no-verdict rather than falling back to an earlier line.
 - **Staleness**: the review report's file mtime must be `>=` every changed file's mtime. This is an mtime **proxy** for "the review postdates the diff" — valid within a single run on one machine, and a documented limitation, not a cryptographic guarantee.
-- **Blockers**: orchestrator-state.json's `blockers` array is split into scoped vs. unscoped by the same milestone-token word-boundary match used above (so an `M10:`-prefixed blocker entry no longer scopes to an `M1` gate run). Scoped entries always gate. **Deliberate divergence**: unscoped entries gate by default too — deliberately **tighter** than `bgpdd-build` §1's "no entries scoped to this milestone" wording, on the fail-safe rationale that freeform ledger entries make "not obviously this milestone's" indistinguishable from "not this milestone's". `--ignore-unscoped` is the sanctioned override, downgrading unscoped entries to a warning.
+- **Blockers**: orchestrator-state.json's `blockers` array is split into scoped vs. unscoped by the same milestone-token word-boundary match used above (so an `M10:`-prefixed blocker entry no longer scopes to an `M1` gate run). Scoped entries always gate. Unscoped entries gate by default too — the commit gate and `bgpdd-build` agree that the `blockers` array must be **empty** (no standing blockers at all) before a milestone commits. `--ignore-unscoped` remains the sanctioned override for exceptional cases, downgrading unscoped entries to a warning.
 - **Rendered evidence**: with `--require-rendered-evidence`, the matched review section must cite at least one evidence file — via a `Rendered evidence:` line or a markdown image ref (`![...](path)`) — that (a) exists, resolved relative to the review report's directory or `--repo`, and (b) is cited under an `evidence/review/` directory (repo-relative or review-report-relative, matching whichever resolution found it). This is the mechanical half of `ui-design-patterns`' "source can fail a check but never pass one" rule. Evidence cited under `evidence/build/` (builder-produced) or any other path does not satisfy the gate, even if the file exists on disk. **Scope limit**: this check proves a cited file exists under `evidence/review/` — it does not prove the reviewer produced it, looked at it, or that it depicts the milestone's actual result; evidence files are not mtime-checked.
 - **Working-tree verification (`--verify-tree`)**: `git status --porcelain` in `--repo` is read and every listed path (rename/copy lines take the new path; git-quoted paths are unquoted) is normalized to a repo-relative, forward-slash, case-folded-on-Windows form. That set is compared against the declared `--changed-files` **plus** anything under `.docs/` (pipeline artifacts — test reports, review reports, state, evidence — legitimately change during a milestone without being a builder code change). Any dirty path outside that union is an **undeclared edit**: it is appended to `undeclared_changes`, `tree_verified` becomes `false`, and the gate fails regardless of verdict/staleness/blockers. When the flag is unset, `undeclared_changes` stays `[]` and `tree_verified` stays `true` — the check never runs and the gate's behavior is unchanged (backward compatible).
   - **Directory-shaped porcelain entries.** `git status --porcelain`'s default mode collapses an entirely-untracked directory into a single `?? <dir>/` line rather than listing the files inside it. A porcelain path ending in `/` is parsed as a **directory entry**, not a file, and is normalized with its trailing slash restored before comparison: it is allowed iff that normalized directory is `.docs/` or begins with `.docs/`, **or** at least one declared `--changed-files` path lies under that directory prefix (a declared file's own never-before-tracked directory collapses the same way — the file itself never appears as its own porcelain line). Otherwise it is an undeclared edit, appended to `undeclared_changes` **with its trailing slash preserved** so the report is honest about naming a directory rather than a file. Fixed 2026-08-09: naively normalizing a directory-shaped path (`Path(".docs/").resolve()` strips the trailing slash to `.docs`) broke both the `.docs/` carve-out's `startswith` prefix test and a declared file's own directory match.
@@ -276,7 +276,7 @@ python next_milestone.py --self-test
 }
 ```
 
-- `result` is `"NEXT"` (a pending milestone was found), `"DONE"` (no pending milestone remains — `next_milestone`/`milestone_text` are `null`, `remaining` is `[]`), or `"MIXED"` (the next pending milestone's tasks mix `[UI]` and `[API]` tags — a planning defect).
+- `result` is `"NEXT"` (a pending milestone was found with a single clear domain), `"DONE"` (no pending milestone remains — `next_milestone`/`milestone_text` are `null`, `remaining` is `[]`), or `"MIXED"` (the next pending milestone's tasks mix `[UI]` and `[API]` tags, **or** the milestone is `UNTAGGED` — both are planning defects).
 - `milestone_text` is the next milestone's full block **verbatim**, from its heading line through the line before the next milestone heading (or EOF) — inject it directly into the delegation brief as the milestone text.
 - `cursor` is `null` when `--state` was not given. Otherwise `{"stored", "matches_next", "stale"}`: `stored` is the raw `milestone_cursor` value (string or `null`); `matches_next` is true when the cursor names the derived next milestone; `stale` is true when the cursor names a milestone that appears **later** in plan order than the first pending one — resuming forward from it would silently skip the earlier pending work.
 - On a structural/usage error the tool prints only `{"result": "ERROR", "error": "<message>"}` — the other fields are not present.
@@ -284,7 +284,7 @@ python next_milestone.py --self-test
 ### Exit codes
 
 - **0** — `result` is `"NEXT"` or `"DONE"`.
-- **1** — `result` is `"MIXED"`: the next pending milestone mixes `[UI]` and `[API]` task tags. This is a **planning defect**, not a routing decision to improvise past — halt and route back through Alex for re-planning, per `bgpdd-build` Phase 1 step 2.
+- **1** — `result` is `"MIXED"`: the next pending milestone mixes `[UI]` and `[API]` task tags, **or is UNTAGGED**. This is a **planning defect**, not a routing decision to improvise past — halt and route back through Alex for re-planning, per `bgpdd-build` Phase 1 step 2. UNTAGGED is treated as MIXED (exit 1), not NEXT with a warning.
 - **2** — usage error (missing `--plan`), an unreadable file, invalid `--state` JSON, a state file missing `milestone_cursor`, or a structural contract failure: **zero `## Milestone <n>` / `### Milestone <n>` headings found in the plan**.
 
 ### Parsing rules (condensed)
@@ -293,13 +293,49 @@ python next_milestone.py --self-test
 
 - **Heading match**: a level-2 **or** level-3 heading of the shape `## Milestone <digit...>` / `### Milestone <digit...>` (regex-anchored: `Milestone` immediately followed by whitespace and a digit) opens a new milestone block. A prose heading like `## Milestone ordering — a stated deviation from the usual sequence` does **not** match — no digit immediately follows "Milestone" — and stays inside whichever milestone block precedes it (or is simply prose if it precedes the first real heading). This is deliberate: it lets a plan discuss "milestone ordering" in prose without the parser mistaking the discussion for a milestone. The canonical writer form, per `planning-and-task-breakdown`, is level-3 (`### Milestone <n> — <Title> [<UI|API>]`); level-2 is tolerated for older plans.
 - **Block extent**: a milestone's block runs from its heading line to the FIRST of: the next milestone heading (either level), the next level-2 heading whose text does not start with "Task" or "Checkpoint" (case-insensitive) — this is what ends the task list at a trailing section like `## Risks and Mitigations` or `## Open Questions` — or EOF. Every other heading in between — `## Task N:` headings, `### Checkpoint:` blocks, and a level-2 `## Checkpoint:` heading — stays inside the current milestone's block. The level-2 `## Checkpoint:` form is **deprecated** (the canonical form is level-3, `### Checkpoint:`, which needs no such special-casing since `###` never terminates a block); tolerating it here is a defensive read-side fix, and each occurrence emits a `warnings` entry naming the milestone. The write side (which heading level a plan's author emits) is tracked separately.
-- **Domain**: the milestone **heading** line's own `[UI]`/`[API]` tag is authoritative when present (backticks around the tag don't matter). Only when the heading carries neither tag does the tool fall back to scanning the whole block text — including task prose — for `[UI]`/`[API]` tags. Both tags present (on the heading, or via fallback scan) → `"MIXED"`; only `[UI]` → `"UI"`; only `[API]` → `"API"`; neither → `"UNTAGGED"` (still `result: "NEXT"`, but with a warning — the milestone can still be routed, just not automatically).
+- **Domain**: the milestone **heading** line's own `[UI]`/`[API]` tag is authoritative when present (backticks around the tag don't matter). Only when the heading carries neither tag does the tool fall back to scanning the whole block text — including task prose — for `[UI]`/`[API]` tags. Both tags present (on the heading, or via fallback scan) → `"MIXED"`; only `[UI]` → `"UI"`; only `[API]` → `"API"`; neither → `"UNTAGGED"`, which the tool reports as `result: "MIXED"` (exit 1 planning defect) — not NEXT with a warning.
 - **Next pending**: the first milestone (in file order) whose heading line does **not** contain `[x]`/`[X]`.
 - **Stale-cursor verdict**: matching between the stored `milestone_cursor` and milestone titles is a case-insensitive substring test in either direction. If the cursor matches no title at all, that's a warning (`stale`/`matches_next` both `false`), not an error — a hand-edited or freeform cursor string shouldn't crash the tool.
 
 ### Fixtures & self-test
 
-`scripts/next_milestone.py --self-test` runs a bundled `unittest` suite in-process (temp plan/state files) covering: happy-path derivation, the prose-heading-not-a-milestone case, all-complete (`DONE`), zero-milestone-headings (`ERROR`), mixed tags (`MIXED`), untagged-with-warning, stale/matching/null/unmatchable cursors, missing/invalid file inputs, a level-3-heading plan with heading-carried domain tags and a trailing `## Risks and Mitigations` section (asserting the last milestone's block excludes it), heading-tag authority over a stray same-tag mention in task prose, heading tags wrapped in backticks, and a deprecated level-2 `## Checkpoint:` heading tolerated inside its milestone block with a warning (contrasted against the canonical level-3 form, which emits none).
+`scripts/next_milestone.py --self-test` runs a bundled `unittest` suite in-process (temp plan/state files) covering: happy-path derivation, the prose-heading-not-a-milestone case, all-complete (`DONE`), zero-milestone-headings (`ERROR`), mixed tags (`MIXED`), untagged-as-MIXED, stale/matching/null/unmatchable cursors, missing/invalid file inputs, a level-3-heading plan with heading-carried domain tags and a trailing `## Risks and Mitigations` section (asserting the last milestone's block excludes it), heading-tag authority over a stray same-tag mention in task prose, heading tags wrapped in backticks, and a deprecated level-2 `## Checkpoint:` heading tolerated inside its milestone block with a warning (contrasted against the canonical level-3 form, which emits none).
+
+## check_ship_decision.py
+
+A pure-stdlib CLI (`scripts/check_ship_decision.py`) that makes Dep's `ship-decision.md` GO/NO-GO machine-verifiable: it requires an unambiguous labeled `GO` or `NO-GO` (Ship Decision / Verdict / Recommendation line), a Rollback heading, and a post-deploy checklist with checkbox items. Used at `bgpdd-shipping` Step 0 (prep entry ticket from build Phase 5) and Step 3 (refreshed exit ticket after Stage 2 Dep).
+
+### Invocation
+
+```bash
+python check_ship_decision.py --report <path> [--require-go]
+python check_ship_decision.py --self-test
+```
+
+`--require-go` fails (exit 1) when the latest verdict is `NO-GO` rather than `GO`.
+
+### Exit codes
+
+- **0** — structurally valid decision; with `--require-go`, verdict is `GO`.
+- **1** — gate failed (NO-GO under `--require-go`, or incomplete/ambiguous decision content).
+- **2** — usage error, missing/empty/unreadable report, or structural non-conformance.
+
+## check_blockers.py
+
+A pure-stdlib CLI (`scripts/check_blockers.py`) that makes the blockers-ledger gate machine-run: it reads `orchestrator-state.json` and exits non-zero when any standing blocker remains. Used at `bgpdd-shipping` Step 0. No manual open-and-read substitute.
+
+### Invocation
+
+```bash
+python check_blockers.py --state <path>
+python check_blockers.py --self-test
+```
+
+### Exit codes
+
+- **0** — `blockers` array is empty.
+- **1** — one or more standing blockers (JSON stdout lists them).
+- **2** — usage/structural failure (missing state, invalid JSON, missing `blockers` field).
 
 ## run_quiet.py
 
@@ -369,7 +405,8 @@ A pure-stdlib CLI (`scripts/update_state.py`) that is **the sanctioned read-modi
 python update_state.py --state <path> \
     [--init --project-name <name>] \
     [--set-cursor <title|null>] [--set-pipeline <name>] \
-    [--set-branch <name>] [--set-artifact <name>=<path>] \
+    [--set-feature <feature|null>] [--set-branch <name>] \
+    [--set-artifact <name>=<path>] \
     [--add-blocker "<text>"] \
     [--resolve-blocker "<substring>" --evidence "<text>"]
 python update_state.py --self-test
@@ -379,9 +416,9 @@ At least one action is required per invocation; any combination may be given in 
 
 ### Actions
 
-- **`--init --project-name <name>`**: if the state file doesn't exist, creates the skeleton (`schema`, `project_name`, `feature: null`, `pipeline: ""`, `branch: null`, `milestone_cursor: null`, `artifacts: {}`, `blockers: []`). If the file already exists, `--init` is a **no-op** (a warning is emitted, the existing content is untouched) — other actions in the same call still apply. `--init` without `--project-name` is a usage error.
+- **`--init --project-name <name>`**: if the state file doesn't exist, creates the skeleton (`schema` version string `"1"`, `project_name`, `feature: null`, `pipeline: ""`, `branch: null`, `milestone_cursor: null`, `artifacts: {}`, `blockers: []`). If the file already exists, `--init` is a **no-op** (a warning is emitted, the existing content is untouched) — other actions in the same call still apply. `--init` without `--project-name` is a usage error.
 - **`--set-cursor <title|null>`**: sets `milestone_cursor`. The **literal string `null`** (not the shell's `NULL`/empty string) sets the JSON field to `null`; any other value sets it verbatim as a string.
-- **`--set-pipeline <name>`** / **`--set-branch <name>`**: set those fields verbatim.
+- **`--set-pipeline <name>`** / **`--set-branch <name>`** / **`--set-feature <feature|null>`**: set those fields verbatim (`null` literal clears `feature`).
 - **`--set-artifact <name>=<path>`** (repeatable): merges `name: path` into the `artifacts` object. A spec with no `=` is a usage error.
 - **`--add-blocker "<text>"`** (repeatable): appends each text verbatim to `blockers`, preserving existing entries.
 - **`--resolve-blocker "<substring>" --evidence "<text>"`**: removes every `blockers` entry containing `substring` (case-insensitive). **`--evidence` is required and must be non-empty** — omitting it is a usage error, not a silent no-op. A substring matching nothing is not an error: `blockers` is left unchanged and a warning is emitted.
