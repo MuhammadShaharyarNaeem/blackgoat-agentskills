@@ -19,7 +19,7 @@ Before any UI code exists, a compact direction must be committed — in `detaile
 - **Tokens**: 4–6 named palette values; 2–3 type roles (a characterful display face used with restraint, a complementary body face, a utility face for data/captions if needed); a spacing scale.
 - **Layout concept**: one-sentence prose description of the composition.
 - **Signature**: the single element this surface will be remembered by. Spend boldness there; keep everything around it quiet.
-- **Generic-default check**: AI-generated design clusters around known looks (cream background + high-contrast serif + terracotta accent; near-black + one acid accent; broadsheet hairlines + zero radius). If any committed choice is one you would produce for *any* similar brief, it is a default, not a decision — revise it and say why. A brief that explicitly asks for one of these looks wins, as always.
+- **Generic-default check**: AI-generated design clusters around known looks (cream background + high-contrast serif + terracotta accent; near-black + one acid accent; broadsheet hairlines + zero radius). If any committed choice is one you would produce for *any* similar brief, it is a default, not a decision — revise it and say why. A brief that explicitly asks for one of these looks wins, as always. The long-tail catalog behind this check — fabricated data, decorative metadata, fake previews, separator texture — is [references/ai-tells.md](references/ai-tells.md); read it when the surface carries substantial static content or demo data.
 
 ### Surface Modes
 
@@ -68,6 +68,7 @@ Run this as each component or view lands, and again before marking the milestone
 - [ ] Responsive to mobile; keyboard focus visible; `prefers-reduced-motion` respected
 - [ ] Copy follows the UX-copy rules (action-named controls, recovery-naming errors)
 - [ ] Nothing from "Category Defaults to Refuse" appears without the brief earning it
+- [ ] Demo/seed/empty-state content passes the fabricated-content group in [references/ai-tells.md](references/ai-tells.md) — no placeholder-canon names, fake-perfect numbers, or generic avatars
 
 ### Review Mode (Luna — design critique)
 
@@ -87,11 +88,14 @@ Source reading is a strictly one-directional instrument here: it can **fail** a 
 
 Read on demand — not needed to execute the contract above:
 
+- [AI tells](references/ai-tells.md) — the long-tail catalog behind the generic-default check: fabricated content and data (every surface), decorative metadata, fake product previews, marketing-copy tells, separator/dash rationing, and list-decoration tells — each group scoped to the surface modes it applies to.
 - [Design critique](references/design-critique.md) — Luna's review procedure: evidence gathering (screenshots via browser tools), Nielsen 10-heuristic scoring, design-specificity verdict, cognitive-load checks, the mechanical craft-floor checklist, and the severity mapping into her review-report format.
 - [Component mechanics](references/component-mechanics.md) — mechanical craft floor for tables, forms, autocompletes, spacing, and feedback states: pass/fail on rendered output. Listed here under Deep Dive, but not read-on-demand in practice: the UI Builder loads it when implementing components/views, Quinn loads it for [UI] test assertions, and Luna loads it on [UI] reviews, per their own Methodology Dependencies tables — a deliberate refinement of the read-on-demand default (convention #8).
 
 ## Attribution
 
 Adapted for this squad from [Anthropic's frontend-design skill](https://github.com/anthropics/skills) and [pbakaus/impeccable](https://github.com/pbakaus/impeccable) (Apache-2.0). Impeccable's command/detector orchestration is intentionally not carried over — orchestration belongs to the squad's Orchestrator, not to a methodology.
+
+The AI-tells catalog in `references/ai-tells.md` is adapted from the "AI Tells" section of [leonxlnx/taste-skill](https://github.com/leonxlnx/taste-skill) (MIT). Only that section is carried over, made framework-neutral and re-scoped by surface mode: the source mandates a React/Next/Tailwind/shadcn stack and self-declares dashboards and multi-step product UI out of scope, so its stack conventions, dial system, and brief-inference stage are intentionally not adopted — stack rules belong to the framework playbooks (`vue3-spa-patterns`, `dotnet-backend-patterns`) and brief inference belongs to the pipeline's requirements and design-direction phases.
 
 The `tools/design-db/` search tool (BM25 CSV database of UI styles, palettes, font pairings, and UX guidelines) is vendored from [nextlevelbuilder/ui-ux-pro-max-skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) (MIT — see `tools/design-db/LICENSE`). Only its data and search scripts are carried over: its self-activating skill surface, doctrine, and design-system generator are intentionally not adopted — this contract remains the sole authority on what ships, and the DB is consulted only as candidate input during Design Direction.
