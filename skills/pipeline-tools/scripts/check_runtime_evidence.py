@@ -1142,6 +1142,25 @@ def run_self_test():
             r = build_report(self._args())
             self.assertEqual(r["result"], "FAIL")
 
+        def test_non_json_body_passes_when_no_content_assertion_asked(self):
+            """Pins a deliberate scope boundary, so it stays intentional.
+
+            The content assertions are JSON-shaped because the failure that
+            motivated them was. A CSV/HTML/binary capture parses to no body and
+            must still PASS on transport + freshness + status: requiring JSON
+            would block every honest non-JSON surface. The cost is that such a
+            claim gets no mechanical content check at all -- documented in
+            pipeline-tools/SKILL.md rather than faked with --require-key.
+            """
+            self._report(self._write(body="id,total\n1,9"))
+            r = build_report(self._args())
+            self.assertEqual(r["result"], "PASS", r["captures"])
+            self.assertFalse(r["captures"][0]["body_parsed"])
+            self.assertEqual(r["captures"][0]["problems"], [])
+            # ...but asking for a key against a body that has none still fails.
+            r2 = build_report(self._args(require_key=["id"]))
+            self.assertEqual(r2["result"], "FAIL")
+
         def test_status_mismatch_fails(self):
             self._report(self._write(status="500 Internal Server Error"))
             r = build_report(self._args(expect_status=200))
