@@ -332,6 +332,18 @@ def run_runtime_gate(args):
         cmd += ["--expect-status", str(args.expect_status)]
     if args.require_build_marker:
         cmd += ["--require-build-marker", args.require_build_marker]
+    # The OpenAPI assertions must forward too, or the commit-time re-run is
+    # strictly weaker than the earlier build-phase run — and this gate is the
+    # one that owns the commit, so it is the one where the restraint has to
+    # bind. Same reasoning as --verify-tree running here rather than only
+    # earlier.
+    if args.require_openapi_reachable:
+        cmd += ["--require-openapi-reachable"]
+    if args.openapi_doc:
+        cmd += ["--openapi-doc", args.openapi_doc,
+                "--openapi-route", args.openapi_route]
+        if args.openapi_method:
+            cmd += ["--openapi-method", args.openapi_method]
 
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
@@ -476,6 +488,10 @@ def build_parser():
     parser.add_argument("--expect-status", type=int)
     parser.add_argument("--forbid-host", action="append", default=[])
     parser.add_argument("--require-build-marker")
+    parser.add_argument("--require-openapi-reachable", action="store_true")
+    parser.add_argument("--openapi-doc")
+    parser.add_argument("--openapi-route")
+    parser.add_argument("--openapi-method")
     parser.add_argument("--self-test", action="store_true")
     return parser
 
@@ -512,7 +528,12 @@ def main(argv):
                                  ("--require-key", args.require_key),
                                  ("--expect-status", args.expect_status),
                                  ("--forbid-host", args.forbid_host),
-                                 ("--require-build-marker", args.require_build_marker))
+                                 ("--require-build-marker", args.require_build_marker),
+                                 ("--require-openapi-reachable",
+                                  args.require_openapi_reachable),
+                                 ("--openapi-doc", args.openapi_doc),
+                                 ("--openapi-route", args.openapi_route),
+                                 ("--openapi-method", args.openapi_method))
                  if v and not args.require_runtime_evidence]
     if forwarded:
         print(json.dumps({"result": "ERROR",
@@ -691,7 +712,7 @@ def run_self_test():
 
         # ---- --require-runtime-evidence (delegates to check_runtime_evidence) ----
 
-        def _runtime_fixtures(self, body):
+        def _runtime_fixtures(self, body, openapi=None):
             """A test-report citing one capture with the given response body."""
             impl = self.dir / ".docs" / "p" / "implementation"
             (impl / "evidence" / "runtime").mkdir(parents=True, exist_ok=True)
@@ -701,7 +722,8 @@ def run_self_test():
                 "- Milestone: M3 — auth endpoints [API] [vs:api]\n"
                 "- Surface: api\n"
                 "- Transport: out-of-process HTTP\n"
-                "- Base URL: http://localhost:5142\n"
+                + (f"- OpenAPI: {openapi}\n" if openapi else "")
+                + "- Base URL: http://localhost:5142\n"
                 "- Probe command: `curl -sS -i http://localhost:5142/api/auth`\n"
                 "- Captured: 2026-08-12T14:03:11Z\n"
                 "- Exit code: 0\n\n"
@@ -749,6 +771,35 @@ def run_self_test():
             self.assertEqual(
                 run_git(["rev-list", "--all", "--count"], str(self.dir)).strip(), "0")
 
+        def test_openapi_flag_forwards_to_the_child_gate(self):
+            """A commit-time re-run must not be weaker than the earlier run.
+
+            The flag has to reach the child process, so the assertion is that
+            the SAME capture passes without it and fails with it.
+            """
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            rep = self._runtime_fixtures('{"isSuccess":true,"notifications":[]}')
+            base = ["--require-runtime-evidence", "--runtime-report", rep]
+            r = build_report(self._ns(extra=base))
+            self.assertTrue(r["runtime_evidence_ok"], r["runtime_evidence"])
+            r2 = build_report(self._ns(extra=base + ["--require-openapi-reachable"]))
+            self.assertFalse(r2["runtime_evidence_ok"])
+            self.assertEqual(r2["result"], "FAIL")
+
+        def test_openapi_flag_passes_when_the_capture_records_it(self):
+            """The forwarded assertion is satisfiable, not a dead end."""
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            rep = self._runtime_fixtures(
+                '{"isSuccess":true,"notifications":[]}',
+                openapi="http://localhost:5142/swagger/v1/swagger.json — 200")
+            r = build_report(self._ns(extra=[
+                "--require-runtime-evidence", "--runtime-report", rep,
+                "--require-openapi-reachable"]))
+            self.assertTrue(r["runtime_evidence_ok"], r["runtime_evidence"])
+            self.assertEqual(r["result"], "PASS")
+
         def test_runtime_evidence_flag_unset_is_backcompat(self):
             self.review.write_text(REVIEW_OK)
             self._order(self.changed, self.review)
@@ -773,6 +824,10 @@ def run_self_test():
             # forwarded flags without the gate flag
             self.assertEqual(main(base + ["--require-key", "isSuccess"]), 2)
             self.assertEqual(main(base + ["--expect-status", "200"]), 2)
+            self.assertEqual(main(base + ["--require-openapi-reachable"]), 2)
+            self.assertEqual(main(base + ["--openapi-doc", "x.json",
+                                          "--openapi-route", "/a"]), 2)
+            self.assertEqual(main(base + ["--openapi-method", "post"]), 2)
 
         def test_nonstandard_verdict_token_fails(self):
             self.review.write_text("## Review: M3\n\n**Verdict:** Approved\n")

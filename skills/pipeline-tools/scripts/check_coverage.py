@@ -115,11 +115,25 @@ IN_PROCESS_TELLS = (
     "webapplicationfactory", "createclient(", "testserver", "testclient",
     "supertest", "mockmvc", "asgitransport", "rack-test", "httptestingcontroller",
     "inmemorytransport", "app.test_client(",
+    # Honest self-descriptions of an in-process probe. A framework name is the
+    # strong signal; these catch the author who describes the transport in prose
+    # instead ("direct handler call", "in-process HTTP"). They do nothing against
+    # someone who misdescribes the transport -- but nothing here does, and the
+    # list is documented as a blocklist and therefore incomplete.
+    "in-process", "in process", "direct handler", "handler directly",
+    "direct invocation", "invoked directly", "same process",
 )
 NON_RUNTIME_PROBE_RES = (
     re.compile(r"\b(?:dotnet|go|cargo|mvn|gradle)\s+(?:build|restore|compile)\b"),
     re.compile(r"\b(?:dotnet|go|cargo|mvn|gradle)\s+test\b"),
-    re.compile(r"\bnpm\s+(?:ci|test|run\s+(?:build|test))\b"),
+    # `node --test` is flag-shaped rather than subcommand-shaped, so it slipped
+    # past every pattern here and a capture declaring it passed the gate with a
+    # hand-written envelope body: the same escape this file exists to stop,
+    # through a different hole. Found 2026-08-12 by the eval fixture.
+    re.compile(r"\bnode\s+--test\b"),
+    re.compile(r"\b(?:deno|bun|swift|rails|ctest)\s+test\b"),
+    re.compile(r"\b(?:rspec|phpunit|vstest|testcafe|minitest)\b"),
+    re.compile(r"\b(?:npm|pnpm)\s+(?:ci|test|run\s+(?:build|test))\b"),
     re.compile(r"\byarn\s+(?:build|test)\b"),
     re.compile(r"\b(?:pytest|jest|vitest|mocha|karma|nunit|xunit)\b"),
     re.compile(r"\btsc\b|--no-?emit\b|\bmsbuild\b"),

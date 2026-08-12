@@ -71,6 +71,7 @@ One file per probe, at `.docs/{project-name}/implementation/evidence/runtime/<mi
 
 Required: `Milestone`, `Requirement IDs`, `Surface`, `Transport`, `Base URL` (or the device/sink identifier), `Probe command`, `Captured`, `Exit code`.
 Required when the surface is `web+api` or wider: `Environment` (every service and the local URL it was reached at) and `Config repointed` (what you changed, and from what).
+Required when the surface is `api` or `web+api`: `OpenAPI` — the contract-document URL and the status it returned, as `- OpenAPI: <url> — <status>`. Record it for the **failure-path capture too**, not just the success one; the gate scopes per capture, so a sibling missing the field fails the whole milestone. This is the cheapest field in the artifact and the one that most directly separates a started application from a test host: the document is typically served behind the same environment branch an in-process host never resolves. It answers *is the surface up and is its schema being served* — nothing about whether a response body is correct, which is what the captured output and the asserted keys are for.
 Strongly recommended: `Build marker` — a version or commit the running service echoes back. Without it, a service started before your change and never restarted produces a capture that is fresh, non-empty, and wrong. This is the largest residual hole in the whole tier; treat its absence as a known risk, not a solved problem.
 
 Captures are **gating** and belong to whoever verifies. A builder's own self-check capture goes to `evidence/build/` instead and does not satisfy a gate — the same producer split `evidence/review/` already uses for rendered evidence.
@@ -103,6 +104,7 @@ An honest `BLOCKED` costs one round-trip. A Tier-2 pass on a Tier-3 claim costs 
 - [ ] Failure paths are captured too, not only success — a wrapper can shape one and miss the other
 - [ ] Every store the requirement names is read back, not inferred from a sibling
 - [ ] Every capture is cited with a `**Runtime evidence:**` line
+- [ ] On an `api` or `web+api` surface, **every** capture records the `OpenAPI` URL and its status — the failure-path sibling included
 
 ### Escalate When
 

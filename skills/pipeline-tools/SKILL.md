@@ -163,11 +163,24 @@ A pure-stdlib CLI (`scripts/check_commit_gate.py`) that makes the `bgpdd-build` 
 python check_commit_gate.py --review-report <path> --state <path> \
     --milestone "<title>" --changed-files <p1> [<p2> ...] \
     [--commit --message "<msg>"] [--repo <dir>] [--ignore-unscoped] \
-    [--require-rendered-evidence] [--verify-tree]
+    [--require-rendered-evidence] [--verify-tree] \
+    [--require-runtime-evidence --runtime-report <path> \
+     [--surface <key>] [--require-key <name>]... [--expect-status <N>] \
+     [--forbid-host <pattern>]... [--require-build-marker <value>] \
+     [--require-openapi-reachable] \
+     [--openapi-doc <path> --openapi-route <path> [--openapi-method <verb>]]]
 python check_commit_gate.py --self-test
 ```
 
 `--repo` defaults to `.` (the current working directory) when omitted.
+
+### Runtime-evidence delegation
+
+`--require-runtime-evidence` runs `check_runtime_evidence.py` as a **subprocess** on `sys.executable`, folds its exit code into the pass, and surfaces its whole JSON report under `runtime_evidence` with a `runtime_evidence_ok` boolean. Subprocess rather than import: this family has no shared module by convention, and duplicating existence/provenance/freshness/content logic into a second file is the worse cost. The file already shells out for `git`.
+
+**Every assertion flag forwards**, including the OpenAPI pair. That completeness is the point, not a convenience: `bgpdd-build` runs the runtime gate twice — once at Phase 2 where feedback is cheap, and again here — and if the commit-time run accepted a weaker set of assertions than the earlier one, the gate that actually owns the commit would be the more permissive of the two. Same reasoning as `--verify-tree` running here rather than only earlier: **the restraint has to bind at the moment it is least convenient.** Any forwarded flag passed *without* `--require-runtime-evidence` is a usage error (exit 2) rather than a silent no-op, so a typo'd invocation cannot quietly drop an assertion.
+
+`--require-runtime-evidence` without `--runtime-report` is exit 2. With the flag unset, `runtime_evidence` stays `null` and `runtime_evidence_ok` stays `true` — backward compatible.
 
 ### JSON output shape
 
@@ -195,8 +208,8 @@ python check_commit_gate.py --self-test
 ### Exit codes
 
 - **0** — gate passed (and a commit was created, when `--commit` was given).
-- **1** — gate failed; the JSON body names the cause (`verdict` not `"Approve"`, `stale`, a non-empty `blocking`, an unignored `unscoped_blockers`, `rendered_evidence_ok: false`, or — with `--verify-tree` — `tree_verified: false`).
-- **2** — usage error, an unreadable/missing artifact, invalid state JSON, or a git failure.
+- **1** — gate failed; the JSON body names the cause (`verdict` not `"Approve"`, `stale`, a non-empty `blocking`, an unignored `unscoped_blockers`, `rendered_evidence_ok: false`, `runtime_evidence_ok: false`, or — with `--verify-tree` — `tree_verified: false`).
+- **2** — usage error (including a forwarded runtime flag without `--require-runtime-evidence`), an unreadable/missing artifact, invalid state JSON, a git failure, or a structural failure reported by the delegated runtime gate.
 
 ### Parsing rules (condensed)
 
@@ -208,6 +221,8 @@ python check_commit_gate.py --self-test
   - **Directory-shaped porcelain entries.** `git status --porcelain`'s default mode collapses an entirely-untracked directory into a single `?? <dir>/` line rather than listing the files inside it. A porcelain path ending in `/` is parsed as a **directory entry**, not a file, and is normalized with its trailing slash restored before comparison: it is allowed iff that normalized directory is `.docs/` or begins with `.docs/`, **or** at least one declared `--changed-files` path lies under that directory prefix (a declared file's own never-before-tracked directory collapses the same way — the file itself never appears as its own porcelain line). Otherwise it is an undeclared edit, appended to `undeclared_changes` **with its trailing slash preserved** so the report is honest about naming a directory rather than a file. Fixed 2026-08-09: naively normalizing a directory-shaped path (`Path(".docs/").resolve()` strips the trailing slash to `.docs`) broke both the `.docs/` carve-out's `startswith` prefix test and a declared file's own directory match.
 
 `bgpdd-build`'s commit gate references this section as its single contract authority and does not restate these parsing rules inline.
+
+`python scripts/check_commit_gate.py --self-test` runs 35 in-process cases (temp git repos, synthetic `os.utime` ordering rather than the real clock) covering verdict precedence, the `M1`/`M10` word-boundary match, staleness, scoped and unscoped blockers, rendered evidence including the `..`-traversal refusal, `--verify-tree` with its directory-shaped-porcelain cases, the runtime delegation's pass and block paths, the OpenAPI forwarding proven by the same capture passing without the flag and failing with it, every forwarded-flag-without-the-gate-flag usage error, and — the load-bearing one — everything green except runtime evidence with `--commit`, asserting the repo holds **zero** commits afterwards. That last case is what distinguishes a gate that blocks from a gate that merely reports.
 
 ## check_agent_report.py
 
@@ -276,7 +291,8 @@ python check_runtime_evidence.py --report <path> --milestone "<title>" \
     --changed-files <p1> [<p2> ...] [--repo <dir>] \
     [--surface <key>] [--require-key <name>]... [--expect-status <N>] \
     [--forbid-host <pattern>]... [--require-build-marker <value>] \
-    [--min-captures <N>]
+    [--min-captures <N>] [--require-openapi-reachable] \
+    [--openapi-doc <path> --openapi-route <path> [--openapi-method <verb>]]
 python check_runtime_evidence.py --self-test
 ```
 
@@ -286,21 +302,40 @@ There is deliberately **no `--allow-stale` / `--ignore-freshness` override** —
 
 `--require-key` and `--forbid-host` are supplied by the **caller**, never declared by the producer: a producer-declared assertion grades itself. Stack-specific keys live in the stack contract (`dotnet-backend-patterns/SKILL.md` names `isSuccess`, `notifications`, `statusCode`); forbidden-host patterns are project-declared, never hardcoded here.
 
+### The OpenAPI flags
+
+**Neither flag opens a socket.** This gate reads artifacts; it never becomes a client. `--require-openapi-reachable` gates the `- OpenAPI: <url> — <status>` header the *probe* wrote, and `--openapi-doc` reads a document the *probe* already fetched and saved. Both prove what the probe reported, not that a contract surface is reachable right now.
+
+`--require-openapi-reachable` rejects a capture whose OpenAPI field is absent, empty, names no `http(s)` URL, names a URL but records no status, or records a non-2xx. The point is not the document — it is that **requiring a contract surface forces the probe at a real application rather than at anything that answers on a port**, and a reachable OpenAPI document is the exact instrument that falsified the 2026-08 claim by hand. Apply it when the surface is `[vs:api]`, the same caller-declares pattern as `--forbid-host`. The URL is cut out of the string before the status is searched for, so `http://localhost:200/swagger.json` does not read as a 200; the separator is not load-bearing (em dash, hyphen, comma, bare space all parse).
+
+`--openapi-doc` + `--openapi-route` (+ `--openapi-method`, default `get`) diffs **declared against observed top-level property names**. Any of the three without its partners is exit 2. Resolution: `paths[route][method].responses` → lowest declared `2xx`, then a `2XX` range key → `content[<json media>].schema`, falling back to Swagger-2.0 `response.schema`. `$ref` resolves **one hop, to `#/components/schemas/<name>` only**. `$ref`s *inside* `properties` values are fine and ignored — only the top-level names are compared, matching `--require-key`'s non-recursive rule.
+
+**Unresolvable is a warning — never a pass and never a fail.** `allOf`/`oneOf`/`anyOf`/`not`/`discriminator`, a second-level `$ref`, a foreign or absent `$ref` target, a non-object or multi-typed schema, empty `properties`, an undeclared route or method, no 2xx response, no JSON media type — each records a reason and leaves `result` untouched. An empty declared set would pass vacuously, so it is refused rather than counted. The diff is also skipped when the capture observed a **non-2xx** status, because a declared 2xx schema does not describe a 400 body. A gate that cannot tell must not pretend either way: this is the same one-directional discipline as the transport tell list, applied to schemas.
+
+**`declared_absent` forces `result: FAIL` independently of `--min-captures`** — the one place this script departs from its uniform "enough accepted captures" pass rule, and a deliberate divergence (convention #8). It was found by the negative-half proof: dropping `dataContext`/`notifications` from the happy fixture's success body still left the 4xx sibling accepted (legitimately schema-skipped), so at `--min-captures 1` the run exited **0** with `declared_absent` populated — the original bug, masked by a sibling. A declared-but-absent property is the contract surface and the runtime contradicting each other, which is not a "this capture isn't good enough" judgment. `observed_undeclared` is informational only: a runtime may legitimately send more than it documents.
+
+**Windows caveat:** Git Bash rewrites `--openapi-route /api/orders` into a filesystem path via MSYS conversion, which silently degrades to a route-not-declared *warning*. Prefix `MSYS_NO_PATHCONV=1`, use PowerShell, or pass `api/orders` — leading-slash normalization handles it.
+
 ### JSON output shape
 
-One JSON object on stdout, `indent=2`, stable pre-initialized keys. Top level: `report`, `milestone`, `citations`, `captures`, `accepted`, `rejected`, `missing_keys`, `stale`, `in_process_transport`, `min_captures`, `warnings`, `result`, `error`. Each entry in `captures` carries `path`, `exists`, `cited_under_evidence_runtime`, `milestone_match`, `fresh`, `surface`, `transport`, `probe_command`, `status`, `body_parsed`, `body_keys`, `missing_keys`, `build_marker`, and `problems` — empty `problems` means accepted.
+One JSON object on stdout, `indent=2`, stable pre-initialized keys. Top level: `report`, `milestone`, `citations`, `captures`, `accepted`, `rejected`, `missing_keys`, `stale`, `in_process_transport`, `min_captures`, `warnings`, `result`, `error`, plus the OpenAPI set `openapi_unreachable`, `require_openapi_reachable`, `openapi_doc`, `openapi_route`, `openapi_method`, `schema_resolved`, `schema_unresolvable_reason`, `declared_properties`, `declared_absent`, `observed_undeclared`. Each entry in `captures` carries `path`, `exists`, `cited_under_evidence_runtime`, `milestone_match`, `fresh`, `surface`, `transport`, `probe_command`, `status`, `body_parsed`, `body_keys`, `missing_keys`, `build_marker`, `openapi_url`, `openapi_status`, `openapi_reachable`, `schema_compared`, `schema_skipped_reason`, `observed_scope`, `declared_absent`, `observed_undeclared`, and `problems` — empty `problems` means accepted.
+
+Three tri-states carry "not asked" distinctly from "asked and false", so a consumer never reads an unrequested check as a negative result: `openapi_reachable` is `null` when the capture has no OpenAPI field; `schema_compared` is `null` when no diff was requested, `false` when requested-but-skipped, `true` when actually compared; `schema_resolved` is `null` without `--openapi-doc`. Adding the OpenAPI keys was verified to be **purely additive** by diffing old-against-new stdout across all four pre-existing fixtures: every diff line is an addition, zero changed and zero removed.
 
 ### Exit codes
 
-- **0** — at least `--min-captures` accepted captures for this milestone.
-- **1** — evidence failure: no citation at all, a cited file missing, cited outside `evidence/runtime/`, no capture naming this milestone, stale, an in-process transport, a build/test-runner/search probe, a forbidden host, an empty or unparseable body, a missing required key, a status mismatch, or a build-marker mismatch. The JSON names the cause per capture.
-- **2** — structural/usage: missing `--report`/`--milestone`, an unreadable report, or a cited capture that exists but has no `## Captured output` section (structurally not a capture).
+- **0** — at least `--min-captures` accepted captures for this milestone **and** `declared_absent` empty.
+- **1** — evidence failure: no citation at all, a cited file missing, cited outside `evidence/runtime/`, no capture naming this milestone, stale, an in-process transport, a build/test-runner/search probe, a forbidden host, an empty or unparseable body, a missing required key, a status mismatch, a build-marker mismatch, an unreachable/unrecorded OpenAPI document under `--require-openapi-reachable`, or any declared-but-absent schema property. The JSON names the cause per capture.
+- **2** — structural/usage: missing `--report`/`--milestone`, an unreadable report, a cited capture that exists but has no `## Captured output` section (structurally not a capture), an incomplete `--openapi-doc`/`--openapi-route`/`--openapi-method` combination, or an `--openapi-doc` that is missing, not valid JSON, or not a JSON object (the error tells the caller to save the JSON form — there is no YAML parser and no dependency to add one).
 
 ### Parsing rules (condensed)
 
 - **Citations are collected file-wide; scoping happens capture-side.** Every `**Runtime evidence:**` line in the report contributes comma/whitespace-separated path-shaped tokens. Filtering to this milestone then reads each capture's own `- Milestone:` field, using the same word-boundary token match `check_commit_gate.py` uses (so `M1` never matches `M10`). Rationale: `test-report.md`'s `#Task [N]:` headers are documented human-only, so a machine header there would break Quinn's append-only format. A capture naming a *different* milestone is neither accepted nor rejected — it is not this gate's business.
 - **Provenance** is a containment scan over the **cited string**: the segments `evidence/runtime` must appear consecutively with at least one segment after, case-insensitively, backslashes normalized. Deliberately a containment scan rather than `check_commit_gate.py:143`'s prefix anchor, because a capture is legitimately cited either report-relative (`evidence/runtime/x.md`) or with its `.docs/{project}/implementation/` prefix. **Any `..` segment is refused** — that predicate's `lstrip("./")` normalization let `../evidence/review/x.png` collapse to a passing path, and this one does not repeat it. Captures under `evidence/build/` (builder-produced) do not gate.
-- **Transport honesty.** `Transport:` and `Probe command:` are scanned for in-process tells (`WebApplicationFactory`, `CreateClient(`, `TestServer`, `TestClient`, `supertest`, `MockMvc`, `ASGITransport`, `rack-test`, …) and for build/test-runner/search shapes (`dotnet build`, `dotnet test`, `npm test`, `pytest`, `jest`, `tsc`, `--noEmit`, `grep`/`rg`, …) by **word-boundary regex**, so a base URL containing `myorg` does not read as `rg`. A test-runner invocation is not a runtime probe: it proves a suite is green, never that the running system emits this.
+- **Transport honesty.** `Transport:` and `Probe command:` are scanned for in-process tells and for build/test-runner/search shapes by **word-boundary regex**, so a base URL containing `myorg` does not read as `rg`. A test-runner invocation is not a runtime probe: it proves a suite is green, never that the running system emits this. Two categories:
+  - **Framework tells** (`WebApplicationFactory`, `CreateClient(`, `TestServer`, `supertest`, `MockMvc`, `ASGITransport`, `rack-test`, …) and **prose tells** (`in-process`, `direct handler`, `invoked directly`, `same process`, …). The prose set exists because a capture reading `Transport: direct handler call` named no framework and so passed every check — with a well-formed envelope body it was accepted outright. Prose is the weaker signal and does nothing against a misdescribed transport, but the honest author is now caught.
+  - **Non-runtime probes**: `dotnet|go|cargo|mvn|gradle build|test`, `npm|pnpm test`, `yarn`, `pytest`, `jest`, `vitest`, `mocha`, `rspec`, `phpunit`, `tsc`, `--noEmit`, `grep`/`rg`, and — added after it escaped — **`node --test`**, which is flag-shaped rather than subcommand-shaped and therefore matched none of the `<tool> test` patterns. `deno|bun|swift|rails|ctest test` went in with it.
+  Both tuples are duplicated **verbatim** into `check_coverage.py`'s plan-time lint, with a test asserting byte-equality so the two cannot drift — a widening on one side is a widening on both, by construction.
 - **Body extraction** takes the **last balanced JSON object** in `## Captured output` — last, not first, because a probe's output routinely carries a status line and headers first and `run_quiet` merges stderr into the stream. The fence regex matches horizontal whitespace only; a `\s*` there consumes the newline after the opening fence and eats the body's first line (fixed 2026-08-12 — it silently broke `--expect-status` and would have dropped the status line from every capture).
 - **`--require-key` checks top-level names only**, satisfiable in the document itself or in its `body` object — **not recursive**, so an `isSuccess` buried inside a payload cannot pass an envelope check.
 - **Freshness**: the capture's mtime must be `>=` every `--changed-files` mtime. Omitting `--changed-files` skips the check and reports `fresh: null`.
@@ -317,9 +352,11 @@ Proves a cited capture exists under `evidence/runtime/`, names an out-of-process
 - `fixtures/runtime-evidence-missing-key/` — **the observed 2026-08 failure.** Honest transport, local host, runtime probe, status 200 — and a bare `{"id":…,"total":…}` body. Exit **1**, `missing_keys: ["isSuccess","notifications"]`.
 - `fixtures/runtime-evidence-inprocess/` — a capture whose body *does* carry the envelope but whose transport is `WebApplicationFactory<Program>` and whose probe is `dotnet test`. Exit **1**: the in-process tier cannot pass this claim no matter what its body says.
 - `fixtures/runtime-evidence-forbidden-host/` — a real out-of-process probe against the shared **dev** gateway, with `Environment:` recording one service still pointing there. Exit **1** *when invoked with* `--forbid-host dev.internal`; exit **0** without it, because the pattern is project-declared by design.
+- `fixtures/runtime-evidence-openapi-unreachable/` — clean transport, local host, status 200, full envelope, and `OpenAPI: …/swagger.json — 404`. Exit **0** bare, **1** with `--require-openapi-reachable`: the only defect is that the contract surface was not there.
+- `fixtures/runtime-evidence-schema-mismatch/` — a capture sending `statusCode`/`isSuccess`/`data`/`traceId`, plus **two** saved documents for the same operation. Against `openapi.json` (a one-hop `$ref` to a 5-property `OrderEnvelope`): exit **1**, `declared_absent: ["dataContext","notifications"]`, `observed_undeclared: ["traceId"]`. Against `openapi-composed.json` (the same response expressed with `allOf`): exit **0**, `schema_resolved: false`, and a warning — the warn-never-fail path proven on a real document rather than only in a unit test.
 - **Staleness has no fixture on purpose** — mtimes do not survive a clone. It is covered only in `run_self_test()`, using synthetic `os.utime` ordering rather than the real clock (the pattern `check_commit_gate.py` established).
 
-`python scripts/check_runtime_evidence.py --self-test` runs a bundled in-process `unittest` suite (26 cases) covering the happy path, the missing-envelope-key case, key-nested-deeper (must fail) and key-in-`body` (must pass), every in-process tell, test-runner and build probes, the `myorg`-is-not-`rg` word-boundary case, forbidden hosts in both `Base URL:` and `Environment:`, build-marker mismatch and absence, staleness, `evidence/build/` non-gating, `..` refusal, milestone scoping including `M1`/`M10`, the status-line fence regression, empty output, `--min-captures`, and the structural exits.
+`python scripts/check_runtime_evidence.py --self-test` runs a bundled in-process `unittest` suite (63 cases) covering the happy path, the missing-envelope-key case, key-nested-deeper (must fail) and key-in-`body` (must pass), every in-process tell, test-runner and build probes, the `myorg`-is-not-`rg` word-boundary case, forbidden hosts in both `Base URL:` and `Environment:`, build-marker mismatch and absence, staleness, `evidence/build/` non-gating, `..` refusal, milestone scoping including `M1`/`M10`, the status-line fence regression, empty output, `--min-captures`, the structural exits, and — for the OpenAPI half — the port-is-not-a-status case, separator tolerance, every unresolvable-schema shape as a warning, inline and Swagger-2.0 schemas, `body`-scope comparison, non-recursive nesting, leading-slash normalization, the skip on a non-2xx capture, and the sibling-masking case that made `declared_absent` override `--min-captures`.
 
 ## check_acceptance_suite.py
 
@@ -330,21 +367,53 @@ Inputs: Alex's `acceptance-matrix.md` (authored at plan time, derived from requi
 ### Invocation
 
 ```bash
+# Execution mode — gates that the matrix was RUN (build Phase 5, shipping Stage 1)
 python check_acceptance_suite.py --matrix <path> --results <path> \
     [--repo <dir>] [--require-priority P0[,P1]] [--min-scenarios <N>]
+# Structure mode — gates that the matrix is WELL-FORMED (bgpdd-plan Phase 3.5)
+python check_acceptance_suite.py --lint-only --matrix <path> [--min-scenarios <N>]
 python check_acceptance_suite.py --self-test
 ```
 
 `--matrix` and `--results` required. `--repo` defaults to `.`; `--min-scenarios` to `1`. `--require-priority` semantics are **"at or above"**: the gated set is every priority numerically ≤ the max value given, so `P1` alone gates {P0, P1} and a careless value can never skip P0. **Omitting it gates every scenario** — otherwise an all-P1 matrix would pass trivially.
 
+### Structure mode (`--lint-only`)
+
+Two gates, one script, because they read the same grammar and a second file would drift into a shadow contract. `--lint-only` runs at **plan time on Alex's output**, before any code exists and therefore before there is anything to execute.
+
+`--results` **with** `--lint-only` is a usage error (exit 2), not a silent ignore: the two modes answer different questions, and a caller who passes both has misunderstood which one they wanted. `--require-priority` is still validated but **does not scope linting** — structural validity is priority-blind, since a broken scenario is broken at every priority — and passing it emits a warning saying so. `--repo` is accepted and ignored (nothing resolves paths in structure mode, and nothing reads an mtime, so there is no freshness dimension here).
+
+Blocking conditions, each with its own JSON array so the failure is addressable rather than a single boolean:
+
+| Array | Defect |
+|---|---|
+| `missing_priority` | scenario heading declares no `P0`–`P3` — cannot be execution-scoped honestly |
+| `missing_step_table` | no table with `GO`/`DO`/`ASSERT` columns — the scenario proves nothing |
+| `missing_columns` | no `Stores` or no `Mode` column |
+| `unrecognized_mode` | a `Mode` cell that is neither `auto` nor `manual` |
+| `missing_stores` | `DO` reads as state-changing but `Stores` is empty — the inverse check cannot run |
+| `duplicate_keys` | a scenario id on two headings, or a step number twice in one scenario — `[inverse of N]` and result keys would both be ambiguous |
+| `malformed_steps` | `GO`, `DO` and `ASSERT` all empty — a phantom row |
+| `dangling_inverse` | `[inverse of N]` naming a step that does not exist |
+| `invalid_exemption` | `[no inverse: …]` with no reason text, or on a step that also declares `[inverse of N]` |
+| `undeclared_inverse` | a state-changing step with neither an inverse nor an exemption |
+
+**`missing_columns` blocks here where execution mode only warns** — a labelled divergence (convention #8). Without `Stores` and `Mode`, the Mode check, the Stores check and the inverse check all silently no-op, so a green lint would mean "nothing was checkable": precisely the failure mode this whole tier exists to close.
+
+**The exemption escape hatch.** `[no inverse: <reason>]` anywhere on the row, case-insensitive, satisfies the inverse requirement. The reason must contain at least one letter — `[no inverse: -]` is refused. **Presence is checkable; truth is not.** The gate cannot know whether "a queued distribution job cannot be un-queued" is true. The marker buys an author nothing except a place to be wrong in writing, where a human reviewer can see it. That is still strictly better than the alternative, which is an inverse silently absent.
+
+Exit codes: **0** enough scenarios and every blocking array empty; **1** any structural defect, any undeclared inverse, or too few scenarios; **2** `--results` passed alongside `--lint-only`, `--matrix` absent, the matrix missing/unreadable, no parseable scenario, or a bad `--require-priority` token.
+
 ### JSON output shape
 
-One `indent=2` object, keys pre-initialized. Top level: `matrix`, `results`, `require_priority`, `min_scenarios`, `scenarios`, `gated_scenarios`, `steps`, `steps_gated`, `passed`, `failed`, `blocked`, `not_run`, `missing_results`, `unevidenced_manual`, `dangling_inverse`, `undeclared_inverse`, `extra_results`, `warnings`, `result`, `error`. Each `steps` entry carries `key`, `scenario`, `n`, `mode`, `stores`, `inverse_of`, `state_changing`, `gated`, `priority`, `status`, `detail`, `evidence`, `evidence_ok`, `problems` — empty `problems` means the step is green. On exit 2 the object is the minimal `{"result": "ERROR", "error": …}` envelope.
+One `indent=2` object, keys pre-initialized. Top level: `matrix`, `results`, `lint_only`, `require_priority`, `min_scenarios`, `scenarios`, `gated_scenarios`, `steps`, `steps_gated`, `passed`, `failed`, `blocked`, `not_run`, `missing_results`, `unevidenced_manual`, `dangling_inverse`, `undeclared_inverse`, `extra_results`, `warnings`, `result`, `error`, plus the structure-mode set `linted_scenarios`, `exempt_steps`, `invalid_exemption`, `missing_priority`, `missing_step_table`, `missing_columns`, `unrecognized_mode`, `missing_stores`, `duplicate_keys`, `malformed_steps`. Each `steps` entry carries `key`, `scenario`, `n`, `mode`, `stores`, `inverse_of`, `state_changing`, `gated`, `priority`, `status`, `detail`, `evidence`, `evidence_ok`, `exempt`, `no_inverse_reason`, `linted`, `problems` — empty `problems` means the step is green. On exit 2 the object is the minimal `{"result": "ERROR", "error": …}` envelope.
+
+**Every key is present in both modes**, so the two reports diff key-for-key and a consumer never branches on key existence: structure mode leaves the execution arrays empty and `results` `null`, execution mode leaves `linted_scenarios` empty. Both modes build step entries through one shared function, so the per-step key set is provably identical — there is a self-test asserting it.
 
 ### Exit codes
 
-- **0** — gated scenarios ≥ `--min-scenarios`, at least one gated step had a result, and `missing_results` / `failed` / `blocked` / `not_run` / `unevidenced_manual` / `dangling_inverse` are all empty.
-- **1** — any gated step missing a result; any gated result `FAIL`/`BLOCKED`/`NOT RUN`; any gated **manual** step reporting `PASS` without an existing `evidence/runtime/` citation; any **dangling** `[inverse of N]` (at *any* priority); too few gated scenarios; zero gated steps.
+- **0** — gated scenarios ≥ `--min-scenarios`, at least one gated step had a result, and `missing_results` / `failed` / `blocked` / `not_run` / `unevidenced_manual` / `dangling_inverse` / `missing_step_table` are all empty.
+- **1** — any gated step missing a result; any gated result `FAIL`/`BLOCKED`/`NOT RUN`; any gated **manual** step (or unrecognized-mode step) reporting `PASS` without an existing `evidence/runtime/` citation; any **dangling** `[inverse of N]` (at *any* priority); any gated scenario whose step table did not parse; too few gated scenarios; zero gated steps.
 - **2** — matrix or results missing/unreadable, results empty, no parseable scenario in the matrix, no parseable result line, or a `--require-priority` value that is not a `P0`–`P3` token.
 
 ### The results grammar Quinn emits
@@ -361,7 +430,9 @@ One `indent=2` object, keys pre-initialized. Top level: `matrix`, `results`, `re
 ### Parsing rules (condensed)
 
 - **Scenario** = a `##` heading containing an id matching `\b[A-Za-z]{1,6}-\d+\b`; priority from `\bP([0-3])\b` in the heading; requirement IDs collected only from **inside parentheses** in the heading, so the scenario's own `AS-2` is never mistaken for a requirement. A scenario with **no** priority token is gated anyway, with a warning — an unprioritized scenario cannot be filtered honestly.
-- **Step table** = the first table under the scenario whose header cells include `go`, `do`, and `assert`; columns are looked up **by header name**, so column order is free. `Mode` defaults to `auto` when blank or absent (absent emits a warning — nothing then gets manual-evidence checking). `Stores` splits on `, / ; +`.
+- **Step table** = the first table under the scenario whose header cells include `go`, `do`, and `assert`; columns are looked up **by header name**, so column order is free. `Stores` splits on `, / ; +`.
+- **`Mode` fails closed.** `manual` demands evidence, so an unrecognized value must not be the cheaper option: a cell that is present but is neither `auto` nor `manual` — `Manual!`, `semi`, `manual (device)` — is gated **as manual**, with a warning saying it was gated that way because the mode was unrecognized rather than because it declared manual. A blank cell or an absent column still defaults to `auto`; that boundary is deliberate, since retroactively making a pre-`Mode` matrix evidence-bearing would break callers, and `--lint-only` blocks the missing column anyway. Before this, `semi` was silently read as `auto` and a device step citing nothing passed green — verified against the previous revision, not assumed.
+- **A gated scenario whose step table does not parse blocks.** One misspelled header cell (`Asserts` for `ASSERT`) drops the entire table, so its steps never enter the step list and can never land in `missing_results`, `not_run` or `unevidenced_manual` — an unevidenced manual device step exited 0/PASS on nothing but a spelling. It now lands in `missing_step_table` in **both** modes. Scoped to *gated* scenarios in execution mode so priority filtering keeps its meaning. This is the same class as `dangling_inverse`, which already blocks in both modes: the artifact misrepresenting its own coverage, not a coverage judgment — and unlike `undeclared_inverse` it rests on no heuristic.
 - **`[inverse of N]`** is matched over the whole row line, so placement is free, and resolves **scenario-locally**.
 - **Manual evidence** is accepted only if the cited token is path-shaped, passes the same `..`-refusing `evidence/runtime/` containment scan `check_runtime_evidence.py` uses, **and** resolves to an existing file against the results file's directory, then `--repo`, then `.`, then as given.
 
@@ -369,13 +440,19 @@ One `indent=2` object, keys pre-initialized. Top level: `matrix`, `results`, `re
 
 Verifies the matrix was **executed and evidenced** — never that a scenario is the *right* scenario, that its ASSERT column asserts the right thing, or that preconditions and ordering were honored; authoring is Alex's judgment and stays reviewable prose. It **never opens** a cited capture beyond an existence check — whether the capture is honest (out-of-process transport, freshness, response keys) is `check_runtime_evidence.py`'s job, and running both is the point. **Auto steps are trusted on their `PASS` token** with no exit code required — deliberately narrower than `check_agent_report.py`, because auto steps are already covered by the per-milestone test and commit gates.
 
-**`undeclared_inverse` is advisory and non-blocking**, and this is deliberate (convention #8 — it refines the "every state-changing step exercises its inverse" doctrine rather than enforcing it here). Three reasons: by the time this gate runs the code is written, so blocking would ask Quinn to author a scenario Alex owed weeks earlier; the `state_changing` detector rests on a mutating-verb **allowlist** and is knowably incomplete, and a blocking gate built on an incomplete heuristic teaches that green means "the heuristic found nothing"; and legitimate one-way steps exist (nothing un-distributes a queued job, nothing un-reinstalls). A **dangling** `[inverse of N]` does block at every priority, because that is the artifact misrepresenting its own coverage rather than a coverage judgment. The consequence of a genuinely missing inverse is still caught and still blocks — as `missing_results`, if Alex wrote the step and Quinn didn't run it.
+**`undeclared_inverse` blocks under `--lint-only` and stays advisory in execution mode.** A deliberate mode divergence (convention #8), refining the "every state-changing step exercises its inverse" doctrine rather than contradicting it: same signal, opposite posture, because both the cost of the fix and the meaning of green differ by phase.
+
+At **plan time** the matrix *is* the artifact under authorship, the fix is a one-line edit, and there is nothing else green could mean — so it blocks. At **build time** the code is already written, so blocking would ask Quinn to author a scenario Alex owed weeks earlier; the `state_changing` detector rests on a mutating-verb **allowlist** and is knowably incomplete, and a blocking gate built on an incomplete heuristic teaches that green means "the heuristic found nothing"; and legitimate one-way steps exist (nothing un-distributes a queued job, nothing un-reinstalls) — so it warns. A **dangling** `[inverse of N]` blocks in both modes at every priority, because that is the artifact misrepresenting its own coverage rather than a coverage judgment. The consequence of a genuinely missing inverse is still caught and still blocks at build — as `missing_results`, if Alex wrote the step and Quinn didn't run it.
 
 ### Fixtures & self-test
 
 `fixtures/acceptance-happy/` (exit **0**), `-missing-inverse/`, `-unevidenced-manual/`, `-notrun/` (exit **1** each) — all four modelling the Slide RMM journey: connect → map → green tick → add policy → distribute → verify installed on device → remove → verify uninstalled → reinstall, across 4 scenarios and 14 steps with 3 manual steps citing real captures. The happy fixture deliberately carries a non-empty `undeclared_inverse` while still exiting 0, which is the proof the advisory is genuinely non-blocking.
 
-`python scripts/check_acceptance_suite.py --self-test` runs 39 in-process cases covering matrix/results parsing, every blocking condition, the manual-evidence paths (missing file, `evidence/build/` instead of `evidence/runtime/`, `..` traversal, resolution against `--repo`, a `.docs/`-prefixed citation keeping its leading dot), dangling vs undeclared inverses, cross-scenario inverse non-resolution, priority-scope semantics, and every exit-2 trigger.
+**`acceptance-happy` exits 0 in execution mode and 1 under `--lint-only`, and that is correct, not a broken fixture.** It is the mode divergence demonstrated on one unchanged input: the same two uninstall/reinstall steps that are legitimately one-way are tolerated at build time and demanded in writing at plan time. Read it as documentation of the posture change rather than as a defect.
+
+`fixtures/acceptance-lint-inverse/` is structure-mode only — a matrix with no results file and no evidence directory, isolating one signal. Two matrices differing by exactly one marker: `acceptance-matrix.md` exits **1** with `undeclared_inverse: ["AL-2.2"]` (a policy distribution nothing undoes) and every other array empty; `acceptance-matrix-exempt.md` adds `[no inverse: a queued distribution job cannot be un-queued; AL-2.4 removes the policy instead]` and exits **0** with `exempt_steps: ["AL-2.2"]`. The pair is the escape hatch's proof that the blocking path is satisfiable rather than a dead end.
+
+`python scripts/check_acceptance_suite.py --self-test` runs 71 in-process cases covering matrix/results parsing, every blocking condition in both modes, the manual-evidence paths (missing file, `evidence/build/` instead of `evidence/runtime/`, `..` traversal, resolution against `--repo`, a `.docs/`-prefixed citation keeping its leading dot), dangling vs undeclared inverses, cross-scenario inverse non-resolution, priority-scope semantics, every structural lint condition, the exemption grammar including the both-markers contradiction and the no-op-on-a-read-only-step warning, the two fail-closed regressions (an unrecognized `Mode`, an unparsed step table) with their ungated/blank-cell boundaries, key parity between the two modes' output, and every exit-2 trigger.
 
 ## next_milestone.py
 

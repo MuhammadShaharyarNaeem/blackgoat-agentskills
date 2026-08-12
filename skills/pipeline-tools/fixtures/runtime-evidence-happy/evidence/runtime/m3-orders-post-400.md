@@ -10,6 +10,7 @@ negative-half proof required by `test-driven-development`.
 - Surface: api
 - Transport: out-of-process HTTP (newman)
 - Base URL: http://localhost:5142
+- OpenAPI: http://localhost:5142/swagger/v1/swagger.json — 200
 - Build marker: 1.4.2+sha.9f2c1ab
 - Probe command: `newman run postman/orders.json --folder create-order-invalid`
 - Captured: 2026-08-12T14:03:19Z
