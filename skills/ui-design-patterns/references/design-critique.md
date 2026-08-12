@@ -51,6 +51,7 @@ Verify on the built result (computed values / screenshots, not intentions). Each
 - Keyboard: focus visible and ordered; interactive elements reachable.
 - `data-test` IDs present on interactive elements (cross-contract with `vue3-spa-patterns` when the project is Vue).
 - Nothing from the SKILL.md "Category Defaults to Refuse" list appears without the brief earning it.
+- Nothing from [ai-tells.md](ai-tells.md) appears without the brief earning it — check the groups scoped to this surface's mode, and always the fabricated-content group (placeholder-canon names, fake-perfect numbers, generic avatars) against whatever data the surface actually renders.
 
 ## 6. Severity Mapping (into your standard taxonomy)
 
