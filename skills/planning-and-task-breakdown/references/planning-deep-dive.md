@@ -96,7 +96,17 @@ The explicit checkpoint block required after every 2-3 tasks (Step 5 of the cont
 - [ ] All tests pass
 - [ ] Application builds without errors
 - [ ] RUNTIME EXIT CRITERION — run `[exact command]`; expect `[exact observable output]`
+- [ ] RUNTIME PROBE: start: `[exact start command]`; probe: `[exact probe command]`; expect-status: [N]; require-keys: [k1, k2]
 - [ ] Review with human before proceeding
+
+The prose criterion carries intent; the `RUNTIME PROBE:` line makes it **executable by
+someone other than its author**, which is what lets the build pipeline hand it to QA and
+gate on the capture. `expect-status:`/`require-keys:` are required whenever the
+milestone's surface is `api`, `web+api`, or `fn`; on a `[vs:none]` milestone replace the
+probe fields with `justification: [why nothing is observable]`. `check_coverage.py`'s
+plan-mode `runtime-criterion` lint rejects a probe that is a build, typecheck, search, or
+**test-runner** command — `npm test` proves a suite is green, never that the running
+system emits anything.
 ```
 
 ## Plan Document Template
@@ -118,7 +128,7 @@ Before starting implementation, you MUST read the following documents to underst
 
 ## Task List
 
-### Milestone 1 — Contacts: list/create endpoints [API]
+### Milestone 1 — Contacts: list/create endpoints [API] [vs:api]
 
 ## Task 1: Contacts table and list/create endpoints
 
@@ -154,9 +164,10 @@ Response envelope for both endpoints is `{ data: Contact[] | Contact, error: nul
 - [ ] All tests pass
 - [ ] Application builds without errors
 - [ ] RUNTIME EXIT CRITERION — run `curl -s localhost:3000/api/contacts`; expect `{"data":[],"error":null}` on a clean DB
+- [ ] RUNTIME PROBE: start: `npm run dev`; probe: `curl -sS -i localhost:3000/api/contacts`; expect-status: 200; require-keys: data, error
 - [ ] Review with human before proceeding
 
-### Milestone 2 — Contacts list view [UI]
+### Milestone 2 — Contacts list view [UI] [vs:web+api]
 
 ## Task 2: Contacts list page
 
@@ -192,9 +203,10 @@ Reads the `{ data: Contact[], error: null }` envelope from `GET /api/contacts` a
 - [ ] All tests pass
 - [ ] Application builds without errors
 - [ ] RUNTIME EXIT CRITERION — open `/contacts`, submit the create form; expect the new contact to appear in the rendered list without a reload
+- [ ] RUNTIME PROBE: start: `npm run dev:api` and `npm run dev:web` with the web config repointed at `localhost:3000`; probe: drive `/contacts` in a browser and submit the create form; expect-status: 200; require-keys: data, error
 - [ ] Review with human before proceeding
 
-### Milestone 3 — Contacts: search and pagination [API]
+### Milestone 3 — Contacts: search and pagination [API] [vs:api]
 
 ## Task 3: Search and pagination on the list endpoint
 
@@ -230,6 +242,7 @@ Reads the `{ data: Contact[], error: null }` envelope from `GET /api/contacts` a
 - [ ] All tests pass
 - [ ] Application builds without errors
 - [ ] RUNTIME EXIT CRITERION — run `curl -s "localhost:3000/api/contacts?q=smith"`; expect only name-matching contacts in `data`
+- [ ] RUNTIME PROBE: start: `npm run dev`; probe: `curl -sS -i "localhost:3000/api/contacts?q=smith"`; expect-status: 200; require-keys: data, error
 - [ ] Review with human before proceeding
 
 ## Risks and Mitigations

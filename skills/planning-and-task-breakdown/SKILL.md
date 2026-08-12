@@ -60,6 +60,7 @@ This is the operational spine. Follow it as written.
 1. **Acceptance criteria assert observable effects, never the existence of code.** Every criterion must name an effect observable at the boundary the requirement is actually about. A criterion satisfiable by code compiling, a file existing, a symbol being defined, or a type checking is **not a criterion**; when you cannot express one as an observable effect, resolve that before writing the task.
 2. **A `provides:` identifier names the effect a consumer needs, not the artifact.** When a task authors a definition that only takes effect through a later action — infrastructure to apply, a migration to run, config to deploy, a package to publish — the identifier belongs to the task performing the effect, not the authoring one. Where authoring and effecting are separate tasks, use separate identifiers (`x.module` for the authored artifact, `x` for the live resource) and let consumers of the live resource consume the effect identifier.
 3. **External prerequisites are provisioned before they're consumed.** Any external resource a task consumes — cloud identity/trust, secrets, provisioned infrastructure — must be provisioned by a lower-numbered task; consuming one no earlier task provisions is a planning defect. **A human ruling is an external prerequisite too:** when a task's precondition is a decision only a person can give (a vendor choice, a policy call, an accepted trade-off), the plan must contain an earlier, explicitly scheduled task whose deliverable is *obtaining that ruling*, early enough that the answer arrives before the blocked task's milestone. A `[BLOCKED]` tag with no earlier eliciting task is a scheduled stall, not a flag.
+4. **An in-process observation is not the effect.** A criterion satisfied *inside* the process that serves the behavior names the artifact that ran — the handler, the query, the assertion — rather than the effect, which is the bytes a client received, the pixels a person saw, or the state a device ended in. An in-process test host (`WebApplicationFactory`, `TestServer`, `supertest`, `MockMvc`) executes real code and produces a real green result, which is what makes it the most convincing wrong criterion available: everything about it is true except that it observed the boundary the requirement is about. Write the criterion at the boundary; the tier that can prove it is `{PLUGIN_ROOT}/runtime-evidence/SKILL.md`'s Tier 3.
 
 (Rationale for all three, example pairs, and the resolve-time vs run-time distinction: [deep dive](references/planning-deep-dive.md).)
 
@@ -86,10 +87,38 @@ This is the operational spine. Follow it as written.
 
 **Milestone domain homogeneity**: every milestone contains tasks of ONE domain only — all `[UI]` or all `[API]` — because the build pipeline routes each milestone to a single specialized builder (Mason for `[API]`, Nova for `[UI]`); a mixed milestone is rejected at build time as a planning defect. This is a deliberate refinement, per convention #8, of Step 3's "Slice Vertically" rule: a vertical slice still governs ordering, but it now spans a PAIR of adjacent milestones (the slice's `[API]` milestone immediately followed by its `[UI]` milestone), with the cross-domain seam expressed through `Boundary contracts:` (`provides:` on the API side, `consumes:` on the UI side — already enforced by the pipeline-tools `consumes-provides` lint, since the API milestone's tasks are lower-numbered).
 
+**Every milestone declares its verification surface with a `[vs:<surface>]` heading tag.** This is a second axis, orthogonal to `[UI]`/`[API]`: the domain tag says *who builds it*, the surface tag says *what evidence proves it*. Both live on the heading — `### Milestone 3 — Order envelope [API] [vs:web+api]`. The tag is lowercase by design so it cannot collide with `[API]`.
+
+| Tag | Use when the milestone's observable effect is… | Evidence it obligates |
+|-----|-----------------------------------------------|-----------------------|
+| `[vs:api]` | a response a client receives | out-of-process capture; contract surface (OpenAPI/Swagger) reachable |
+| `[vs:ui]` | something a person sees | rendered evidence (screenshot / accessibility-tree read) |
+| `[vs:web+api]` | a frontend behavior that depends on local APIs | both, **plus** the environment manifest recording which local URLs were used |
+| `[vs:rmm]` | state on a device or agent | device/agent state read back, plus the service set that was running |
+| `[vs:fn]` | an async effect (function, queue, cache, bus) | invocation plus the effect read back from its sink |
+| `[vs:none]` | nothing a client, person, or device can observe | **a written justification line in the checkpoint** |
+
+**A missing or unknown surface tag is a planning defect**, mechanically: `next_milestone.py` returns `MIXED` (exit 1) and the build pipeline halts before Phase 1, exactly as it does for a mixed or untagged domain. This is deliberate and it is the point — a surface that can be silently omitted is a surface that will be, and the milestone whose evidence requirement nobody declared is the milestone whose claim nobody checks. `[vs:none]` is available and cheap, but it is an *explicit, reviewable claim* rather than an exemption: write why there is nothing to observe, and expect that sentence to be challenged.
+
+**Choose the surface from the requirement, not from the task list.** A milestone that adds a database column and a wrapper around it is `[vs:api]` if a client's response shape changes, `[vs:none]` only if nothing outside the process can tell the difference. Ask what the requirement's grammatical subject *receives*; that names the surface.
+
 ### Multi-Frontend Shared Component Dependency Rule
 For multi-frontend workspace architectures, initial Phase 1 / Foundation task breakdowns MUST include establishing shared package infrastructure (e.g. `packages/ui`) before application-level development, and application tasks MUST list completion of shared UI component primitives as explicit prerequisites.
 
 **Every milestone and checkpoint declares at least one runtime exit criterion, written as the command plus the expected observable output** — a criterion that names no command is satisfied by opinion. Add an explicit `### Checkpoint:` block at each of rule 3's points, containing at minimum: all tests pass, application builds without errors, a `RUNTIME EXIT CRITERION` line (run `[exact command]`; expect `[exact observable output]`), and review with human before proceeding — level-3, never `## Checkpoint:`: a level-2 checkpoint heading terminates the milestone block `next_milestone.py` extracts, silently dropping the exit criterion from the builder's brief. Example block: [deep dive](references/planning-deep-dive.md).
+
+**Each checkpoint also carries a machine-parseable `RUNTIME PROBE:` line** beside the prose criterion. The prose line carries intent; this line makes the criterion **executable by someone other than its author** — which is the whole point, because a probe invented at verification time is invented by the party motivated to soften it. Shape:
+
+```
+RUNTIME EXIT CRITERION — run `<probe>`; expect `<observable>`
+RUNTIME PROBE: start: `<start command>`; probe: `<probe command>`; expect-status: <N>; require-keys: <k1, k2>
+```
+
+- `start:` is how the application is brought up as a user brings it up. In a multi-service estate, name **every** service that must be running and note that their configuration is repointed at local URLs — a probe against a frontend still pointing at shared dev proves nothing about local.
+- `probe:` must exercise the running system. A build, typecheck, bundle, search, **or test-runner** command is not a probe: `dotnet test` proves a suite is green, never that the hosted app emits this. `check_coverage.py`'s plan-mode `runtime-criterion` lint rejects those shapes.
+- `expect-status:` and `require-keys:` are required when the surface is `api`, `web+api`, or `fn` — they become the gate's `--expect-status` / `--require-key` arguments verbatim.
+- When the surface is `[vs:none]`, replace the probe fields with `justification: <why nothing is observable>`. The lint checks that the sentence is present, not that it is true.
+- When no harness can run the probe yet, building it is its own earlier milestone (Step 5, rule 5), and until it exists the criterion is recorded BLOCKED — never PASS.
 
 **A compile, typecheck, bundle, or source-search command is not a runtime exit criterion.** For any milestone delivering user-visible behavior the criterion must exercise the built application as a user reaches it — started, driven, and the asserted effect read back from the running system — and it must exercise the *stateful* behavior the requirement names (a toggle actually toggled, a route actually navigated, a mode actually switched), not the first paint. `tsc --noEmit`, a clean bundle, and a search proving a symbol exists all prove the code was written; none prove it runs. If no harness can do this yet, building it is its own earlier milestone (Step 5, rule 5), and until it exists every such criterion is recorded BLOCKED — never PASS.
 
@@ -140,6 +169,9 @@ Before starting implementation, confirm:
 - [ ] Two-implementers test per task: could two competent implementers produce structurally different solutions from this task's text? If yes, a decision is missing — resolve it in the plan, not the build
 - [ ] Stack Blueprint Verification: all stack-mandated patterns (e.g. Resource project isolation, Response envelope `.ToResult()`, FluentValidation for .NET backend APIs) from active stack methodology skills are explicitly mapped to concrete tasks
 - [ ] Checkpoints exist between major phases; every milestone/checkpoint carries a command + expected-output runtime exit criterion, with no gate mixing an unfakeable criterion and an aggregate-green one (Step 5)
+- [ ] Every milestone heading carries a valid `[vs:<surface>]` tag alongside its `[UI]`/`[API]` domain tag; every `[vs:none]` carries its written justification
+- [ ] Every checkpoint carries a conforming `RUNTIME PROBE:` line whose `probe:` exercises the running system — no build, typecheck, search, or **test-runner** command; `expect-status`/`require-keys` present wherever the surface is `api`, `web+api`, or `fn`
+- [ ] No acceptance criterion for a client-, person-, or device-observable effect is satisfiable in-process (Step 1, corollary 4)
 - [ ] Every High-impact risk named by research or design traces to a specific acceptance or checkpoint criterion that would **detect** it — a risk whose only entry is prose in the Risks table is unmitigated, because nothing in the plan fails when the mitigation does not hold
 - [ ] The plan has been surfaced for human review — via your `<handoff>` to the Orchestrator when delegated, or directly to the user in the main session
 
