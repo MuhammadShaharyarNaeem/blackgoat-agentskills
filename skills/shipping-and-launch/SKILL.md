@@ -27,6 +27,19 @@ The Security, Performance, and Accessibility sections below are the delegation s
 - [ ] No `console.log` debugging statements in production code
 - [ ] Error handling covers expected failure modes
 
+#### Pre-Merge Local Runtime Smoke
+
+**Vera-owned. Pre-merge, local.** Run from a clean checkout of the branch under review, before it merges — not after a deploy, and not against a shared staging host. In `bgpdd-shipping` this section is part of Vera's Stage 1 assignment alongside Code Quality, Performance, and Accessibility.
+
+- [ ] The application starts from a clean checkout using the start command **declared in the plan** — never one you inferred; a milestone with no declared start command is a planning defect to escalate, not a blank to fill
+- [ ] Every endpoint the epic touched returns its declared response envelope, observed from outside the process
+- [ ] The contract surface (OpenAPI/Swagger) is reachable, wherever the stack exposes one
+- [ ] In a multi-service estate, every service's configuration is repointed at local URLs, and the manifest records which service was reached at which URL
+
+The tier ladder, the out-of-process probe, the capture artifact and the `**Runtime evidence:**` citation that carries it are owned by `{PLUGIN_ROOT}/runtime-evidence/SKILL.md` — read it before running this section; none of it is restated here. An item whose precondition is absent (the app will not start, the environment cannot be repointed, the transport is unavailable) is `BLOCKED` naming what was missing, never `PASS`.
+
+**Deliberate divergence (convention #8) from the deployment-time health checks in this same file.** Those are Dep's, they run against a deployed environment, and this section neither replaces nor duplicates them: Infrastructure's *"Health check endpoint exists and responds"*; Staged Rollout step 1's *"Full test suite in staging environment"* and *"Manual smoke test of critical flows"* and step 2's *"Verify deployment succeeded (health check)"*; Post-Launch Verification's *"Check health endpoint returns 200"* and *"Test the critical user flow manually"*; and the after-deploying Verification items *"Health check returns 200"* and *"Critical user flow works"*. Every one of those presupposes a deployed artifact and answers **did the deploy land**. This section answers a different question, earlier and cheaper: **does the change work at all when a person runs it** — the question a green in-process test suite cannot answer, and the one that went unasked before merge.
+
 #### Security
 
 - [ ] No secrets in code or version control

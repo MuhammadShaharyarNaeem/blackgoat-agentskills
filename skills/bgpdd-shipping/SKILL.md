@@ -53,7 +53,7 @@ This pipeline's only refinement: agents here touch a shipping-ready codebase, so
 
 ## Path Model
 
-- **Tier 1 (global knowledge base)**: `.docs/summary/{feature}/` — produced ONLY by `/bgpdd-discovery`. Read-only in this pipeline.
+- **Tier 1 (global knowledge base)**: `.docs/summary/{feature}/` — produced ONLY by `/bgpdd-discovery`. Read-only in this pipeline, with **one narrow, deliberate exception (convention #8)**: Step 6.4 folds the proven acceptance results back into `.docs/summary/{feature}/QA/manual-testing.md`. This refines the read-only rule rather than breaking it — the write happens once, to one file, only after the launch squad is green, and only to record behavior that was just verified. The alternative is a baseline that rots after the first feature ships and a discovery re-run that re-derives it from scratch every time. Nothing else under `.docs/summary/` is ever written here.
 - **Tier 2 (per-enhancement workspace)**: `.docs/{project-name}/` — this pipeline's read-write workspace (plan.md, test-report.md, verification-report.md, security-report.md, ship-decision.md, game-tape.md, orchestrator-state.json). Never write shipping artifacts to Tier 1.
 
 ---
@@ -88,9 +88,10 @@ Delegate to the following three agents in **two stages**. Each prompt MUST (a) i
 - **Stage 2 — Cipher and Dep in parallel**: After Vera's handoff returns, delegate Cipher and Dep **in parallel** — start both delegations in a single batch.
 
 1. **Vera (QA & Performance)** — delegate to the **Vera** agent (Stage 1)
-   - **Assignment**: `Code Quality`, `Performance`, and `Accessibility` checklists.
-   - **Prompt**: "Execute the Code Quality, Performance, and Accessibility sections of the `shipping-and-launch` skill (`{PLUGIN_ROOT}/shipping-and-launch/SKILL.md`) against the current codebase. [Paste the exact checklist section text here.] Run all tests, linters, and accessibility checks. Write your per-item report to `.docs/{project-name}/implementation/verification-report.md` per your persona's Verification Report contract, ending in the machine-read `**Verdict:**` line. Report back with a final pass/fail."
+   - **Assignment**: `Code Quality`, `Pre-Merge Local Runtime Smoke`, `Performance`, and `Accessibility` checklists.
+   - **Prompt**: "Execute the Code Quality, **Pre-Merge Local Runtime Smoke**, Performance, and Accessibility sections of the `shipping-and-launch` skill (`{PLUGIN_ROOT}/shipping-and-launch/SKILL.md`) against the current codebase. [Paste the exact checklist section text here.] Run all tests, linters, and accessibility checks — and **start the application and probe it**, per the Runtime Smoke section and your `runtime-evidence` dependency: a built codebase is not a running one, and every claim about behavior a client, person, or device can observe needs an out-of-process capture cited by path. Write your per-item report to `.docs/{project-name}/implementation/verification-report.md` per your persona's Verification Report contract, ending in the machine-read `**Verdict:**` line. Report back with a final pass/fail."
    - **CRITICAL PATHING**: Vera's report path above is mandatory — the Step 3 Report Gate reads that file, not her handoff.
+   - **Do not drop the Runtime Smoke section from the paste.** It is the only item in her assignment that requires a *started* application, and it is the section that would have caught the 2026-08 response-envelope escape. Omitting it silently returns this pipeline to build-and-lint verification.
 
 2. **Cipher (Security Auditor)** — delegate to the **Cipher** agent (Stage 2)
    - **Assignment**: `Security` checklist.
@@ -108,6 +109,11 @@ Read the returned handoffs as each stage completes — Vera's after Stage 1, the
   `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_agent_report.py --report .docs/{project-name}/implementation/security-report.md`
   The full CLI contract (JSON shape, exit codes, parsing rules) lives in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`. Exit code 0 = the report's verdict is a machine-read `Pass` backed by evidenced check lines and zero Critical findings — proceed. Exit code 1 = **BLOCK**: the JSON body names the failing/blocked/unrun/unevidenced items and Critical findings — route per the failure rules below. Exit code 2 = the report is missing or structurally non-conforming — treat this as a defect in the agent's artifact, not the tool: route back to that agent to produce a conforming report (this counts as a fix-and-reverify round).
   - **If Python is unavailable: HALT** and surface the missing interpreter — do not substitute a manual judgment path for a mechanical gate.
+- **Runtime Evidence Gate (mechanical)**: `check_agent_report.py` verifies Vera's verdict is backed by evidenced check lines with exit codes — it does **not** verify that anything was ever started. Run this once Stage 1's report is in hand, and again after any fix round:
+  `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_runtime_evidence.py --report .docs/{project-name}/implementation/verification-report.md --milestone "<the epic or feature name Vera scoped her report to>" --changed-files <the epic's changed-files union> --repo . [--require-key <k> ...] [--forbid-host <pattern> ...]`
+  The `--milestone` token must match the scope Vera wrote into her captures' `Milestone:` field — at shipping that is the epic, not a single build milestone, so brief her with the exact string you will pass. Exit 0 = at least one fresh out-of-process capture backs her runtime claims — proceed. Exit 1 = **BLOCK** and route per the failure rules below. Exit 2 = a capture is structurally non-conforming — route back to Vera. Full CLI contract: `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
+  - **If the application cannot be started out-of-process in this environment**, do NOT loop against a gate it cannot pass: **HALT** and surface that launch verification was necessarily in-process only. A release is never shipped on in-process-only evidence — the same line `bgpdd-build` §1 holds for a milestone commit.
+  - **If Python is unavailable: HALT.**
 - **Ship-decision exit ticket (Dep)**: after Vera/Cipher's `check_agent_report` gates pass, gate Dep's refreshed ship-decision before Step 4:
   `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_ship_decision.py --report .docs/{project-name}/implementation/ship-decision.md --require-go`
   Exit 0 = final GO — proceed. Exit 1/2 = BLOCK. On a `NO-GO`, route per the failure rules below and re-run this gate after Dep's refresh — the gate reads the LAST verdict-bearing section, so an appended fix round supersedes the earlier verdict rather than reading as ambiguity. **If Python is unavailable: HALT.**
@@ -141,6 +147,16 @@ Present the user with the final "Launch Readiness Report", including the PR link
 
 ### Step 6: Cleanup
 Delete `.docs/{project-name}/orchestrator-state.json` — the pipeline lifecycle has successfully completed and the state is no longer needed. Delete ONLY that file: `.docs/{project-name}/implementation/game-tape.md` survives as the epic's durable record and is the primary input to Step 7.
+
+### Step 6.4: Refresh the Legacy QA Baseline (Orchestrator)
+No delegation, no halt — you perform this step directly. **This is the one sanctioned write to Tier 1** (see Path Model, and the named divergence there).
+
+1. Read `.docs/{project-name}/acceptance-matrix.md` and `.docs/{project-name}/implementation/acceptance-results.md`. If either is absent — a lite or pre-matrix epic — skip this step and say so in the Step 6.5 game tape.
+2. Fold them into `.docs/summary/{feature}/QA/manual-testing.md`, preserving Echo's format exactly (strict `GO → DO → ASSERT` tables, Happy Path / Edge Cases / Negative / Regression Risks categories, P0/P1/P2 flags, preconditions, `[ ] Pass [ ] Fail` checkboxes — the shape `evals/contract/echo-qa-discovery-shape` asserts). Concretely: scenarios that **passed** become or update baseline cases; cases Alex marked **invalidated** or **superseded** during his Baseline Reconciliation are removed or rewritten to match the behavior that now ships.
+3. **Record only what was proven.** A scenario that was `BLOCKED`, `NOT RUN`, or never executed does not enter the baseline — an unverified case written into the durable baseline is worse than an absent one, because the next feature's discovery run will trust it.
+4. Note in the game tape what you changed, so the next discovery run can tell a refreshed baseline from an original one.
+
+**Why this exception exists**: without it the baseline captures only how the system behaved before the *first* feature ever shipped, every subsequent discovery run re-derives it from scratch, and Alex's reconciliation duty compares against a document that is progressively more wrong. The write is narrow by construction — one file, once, post-proof, recording only verified behavior.
 
 ### Step 6.5: Game Tape Checkpoint (Orchestrator)
 No delegation, no halt — you perform this step directly, before briefing Forge:

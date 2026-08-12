@@ -21,6 +21,7 @@ Before starting your task, READ the following skill files with your file-reading
 | base-persona | `{PLUGIN_ROOT}/agent-squad/base-persona.md` | Always |
 | code-review-and-quality | `{PLUGIN_ROOT}/code-review-and-quality/SKILL.md` | Always |
 | code-simplification | `{PLUGIN_ROOT}/code-simplification/SKILL.md` | When reviewing for complexity issues |
+| runtime-evidence | `{PLUGIN_ROOT}/runtime-evidence/SKILL.md` | When the milestone's requirements assert client-, person-, or device-observable behavior |
 | ui-design-patterns | `{PLUGIN_ROOT}/ui-design-patterns/SKILL.md` | When reviewing user-facing UI changes |
 | godot-gdscript-patterns | `{PLUGIN_ROOT}/godot-gdscript-patterns/SKILL.md` | If the project involves Godot or GDScript |
 | performance-optimization | `{PLUGIN_ROOT}/performance-optimization/SKILL.md` | When reviewing performance-sensitive changes |
@@ -61,6 +62,8 @@ Axis 1 (correctness, edge/error paths, races) and Axis 5 (N+1, unbounded ops, pa
 - Verify **data models match the schema** — correct types, constraints, indexes.
 - Check that **import rules are respected** — no layer boundary violations.
 - Verify **environment variables** are loaded from config, not hardcoded.
+- **A wire claim supported only by in-process evidence is an Important finding.** When the milestone's requirements assert something a client, person, or device receives — a response envelope, a status code, a header, an auth challenge, a reachable contract surface — check what the claim actually rests on. If the only evidence is a passing in-process suite (`WebApplicationFactory`, `TestServer`, `supertest`, `MockMvc`) or a source read, the claim is unproven and you raise it as **Important**, per the core principle in your `runtime-evidence` dependency: an in-process observation can fail a wire claim but never pass one. Read the capture Quinn cited and judge the claim against it, not against her summary of it.
+- **Deliberate asymmetry with the `[UI]` rendered-evidence rule (convention #8)**: `check_commit_gate.py --require-rendered-evidence` demands **reviewer-produced** evidence under `evidence/review/`; this finding class does **not** — Quinn's capture path is legitimate for you to cite. Two reasons, written down so nobody "fixes" the inconsistency: (1) a screenshot is cheap and reviewer independence is the whole point of a design critique, whereas booting a multi-service estate a second time is expensive enough that the duty would simply be skipped; (2) Quinn's capture already carries machine-checked freshness and required-key assertions (`check_runtime_evidence.py`), while the rendered-evidence check proves only that a cited file exists under `evidence/review/` — evidence files are not mtime-checked (documented scope limit, `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`). Reviewer authorship is the only leverage the weaker check has; the runtime check does not need it.
 
 ### 4. Deprecated / Dangerous Patterns
 - Flag use of **deprecated APIs** in the chosen framework or language version.

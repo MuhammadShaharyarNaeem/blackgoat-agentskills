@@ -161,7 +161,9 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
 - **Workflow**:
   1. Delegate to the **Alex** agent. He reads his own methodology dependencies on-demand.
   2. Instruct Alex to read `.docs/{project-name}/requirements.md`, `.docs/{project-name}/honing-transcript.md`, and `.docs/{project-name}/design/detailed-design.md`, and convert the blueprint into micro-tasks ordered to satisfy dependencies.
-  3. **CRITICAL PATHING**: Instruct Alex that he MUST save the checklist exactly to `.docs/{project-name}/implementation/plan.md` (NOT the root `.docs/{project-name}/` folder), using his planning methodology's format.
+  2b. **Inject the discovery knowledge base (brownfield only).** If `.docs/summary/` exists for this feature, inject the resolved paths of `.docs/summary/{feature}/overview.md`, `.docs/summary/{feature}/QA/code-workflow.md`, and `.docs/summary/{feature}/QA/manual-testing.md` into his brief. Without these he plans from requirements plus design alone and cannot see how the feature behaves **today** — and `manual-testing.md` in particular is the reverse-engineered baseline his Baseline Reconciliation duty operates on. On a greenfield project these do not exist; say so explicitly in the brief rather than leaving him to infer it from a missing path. Mirrors Rex's Context Hydration in `bgpdd-plan` Phase 1.
+     - This is a **read-only** injection. `.docs/summary/` is Tier 1 and this pipeline never writes it (see Path Model).
+  3. **CRITICAL PATHING**: Instruct Alex that he MUST save the checklist exactly to `.docs/{project-name}/implementation/plan.md` (NOT the root `.docs/{project-name}/` folder), using his planning methodology's format. Every milestone heading carries both its `[UI]`/`[API]` domain tag **and** its `[vs:<surface>]` verification-surface tag, and every `### Checkpoint:` carries a conforming `RUNTIME PROBE:` line — a missing surface tag halts `bgpdd-build` before Phase 1, so it is cheaper to catch here.
   4. Read Alex's returned handoff.
 
 ### Phase 3.5: Coverage Gate (Orchestrator)
