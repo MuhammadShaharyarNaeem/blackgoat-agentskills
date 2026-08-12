@@ -1,6 +1,6 @@
 ---
 name: runtime-evidence
-description: Squad-internal execution contract for proving a claim against the actually-running application rather than an in-process test host — the tier ladder, the verification-surface registry, the out-of-process probe, and the capture artifact that gates on it. Loaded by agents via their Methodology Dependencies table whenever a requirement asserts behavior a client, device, or human can observe. Owns the `**Runtime evidence:**` citation grammar; user-facing triggers belong to the /bgpdd-build and /bgpdd-shipping pipelines.
+description: Squad-internal execution contract for proving a claim against the actually-running application rather than an in-process test host — the tier ladder, the verification-surface registry, the out-of-process probe, and the capture artifact that gates on it. Loaded by agents via their Methodology Dependencies table whenever a requirement asserts behavior a client, device, or human can observe. Owns the `**Runtime evidence:**` citation grammar; user-facing triggers belong to the /bgpdd-build, /bgpdd-verify, and /bgpdd-shipping pipelines.
 ---
 
 # Runtime Evidence
@@ -78,7 +78,7 @@ Captures are **gating** and belong to whoever verifies. A builder's own self-che
 
 ### Citation
 
-This file is the single owner of the grammar. Emit it in your report — `test-report.md` during build, `verification-report.md` during shipping — inside the block for the unit being reported:
+This file is the single owner of the grammar. Emit it in your report — `test-report.md` during build and verify runs, `verification-report.md` during shipping — inside the block for the unit being reported:
 
 ```
 **Runtime evidence:** evidence/runtime/<file>.md[, evidence/runtime/<file>.md]
