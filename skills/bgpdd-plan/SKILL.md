@@ -80,6 +80,7 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
 ├── rough-idea.md          # Initial concept
 ├── honing-transcript.md   # Interactive Q&A transcript (Phase 1, main session)
 ├── requirements.md        # Finalized specification (Phase 1, Rex synthesis)
+├── acceptance-matrix.md   # Feature-scoped walkthrough scenarios (Phase 3, Alex)
 ├── research/              # Technical research & findings (Aria)
 ├── design/                # System designs & Mermaid diagrams (Aria)
 │   ├── detailed-design.md
@@ -164,9 +165,10 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
   2b. **Inject the discovery knowledge base (brownfield only).** If `.docs/summary/` exists for this feature, inject the resolved paths of `.docs/summary/{feature}/overview.md`, `.docs/summary/{feature}/QA/code-workflow.md`, and `.docs/summary/{feature}/QA/manual-testing.md` into his brief. Without these he plans from requirements plus design alone and cannot see how the feature behaves **today** — and `manual-testing.md` in particular is the reverse-engineered baseline his Baseline Reconciliation duty operates on. On a greenfield project these do not exist; say so explicitly in the brief rather than leaving him to infer it from a missing path. Mirrors Rex's Context Hydration in `bgpdd-plan` Phase 1.
      - This is a **read-only** injection. `.docs/summary/` is Tier 1 and this pipeline never writes it (see Path Model).
   3. **CRITICAL PATHING**: Instruct Alex that he MUST save the checklist exactly to `.docs/{project-name}/implementation/plan.md` (NOT the root `.docs/{project-name}/` folder), using his planning methodology's format. Every milestone heading carries both its `[UI]`/`[API]` domain tag **and** its `[vs:<surface>]` verification-surface tag, and every `### Checkpoint:` carries a conforming `RUNTIME PROBE:` line — a missing surface tag halts `bgpdd-build` before Phase 1, so it is cheaper to catch here.
+  3b. **Second artifact, different scope**: Alex MUST also save the feature acceptance matrix to `.docs/{project-name}/acceptance-matrix.md` (the project root, NOT `implementation/`), derived from `requirements.md` and never from the task list he just wrote. The plan is per-milestone; the matrix is per-feature — milestone evidence proves each brick, only the matrix proves the wall stands. Every state-changing step declares its inverse or carries a written `[no inverse: <reason>]` exemption.
   4. Read Alex's returned handoff.
 
-### Phase 3.5: Coverage Gate (Orchestrator)
+### Phase 3.5: Coverage & Acceptance Lint Gate (Orchestrator)
 - **Delegated Agent**: None — the Orchestrator performs this check directly.
 - **Workflow**:
   1. Execute the coverage tool via a shell action, using the runtime's available Python 3 interpreter (`python` or `python3`):
@@ -175,7 +177,12 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
   2. Read the JSON object from stdout. Exit code 0 = every Must-Have `FR`/`NFR` is covered — report any `warnings` and `uncovered_should` entries to the user as non-blocking notes, then proceed to Phase 4. Exit code 1 = the `uncovered` array lists the Must-Have gaps. Exit code 2 = an artifact failed its structural contract (e.g. no task blocks, no Must-Have IDs) — treat this as a defect in the artifact, not the tool.
   3. On exit 1 or 2, re-delegate to **Alex** (a fresh delegation) quoting the exact `uncovered` IDs and `warnings` (or the `error` message) — subject to the existing 2-round auto-fix bound. If unresolved after 2 rounds, halt and surface to the user. After each fix, re-run step 1 to verify.
   4. **If Python is unavailable: HALT** and surface the missing interpreter — do not substitute a manual judgment path for a mechanical gate.
-  5. Once coverage is confirmed, proceed to Phase 4.
+  5. **Lint the acceptance matrix's structure** — the same gate script, structure mode, no results file yet because nothing has been executed:
+     `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_acceptance_suite.py --lint-only --matrix .docs/{project-name}/acceptance-matrix.md`
+     Exit 0 = the matrix is structurally sound. Exit 1 = the JSON names the defect: a scenario with no priority or no step table, a missing `Stores`/`Mode` column, an unrecognized `Mode`, a duplicate scenario id or step number, a phantom row, a dangling `[inverse of N]`, a malformed exemption, or a state-changing step with no inverse and no exemption. Exit 2 = usage or an unparseable matrix. Re-delegate to **Alex** quoting the exact arrays, under the same 2-round bound as step 3, re-running after each fix.
+     **Why an inverse blocks here but only warns at build** — a deliberate mode divergence, not a contradiction. At plan time the matrix *is* the artifact under authorship and the fix is a one-line edit; at build time the code is already written, so blocking would bill QA for a debt the planner incurred weeks earlier, and the check rests on a verb heuristic whose green means only "the heuristic found nothing". Same signal, opposite posture, because both the cost of the fix and the meaning of green differ by phase.
+  6. **If `acceptance-matrix.md` does not exist**, treat it as a Phase 3 defect and re-delegate to Alex — do not proceed. A feature with no declared walkthrough is a feature nobody has agreed on the meaning of "works" for. (Epics genuinely too small for a matrix belong in `/bgpdd-lite`, which declares `acceptance_matrix=null` explicitly rather than silently.)
+  7. Once coverage and the matrix lint are both confirmed, proceed to Phase 4.
 
 ### Phase 4: Game Tape Checkpoint (Orchestrator)
 - **Delegated Agent**: None — the Orchestrator performs this phase directly. No delegation, no halt.
@@ -191,7 +198,8 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
        --set-feature <feature|null> \
        --set-artifact requirements=.docs/{project-name}/requirements.md \
        --set-artifact design=.docs/{project-name}/design/detailed-design.md \
-       --set-artifact plan=.docs/{project-name}/implementation/plan.md
+       --set-artifact plan=.docs/{project-name}/implementation/plan.md \
+       --set-artifact acceptance_matrix=.docs/{project-name}/acceptance-matrix.md
      ```
      Field notes: `feature` is the Tier-1 durable feature id from `.docs/summary/{feature}/` (`null` for greenfield). `pipeline` is the last pipeline that wrote the state. `milestone_cursor` and `branch` stay `null` until `bgpdd-build` owns them. Downstream pipelines hydrate from the resulting shape (documentation only — do not recreate by hand):
 ```json

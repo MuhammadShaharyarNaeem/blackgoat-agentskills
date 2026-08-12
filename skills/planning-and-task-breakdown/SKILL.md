@@ -145,6 +145,34 @@ Save the finalized plan to `.docs/{project-name}/implementation/plan.md`. Requir
 - `## Task List` — tasks grouped into slice-shaped milestones: per the **Milestone domain homogeneity** rule above (a deliberate refinement, per convention #8, of the plain one-milestone-per-slice framing, made necessary because a slice now spans a pair of single-domain milestones rather than one mixed one), the first SLICE — its `[API]` milestone plus the immediately following `[UI]` milestone — is one thin end-to-end path, demoable at the pair's end; later slices widen. Each milestone is followed by its `### Checkpoint:` block carrying a runtime exit criterion. **Canonical milestone heading:** each milestone is headed `### Milestone <n> — <Title> [<UI|API>]` — a level-3 heading, `<n>` a bare integer, the milestone's domain tag carried in the heading itself. The build Orchestrator records milestone completion by appending `[x]` to that heading line. Machine consumer: `pipeline-tools/next_milestone.py` parses these headings (it tolerates level-2 `## Milestone <n>` for older plans; new plans use level-3) — full contract in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`. **If the first slice is NOT thin and end-to-end demoable, say so and why, in the plan** — name the constraint that forced the horizontal ordering and where the first demoable artifact does land. The rule may bend to a real constraint; it may never bend silently.
 - `## Risks and Mitigations` — table of risk / impact (High/Med/Low) / mitigation.
 - `## Open Questions` — questions needing human input.
+- **Canonical milestone heading, both axes:** `### Milestone <n> — <Title> [<UI|API>] [vs:<surface>]`. The domain tag routes the builder; the surface tag selects the evidence. A missing or unknown `[vs:]` tag halts the build pipeline before Phase 1.
+
+### Acceptance Matrix Output
+
+Save to `.docs/{project-name}/acceptance-matrix.md`. **A separate artifact at a different scope from the plan**: the plan is per-milestone, this is per-feature. Milestone evidence proves each brick; only this proves the wall stands, because the journey is ordered and stateful and because **the milestone that adds an operation has no reason to exercise its inverse.**
+
+**Derive it from `requirements.md`, never from the task list you just wrote.** This is the same rule `shipping-and-launch` states for the launch checklist — *"Enumerate from the requirements document, never from the built feature list"* — and the reason is identical: a matrix derived from the plan inherits the plan's blind spots, and it is written by the party who would have to redo work if it found something. On brownfield work, reconcile against the `QA/manual-testing.md` baseline (see your Baseline Reconciliation duty) so existing behavior stays covered rather than silently dropped.
+
+```markdown
+## AS-2 Client mapping lifecycle — P0 — (FR-3, FR-4, EC-2)
+Surface: web+api | Preconditions: integration connected (AS-1)
+
+| # | GO | DO | ASSERT | Stores | Mode |
+|---|----|----|--------|--------|------|
+| 1 | Clients list | map client A | 200 + mapping row | api, db | auto |
+| 2 | Clients list | reload | green tick on A | ui | auto |
+| 3 | Clients list | unmap A [inverse of 1] | 200 + row gone | api, db | auto |
+| 4 | Agent console | distribute [no inverse: a queued job cannot be un-queued] | agent installed | device | manual |
+```
+
+- **Scenario heading**: `## <ID> <title> — P<0-3> — (<requirement IDs>)`. The ID is short and stable (`AS-2`); requirement IDs go **inside the parentheses** so the scenario's own id is never mistaken for one. Every scenario carries a priority — an unprioritized scenario cannot be filtered honestly and is gated anyway.
+- **Metadata line**: `|`-separated `key: value` pairs. `Surface:` uses the same keys as the `[vs:]` axis. `Preconditions:` may name an earlier scenario, which is how an ordered journey is expressed without the gate having to replay it.
+- **Step table**: reuses the `GO → DO → ASSERT` grammar Echo already uses for `QA/manual-testing.md`, deliberately, so the two artifacts stay diffable and the write-back at end of shipping is a merge rather than a translation. Header cells must include `GO`, `DO`, `ASSERT`; columns are read by name, so order is free.
+- **`Stores`** names every source of truth the step reads back. **An effect asserted in one store is not asserted**: a mapping that shows a green tick, a row in the database, and a paired agent on the device is three claims, and reading one and inferring the others is a proxy substitution.
+- **`Mode`** is `auto` or `manual`. Manual is first-class — device state, an agent console, a pairing code genuinely cannot be automated — but a manual step **passes only with recorded evidence** under `evidence/runtime/`; unevidenced, it reads as NOT RUN and blocks.
+- **`[inverse of N]`** marks a step as the inverse of step N in the same scenario. Every state-changing step needs one, or an explicit `[no inverse: <reason>]` — legitimate one-way steps exist (nothing un-distributes a queued job, nothing un-reinstalls). Cover install→uninstall→**reinstall**: reinstall is the idempotency case, and it is the one that catches an uninstall that only half-removed.
+
+Machine consumers: `check_acceptance_suite.py` gates execution at build Phase 5 and again at shipping Stage 1; its `--lint-only` mode gates this artifact's structure at plan time. Full contract in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md` — single authority, not restated here.
 
 ### Verification
 
@@ -172,6 +200,9 @@ Before starting implementation, confirm:
 - [ ] Every milestone heading carries a valid `[vs:<surface>]` tag alongside its `[UI]`/`[API]` domain tag; every `[vs:none]` carries its written justification
 - [ ] Every checkpoint carries a conforming `RUNTIME PROBE:` line whose `probe:` exercises the running system — no build, typecheck, search, or **test-runner** command; `expect-status`/`require-keys` present wherever the surface is `api`, `web+api`, or `fn`
 - [ ] No acceptance criterion for a client-, person-, or device-observable effect is satisfiable in-process (Step 1, corollary 4)
+- [ ] `acceptance-matrix.md` exists, is derived from `requirements.md` (not from the task list), and every Must-Have FR appears in at least one scenario
+- [ ] Every state-changing step declares `[inverse of N]` or an explicit `[no inverse: <reason>]`; install paths cover uninstall **and** reinstall
+- [ ] Every step names every store its assertion reads back, and every `manual` step is one where automation is genuinely impossible rather than merely inconvenient
 - [ ] Every High-impact risk named by research or design traces to a specific acceptance or checkpoint criterion that would **detect** it — a risk whose only entry is prose in the Risks table is unmitigated, because nothing in the plan fails when the mitigation does not hold
 - [ ] The plan has been surfaced for human review — via your `<handoff>` to the Orchestrator when delegated, or directly to the user in the main session
 

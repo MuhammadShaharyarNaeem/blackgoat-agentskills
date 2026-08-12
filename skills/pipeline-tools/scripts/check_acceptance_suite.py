@@ -10,9 +10,10 @@ Quinn's end-of-build `acceptance-results.md` and verifies:
 
   1. every gated scenario's EVERY step has a result;
   2. every gated step's result is PASS (FAIL / BLOCKED / NOT RUN block);
-  3. every `Mode: manual` step cites an EXISTING evidence file under an
-     `evidence/runtime/` directory — a manual step on an agent's word
-     alone reads as NOT RUN and blocks;
+  3. every `Mode: manual` step — and every step whose Mode cell is
+     present but UNRECOGNIZED, which fails closed to manual — cites an
+     EXISTING evidence file under an `evidence/runtime/` directory; such
+     a step on an agent's word alone reads as NOT RUN and blocks;
   4. every step marked `[inverse of N]` names a real step N in the same
      scenario (blocking, at any priority) and has a result of its own.
 
@@ -20,18 +21,42 @@ It additionally REPORTS (never blocks on) state-changing steps that
 declare no inverse — see `undeclared_inverse` in the JSON and the
 reasoning note below.
 
-SCOPE LIMIT: this gate verifies the matrix was EXECUTED and EVIDENCED. It
-never verifies that a scenario is the RIGHT scenario, that the ASSERT
-column asserts the right thing, or that the cited evidence actually shows
-what the step claims. Choosing and wording the scenarios is Alex's
-authoring judgment and stays reviewable prose; the internal honesty of a
-runtime capture is check_runtime_evidence.py's job.
+`--lint-only` is a SECOND MODE that gates matrix STRUCTURE at plan time,
+before any code exists. It takes --matrix alone (--results is a usage
+error) and runs only the checks the matrix can support by itself.
+
+DELIBERATE MODE DIVERGENCE (CLAUDE.md convention #8 — this refines the
+"undeclared_inverse is advisory, non-blocking" rule stated above rather
+than contradicting it): in --lint-only mode `undeclared_inverse` BLOCKS.
+Same signal, opposite posture, because both the COST of the fix and the
+MEANING of green differ by phase. At build time the code is already
+written, so blocking would ask Quinn to author a scenario Alex owed weeks
+earlier, and a verb-allowlist heuristic must not block when green means
+only "the heuristic found nothing". At plan time the matrix is the
+artifact under authorship, the fix is a one-line edit, and there is
+nothing else green could mean. The escape hatch is the same in both
+modes: `[no inverse: <reason>]` on the row.
+
+SCOPE LIMIT: in execution mode this gate verifies the matrix was EXECUTED
+and EVIDENCED. It never verifies that a scenario is the RIGHT scenario,
+that the ASSERT column asserts the right thing, or that the cited
+evidence actually shows what the step claims. Choosing and wording the
+scenarios is Alex's authoring judgment and stays reviewable prose; the
+internal honesty of a runtime capture is check_runtime_evidence.py's job.
+
+SCOPE LIMIT (--lint-only): structure only. It never judges whether a
+scenario is worth running, whether its ASSERT column asserts the right
+thing, whether an exemption reason is TRUE, or whether the requirement
+IDs in the heading exist. Exemption presence is checkable; exemption
+truth is not.
 
 Pure standard library.
 
 Usage:
     python check_acceptance_suite.py --matrix <path> --results <path> \
         [--repo <dir>] [--require-priority P0[,P1]] [--min-scenarios <N>]
+    python check_acceptance_suite.py --lint-only --matrix <path> \
+        [--min-scenarios <N>]
     python check_acceptance_suite.py --self-test
 """
 import argparse
@@ -48,6 +73,12 @@ REQ_ID_RE = re.compile(r"\b[A-Z]{2,6}-\d+\b")
 META_PAIR_RE = re.compile(r"^\s*\**\s*([A-Za-z][A-Za-z /_-]{0,30}?)\s*\**\s*:\s*(.*)$")
 SEPARATOR_CELL_RE = re.compile(r"^:?-{2,}:?$")
 INVERSE_RE = re.compile(r"\[\s*inverse\s+of\s+(\d+)\s*\]", re.IGNORECASE)
+# Escape hatch for legitimately one-way steps: nothing un-queues a distributed
+# job, nothing un-reinstalls. The reason text is REQUIRED — presence is
+# checkable, truth is not, so the marker buys an author nothing but a place to
+# be wrong in writing.
+NO_INVERSE_RE = re.compile(r"\[\s*no\s+inverse\s*:\s*([^\]]*)\]", re.IGNORECASE)
+LETTER_RE = re.compile(r"[A-Za-z]")
 
 # Result lines reuse check_agent_report.py's check-line grammar verbatim, so
 # Quinn emits one shape for every durable report she writes.
@@ -64,6 +95,12 @@ PATH_SHAPE_RE = re.compile(r"^[A-Za-z0-9_./\\-]+$")
 PATH_EXTENSION_RE = re.compile(r"\.[A-Za-z0-9]+$")
 
 MANUAL_MODES = ("manual",)
+# The whole recognized Mode vocabulary. A typo like "Manual!" or an invented
+# "semi" matches neither entry, so it must not be read as "auto" — see
+# needs_manual_evidence() for how execution mode fails closed on it.
+# --lint-only additionally BLOCKS on it, at the only time the fix is a
+# one-character edit.
+RECOGNIZED_MODES = ("auto", "manual")
 
 # Stores that record no durable state. A step touching only these cannot
 # have an inverse, so it is never reported as missing one.
@@ -164,8 +201,16 @@ def split_stores(value):
 # ---------------------------------------------------------------------------
 
 def new_scenario(heading):
-    """Build a scenario dict from a `## ` heading, or None if it names no id."""
-    idm = SCENARIO_ID_RE.search(heading)
+    """Build a scenario dict from a `## ` heading, or None if it names no id.
+
+    The id is searched for OUTSIDE the parentheses. Requirement ids already live
+    inside them by contract, so scanning the raw heading let a scenario with no
+    id of its own silently adopt one: `## Mapping lifecycle — P0 — (FR-1)`
+    parsed as `id: "FR-1"` and its result keys became `FR-1.1`. Failing to parse
+    is the honest outcome — it lands in the prose-heading warning and, under
+    --lint-only, in the too-few-scenarios block. Found 2026-08-12.
+    """
+    idm = SCENARIO_ID_RE.search(PAREN_RE.sub(" ", heading))
     if not idm:
         return None
     pm = PRIORITY_RE.search(heading)
@@ -181,6 +226,7 @@ def new_scenario(heading):
         "preconditions": None,
         "step_count": 0,
         "gated": False,
+        "linted": False,
         "_steps": [],
     }
 
@@ -245,10 +291,42 @@ def parse_matrix(text):
                 warnings.append(
                     f"{current['id']}: step row {ordinal} has a non-numeric '#' "
                     f"cell ({raw_n!r}); using the row ordinal {ordinal}")
-        mode = (cell("mode") or "auto").strip().lower() or "auto"
+        # The raw declared value is captured BEFORE the "auto" default, because
+        # "absent" and "present but unreadable" must not collapse into the same
+        # token: the default is safe, an unreadable declaration is not.
+        raw_mode = (cell("mode") or "").strip()
+        mode = raw_mode.lower() or "auto"
+        # SCOPE BOUNDARY: only a NON-EMPTY-after-strip cell can be flagged. An
+        # empty cell — and every step in a table with no `Mode` column at all,
+        # which predates the column — keeps defaulting to "auto" and is never
+        # flagged. Retroactively making every step of a pre-column matrix
+        # evidence-bearing would be a back-compat break, and --lint-only already
+        # blocks the missing column at plan time.
+        mode_unrecognized = bool(raw_mode) and mode not in RECOGNIZED_MODES
         do_text = cell("do")
         inv = INVERSE_RE.search(raw)
         stores = split_stores(cell("stores"))
+        mutating = bool(MUTATING_VERB_RE.search(do_text.lower()))
+
+        # `[no inverse: <reason>]` exemption. Validated identically in both
+        # modes so the two reports stay diffable; only the POSTURE differs
+        # (execution mode warns, --lint-only blocks).
+        nom = NO_INVERSE_RE.search(raw)
+        exempt_reason = nom.group(1).strip() if nom else None
+        exempt, exempt_error = False, None
+        if nom:
+            if not exempt_reason or not LETTER_RE.search(exempt_reason):
+                exempt_error = (
+                    "'[no inverse: <reason>]' carries no reason text — the "
+                    "reason is required and must contain at least one letter")
+            elif inv is not None:
+                exempt_error = (
+                    f"declares both '[inverse of {inv.group(1)}]' and "
+                    "'[no inverse: ...]' — a step cannot both have and lack "
+                    "an inverse")
+            else:
+                exempt = True
+
         current["_steps"].append({
             "key": f"{current['id']}.{number}",
             "scenario": current["id"],
@@ -258,9 +336,14 @@ def parse_matrix(text):
             "assert": cell("assert"),
             "stores": stores,
             "mode": mode,
+            "mode_unrecognized": mode_unrecognized,
             "inverse_of": int(inv.group(1)) if inv else None,
-            "state_changing": bool(MUTATING_VERB_RE.search(do_text.lower()))
+            "mutating_verb": mutating,
+            "state_changing": mutating
                               and any(s not in READ_ONLY_STORES for s in stores),
+            "exempt": exempt,
+            "no_inverse_reason": exempt_reason,
+            "exempt_error": exempt_error,
             "has_mode_column": "mode" in header,
             "has_stores_column": "stores" in header,
         })
@@ -341,14 +424,52 @@ def parse_priority_filter(value):
 # Report assembly
 # ---------------------------------------------------------------------------
 
-def build_report(args):
-    report = {
+def is_undeclared_inverse(st, inverse_targets):
+    """ONE predicate, two postures. A state-changing step that neither declares
+    an inverse, nor is the target of one, nor is validly exempt. Execution mode
+    reports it; --lint-only blocks on it (see the module docstring's labelled
+    divergence)."""
+    return (st["state_changing"]
+            and not st["exempt"]
+            and st["inverse_of"] is None
+            and st["n"] not in inverse_targets)
+
+
+def needs_manual_evidence(entry):
+    """ONE predicate for "this step owes a runtime evidence citation".
+
+    DELIBERATE DIVERGENCE (CLAUDE.md convention #8 — this refines the
+    `MANUAL_MODES` evidence rule, which demanded evidence of `Mode: manual`
+    alone): execution mode is now STRICTER. A present-but-unrecognized Mode
+    also owes evidence.
+
+    Fail-closed doctrine (base-persona.md:49): of the two readings available
+    for an unreadable Mode cell, `manual` is the one that DEMANDS evidence, so
+    it must be the one an unrecognized value falls back to. Reading `semi` or
+    `Manual!` as `auto` made a one-character typo the cheapest way to buy a
+    device step out of the evidence gate, silently. `--lint-only` blocks such a
+    matrix at plan time, but a matrix can be hand-edited between plan and
+    build, so execution mode must fail closed on its own.
+
+    Used at BOTH evidence sites — collection and the blocking check — so the
+    two can never disagree about which steps are evidence-bearing.
+    """
+    return entry["mode"] in MANUAL_MODES or entry["mode_unrecognized"]
+
+
+def new_report(args):
+    """Pre-initialized report. EVERY key is present in BOTH modes so that the
+    two modes' JSON can be diffed key-for-key; the arrays a mode cannot fill
+    stay `[]`/`0`/`None`."""
+    return {
         "matrix": args.matrix,
         "results": args.results,
+        "lint_only": bool(args.lint_only),
         "require_priority": None,
         "min_scenarios": args.min_scenarios,
         "scenarios": [],
         "gated_scenarios": [],
+        "linted_scenarios": [],
         "steps": [],
         "steps_gated": 0,
         "passed": 0,
@@ -359,11 +480,36 @@ def build_report(args):
         "unevidenced_manual": [],
         "dangling_inverse": [],
         "undeclared_inverse": [],
+        "exempt_steps": [],
+        "invalid_exemption": [],
+        "missing_priority": [],
+        "missing_step_table": [],
+        "missing_columns": [],
+        "unrecognized_mode": [],
+        "missing_stores": [],
+        "duplicate_keys": [],
+        "malformed_steps": [],
         "extra_results": [],
         "warnings": [],
         "result": "FAIL",
         "error": None,
     }
+
+
+def step_entry(st, **overrides):
+    """A `steps` entry with an identical key set in both modes."""
+    entry = {k: st[k] for k in
+             ("key", "scenario", "n", "mode", "mode_unrecognized", "stores",
+              "inverse_of", "state_changing", "exempt", "no_inverse_reason")}
+    entry.update({"gated": False, "priority": None, "status": None,
+                  "detail": None, "evidence": [], "evidence_ok": None,
+                  "problems": []})
+    entry.update(overrides)
+    return entry
+
+
+def build_report(args):
+    report = new_report(args)
 
     wanted = parse_priority_filter(args.require_priority)
     report["require_priority"] = sorted(wanted) if wanted else None
@@ -375,6 +521,9 @@ def build_report(args):
         raise GateError(
             f"no parseable scenario in {args.matrix} — a scenario is a '## ' "
             "heading naming an id like 'AS-2'; not a conforming acceptance matrix")
+
+    if args.lint_only:
+        return lint_report(report, scenarios, matrix_text, args)
 
     results_text = read_text(args.results)
     if not results_text.strip():
@@ -404,6 +553,21 @@ def build_report(args):
             report["warnings"].append(
                 f"{sc['id']}: no step table found (need a header row carrying "
                 "GO, DO and ASSERT columns) — this scenario proves nothing")
+            # Fail closed on a GATED scenario with no parsed steps. Deliberate
+            # divergence (CLAUDE.md #8) refining this file's build-time-advisory
+            # posture, which exists because the `state_changing` verb allowlist
+            # is an incomplete heuristic. This is not a heuristic: a header cell
+            # reading `Asserts` instead of `ASSERT` silently drops the whole
+            # table, so its steps never enter `_steps` and therefore can never
+            # land in `missing_results`, `not_run` or `unevidenced_manual`. An
+            # unevidenced manual device step passed green on nothing but a
+            # spelling, which is the exact escape this gate exists to close.
+            # Same class as `dangling_inverse`, which already blocks in both
+            # modes: the artifact misrepresenting its own coverage, not a
+            # coverage judgment. Scoped to gated scenarios so priority
+            # filtering keeps its meaning.
+            if sc["gated"]:
+                report["missing_step_table"].append(sc["id"])
 
     report["gated_scenarios"] = [sc["id"] for sc in scenarios if sc["gated"]]
 
@@ -414,13 +578,16 @@ def build_report(args):
         inverse_targets = {st["inverse_of"] for st in sc["_steps"]
                            if st["inverse_of"] is not None}
         for st in sc["_steps"]:
-            entry = {k: st[k] for k in
-                     ("key", "scenario", "n", "mode", "stores", "inverse_of",
-                      "state_changing")}
-            entry.update({"gated": sc["gated"], "priority": sc["priority"],
-                          "status": None, "detail": None, "evidence": [],
-                          "evidence_ok": None, "problems": []})
+            entry = step_entry(st, gated=sc["gated"], priority=sc["priority"])
             seen_keys.add(st["key"].lower())
+
+            # Exemption bookkeeping. Recorded in BOTH modes; non-blocking here,
+            # matching this mode's advisory posture on the whole inverse signal.
+            if st["exempt"]:
+                report["exempt_steps"].append(st["key"])
+            elif st["exempt_error"]:
+                report["invalid_exemption"].append(
+                    f"{st['key']}: {st['exempt_error']}")
 
             # Dangling inverse reference: a matrix-authoring defect. Blocking at
             # ANY priority — priority scopes EXECUTION, not authoring validity,
@@ -433,9 +600,8 @@ def build_report(args):
                 report["dangling_inverse"].append(st["key"])
 
             # Non-blocking advisory: a state-changing step with no inverse
-            # anywhere in its scenario.
-            if (st["state_changing"] and st["inverse_of"] is None
-                    and st["n"] not in inverse_targets):
+            # anywhere in its scenario. Same predicate --lint-only blocks on.
+            if is_undeclared_inverse(st, inverse_targets):
                 report["undeclared_inverse"].append(st["key"])
 
             found = results.get(st["key"].lower())
@@ -454,7 +620,7 @@ def build_report(args):
             entry["status"] = status
             entry["detail"] = rest.strip() or None
 
-            if entry["mode"] in MANUAL_MODES:
+            if needs_manual_evidence(entry):
                 entry["evidence"] = evidence_tokens(rest)
                 accepted = [t for t in entry["evidence"]
                             if cited_under(t, "evidence", "runtime")
@@ -476,14 +642,22 @@ def build_report(args):
             elif status == "NOT RUN":
                 report["not_run"].append(st["key"])
                 entry["problems"].append("result is NOT RUN")
-            elif entry["mode"] in MANUAL_MODES and not entry["evidence_ok"]:
+            elif needs_manual_evidence(entry) and not entry["evidence_ok"]:
                 # The crux. Manual steps are first-class (a device check
                 # genuinely cannot be automated) but never trusted on an
                 # agent's word: an unevidenced manual PASS reads as NOT RUN.
                 report["unevidenced_manual"].append(st["key"])
                 report["not_run"].append(st["key"])
+                # An unrecognized Mode says WHY the gate applied, so an author
+                # who typed "semi" is not left wondering why an "auto" step
+                # suddenly demanded evidence.
+                because = (
+                    f"Mode {entry['mode']!r} is not recognized (expected "
+                    f"{' or '.join(RECOGNIZED_MODES)}), so this step was gated "
+                    "as manual (fail-closed); it "
+                    if entry["mode_unrecognized"] else "manual step ")
                 entry["problems"].append(
-                    "manual step reports PASS but cites no existing evidence "
+                    because + "reports PASS but cites no existing evidence "
                     "file under an 'evidence/runtime/' directory (a '..' segment "
                     "is also refused) — reads as NOT RUN")
             elif entry["problems"]:
@@ -507,6 +681,25 @@ def build_report(args):
             "ADVISORY (non-blocking): state-changing step(s) with no inverse "
             "declared anywhere in their scenario — the inverse operation is the "
             "one that escapes: " + ", ".join(report["undeclared_inverse"]))
+    if report["invalid_exemption"]:
+        report["warnings"].append(
+            "ADVISORY (non-blocking here; BLOCKS under --lint-only): malformed "
+            "'[no inverse: <reason>]' marker(s): "
+            + "; ".join(report["invalid_exemption"]))
+    # Warn, never hide: the fail-closed gate is invisible otherwise, and an
+    # author reading only `unevidenced_manual` would not learn that the entry is
+    # there because of a Mode typo. Recorded as a warning rather than in
+    # `unrecognized_mode` (which BLOCKS in --lint-only) so that execution mode's
+    # posture stays "gate the step, do not block on the spelling".
+    unrecognized = [f"{e['key']} ({e['mode']})" for e in report["steps"]
+                    if e["mode_unrecognized"]]
+    if unrecognized:
+        report["warnings"].append(
+            "step(s) whose 'Mode' cell is present but not recognized (expected "
+            f"{' or '.join(RECOGNIZED_MODES)}) — each was gated as MANUAL "
+            "(evidence required) BECAUSE the mode was unrecognized, not because "
+            "it declares manual; fix the Mode cell or cite an "
+            "'evidence/runtime/' capture: " + ", ".join(unrecognized))
     if any(not st["has_mode_column"] for sc in scenarios for st in sc["_steps"]):
         report["warnings"].append(
             "step table(s) have no 'Mode' column — every step there defaults to "
@@ -533,8 +726,169 @@ def build_report(args):
                and not report["blocked"]
                and not report["not_run"]
                and not report["unevidenced_manual"]
-               and not report["dangling_inverse"])
+               and not report["dangling_inverse"]
+               and not report["missing_step_table"])
     report["result"] = "PASS" if gate_ok else "FAIL"
+    return report
+
+
+# ---------------------------------------------------------------------------
+# --lint-only: plan-time structural gate
+# ---------------------------------------------------------------------------
+
+def lint_report(report, scenarios, matrix_text, args):
+    """Structure-only gate over the matrix ALONE. No results file exists yet.
+
+    Every check here is answerable from the matrix. Priority does NOT scope
+    linting: priority scopes EXECUTION, and a structurally broken scenario is
+    broken at every priority — the same reasoning execution mode already
+    applies to `dangling_inverse`.
+    """
+    # A `## ` heading naming no id is not a scenario. Warning only, never
+    # blocking: `## Overview` is legitimate prose in a matrix document, and
+    # there is no way to tell a prose heading from a typo'd scenario id.
+    for raw in matrix_text.splitlines():
+        m = SCENARIO_HEADING_RE.match(raw)
+        # Same paren-stripped scan `new_scenario` uses, so this warning fires on
+        # exactly the headings that failed to parse -- never on a different set.
+        if m and not SCENARIO_ID_RE.search(PAREN_RE.sub(" ", m.group(1))):
+            report["warnings"].append(
+                f"heading '## {m.group(1).strip()}' names no scenario id "
+                "(expected something like 'AS-2') — read as prose, not linted")
+
+    if args.require_priority:
+        report["warnings"].append(
+            "--require-priority does not scope --lint-only: structural validity "
+            "is priority-blind, so every scenario in the matrix was linted")
+
+    seen_scenarios = set()
+    for sc in scenarios:
+        sc["linted"] = True
+        if sc["id"] in seen_scenarios:
+            report["duplicate_keys"].append(
+                f"scenario id {sc['id']} is declared by more than one '## ' "
+                "heading — step keys like '{0}.1' would be ambiguous in "
+                "acceptance-results.md".format(sc["id"]))
+        seen_scenarios.add(sc["id"])
+
+        if sc["priority"] is None:
+            report["missing_priority"].append(sc["id"])
+
+        if not sc["_steps"]:
+            report["missing_step_table"].append(sc["id"])
+            continue
+
+        first = sc["_steps"][0]
+        absent = [name for name, present in
+                  (("Stores", first["has_stores_column"]),
+                   ("Mode", first["has_mode_column"])) if not present]
+        if absent:
+            # Blocking, and deliberately stricter than execution mode (which
+            # only warns) — CLAUDE.md #8. Without these columns the Mode,
+            # Stores and inverse checks below silently no-op, so a green lint
+            # would mean "nothing was checkable", the exact failure mode the
+            # advisory posture of `undeclared_inverse` exists to avoid.
+            report["missing_columns"].append(
+                f"{sc['id']}: step table has no {' or '.join(absent)} column")
+
+        numbers, seen_numbers = set(), set()
+        for st in sc["_steps"]:
+            if st["n"] in seen_numbers:
+                report["duplicate_keys"].append(
+                    f"{sc['id']}: step number {st['n']} appears more than once "
+                    f"— '[inverse of {st['n']}]' and result key {st['key']} "
+                    "would both be ambiguous")
+            seen_numbers.add(st["n"])
+            numbers.add(st["n"])
+        inverse_targets = {st["inverse_of"] for st in sc["_steps"]
+                           if st["inverse_of"] is not None}
+
+        for st in sc["_steps"]:
+            entry = step_entry(st, priority=sc["priority"])
+
+            if not (st["go"] or st["do"] or st["assert"]):
+                report["malformed_steps"].append(st["key"])
+                entry["problems"].append(
+                    "GO, DO and ASSERT are all empty — phantom step row")
+
+            if st["inverse_of"] is not None and st["inverse_of"] not in numbers:
+                report["dangling_inverse"].append(st["key"])
+                entry["problems"].append(
+                    f"declares '[inverse of {st['inverse_of']}]' but scenario "
+                    f"{sc['id']} has no step {st['inverse_of']}")
+
+            if st["has_mode_column"] and st["mode"] not in RECOGNIZED_MODES:
+                report["unrecognized_mode"].append(f"{st['key']} ({st['mode']})")
+                entry["problems"].append(
+                    f"Mode {st['mode']!r} is not recognized (expected "
+                    f"{' or '.join(RECOGNIZED_MODES)})")
+
+            if st["has_stores_column"] and st["mutating_verb"] and not st["stores"]:
+                report["missing_stores"].append(st["key"])
+                entry["problems"].append(
+                    "DO reads as state-changing but Stores is empty — record "
+                    "where the state lands, or the inverse check cannot run")
+
+            if st["exempt"]:
+                report["exempt_steps"].append(st["key"])
+                if not st["state_changing"]:
+                    report["warnings"].append(
+                        f"{st['key']}: carries '[no inverse: ...]' but reads as "
+                        "read-only anyway — the exemption is a no-op")
+            elif st["exempt_error"]:
+                report["invalid_exemption"].append(
+                    f"{st['key']}: {st['exempt_error']}")
+                entry["problems"].append(st["exempt_error"])
+
+            if is_undeclared_inverse(st, inverse_targets):
+                report["undeclared_inverse"].append(st["key"])
+                entry["problems"].append(
+                    "state-changing step declares no inverse and is not the "
+                    "target of one — add '[inverse of N]' on the undoing step, "
+                    "or '[no inverse: <reason>]' here if the step is genuinely "
+                    "one-way")
+
+            report["steps"].append(entry)
+
+    report["linted_scenarios"] = [sc["id"] for sc in scenarios]
+
+    # ---- report-level messages ----
+    if report["missing_priority"]:
+        report["warnings"].append(
+            "scenario(s) whose '## ' heading declares no P0-P3 priority token — "
+            "an unprioritized scenario cannot be execution-scoped honestly: "
+            + ", ".join(report["missing_priority"]))
+    if report["missing_step_table"]:
+        report["warnings"].append(
+            "scenario(s) with no step table (need a header row carrying GO, DO "
+            "and ASSERT columns) — these prove nothing: "
+            + ", ".join(report["missing_step_table"]))
+    if report["undeclared_inverse"]:
+        report["warnings"].append(
+            "BLOCKING in --lint-only (advisory in execution mode — deliberate "
+            "mode divergence): state-changing step(s) with no inverse declared "
+            "anywhere in their scenario: "
+            + ", ".join(report["undeclared_inverse"]))
+    if len(report["linted_scenarios"]) < args.min_scenarios:
+        report["warnings"].append(
+            f"{len(report['linted_scenarios'])} scenario(s) in the matrix, "
+            f"below --min-scenarios {args.min_scenarios}")
+
+    report["scenarios"] = [{k: v for k, v in sc.items() if not k.startswith("_")}
+                           for sc in scenarios]
+
+    lint_ok = (len(report["linted_scenarios"]) >= args.min_scenarios
+               and not report["missing_priority"]
+               and not report["missing_step_table"]
+               and not report["missing_columns"]
+               and not report["unrecognized_mode"]
+               and not report["missing_stores"]
+               and not report["duplicate_keys"]
+               and not report["malformed_steps"]
+               and not report["invalid_exemption"]
+               and not report["dangling_inverse"]
+               and not report["undeclared_inverse"])
+    report["result"] = "PASS" if lint_ok else "FAIL"
     return report
 
 
@@ -549,6 +903,7 @@ def build_parser():
     p.add_argument("--repo", default=".")
     p.add_argument("--require-priority")
     p.add_argument("--min-scenarios", type=int, default=1)
+    p.add_argument("--lint-only", action="store_true")
     p.add_argument("--self-test", action="store_true")
     return p
 
@@ -559,12 +914,25 @@ def main(argv):
     if args.self_test:
         return run_self_test()
 
-    missing = [n for n, v in (("--matrix", args.matrix),
-                              ("--results", args.results)) if not v]
-    if missing:
-        print(json.dumps({"result": "ERROR",
-                          "error": f"missing required argument(s): {', '.join(missing)}"}))
-        return 2
+    if args.lint_only:
+        if args.results:
+            print(json.dumps({"result": "ERROR", "error":
+                              "--results is not accepted with --lint-only: lint "
+                              "mode gates matrix STRUCTURE, not execution. Drop "
+                              "--results to lint, or drop --lint-only to gate "
+                              "execution."}))
+            return 2
+        if not args.matrix:
+            print(json.dumps({"result": "ERROR",
+                              "error": "missing required argument(s): --matrix"}))
+            return 2
+    else:
+        missing = [n for n, v in (("--matrix", args.matrix),
+                                  ("--results", args.results)) if not v]
+        if missing:
+            print(json.dumps({"result": "ERROR",
+                              "error": f"missing required argument(s): {', '.join(missing)}"}))
+            return 2
 
     try:
         report = build_report(args)
@@ -606,6 +974,24 @@ Surface: web+api | Preconditions: integration connected (AS-1)
 | 4 | Asset policies | distribute | Slide installed on device | device | manual |
 """
 
+    # MATRIX itself is NOT lint-clean: AS-2.4 `distribute` is a state-changing
+    # step with no inverse. That is the whole point of the mode divergence —
+    # execution mode passes it, --lint-only blocks it. LINT_CLEAN is MATRIX plus
+    # the one-line exemption that resolves it.
+    LINT_CLEAN = MATRIX.replace(
+        "| distribute |",
+        "| distribute [no inverse: a queued job cannot be un-queued] |")
+
+    EXPECTED_KEYS = {
+        "matrix", "results", "lint_only", "require_priority", "min_scenarios",
+        "scenarios", "gated_scenarios", "linted_scenarios", "steps",
+        "steps_gated", "passed", "failed", "blocked", "not_run",
+        "missing_results", "unevidenced_manual", "dangling_inverse",
+        "undeclared_inverse", "exempt_steps", "invalid_exemption",
+        "missing_priority", "missing_step_table", "missing_columns",
+        "unrecognized_mode", "missing_stores", "duplicate_keys",
+        "malformed_steps", "extra_results", "warnings", "result", "error"}
+
     def results(lines):
         return ("# Acceptance Results — slide-integration\n\n"
                 "## Execution — 2026-08-12\n\n" + "\n".join(lines) + "\n")
@@ -636,9 +1022,14 @@ Surface: web+api | Preconditions: integration connected (AS-1)
         def _args(self, **kw):
             base = dict(matrix=str(self.matrix), results=str(self.results),
                         repo=str(self.dir), require_priority=None,
-                        min_scenarios=1, self_test=False)
+                        min_scenarios=1, lint_only=False, self_test=False)
             base.update(kw)
             return argparse.Namespace(**base)
+
+        def _lint(self, matrix=None, **kw):
+            if matrix is not None:
+                self.matrix.write_text(matrix, encoding="utf-8")
+            return build_report(self._args(lint_only=True, results=None, **kw))
 
         def _run(self, lines=None, matrix=None, **kw):
             self.results.write_text(results(lines if lines is not None else GREEN),
@@ -681,6 +1072,51 @@ Surface: web+api | Preconditions: integration connected (AS-1)
             r = self._run([l for l in GREEN if not l.startswith("- AS-1.2")])
             self.assertEqual(r["result"], "FAIL")
             self.assertIn("AS-1.2", r["missing_results"])
+
+        def test_heading_without_an_id_does_not_adopt_a_requirement_id(self):
+            """A missing scenario id must not become the cited requirement id."""
+            table = ("| # | GO | DO | ASSERT | Stores | Mode |\n"
+                     "|---|----|----|--------|--------|------|\n"
+                     "| 1 | list | read the list | rows render | ui | auto |\n")
+            matrix = ("## AS-1 Listing — P0 — (FR-9)\n\n" + table
+                      + "\n## Mapping lifecycle — P0 — (FR-1)\n\n" + table)
+            r = self._lint(matrix=matrix)
+            # AS-1 only. Before the fix the second heading parsed as `FR-1`.
+            self.assertEqual(r["linted_scenarios"], ["AS-1"])
+            self.assertTrue(any("names no scenario id" in w for w in r["warnings"]),
+                            r["warnings"])
+
+        def test_unparsed_step_table_blocks_in_execution_mode(self):
+            """A misspelled header cell must not buy a scenario out of the gate.
+
+            `Asserts` instead of `ASSERT` drops the whole table, so the manual
+            device step never enters `_steps` and cannot land in
+            `unevidenced_manual`. Before this blocked, the run exited 0/PASS on
+            nothing but a spelling.
+            """
+            broken = MATRIX + (
+                "\n## AS-9 Device install — P0 — (FR-9)\n"
+                "Surface: rmm | Preconditions: AS-2 step 1\n\n"
+                "| # | GO | DO | Asserts | Stores | Mode |\n"
+                "|---|----|----|---------|--------|------|\n"
+                "| 1 | agent console | verify agent installed | present | device | manual |\n")
+            r = self._run(matrix=broken)
+            self.assertEqual(r["result"], "FAIL", r)
+            self.assertEqual(r["missing_step_table"], ["AS-9"])
+            self.assertEqual(r["unevidenced_manual"], [])
+
+        def test_unparsed_step_table_outside_priority_scope_only_warns(self):
+            """Priority scoping keeps its meaning: an ungated scenario warns."""
+            broken = MATRIX + (
+                "\n## AS-9 Device install — P2 — (FR-9)\n\n"
+                "| # | GO | DO | Asserts | Stores | Mode |\n"
+                "|---|----|----|---------|--------|------|\n"
+                "| 1 | agent console | verify agent installed | present | device | manual |\n")
+            r = self._run(matrix=broken, require_priority="P0")
+            self.assertEqual(r["result"], "PASS", r)
+            self.assertEqual(r["missing_step_table"], [])
+            self.assertTrue(any("AS-9" in w and "no step table" in w
+                                for w in r["warnings"]))
 
         def test_empty_results_file_is_exit_2(self):
             self.results.write_text("   \n", encoding="utf-8")
@@ -781,6 +1217,48 @@ Surface: web+api | Preconditions: integration connected (AS-1)
             r = self._run()
             step1 = [s for s in r["steps"] if s["key"] == "AS-2.1"][0]
             self.assertIsNone(step1["evidence_ok"])
+
+        # ---- condition 3, fail-closed half: an unrecognized Mode owes evidence ----
+
+        def test_unrecognized_mode_without_evidence_blocks(self):
+            """The bug this closed: `semi` used to read as auto and pass green."""
+            m = MATRIX.replace("| manual |", "| semi |")
+            r = self._run(GREEN[:-1]
+                          + ["- AS-2.4: PASS — confirmed the agent installed"],
+                          matrix=m)
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["unevidenced_manual"], ["AS-2.4"])
+            self.assertEqual(r["not_run"], ["AS-2.4"])
+            step4 = [s for s in r["steps"] if s["key"] == "AS-2.4"][0]
+            self.assertTrue(step4["mode_unrecognized"])
+            self.assertTrue(any("not recognized" in p
+                                for p in step4["problems"]), step4)
+            self.assertTrue(any("BECAUSE the mode was unrecognized" in w
+                                for w in r["warnings"]), r["warnings"])
+
+        def test_unrecognized_mode_with_evidence_passes(self):
+            """The fail-closed path is satisfiable, not a dead end."""
+            r = self._run(GREEN, matrix=MATRIX.replace("| manual |", "| semi |"))
+            self.assertEqual(r["result"], "PASS", r)
+            step4 = [s for s in r["steps"] if s["key"] == "AS-2.4"][0]
+            self.assertTrue(step4["mode_unrecognized"])
+            self.assertTrue(step4["evidence_ok"])
+
+        def test_empty_mode_cell_stays_auto_and_is_not_flagged(self):
+            """Scope boundary: absent is not unrecognized."""
+            m = MATRIX.replace("| device | manual |", "| device |  |")
+            r = self._run(GREEN[:-1]
+                          + ["- AS-2.4: PASS — confirmed the agent installed"],
+                          matrix=m)
+            self.assertEqual(r["result"], "PASS", r)
+            step4 = [s for s in r["steps"] if s["key"] == "AS-2.4"][0]
+            self.assertEqual(step4["mode"], "auto")
+            self.assertFalse(step4["mode_unrecognized"])
+            self.assertEqual(r["unevidenced_manual"], [])
+
+        def test_mode_unrecognized_is_a_step_key_in_both_modes(self):
+            self.assertIn("mode_unrecognized", self._run()["steps"][0])
+            self.assertIn("mode_unrecognized", self._lint(LINT_CLEAN)["steps"][0])
 
         def test_missing_mode_column_defaults_auto_and_warns(self):
             m = MATRIX.replace(" | Mode |", " |").replace("|--------|------|",
@@ -912,14 +1390,197 @@ Surface: web+api | Preconditions: integration connected (AS-1)
             self.assertIn("AS-2-3", r["extra_results"])
 
         def test_json_keys_present_on_every_run(self):
-            expected = {
-                "matrix", "results", "require_priority", "min_scenarios",
-                "scenarios", "gated_scenarios", "steps", "steps_gated", "passed",
-                "failed", "blocked", "not_run", "missing_results",
-                "unevidenced_manual", "dangling_inverse", "undeclared_inverse",
-                "extra_results", "warnings", "result", "error"}
-            self.assertEqual(set(self._run().keys()), expected)
-            self.assertEqual(set(self._run(GREEN[:1]).keys()), expected)
+            self.assertEqual(set(self._run().keys()), EXPECTED_KEYS)
+            self.assertEqual(set(self._run(GREEN[:1]).keys()), EXPECTED_KEYS)
+
+        # ---- --lint-only: mode divergence ----
+
+        def test_lint_clean_matrix_passes(self):
+            r = self._lint(LINT_CLEAN)
+            self.assertEqual(r["result"], "PASS", r)
+            self.assertTrue(r["lint_only"])
+            self.assertEqual(r["linted_scenarios"], ["AS-1", "AS-2"])
+            self.assertEqual(r["undeclared_inverse"], [])
+            self.assertEqual(r["exempt_steps"], ["AS-2.4"])
+
+        def test_lint_only_leaves_execution_arrays_empty(self):
+            r = self._lint(LINT_CLEAN)
+            self.assertIsNone(r["results"])
+            self.assertEqual(r["gated_scenarios"], [])
+            self.assertEqual(r["steps_gated"], 0)
+            self.assertEqual(r["passed"], 0)
+            for k in ("failed", "blocked", "not_run", "missing_results",
+                      "unevidenced_manual", "extra_results"):
+                self.assertEqual(r[k], [], k)
+
+        def test_lint_only_json_keys_match_execution_mode(self):
+            """Same key set both modes, so the two reports diff key-for-key."""
+            self.assertEqual(set(self._lint(LINT_CLEAN).keys()), EXPECTED_KEYS)
+            self.matrix.write_text(MATRIX, encoding="utf-8")
+            exec_r, lint_r = self._run(), self._lint(MATRIX)
+            self.assertEqual(set(exec_r.keys()), set(lint_r.keys()))
+            self.assertEqual(set(exec_r["steps"][0]), set(lint_r["steps"][0]))
+
+        def test_undeclared_inverse_blocks_under_lint_only(self):
+            """THE divergence: one matrix, exit 0 executing, exit 1 linting."""
+            self.matrix.write_text(MATRIX, encoding="utf-8")
+            self.assertEqual(self._run()["result"], "PASS")
+            r = self._lint(MATRIX)
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["undeclared_inverse"], ["AS-2.4"])
+            self.assertTrue(any("BLOCKING in --lint-only" in w
+                                for w in r["warnings"]))
+
+        # ---- --lint-only: structural conditions ----
+
+        def test_lint_missing_priority_blocks(self):
+            m = LINT_CLEAN.replace("## AS-2 Client mapping lifecycle — P0 —",
+                                   "## AS-2 Client mapping lifecycle —")
+            r = self._lint(m)
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["missing_priority"], ["AS-2"])
+
+        def test_lint_missing_step_table_blocks(self):
+            r = self._lint("## AS-1 Connect — P0 — (FR-1)\n\nSurface: api\n")
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["missing_step_table"], ["AS-1"])
+
+        def test_lint_missing_stores_or_mode_column_blocks(self):
+            m = LINT_CLEAN.replace(" | Stores | Mode |", " |")
+            m = m.replace("|--------|--------|------|", "|--------|")
+            m = re.sub(r"\| [a-z, ]+ \| (auto|manual) \|$", "|", m, flags=re.M)
+            r = self._lint(m)
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(len(r["missing_columns"]), 2)
+            self.assertIn("no Stores or Mode column", r["missing_columns"][0])
+
+        def test_lint_unrecognized_mode_blocks(self):
+            r = self._lint(LINT_CLEAN.replace("| manual |", "| semi |"))
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["unrecognized_mode"], ["AS-2.4 (semi)"])
+
+        def test_lint_state_changing_step_with_empty_stores_blocks(self):
+            m = LINT_CLEAN.replace(
+                "| 1 | Clients list | map client A | 200 + mapping row | api, db "
+                "| auto |",
+                "| 1 | Clients list | map client A | 200 + mapping row |  | auto |")
+            r = self._lint(m)
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["missing_stores"], ["AS-2.1"])
+
+        def test_lint_dangling_inverse_blocks(self):
+            r = self._lint(LINT_CLEAN.replace("[inverse of 1]",
+                                              "[inverse of 9]", 1))
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["dangling_inverse"], ["AS-1.2"])
+
+        def test_lint_duplicate_step_number_blocks(self):
+            m = LINT_CLEAN.replace(
+                "| 2 | Clients list | reload | green tick on A | ui | auto |",
+                "| 1 | Clients list | reload | green tick on A | ui | auto |")
+            r = self._lint(m)
+            self.assertEqual(r["result"], "FAIL")
+            self.assertTrue(any("step number 1 appears more than once" in d
+                                for d in r["duplicate_keys"]), r["duplicate_keys"])
+
+        def test_lint_duplicate_scenario_id_blocks(self):
+            r = self._lint(LINT_CLEAN.replace(
+                "## AS-2 Client mapping lifecycle",
+                "## AS-1 Client mapping lifecycle"))
+            self.assertEqual(r["result"], "FAIL")
+            self.assertTrue(any("scenario id AS-1 is declared" in d
+                                for d in r["duplicate_keys"]), r["duplicate_keys"])
+
+        def test_lint_phantom_step_row_blocks(self):
+            m = LINT_CLEAN.replace(
+                "| 2 | Clients list | reload | green tick on A | ui | auto |",
+                "| 2 |  |  |  | ui | auto |")
+            r = self._lint(m)
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["malformed_steps"], ["AS-2.2"])
+
+        def test_lint_min_scenarios_enforced(self):
+            r = self._lint(LINT_CLEAN, min_scenarios=3)
+            self.assertEqual(r["result"], "FAIL")
+            self.assertTrue(any("--min-scenarios" in w for w in r["warnings"]))
+
+        def test_lint_priority_does_not_scope_structure(self):
+            """P2 does not buy a scenario out of structural linting."""
+            m = LINT_CLEAN.replace("## AS-2 Client mapping lifecycle — P0",
+                                   "## AS-2 Client mapping lifecycle — P2")
+            m = m.replace("[no inverse: a queued job cannot be un-queued]", "")
+            r = self._lint(m, require_priority="P0")
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["undeclared_inverse"], ["AS-2.4"])
+            self.assertEqual(r["linted_scenarios"], ["AS-1", "AS-2"])
+            self.assertTrue(any("does not scope --lint-only" in w
+                                for w in r["warnings"]))
+
+        def test_lint_non_scenario_heading_warns_but_does_not_block(self):
+            r = self._lint("## Overview\n\nprose about the journey\n\n"
+                           + LINT_CLEAN)
+            self.assertEqual(r["result"], "PASS", r)
+            self.assertTrue(any("names no scenario id" in w
+                                for w in r["warnings"]))
+
+        def test_lint_unparseable_matrix_is_exit_2(self):
+            self.matrix.write_text("# Matrix\n\n## Overview\n\nprose\n",
+                                   encoding="utf-8")
+            with self.assertRaises(GateError):
+                build_report(self._args(lint_only=True, results=None))
+
+        # ---- --lint-only: the exemption escape hatch ----
+
+        def test_exemption_reason_is_required(self):
+            for bad in ("[no inverse:]", "[no inverse: ]", "[no inverse: -]"):
+                r = self._lint(LINT_CLEAN.replace(
+                    "[no inverse: a queued job cannot be un-queued]", bad))
+                self.assertEqual(r["result"], "FAIL", bad)
+                self.assertEqual(len(r["invalid_exemption"]), 1, bad)
+                self.assertIn("carries no reason text",
+                              r["invalid_exemption"][0])
+                self.assertEqual(r["exempt_steps"], [], bad)
+
+        def test_exemption_conflicting_with_inverse_of_blocks(self):
+            r = self._lint(LINT_CLEAN.replace(
+                "[no inverse: a queued job cannot be un-queued]",
+                "[inverse of 2] [no inverse: cannot be un-queued]"))
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("cannot both have and lack an inverse",
+                          r["invalid_exemption"][0])
+
+        def test_exemption_is_case_insensitive_and_reason_is_captured(self):
+            r = self._lint(LINT_CLEAN.replace(
+                "[no inverse: a queued job cannot be un-queued]",
+                "[NO INVERSE: a queued job cannot be un-queued]"))
+            self.assertEqual(r["result"], "PASS", r)
+            step4 = [s for s in r["steps"] if s["key"] == "AS-2.4"][0]
+            self.assertTrue(step4["exempt"])
+            self.assertEqual(step4["no_inverse_reason"],
+                             "a queued job cannot be un-queued")
+
+        def test_exemption_on_read_only_step_is_a_no_op_warning(self):
+            r = self._lint(LINT_CLEAN.replace(
+                "| reload |", "| reload [no inverse: a reload changes nothing] |"))
+            self.assertEqual(r["result"], "PASS", r)
+            self.assertTrue(any("the exemption is a no-op" in w
+                                for w in r["warnings"]))
+
+        def test_exemption_suppresses_the_advisory_in_execution_mode_too(self):
+            """One predicate, two postures — the arrays must agree."""
+            r = self._run(matrix=LINT_CLEAN)
+            self.assertEqual(r["result"], "PASS", r)
+            self.assertEqual(r["undeclared_inverse"], [])
+            self.assertEqual(r["exempt_steps"], ["AS-2.4"])
+
+        def test_malformed_exemption_is_non_blocking_in_execution_mode(self):
+            r = self._run(matrix=LINT_CLEAN.replace(
+                "[no inverse: a queued job cannot be un-queued]",
+                "[no inverse:]"))
+            self.assertEqual(r["result"], "PASS", r)
+            self.assertEqual(len(r["invalid_exemption"]), 1)
+            self.assertTrue(any("BLOCKS under --lint-only" in w
+                                for w in r["warnings"]))
 
         # ---- CLI ----
 
@@ -939,6 +1600,21 @@ Surface: web+api | Preconditions: integration connected (AS-1)
             self.assertEqual(main(argv), 1)
             self.assertEqual(main(["--matrix", str(self.dir / "nope.md"),
                                    "--results", str(self.results)]), 2)
+
+        def test_lint_only_rejects_results_with_exit_2(self):
+            self.assertEqual(main(["--lint-only", "--matrix", str(self.matrix),
+                                   "--results", str(self.results)]), 2)
+            self.assertEqual(main(["--lint-only"]), 2)
+
+        def test_lint_only_cli_exit_codes(self):
+            self.matrix.write_text(LINT_CLEAN, encoding="utf-8")
+            self.assertEqual(main(["--lint-only", "--matrix",
+                                   str(self.matrix)]), 0)
+            self.matrix.write_text(MATRIX, encoding="utf-8")
+            self.assertEqual(main(["--lint-only", "--matrix",
+                                   str(self.matrix)]), 1)
+            self.assertEqual(main(["--lint-only", "--matrix",
+                                   str(self.dir / "nope.md")]), 2)
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(Tests)
     result = unittest.TextTestRunner(verbosity=1).run(suite)
