@@ -118,10 +118,30 @@ foreach ($f in $changedFiles) {
         [void]$affectedEvals.Add('contract:rex-requirements-shape')
     }
     if ($f -match 'agents/alex\.md$' -or $f -match 'skills/planning-and-task-breakdown/') {
+        # Alex owns TWO plan-time artifacts: plan.md (coverage gate) and
+        # acceptance-matrix.md (the feature-scoped walkthrough). Both formats are
+        # owned by planning-and-task-breakdown, so a change to either file fires both.
         [void]$affectedEvals.Add('contract:alex-plan-coverage')
+        [void]$affectedEvals.Add('contract:alex-acceptance-matrix')
     }
-    if ($f -match 'agents/quinn\.md$' -or $f -match 'skills/test-driven-development/' -or $f -match 'skills/debugging-and-error-recovery/') {
+    if ($f -match 'agents/quinn\.md$' -or $f -match 'skills/test-driven-development/' -or $f -match 'skills/debugging-and-error-recovery/' -or $f -match 'skills/runtime-evidence/') {
         [void]$affectedEvals.Add('contract:quinn-test-report-shape')
+        [void]$affectedEvals.Add('contract:quinn-runtime-evidence')
+    }
+    if ($f -match 'skills/runtime-evidence/') {
+        # The contract quinn-runtime-evidence exists to regression-test: an
+        # in-process observation can fail a wire claim but never pass one. Its
+        # SKILL.md description also drives routing, hence trigger.
+        [void]$affectedEvals.Add('contract:quinn-runtime-evidence')
+        [void]$affectedEvals.Add('trigger')
+    }
+    if ($f -match 'skills/dotnet-backend-patterns/') {
+        # That case encodes this stack's tier rule: the .NET contract mandates
+        # zero-mock integration tests against a real DB, which is exactly the
+        # in-process tier that stood in for a wire observation in the 2026-08
+        # incident. It also names the envelope keys (isSuccess, notifications,
+        # statusCode) the case's gate invocation requires.
+        [void]$affectedEvals.Add('contract:quinn-runtime-evidence')
     }
     if ($f -match 'agents/echo\.md$' -or $f -match 'agents/iris\.md$' -or $f -match 'agents/scout\.md$' -or $f -match 'skills/bgpdd-discovery/') {
         [void]$affectedEvals.Add('contract:echo-qa-discovery-shape')
@@ -132,8 +152,14 @@ foreach ($f in $changedFiles) {
     if ($f -match 'agents/dep\.md$' -or $f -match 'agents/cipher\.md$' -or $f -match 'skills/shipping-and-launch/' -or $f -match 'skills/cloud-deploy-patterns/' -or $f -match 'skills/bgpdd-shipping/') {
         [void]$affectedEvals.Add('contract:dep-ship-decision-shape')
     }
-    if ($f -match 'agents/nova\.md$') {
-        # Nova has no dedicated contract eval yet — skill-routing still covers builder frontmatter/description changes via trigger.
+    if ($f -match 'agents/nova\.md$' -or $f -match 'agents/mason\.md$' -or $f -match 'agents/luna\.md$') {
+        # None of the three builders/reviewers has a dedicated contract eval: no
+        # suite here invokes them, because grading produced CODE deterministically
+        # is a different problem from grading a produced DOCUMENT's shape, which is
+        # all this suite's graders do. Their frontmatter `description` does drive
+        # delegation routing, so a change at least re-checks that via trigger.
+        # This is a stopgap, not coverage: read a green trigger run as "routing still
+        # works", never as "the builder/reviewer still behaves".
         [void]$affectedEvals.Add('trigger')
     }
     if ($f -match 'skills/bgpdd-learn/') {
@@ -153,7 +179,7 @@ foreach ($f in $changedFiles) {
         # dir) and exits 2 if handed one, so it gets its own line below.
         # $LASTEXITCODE, not $? - PS 5.1 sets $? false on any native stderr write,
         # and unittest always reports to stderr even when it passes.
-        [void]$mechanicalChecks.Add("@('check_agent_report','check_blockers','check_commit_gate','check_coverage','check_ship_decision','next_milestone','update_state','run_quiet') | ForEach-Object { python skills/pipeline-tools/scripts/`$_.py --self-test *> `$null; `"`$_ -> exit `$LASTEXITCODE`" }")
+        [void]$mechanicalChecks.Add("@('check_acceptance_suite','check_agent_report','check_blockers','check_commit_gate','check_coverage','check_runtime_evidence','check_ship_decision','next_milestone','update_state','run_quiet') | ForEach-Object { python skills/pipeline-tools/scripts/`$_.py --self-test *> `$null; `"`$_ -> exit `$LASTEXITCODE`" }")
         [void]$mechanicalChecks.Add('python skills/pipeline-tools/scripts/check_dependency_tables.py skills')
     }
     if ($f -match 'SKILL\.md$') {
