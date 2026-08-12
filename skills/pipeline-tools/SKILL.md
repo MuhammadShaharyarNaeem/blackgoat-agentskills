@@ -1,6 +1,6 @@
 ---
 name: pipeline-tools
-description: "Deterministic stdlib-Python CLI family for the PDD pipelines: check_coverage.py verifies every Must-Have FR/NFR in requirements.md is covered by plan.md tasks, by passing tests in test-report.md, or by an in-place supersession annotation in detailed-design.md; check_commit_gate.py makes the bgpdd-build milestone commit gate machine-run (verdict, staleness, blockers, optional working-tree verification) and can perform the commit itself on a pass; check_agent_report.py verifies a durable agent report (Cipher's security-report.md, Vera's verification-report.md) backs its Pass verdict with evidenced check lines and zero Critical findings; check_ship_decision.py gates Dep's ship-decision.md GO/NO-GO; check_blockers.py gates an empty blockers array in orchestrator-state.json; next_milestone.py derives the next pending milestone from plan.md without a full re-read; run_quiet.py runs builds/tests, logging the full output to disk and surfacing only errors-with-context and a tail; update_state.py is the sanctioned read-modify-write path for orchestrator-state.json; and check_dependency_tables.py statically validates every agent's Methodology Dependencies table. Squad-internal: executed by the Orchestrator directly at the bgpdd pipeline gates, not delegated to agents."
+description: "Deterministic stdlib-Python CLI family for the PDD pipelines: check_coverage.py verifies every Must-Have FR/NFR in requirements.md is covered by plan.md tasks, by passing tests in test-report.md, or by an in-place supersession annotation in detailed-design.md; check_commit_gate.py makes the bgpdd-build milestone commit gate machine-run (verdict, staleness, blockers, optional working-tree verification) and can perform the commit itself on a pass; check_agent_report.py verifies a durable agent report (Cipher's security-report.md, Vera's verification-report.md) backs its Pass verdict with evidenced check lines and zero Critical findings; check_runtime_evidence.py gates observed-runtime captures cited in a test or verification report — out-of-process transport, freshness, and required response keys — so an in-process suite can no longer stand in for an observation; check_acceptance_suite.py gates the feature-scoped walkthrough in acceptance-matrix.md against Quinn's acceptance-results.md, including manual steps that must cite real evidence and inverse operations that must actually have been run; check_ship_decision.py gates Dep's ship-decision.md GO/NO-GO; check_blockers.py gates an empty blockers array in orchestrator-state.json; next_milestone.py derives the next pending milestone from plan.md without a full re-read; run_quiet.py runs builds/tests, logging the full output to disk and surfacing only errors-with-context and a tail; update_state.py is the sanctioned read-modify-write path for orchestrator-state.json; and check_dependency_tables.py statically validates every agent's Methodology Dependencies table. Squad-internal: executed by the Orchestrator directly at the bgpdd pipeline gates, not delegated to agents."
 ---
 
 # pipeline-tools
@@ -32,6 +32,7 @@ The tool always prints exactly one JSON object to stdout (diagnostics go to stde
   "covered": ["FR-1", "NFR-1", "FR-3"],
   "uncovered": ["FR-2"],
   "uncovered_should": ["NFR-2"],
+  "blocked": [],
   "warnings": ["Task 5 has no 'Requirements covered:' field"],
   "lint_failures": [
     {"check": "literal-count", "task": "2", "detail": "hardcoded count \"7 error codes\": ..."}
@@ -43,7 +44,8 @@ The tool always prints exactly one JSON object to stdout (diagnostics go to stde
 
 - `mode` is `"plan"`, `"test"` or `"design"`.
 - `uncovered` and `lint_failures` are the **two gating arrays**: `uncovered` holds Must-Have coverage gaps, `lint_failures` holds lint violations. Either one non-empty ⇒ `"result": "FAIL"`. `uncovered_should` is informational and never affects exit code.
-- `lint_failures` entries are always `{"check", "task", "detail"}`. `check` is one of `literal-count`, `consumes-provides`, `path-hygiene` (plan mode) or `supersession-annotation` / `fr-citation` (design mode — `fr-citation` when the script emits Must-Have IDs missing from the design); `detail` is the author-facing message. `task` names the offending unit: the task number as a string in plan mode, the **register row's identifier** (`SUP-01`, `DIV-10`, …) or the missing FR/NFR id for `fr-citation` in design mode. The array is always present and always empty in test mode (test mode runs no lints).
+- `blocked` (test mode) lists every requirement ID whose latest status token is `BLOCKED`. It is **informational and simultaneously gating**: a BLOCKED Must-Have also appears in `uncovered`, so the gate exits 1 — the array exists so a reader can tell *"unperformed and said so"* from *"never mentioned"*. Always present, always `[]` outside test mode. Reported unfiltered (not intersected with the known-ID set) so an ID the requirements never declared still surfaces rather than vanishing.
+- `lint_failures` entries are always `{"check", "task", "detail"}`. `check` is one of `literal-count`, `consumes-provides`, `path-hygiene`, `runtime-criterion` (plan mode) or `supersession-annotation` / `fr-citation` (design mode — `fr-citation` when the script emits Must-Have IDs missing from the design); `detail` is the author-facing message. `task` names the offending unit: the task number as a string in plan mode, the **register row's identifier** (`SUP-01`, `DIV-10`, …) or the missing FR/NFR id for `fr-citation` in design mode. The array is always present and always empty in test mode (test mode runs no lints).
 - **Design mode is supersession-lint + fr-citation, not full FR→design coverage.** `covered`, `uncovered` and `uncovered_should` are always empty for the coverage arrays; `must_have` / `should_have` are still populated (design mode still requires a parseable requirements.md and still exits 2 on one with zero Must-Haves). Only `lint_failures` gates. Every Must-Have ID must appear at least once in the design text (`fr-citation`); register rows must route to matching in-place supersession annotations (`supersession-annotation`). Citation presence is not proof the design satisfies the requirement.
 - On error: `"result": "ERROR"`, `"error"` holds the message, other arrays hold whatever was parsed before the failure.
 - ID arrays are naturally sorted (`FR-2` before `FR-10`).
@@ -104,7 +106,20 @@ Only `PASS`/`FAIL` as the status word, latest mention wins, so a retest appends 
 
 - A `PASS` cites **the executed test that asserts that requirement's own acceptance criterion**, named by test file plus test name. A source file, a component, an infrastructure resource, a design document, or a prior milestone's `PASS` is **not** evidence — those establish that code exists, not that the requirement holds.
 - **Never restate a `PASS` you did not just re-execute.** This is the sharp edge of *latest mention wins*: a later, vaguer line silently **overwrites** an earlier, stronger one, and it is the last line in file order that the gate reads. Appending "re-verified" or "final verification" prose over a genuine earlier measurement does not strengthen the ledger — it destroys the only real evidence in it and leaves the gate reading the weakest claim in the file. If you did not run it this round, append nothing.
-- A verification you could not perform is recorded as `FAIL` with the reason, or omitted entirely so the gate reports it as uncovered. It is **never** recorded as `PASS` with a hedge (see `agent-squad/base-persona.md`, Evidence Integrity). A gap the gate can see is cheap; a gap it cannot is what the gate exists to prevent.
+- **A verification you could not perform is recorded as `BLOCKED`, with the reason.** `- FR-3: BLOCKED — app will not start; Tier 2 suite green only`. This is the sanctioned record and it is status-bearing: it counts as **not covered**, lands a Must-Have in `uncovered`, and exits 1 — honesty routes the work, it never passes it. Do **not** write `FAIL` (that asserts a test ran and failed, a different fabrication) and do **not** omit the line (that hides the gap). It is never `PASS` with a hedge (see `agent-squad/base-persona.md`, Evidence Integrity). A gap the gate can see is cheap; a gap it cannot is what the gate exists to prevent.
+- **Status precedence on one line is `FAIL > BLOCKED > PASS`**, extending the pre-existing both-PASS-and-FAIL-counts-as-FAIL rule. Across lines, latest mention wins, so a `BLOCKED` appended after a stale `PASS` downgrades the ID and a later genuine `PASS` clears it.
+- **`NOT RUN` is deliberately NOT a token here** — a divergence (convention #8) from `check_agent_report.py`'s four-token grammar: in the coverage ledger, omission already means "not run", and a status-less mention already warns and stays uncovered. A `NOT RUN` line therefore behaves exactly like any other status-less mention.
+- **Authoring hazard**: token matching is case-insensitive prose matching, the same posture as `PASS`/`FAIL`. So `- FR-1: PASS — the BLOCKED-state banner renders` downgrades to BLOCKED. The family's bias is deliberate (a false BLOCKED routes work; a false PASS ships a gap) but avoid the words in evidence prose.
+
+**`runtime-criterion` (plan mode).** Mechanizes `planning-and-task-breakdown`'s rule that a compile, typecheck, bundle, or source-search command is not a runtime exit criterion — at **plan time, before any code exists**. It reads each `Checkpoint` block's machine-parseable `RUNTIME PROBE:` line and reports one entry per defect, with `task` = the owning milestone's full heading text and every `detail` naming the checkpoint (one milestone may own several).
+
+Six conditions: (1) no `RUNTIME PROBE:` line at all — this **short-circuits**, since it is the single root cause and reporting 2–6 on top would be noise; (2) `probe:` absent or empty (suppressed when the surface is `none`, where the SKILL replaces the probe fields with `justification:`); (3) `probe:` names an **in-process test client**; (4) `probe:` is a build / typecheck / search / **test-runner** command — `dotnet test` proves a suite is green, never that the running system emits anything; (5) the milestone's surface is `api`, `web+api`, or `fn` but the probe declares no `expect-status:` and/or no `require-keys:` (only the actually-missing field is named), because those become `check_runtime_evidence.py`'s arguments verbatim; (6) the surface is `none` but no `justification:` field is present.
+
+The in-process tell list and the non-runtime-probe regexes are **duplicated verbatim** from `check_runtime_evidence.py` (this family has no shared module by convention), and a test asserts byte-equality of both so the two cannot drift. Milestone block extents mirror `next_milestone.py`'s `parse_milestones()`, with a cross-check test and one deliberate difference: a milestone-less plan yields `[]` here rather than raising, because the coverage gate also runs against plans predating the milestone convention.
+
+**Checkpoint headings are matched at level 2 **and** 3** (`#{2,3}`), not level 3 only. `next_milestone.py` tolerates the deprecated `## Checkpoint:` form inside a milestone block, so linting only `###` would leave the deprecated spelling as a free escape hatch from the probe requirement. `### Checkpoints Overview` does not match (the pattern requires a word boundary after `Checkpoint`).
+
+Scope limits: a plan with **zero** checkpoints yields zero failures — checkpoint *presence* is Step 5's own review item, and failing on absence would retroactively fail every pre-convention plan. A checkpoint outside every milestone block has no surface, so only conditions 1–4 apply. A missing or misspelled `[vs:]` tag is not this lint's business — `next_milestone.py` already halts the build for it. A `;` inside a probe command truncates the value, the documented cost of the `;`-delimited grammar shared with `Boundary contracts:`. The probe is never executed here; the capture it later produces is `check_runtime_evidence.py`'s business. And the tell list is a blocklist, therefore incomplete.
 
 ## Fixtures & self-test
 
@@ -114,6 +129,8 @@ Only `PASS`/`FAIL` as the status word, latest mention wins, so a retest appends 
 - `fixtures/lint-literal-count/` — transcribed inventory counts alongside legitimate unit values; exits **1** on `literal-count` only.
 - `fixtures/lint-boundary-contracts/` — an identifier provided by a later task, one provided by no task, and a task with no contracts field; exits **1** on `consumes-provides` only.
 - `fixtures/lint-paths/` — absolute path, `file:///` URI, and `../sibling-repo/` reference beside sanctioned repo-relative paths; exits **1** on `path-hygiene` only.
+- `fixtures/lint-runtime-criterion/` — a checkpoint whose probe is `npm test -- --grep orders` (condition 4) and a second on a `[vs:api]` milestone whose valid `curl` probe declares no `expect-status:`/`require-keys:` (condition 5); exits **1** on exactly two `runtime-criterion` entries and no sibling lint.
+- `fixtures/blocked/` — a `- FR-2: BLOCKED — …` ledger line; exits **1** with `FR-2` in **both** `uncovered` and `blocked`, and no warnings (BLOCKED is status-bearing, so it earns no status-less-mention warning).
 - `fixtures/design-annotated/` — a `detailed-design.md` whose register supersedes two requirements, both annotated in place (one by strikethrough + note, one by note alone), plus a divergence row citing no requirement; exits **0**.
 - `fixtures/design-unannotated/` — the observed evasion shape: a **divergence** row whose subject is an FR that was never annotated, beside an annotated supersession row and a row citing an undefined id; exits **1** on one `supersession-annotation` entry, with the undefined id as a warning.
 
@@ -246,6 +263,120 @@ The producer-side grammar lives in `agents/cipher.md` §4 and `agents/vera.md` (
 
 `python scripts/check_agent_report.py --self-test` runs a bundled in-process `unittest` suite (temp files) covering the happy path, each failure cause, last-section and last-verdict-line precedence, duplicate-name latest-wins, lowercase-status-is-prose, and the three structural errors.
 
+## check_runtime_evidence.py
+
+A pure-stdlib CLI (`scripts/check_runtime_evidence.py`) that converts `runtime-evidence`'s prose rule — *an in-process observation can fail a wire claim but never pass one* — into an artifact that has to exist on disk. It reads a durable agent report (`test-report.md` in build, `verification-report.md` in shipping), collects its `**Runtime evidence:**` citations, and verifies each cited capture. The failure class it exists to stop: a response envelope green in a `WebApplicationFactory` suite, green in QA prose, and absent from local Swagger.
+
+`runtime-evidence/SKILL.md` owns the capture artifact and citation grammar; this section owns only the CLI contract, and the two do not restate each other.
+
+### Invocation
+
+```bash
+python check_runtime_evidence.py --report <path> --milestone "<title>" \
+    --changed-files <p1> [<p2> ...] [--repo <dir>] \
+    [--surface <key>] [--require-key <name>]... [--expect-status <N>] \
+    [--forbid-host <pattern>]... [--require-build-marker <value>] \
+    [--min-captures <N>]
+python check_runtime_evidence.py --self-test
+```
+
+`--report` and `--milestone` are required. `--repo` defaults to `.`. `--min-captures` defaults to `1`. `--require-key` and `--forbid-host` are repeatable.
+
+There is deliberately **no `--allow-stale` / `--ignore-freshness` override** — a divergence from `check_commit_gate.py`'s `--ignore-unscoped` precedent (convention #8), because freshness is the specific gap the observed failure walked through.
+
+`--require-key` and `--forbid-host` are supplied by the **caller**, never declared by the producer: a producer-declared assertion grades itself. Stack-specific keys live in the stack contract (`dotnet-backend-patterns/SKILL.md` names `isSuccess`, `notifications`, `statusCode`); forbidden-host patterns are project-declared, never hardcoded here.
+
+### JSON output shape
+
+One JSON object on stdout, `indent=2`, stable pre-initialized keys. Top level: `report`, `milestone`, `citations`, `captures`, `accepted`, `rejected`, `missing_keys`, `stale`, `in_process_transport`, `min_captures`, `warnings`, `result`, `error`. Each entry in `captures` carries `path`, `exists`, `cited_under_evidence_runtime`, `milestone_match`, `fresh`, `surface`, `transport`, `probe_command`, `status`, `body_parsed`, `body_keys`, `missing_keys`, `build_marker`, and `problems` — empty `problems` means accepted.
+
+### Exit codes
+
+- **0** — at least `--min-captures` accepted captures for this milestone.
+- **1** — evidence failure: no citation at all, a cited file missing, cited outside `evidence/runtime/`, no capture naming this milestone, stale, an in-process transport, a build/test-runner/search probe, a forbidden host, an empty or unparseable body, a missing required key, a status mismatch, or a build-marker mismatch. The JSON names the cause per capture.
+- **2** — structural/usage: missing `--report`/`--milestone`, an unreadable report, or a cited capture that exists but has no `## Captured output` section (structurally not a capture).
+
+### Parsing rules (condensed)
+
+- **Citations are collected file-wide; scoping happens capture-side.** Every `**Runtime evidence:**` line in the report contributes comma/whitespace-separated path-shaped tokens. Filtering to this milestone then reads each capture's own `- Milestone:` field, using the same word-boundary token match `check_commit_gate.py` uses (so `M1` never matches `M10`). Rationale: `test-report.md`'s `#Task [N]:` headers are documented human-only, so a machine header there would break Quinn's append-only format. A capture naming a *different* milestone is neither accepted nor rejected — it is not this gate's business.
+- **Provenance** is a containment scan over the **cited string**: the segments `evidence/runtime` must appear consecutively with at least one segment after, case-insensitively, backslashes normalized. Deliberately a containment scan rather than `check_commit_gate.py:143`'s prefix anchor, because a capture is legitimately cited either report-relative (`evidence/runtime/x.md`) or with its `.docs/{project}/implementation/` prefix. **Any `..` segment is refused** — that predicate's `lstrip("./")` normalization let `../evidence/review/x.png` collapse to a passing path, and this one does not repeat it. Captures under `evidence/build/` (builder-produced) do not gate.
+- **Transport honesty.** `Transport:` and `Probe command:` are scanned for in-process tells (`WebApplicationFactory`, `CreateClient(`, `TestServer`, `TestClient`, `supertest`, `MockMvc`, `ASGITransport`, `rack-test`, …) and for build/test-runner/search shapes (`dotnet build`, `dotnet test`, `npm test`, `pytest`, `jest`, `tsc`, `--noEmit`, `grep`/`rg`, …) by **word-boundary regex**, so a base URL containing `myorg` does not read as `rg`. A test-runner invocation is not a runtime probe: it proves a suite is green, never that the running system emits this.
+- **Body extraction** takes the **last balanced JSON object** in `## Captured output` — last, not first, because a probe's output routinely carries a status line and headers first and `run_quiet` merges stderr into the stream. The fence regex matches horizontal whitespace only; a `\s*` there consumes the newline after the opening fence and eats the body's first line (fixed 2026-08-12 — it silently broke `--expect-status` and would have dropped the status line from every capture).
+- **`--require-key` checks top-level names only**, satisfiable in the document itself or in its `body` object — **not recursive**, so an `isSuccess` buried inside a payload cannot pass an envelope check.
+- **Freshness**: the capture's mtime must be `>=` every `--changed-files` mtime. Omitting `--changed-files` skips the check and reports `fresh: null`.
+
+### Scope limits
+
+Proves a cited capture exists under `evidence/runtime/`, names an out-of-process transport, probes a runtime surface, postdates the diff, and carries the required top-level keys. It does **not** prove the process that answered was the built application, that the base URL was not a stub server, or that the body was not hand-typed (`run_quiet.py --capture` narrows the last by owning the load-bearing fields, but this gate cannot tell whether it was used). Freshness is an **mtime proxy**, the same documented limitation as review staleness. The in-process tell list is a **blocklist and therefore incomplete** — a new framework's in-process client passes until its name is added.
+
+**The largest residual risk, and it is not closed:** in a multi-service estate a service started before the edit and never restarted answers with stale behavior, and its capture is fresh, non-empty, well-formed, and may carry every required key. `--require-build-marker` is the only real closure and it requires the service to echo its build version. Where no service does, this hole stays open and must be understood rather than assumed away.
+
+### Fixtures & self-test
+
+- `fixtures/runtime-evidence-happy/` — a report citing a success capture and its 4xx failure sibling; exit **0** at `--min-captures 2` with `--require-key isSuccess --require-key notifications`.
+- `fixtures/runtime-evidence-missing-key/` — **the observed 2026-08 failure.** Honest transport, local host, runtime probe, status 200 — and a bare `{"id":…,"total":…}` body. Exit **1**, `missing_keys: ["isSuccess","notifications"]`.
+- `fixtures/runtime-evidence-inprocess/` — a capture whose body *does* carry the envelope but whose transport is `WebApplicationFactory<Program>` and whose probe is `dotnet test`. Exit **1**: the in-process tier cannot pass this claim no matter what its body says.
+- `fixtures/runtime-evidence-forbidden-host/` — a real out-of-process probe against the shared **dev** gateway, with `Environment:` recording one service still pointing there. Exit **1** *when invoked with* `--forbid-host dev.internal`; exit **0** without it, because the pattern is project-declared by design.
+- **Staleness has no fixture on purpose** — mtimes do not survive a clone. It is covered only in `run_self_test()`, using synthetic `os.utime` ordering rather than the real clock (the pattern `check_commit_gate.py` established).
+
+`python scripts/check_runtime_evidence.py --self-test` runs a bundled in-process `unittest` suite (26 cases) covering the happy path, the missing-envelope-key case, key-nested-deeper (must fail) and key-in-`body` (must pass), every in-process tell, test-runner and build probes, the `myorg`-is-not-`rg` word-boundary case, forbidden hosts in both `Base URL:` and `Environment:`, build-marker mismatch and absence, staleness, `evidence/build/` non-gating, `..` refusal, milestone scoping including `M1`/`M10`, the status-line fence regression, empty output, `--min-captures`, and the structural exits.
+
+## check_acceptance_suite.py
+
+A pure-stdlib CLI (`scripts/check_acceptance_suite.py`) gating the **feature-scoped** walkthrough, one scope up from every other gate here. Per-milestone evidence proves each brick; nothing else proves the wall stands — a feature can be green on every milestone gate and still fail its own journey, because the journey is ordered and stateful and because **inverse operations are never exercised by the milestone that added them** (the milestone that adds mapping has no reason to unmap). Run at `bgpdd-build` Phase 5 before Dep writes the prep ship-decision, and again at `bgpdd-shipping` Stage 1 as regression.
+
+Inputs: Alex's `acceptance-matrix.md` (authored at plan time, derived from requirements — never from what got built) and Quinn's `acceptance-results.md`.
+
+### Invocation
+
+```bash
+python check_acceptance_suite.py --matrix <path> --results <path> \
+    [--repo <dir>] [--require-priority P0[,P1]] [--min-scenarios <N>]
+python check_acceptance_suite.py --self-test
+```
+
+`--matrix` and `--results` required. `--repo` defaults to `.`; `--min-scenarios` to `1`. `--require-priority` semantics are **"at or above"**: the gated set is every priority numerically ≤ the max value given, so `P1` alone gates {P0, P1} and a careless value can never skip P0. **Omitting it gates every scenario** — otherwise an all-P1 matrix would pass trivially.
+
+### JSON output shape
+
+One `indent=2` object, keys pre-initialized. Top level: `matrix`, `results`, `require_priority`, `min_scenarios`, `scenarios`, `gated_scenarios`, `steps`, `steps_gated`, `passed`, `failed`, `blocked`, `not_run`, `missing_results`, `unevidenced_manual`, `dangling_inverse`, `undeclared_inverse`, `extra_results`, `warnings`, `result`, `error`. Each `steps` entry carries `key`, `scenario`, `n`, `mode`, `stores`, `inverse_of`, `state_changing`, `gated`, `priority`, `status`, `detail`, `evidence`, `evidence_ok`, `problems` — empty `problems` means the step is green. On exit 2 the object is the minimal `{"result": "ERROR", "error": …}` envelope.
+
+### Exit codes
+
+- **0** — gated scenarios ≥ `--min-scenarios`, at least one gated step had a result, and `missing_results` / `failed` / `blocked` / `not_run` / `unevidenced_manual` / `dangling_inverse` are all empty.
+- **1** — any gated step missing a result; any gated result `FAIL`/`BLOCKED`/`NOT RUN`; any gated **manual** step reporting `PASS` without an existing `evidence/runtime/` citation; any **dangling** `[inverse of N]` (at *any* priority); too few gated scenarios; zero gated steps.
+- **2** — matrix or results missing/unreadable, results empty, no parseable scenario in the matrix, no parseable result line, or a `--require-priority` value that is not a `P0`–`P3` token.
+
+### The results grammar Quinn emits
+
+`acceptance-results.md` reuses `check_agent_report.py`'s check-line grammar, keyed by step:
+
+```
+- AS-2.1: PASS — exit 0 — 200, mapping row client A -> slide-c-882
+- AS-3.5: PASS — evidence/runtime/as3-5-agent-uninstalled.md — agent absent, service deregistered
+```
+
+`- <ScenarioId>.<StepNumber>: <PASS|FAIL|BLOCKED|NOT RUN> — <detail>`. The separator is a **dot**, deliberately not a dash (`AS-2-4` is ambiguous with the id's own dash); a mis-keyed line lands in `extra_results` as a warning while the step it meant to cover lands in `missing_results` as a block, so the mistake fails loud rather than silently binding the wrong step. Step keys are self-describing, so `##` headings in the results file are informational and never parsed — that removes the whole "which section was this result under" scoping problem `test-report.md`'s human-only `#Task [N]:` headers force on other parsers. Duplicate keys: **latest wins**, so a retest appends rather than edits.
+
+### Parsing rules (condensed)
+
+- **Scenario** = a `##` heading containing an id matching `\b[A-Za-z]{1,6}-\d+\b`; priority from `\bP([0-3])\b` in the heading; requirement IDs collected only from **inside parentheses** in the heading, so the scenario's own `AS-2` is never mistaken for a requirement. A scenario with **no** priority token is gated anyway, with a warning — an unprioritized scenario cannot be filtered honestly.
+- **Step table** = the first table under the scenario whose header cells include `go`, `do`, and `assert`; columns are looked up **by header name**, so column order is free. `Mode` defaults to `auto` when blank or absent (absent emits a warning — nothing then gets manual-evidence checking). `Stores` splits on `, / ; +`.
+- **`[inverse of N]`** is matched over the whole row line, so placement is free, and resolves **scenario-locally**.
+- **Manual evidence** is accepted only if the cited token is path-shaped, passes the same `..`-refusing `evidence/runtime/` containment scan `check_runtime_evidence.py` uses, **and** resolves to an existing file against the results file's directory, then `--repo`, then `.`, then as given.
+
+### Scope limits
+
+Verifies the matrix was **executed and evidenced** — never that a scenario is the *right* scenario, that its ASSERT column asserts the right thing, or that preconditions and ordering were honored; authoring is Alex's judgment and stays reviewable prose. It **never opens** a cited capture beyond an existence check — whether the capture is honest (out-of-process transport, freshness, response keys) is `check_runtime_evidence.py`'s job, and running both is the point. **Auto steps are trusted on their `PASS` token** with no exit code required — deliberately narrower than `check_agent_report.py`, because auto steps are already covered by the per-milestone test and commit gates.
+
+**`undeclared_inverse` is advisory and non-blocking**, and this is deliberate (convention #8 — it refines the "every state-changing step exercises its inverse" doctrine rather than enforcing it here). Three reasons: by the time this gate runs the code is written, so blocking would ask Quinn to author a scenario Alex owed weeks earlier; the `state_changing` detector rests on a mutating-verb **allowlist** and is knowably incomplete, and a blocking gate built on an incomplete heuristic teaches that green means "the heuristic found nothing"; and legitimate one-way steps exist (nothing un-distributes a queued job, nothing un-reinstalls). A **dangling** `[inverse of N]` does block at every priority, because that is the artifact misrepresenting its own coverage rather than a coverage judgment. The consequence of a genuinely missing inverse is still caught and still blocks — as `missing_results`, if Alex wrote the step and Quinn didn't run it.
+
+### Fixtures & self-test
+
+`fixtures/acceptance-happy/` (exit **0**), `-missing-inverse/`, `-unevidenced-manual/`, `-notrun/` (exit **1** each) — all four modelling the Slide RMM journey: connect → map → green tick → add policy → distribute → verify installed on device → remove → verify uninstalled → reinstall, across 4 scenarios and 14 steps with 3 manual steps citing real captures. The happy fixture deliberately carries a non-empty `undeclared_inverse` while still exiting 0, which is the proof the advisory is genuinely non-blocking.
+
+`python scripts/check_acceptance_suite.py --self-test` runs 39 in-process cases covering matrix/results parsing, every blocking condition, the manual-evidence paths (missing file, `evidence/build/` instead of `evidence/runtime/`, `..` traversal, resolution against `--repo`, a `.docs/`-prefixed citation keeping its leading dot), dangling vs undeclared inverses, cross-scenario inverse non-resolution, priority-scope semantics, and every exit-2 trigger.
+
 ## next_milestone.py
 
 A pure-stdlib CLI (`scripts/next_milestone.py`) that makes "what's the next milestone to build" a mechanical derivation from `plan.md` instead of a full re-read. Real plans reach roughly 290K characters; the Orchestrator Contract's mandated re-reads of the whole file at every hydration and phase-1 entry cost on the order of 73k tokens each. This tool reads the plan once and returns only what the Orchestrator needs to route the next build phase — for roughly 2K tokens.
@@ -265,7 +396,7 @@ python next_milestone.py --self-test
 {
   "plan_file": "<path as given>",
   "result": "NEXT",
-  "next_milestone": {"title": "Milestone 2 — Persistence", "line": 12, "domain": "API"},
+  "next_milestone": {"title": "Milestone 2 — Persistence [API] [vs:api]", "line": 12, "domain": "API", "surface": "api"},
   "milestone_text": "## Milestone 2 — Persistence\n\n## Task 2: ...",
   "remaining": ["Milestone 2 — Persistence", "Milestone 3 — Reporting"],
   "completed_count": 1,
@@ -276,7 +407,8 @@ python next_milestone.py --self-test
 }
 ```
 
-- `result` is `"NEXT"` (a pending milestone was found with a single clear domain), `"DONE"` (no pending milestone remains — `next_milestone`/`milestone_text` are `null`, `remaining` is `[]`), or `"MIXED"` (the next pending milestone's tasks mix `[UI]` and `[API]` tags, **or** the milestone is `UNTAGGED` — both are planning defects).
+- `result` is `"NEXT"` (a pending milestone was found, with a single clear domain AND a valid verification surface), `"DONE"` (no pending milestone remains — `next_milestone`/`milestone_text` are `null`, `remaining` is `[]`), or `"MIXED"`. **`"MIXED"` is the family name for "the plan cannot be executed as written"**, covering three distinct planning defects: the next pending milestone mixes `[UI]` and `[API]` tags; it is `UNTAGGED`; or its `[vs:<surface>]` verification-surface tag is **missing or unknown**. They share a verdict and exit code because the Orchestrator's action is identical in all three — halt, route back through Alex — and are told apart by the `warnings` entry, not the verdict.
+- `next_milestone.surface` is the declared surface key (`api`, `ui`, `web+api`, `rmm`, `fn`, `none`), `null` when no tag was found, or the **raw key verbatim** when one was found but is not valid — so a typo (`[vs:apo]`) is distinguishable from an omission.
 - `milestone_text` is the next milestone's full block **verbatim**, from its heading line through the line before the next milestone heading (or EOF) — inject it directly into the delegation brief as the milestone text.
 - `cursor` is `null` when `--state` was not given. Otherwise `{"stored", "matches_next", "stale"}`: `stored` is the raw `milestone_cursor` value (string or `null`); `matches_next` is true when the cursor names the derived next milestone; `stale` is true when the cursor names a milestone that appears **later** in plan order than the first pending one — resuming forward from it would silently skip the earlier pending work.
 - On a structural/usage error the tool prints only `{"result": "ERROR", "error": "<message>"}` — the other fields are not present.
@@ -284,7 +416,8 @@ python next_milestone.py --self-test
 ### Exit codes
 
 - **0** — `result` is `"NEXT"` or `"DONE"`.
-- **1** — `result` is `"MIXED"`: the next pending milestone mixes `[UI]` and `[API]` task tags, **or is UNTAGGED**. This is a **planning defect**, not a routing decision to improvise past — halt and route back through Alex for re-planning, per `bgpdd-build` Phase 1 step 2. UNTAGGED is treated as MIXED (exit 1), not NEXT with a warning.
+- **1** — `result` is `"MIXED"`: a **planning defect** — mixed `[UI]`/`[API]` tags, `UNTAGGED`, or a missing/unknown `[vs:<surface>]` tag. Not a routing decision to improvise past: halt and route back through Alex for re-planning, per `bgpdd-build` Phase 1 step 2. None of the three is ever `NEXT`-with-a-warning.
+  - **Migration note.** Every plan authored before the `[vs:]` axis existed reads as a defect on its next pending milestone until re-tagged. That is the intended cost of making the declaration non-omissible: a surface that can be silently left out is a surface that will be. Re-tagging is a one-line edit per milestone heading.
 - **2** — usage error (missing `--plan`), an unreadable file, invalid `--state` JSON, a state file missing `milestone_cursor`, or a structural contract failure: **zero `## Milestone <n>` / `### Milestone <n>` headings found in the plan**.
 
 ### Parsing rules (condensed)
@@ -294,12 +427,13 @@ python next_milestone.py --self-test
 - **Heading match**: a level-2 **or** level-3 heading of the shape `## Milestone <digit...>` / `### Milestone <digit...>` (regex-anchored: `Milestone` immediately followed by whitespace and a digit) opens a new milestone block. A prose heading like `## Milestone ordering — a stated deviation from the usual sequence` does **not** match — no digit immediately follows "Milestone" — and stays inside whichever milestone block precedes it (or is simply prose if it precedes the first real heading). This is deliberate: it lets a plan discuss "milestone ordering" in prose without the parser mistaking the discussion for a milestone. The canonical writer form, per `planning-and-task-breakdown`, is level-3 (`### Milestone <n> — <Title> [<UI|API>]`); level-2 is tolerated for older plans.
 - **Block extent**: a milestone's block runs from its heading line to the FIRST of: the next milestone heading (either level), the next level-2 heading whose text does not start with "Task" or "Checkpoint" (case-insensitive) — this is what ends the task list at a trailing section like `## Risks and Mitigations` or `## Open Questions` — or EOF. Every other heading in between — `## Task N:` headings, `### Checkpoint:` blocks, and a level-2 `## Checkpoint:` heading — stays inside the current milestone's block. The level-2 `## Checkpoint:` form is **deprecated** (the canonical form is level-3, `### Checkpoint:`, which needs no such special-casing since `###` never terminates a block); tolerating it here is a defensive read-side fix, and each occurrence emits a `warnings` entry naming the milestone. The write side (which heading level a plan's author emits) is tracked separately.
 - **Domain**: the milestone **heading** line's own `[UI]`/`[API]` tag is authoritative when present (backticks around the tag don't matter). Only when the heading carries neither tag does the tool fall back to scanning the whole block text — including task prose — for `[UI]`/`[API]` tags. Both tags present (on the heading, or via fallback scan) → `"MIXED"`; only `[UI]` → `"UI"`; only `[API]` → `"API"`; neither → `"UNTAGGED"`, which the tool reports as `result: "MIXED"` (exit 1 planning defect) — not NEXT with a warning.
+- **Verification surface**: a second, **orthogonal** axis, matched as `[vs:<key>]` with the same heading-wins-then-scan-the-block authority rule. The tag is **lowercase-only by design**: the domain regexes match case-sensitive bracket literals `[UI]`/`[API]`, so `[vs:api]` cannot be mistaken for `[API]` and `[API]` cannot be mistaken for a surface. `web+api` is the one key containing `+`. A heading may legitimately carry both axes: `### Milestone 3 — Order envelope [API] [vs:web+api]`.
 - **Next pending**: the first milestone (in file order) whose heading line does **not** contain `[x]`/`[X]`.
 - **Stale-cursor verdict**: matching between the stored `milestone_cursor` and milestone titles is a case-insensitive substring test in either direction. If the cursor matches no title at all, that's a warning (`stale`/`matches_next` both `false`), not an error — a hand-edited or freeform cursor string shouldn't crash the tool.
 
 ### Fixtures & self-test
 
-`scripts/next_milestone.py --self-test` runs a bundled `unittest` suite in-process (temp plan/state files) covering: happy-path derivation, the prose-heading-not-a-milestone case, all-complete (`DONE`), zero-milestone-headings (`ERROR`), mixed tags (`MIXED`), untagged-as-MIXED, stale/matching/null/unmatchable cursors, missing/invalid file inputs, a level-3-heading plan with heading-carried domain tags and a trailing `## Risks and Mitigations` section (asserting the last milestone's block excludes it), heading-tag authority over a stray same-tag mention in task prose, heading tags wrapped in backticks, and a deprecated level-2 `## Checkpoint:` heading tolerated inside its milestone block with a warning (contrasted against the canonical level-3 form, which emits none).
+`scripts/next_milestone.py --self-test` runs a bundled `unittest` suite in-process (temp plan/state files) covering: happy-path derivation, the prose-heading-not-a-milestone case, all-complete (`DONE`), zero-milestone-headings (`ERROR`), mixed tags (`MIXED`), untagged-as-MIXED, missing-surface and unknown-surface as MIXED, every valid surface key accepted, heading-surface authority over a block mention, surface read from the block when the heading carries none, the `[vs:api]`/`[API]` non-collision in both directions, stale/matching/null/unmatchable cursors, missing/invalid file inputs, a level-3-heading plan with heading-carried domain tags and a trailing `## Risks and Mitigations` section (asserting the last milestone's block excludes it), heading-tag authority over a stray same-tag mention in task prose, heading tags wrapped in backticks, and a deprecated level-2 `## Checkpoint:` heading tolerated inside its milestone block with a warning (contrasted against the canonical level-3 form, which emits none).
 
 ## check_ship_decision.py
 
@@ -354,10 +488,19 @@ A pure-stdlib CLI (`scripts/run_quiet.py`) that runs a build or test command, wr
 
 ```bash
 python run_quiet.py --log <path> [--context N] [--tail N] [--timeout SECONDS] -- <command and args...>
+python run_quiet.py --capture <path> [--capture-field Name=value]... [--log <path>] -- <command and args...>
 python run_quiet.py --self-test
 ```
 
-`--log` and a command after `--` are both required. Defaults: `--context 5`, `--tail 15`, `--timeout 240` (seconds). Everything after `--` is passed to the child process verbatim (no shell).
+**One of `--log` or `--capture`** is required, plus a command after `--`. Defaults: `--context 5`, `--tail 15`, `--timeout 240` (seconds). Everything after `--` is passed to the child process verbatim (no shell).
+
+### `--capture` — writing a runtime-evidence artifact
+
+`--capture <path>` additionally writes a conforming capture artifact (contract: `runtime-evidence/SKILL.md`), creating parent directories. This exists so the fields a gate reads are **observed, not authored**: `run_quiet.py` stamps the probe command, the UTC timestamp, the real child exit code, the duration, and the captured output itself. `--capture-field Name=value` (repeatable) supplies only the descriptive header — `Title`, `Milestone`, `Requirement IDs`, `Surface`, `Transport`, `Base URL`, `Environment`, `Config repointed`, `Build marker`, `OpenAPI`. A `Title` field becomes the artifact's `# Runtime capture: …` heading.
+
+**A field name the tool owns is rejected, not overwritten**: `Probe command`, `Captured`, `Exit code`, `Duration` and `Log` cannot be supplied via `--capture-field` (compared case-insensitively) — the attempt is a usage error, exit **2**, and no capture is written. That refusal is the integrity property of this mode; without it the flag would be a fabrication vector rather than a defense against one.
+
+The captured output is fenced with a backtick run longer than any inside the output, so a body containing fences cannot break the artifact. `--capture-field` without `--capture` is a usage error. Passing both `--capture` and `--log` writes both and records the log path in the artifact. A timed-out probe still writes a capture, annotated that it records an incomplete observation.
 
 ### Report shape (plain text on stdout)
 

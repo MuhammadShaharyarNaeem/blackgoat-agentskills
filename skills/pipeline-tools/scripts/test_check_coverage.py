@@ -130,6 +130,90 @@ class TestLatestWins(unittest.TestCase):
         self.assertTrue(any("FR-1" in w for w in warnings))
 
 
+class TestBlockedStatusToken(unittest.TestCase):
+    """BLOCKED — a check whose precondition was absent — is status-bearing.
+
+    Required by agents/quinn.md §6 and base-persona.md's Evidence Integrity
+    section. Without it an honest agent must write FAIL (asserting a test ran)
+    or omit the line (hiding the gap).
+    """
+
+    def test_blocked_is_status_bearing_and_never_covered(self):
+        text = "- FR-1: BLOCKED — the dismiss endpoint is not deployed locally\n"
+        status_by_id, warnings = cc.parse_test_report(text)
+        self.assertEqual(status_by_id["FR-1"], "BLOCKED")
+        # Status-bearing, so it earns no "mentioned without a status" warning.
+        self.assertEqual(warnings, [])
+
+    def test_blocked_downgrades_a_stale_pass(self):
+        text = "- FR-1: PASS — first run\n- FR-1: BLOCKED — harness removed\n"
+        status_by_id, _warnings = cc.parse_test_report(text)
+        self.assertEqual(status_by_id["FR-1"], "BLOCKED")
+
+    def test_later_pass_can_still_clear_a_blocked(self):
+        text = "- FR-1: BLOCKED — no harness\n- FR-1: PASS — harness built, retested\n"
+        status_by_id, _warnings = cc.parse_test_report(text)
+        self.assertEqual(status_by_id["FR-1"], "PASS")
+
+    def test_fail_beats_blocked_on_one_line(self):
+        text = "- FR-1: BLOCKED for the device check, FAIL for the API check\n"
+        status_by_id, _warnings = cc.parse_test_report(text)
+        self.assertEqual(status_by_id["FR-1"], "FAIL")
+
+    def test_blocked_beats_pass_on_one_line(self):
+        text = "- FR-1: PASS in-process, BLOCKED on the wire (no local estate)\n"
+        status_by_id, _warnings = cc.parse_test_report(text)
+        self.assertEqual(status_by_id["FR-1"], "BLOCKED")
+
+    def test_not_run_is_deliberately_not_a_status_token(self):
+        """Divergence from check_agent_report.py: omission already means not-run.
+
+        A `NOT RUN` line must therefore behave exactly like any other
+        status-less mention — warned about, and not covered.
+        """
+        text = "- FR-1: NOT RUN — deferred to the next milestone\n"
+        status_by_id, warnings = cc.parse_test_report(text)
+        self.assertNotIn("FR-1", status_by_id)
+        self.assertTrue(any("FR-1" in w for w in warnings))
+
+    def test_blocked_must_have_lands_in_uncovered_and_blocked(self):
+        report = cc.build_report(
+            "test",
+            str(FIXTURES / "blocked" / "requirements.md"),
+            str(FIXTURES / "blocked" / "test-report.md"),
+        )
+        self.assertEqual(report["result"], "FAIL")
+        self.assertEqual(report["uncovered"], ["FR-2"])
+        self.assertEqual(report["blocked"], ["FR-2"])
+        self.assertNotIn("FR-2", report["covered"])
+
+    def test_blocked_key_present_and_empty_in_plan_mode(self):
+        report = cc.build_report(
+            "plan",
+            str(FIXTURES / "happy" / "requirements.md"),
+            str(FIXTURES / "happy" / "plan.md"),
+        )
+        self.assertEqual(report["blocked"], [])
+
+    def test_blocked_key_present_and_empty_in_design_mode(self):
+        report = cc.build_report(
+            "design",
+            str(FIXTURES / "design-annotated" / "requirements.md"),
+            str(FIXTURES / "design-annotated" / "detailed-design.md"),
+        )
+        self.assertEqual(report["blocked"], [])
+
+    def test_existing_test_mode_fixtures_report_no_blocked_ids(self):
+        """Backward compatibility: no pre-existing report carries the token."""
+        for name in ("happy", "uncovered"):
+            report = cc.build_report(
+                "test",
+                str(FIXTURES / name / "requirements.md"),
+                str(FIXTURES / name / "test-report.md"),
+            )
+            self.assertEqual(report["blocked"], [], name)
+
+
 class TestSupersessionAnnotation(unittest.TestCase):
     def test_struck_through_id_keeps_its_tier_and_warns(self):
         text = (
@@ -321,6 +405,268 @@ class TestPathHygieneLint(unittest.TestCase):
             "Implements the `/auth/login` route.\n"
         )
         self.assertEqual(failures, [])
+
+
+class TestRuntimeCriterionLint(unittest.TestCase):
+    """The plan-mode `runtime-criterion` lint over `### Checkpoint:` blocks."""
+
+    GOOD_PROBE = (
+        "RUNTIME PROBE: start: `npm run start`; "
+        "probe: `curl -sS -i http://localhost:5142/api/orders`; "
+        "expect-status: 200; require-keys: isSuccess, data"
+    )
+
+    def _plan(self, surface="api", probe_line=GOOD_PROBE, extra_checkpoint_lines=()):
+        lines = [
+            "# P",
+            "",
+            f"### Milestone 1 — Orders [API] [vs:{surface}]",
+            "",
+            "## Task 1: Endpoint",
+            "",
+            "**Requirements covered:** FR-1",
+            "",
+            "### Checkpoint: Milestone 1",
+            "- [ ] All tests pass",
+        ]
+        if probe_line is not None:
+            lines.append(f"- [ ] {probe_line}")
+        lines.extend(f"- [ ] {line}" for line in extra_checkpoint_lines)
+        lines.append("- [ ] Review with human before proceeding")
+        return "\n".join(lines) + "\n"
+
+    def _lint(self, *args, **kwargs):
+        return cc.lint_runtime_criterion(self._plan(*args, **kwargs))
+
+    # ---- condition 1: no RUNTIME PROBE line ----
+
+    def test_checkpoint_without_a_probe_line_fails(self):
+        failures = self._lint(probe_line=None)
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]["check"], "runtime-criterion")
+        self.assertIn("carries no 'RUNTIME PROBE:' line", failures[0]["detail"])
+
+    def test_missing_probe_line_reports_one_root_cause_only(self):
+        """A [vs:api] checkpoint with no probe line must not also report the
+        missing expect-status/require-keys — one root cause, one failure."""
+        self.assertEqual(len(self._lint(surface="api", probe_line=None)), 1)
+
+    # ---- condition 2: empty probe field ----
+
+    def test_empty_probe_field_fails(self):
+        failures = self._lint(probe_line=(
+            "RUNTIME PROBE: start: `npm run start`; probe: ; "
+            "expect-status: 200; require-keys: isSuccess"))
+        self.assertEqual(len(failures), 1)
+        self.assertIn("declares no 'probe:' command", failures[0]["detail"])
+
+    def test_probe_field_set_to_none_counts_as_empty(self):
+        failures = self._lint(probe_line=(
+            "RUNTIME PROBE: start: `npm run start`; probe: none; "
+            "expect-status: 200; require-keys: isSuccess"))
+        self.assertEqual(len(failures), 1)
+        self.assertIn("declares no 'probe:' command", failures[0]["detail"])
+
+    def test_probe_keyword_entirely_absent_counts_as_empty(self):
+        failures = self._lint(probe_line=(
+            "RUNTIME PROBE: start: `npm run start`; "
+            "expect-status: 200; require-keys: isSuccess"))
+        self.assertEqual(len(failures), 1)
+        self.assertIn("declares no 'probe:' command", failures[0]["detail"])
+
+    # ---- condition 3: in-process test client ----
+
+    def test_in_process_probe_fails_for_every_tell(self):
+        for tell in ("WebApplicationFactory<Program>", "factory.CreateClient()",
+                     "TestServer", "supertest(app)", "MockMvc",
+                     "app.test_client()", "ASGITransport"):
+            failures = self._lint(probe_line=(
+                f"RUNTIME PROBE: start: `run`; probe: `{tell}`; "
+                "expect-status: 200; require-keys: isSuccess"))
+            self.assertTrue(any("IN-PROCESS" in f["detail"] for f in failures), tell)
+
+    # ---- condition 4: build / typecheck / search / test-runner ----
+
+    def test_test_runner_probe_fails(self):
+        """The load-bearing case: a green suite is not an observation."""
+        for bad in ("dotnet test --filter Orders", "npm test", "pytest -k orders",
+                    "go test ./...", "npx jest orders", "vitest run"):
+            failures = self._lint(probe_line=(
+                f"RUNTIME PROBE: start: `run`; probe: `{bad}`; "
+                "expect-status: 200; require-keys: isSuccess"))
+            self.assertTrue(
+                any("test-runner command" in f["detail"] for f in failures), bad)
+
+    def test_build_typecheck_and_search_probes_fail(self):
+        for bad in ("dotnet build", "npm run build", "tsc --noEmit",
+                    "grep -r isSuccess src/", "msbuild /t:Rebuild", "make build"):
+            failures = self._lint(probe_line=(
+                f"RUNTIME PROBE: start: `run`; probe: `{bad}`; "
+                "expect-status: 200; require-keys: isSuccess"))
+            self.assertEqual(len(failures), 1, bad)
+
+    def test_url_containing_rg_is_not_a_search_command(self):
+        """Word boundaries, as in check_runtime_evidence.py: 'myorg' != ripgrep."""
+        failures = self._lint(probe_line=(
+            "RUNTIME PROBE: start: `run`; "
+            "probe: `curl -sS -i http://myorg.localhost:5142/api/orders`; "
+            "expect-status: 200; require-keys: isSuccess"))
+        self.assertEqual(failures, [])
+
+    # ---- condition 5: response surfaces need assertion fields ----
+
+    def test_response_surfaces_require_expect_status_and_require_keys(self):
+        for surface in ("api", "web+api", "fn"):
+            failures = self._lint(surface=surface, probe_line=(
+                "RUNTIME PROBE: start: `run`; "
+                "probe: `curl -sS -i http://localhost:5142/api/orders`"))
+            self.assertEqual(len(failures), 1, surface)
+            self.assertIn("'expect-status:'", failures[0]["detail"])
+            self.assertIn("'require-keys:'", failures[0]["detail"])
+            self.assertIn(f"[vs:{surface}]", failures[0]["detail"])
+
+    def test_only_the_absent_response_field_is_named(self):
+        failures = self._lint(probe_line=(
+            "RUNTIME PROBE: start: `run`; "
+            "probe: `curl -sS -i http://localhost:5142/api/orders`; "
+            "expect-status: 200"))
+        self.assertEqual(len(failures), 1)
+        self.assertIn("'require-keys:'", failures[0]["detail"])
+        self.assertNotIn("'expect-status:'", failures[0]["detail"])
+
+    def test_non_response_surfaces_do_not_require_those_fields(self):
+        for surface in ("ui", "rmm"):
+            failures = self._lint(surface=surface, probe_line=(
+                "RUNTIME PROBE: start: `npm run dev`; "
+                "probe: `open /orders and read the accessibility tree`"))
+            self.assertEqual(failures, [], surface)
+
+    # ---- condition 6: [vs:none] needs a justification ----
+
+    def test_vs_none_without_a_justification_fails(self):
+        failures = self._lint(surface="none", probe_line=(
+            "RUNTIME PROBE: start: `npm run start`"))
+        self.assertEqual(len(failures), 1)
+        self.assertIn("'justification:'", failures[0]["detail"])
+
+    def test_vs_none_with_a_justification_passes_without_a_probe(self):
+        failures = self._lint(surface="none", probe_line=(
+            "RUNTIME PROBE: justification: the change renames an internal "
+            "helper; no client, person or device can observe it"))
+        self.assertEqual(failures, [])
+
+    def test_vs_none_justification_elsewhere_in_the_block_is_accepted(self):
+        failures = self._lint(
+            surface="none",
+            probe_line="RUNTIME PROBE: start: `npm run start`",
+            extra_checkpoint_lines=("justification: nothing crosses a boundary",))
+        self.assertEqual(failures, [])
+
+    # ---- happy path and scope limits ----
+
+    def test_conforming_probe_passes(self):
+        self.assertEqual(self._lint(), [])
+
+    def test_plan_with_no_checkpoints_yields_no_failures(self):
+        """Backward compatibility: absence of checkpoints is Step 5's own
+        review item, never this lint's failure."""
+        self.assertEqual(cc.lint_runtime_criterion(
+            "# P\n\n### Milestone 1 — X [API] [vs:api]\n\n## Task 1: t\n"), [])
+
+    def test_plan_with_no_milestones_still_lints_its_checkpoints(self):
+        """No milestone means no surface, so only the surface-independent
+        rules apply — the probe must still exist and be a runtime probe."""
+        failures = cc.lint_runtime_criterion(
+            "# P\n\n## Task 1: t\n\n### Checkpoint: after task 1\n"
+            "- [ ] All tests pass\n")
+        self.assertEqual(len(failures), 1)
+        self.assertIn("carries no 'RUNTIME PROBE:' line", failures[0]["detail"])
+        self.assertEqual(failures[0]["task"], "Checkpoint: after task 1")
+
+    def test_task_field_names_the_owning_milestone(self):
+        failures = self._lint(probe_line=None)
+        self.assertEqual(failures[0]["task"], "Milestone 1 — Orders [API] [vs:api]")
+
+    def test_deprecated_level2_checkpoint_is_also_linted(self):
+        """The level-2 form next_milestone.py tolerates is not an escape hatch."""
+        failures = cc.lint_runtime_criterion(
+            "# P\n\n### Milestone 1 — X [API] [vs:api]\n\n## Task 1: t\n\n"
+            "## Checkpoint: Milestone 1\n- [ ] All tests pass\n")
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]["task"], "Milestone 1 — X [API] [vs:api]")
+
+    def test_checkpoint_is_attributed_to_its_own_milestone(self):
+        plan = (
+            "# P\n\n"
+            "### Milestone 1 — API [API] [vs:api]\n\n## Task 1: t\n\n"
+            "### Checkpoint: Milestone 1\n"
+            "- [ ] RUNTIME PROBE: start: `run`; probe: `curl -sS -i http://localhost:1/a`\n\n"
+            "### Milestone 2 — UI [UI] [vs:ui]\n\n## Task 2: t\n\n"
+            "### Checkpoint: Milestone 2\n"
+            "- [ ] RUNTIME PROBE: start: `run`; probe: `open /orders, read the tree`\n"
+        )
+        failures = cc.lint_runtime_criterion(plan)
+        # Only the [vs:api] milestone's checkpoint needs the response fields.
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]["task"], "Milestone 1 — API [API] [vs:api]")
+        self.assertIn("Checkpoint: Milestone 1", failures[0]["detail"])
+
+    def test_heading_surface_wins_over_a_block_mention(self):
+        """Mirrors next_milestone.py's milestone_surface() authority rule."""
+        plan = (
+            "# P\n\n### Milestone 1 — X [API] [vs:ui]\n\n## Task 1: t\n\n"
+            "Prose mentioning [vs:api] in passing.\n\n"
+            "### Checkpoint: Milestone 1\n"
+            "- [ ] RUNTIME PROBE: start: `run`; probe: `open /x and read the tree`\n"
+        )
+        self.assertEqual(cc.lint_runtime_criterion(plan), [])
+        self.assertEqual(cc.milestone_surface("### M 1 — X [API] [vs:ui]", "[vs:api]"), "ui")
+
+    def test_surface_read_from_the_block_when_the_heading_has_none(self):
+        plan = (
+            "# P\n\n### Milestone 1 — X [API]\n\n## Task 1: t\n\n"
+            "**Verification surface:** [vs:api]\n\n"
+            "### Checkpoint: Milestone 1\n"
+            "- [ ] RUNTIME PROBE: start: `run`; probe: `curl -sS -i http://localhost:1/a`\n"
+        )
+        failures = cc.lint_runtime_criterion(plan)
+        self.assertEqual(len(failures), 1)
+        self.assertIn("[vs:api]", failures[0]["detail"])
+
+    def test_multiline_probe_field_is_folded_in(self):
+        plan = (
+            "# P\n\n### Milestone 1 — X [API] [vs:api]\n\n## Task 1: t\n\n"
+            "### Checkpoint: Milestone 1\n"
+            "- [ ] RUNTIME PROBE: start: `npm run start`;\n"
+            "      probe: `curl -sS -i http://localhost:5142/api/orders`;\n"
+            "      expect-status: 200; require-keys: isSuccess, data\n"
+        )
+        self.assertEqual(cc.lint_runtime_criterion(plan), [])
+
+    def test_milestone_block_extents_match_next_milestone(self):
+        """A trailing non-Task level-2 heading ends the milestone block, so a
+        checkpoint after it is an orphan with no surface — the same extent
+        next_milestone.py's parse_milestones() computes."""
+        plan = (
+            "# P\n\n### Milestone 1 — X [API] [vs:api]\n\n## Task 1: t\n\n"
+            "## Risks and Mitigations\n\n"
+            "### Checkpoint: stray\n"
+            "- [ ] RUNTIME PROBE: start: `run`; probe: `curl -sS -i http://localhost:1/a`\n"
+        )
+        failures = cc.lint_runtime_criterion(plan)
+        # Orphan: no surface, so the response-field rule does not apply.
+        self.assertEqual(failures, [])
+        blocks = cc.split_milestone_blocks(plan.split("\n"))
+        self.assertEqual(len(blocks), 1)
+        self.assertNotIn("Checkpoint: stray", "\n".join(
+            plan.split("\n")[blocks[0][2]:blocks[0][3]]))
+
+    def test_in_process_tells_match_check_runtime_evidence_verbatim(self):
+        """Both lists gate the same claim; a drift is a hole in one of them."""
+        import check_runtime_evidence as cre  # noqa: E402
+        self.assertEqual(cc.IN_PROCESS_TELLS, cre.IN_PROCESS_TELLS)
+        self.assertEqual([p.pattern for p in cc.NON_RUNTIME_PROBE_RES],
+                         [p.pattern for p in cre.NON_RUNTIME_PROBE_RES])
 
 
 class TestDesignRegisterParsing(unittest.TestCase):
@@ -617,6 +963,46 @@ class TestCliLintPathsFixture(unittest.TestCase):
         self.assertIn("../Travel-Goat-v5/src/import/rollback.ts", details)
         # Sanctioned repo-relative identifiers are untouched.
         self.assertNotIn("src/import/itinerary-parser.ts", details)
+
+
+class TestCliLintRuntimeCriterionFixture(unittest.TestCase):
+    def test_non_runtime_probe_and_missing_response_fields_fail_the_gate(self):
+        code, out, _err = run_cli(
+            "--requirements", str(FIXTURES / "lint-runtime-criterion" / "requirements.md"),
+            "--plan", str(FIXTURES / "lint-runtime-criterion" / "plan.md"),
+        )
+        data = json.loads(out)
+        self.assertEqual(code, 1)
+        self.assertEqual(data["result"], "FAIL")
+        # This fixture isolates ONE lint: no coverage gap, no sibling lint.
+        self.assertEqual(data["uncovered"], [])
+        failures = data["lint_failures"]
+        self.assertEqual({f["check"] for f in failures}, {"runtime-criterion"})
+        self.assertEqual(len(failures), 2)
+        details = " ".join(f["detail"] for f in failures)
+        self.assertIn("test-runner command", details)
+        self.assertIn("'npm test'", details)
+        self.assertIn("'expect-status:'", details)
+        self.assertIn("'require-keys:'", details)
+        self.assertEqual([f["task"] for f in failures],
+                         ["Milestone 1 — Orders: list endpoint [API] [vs:api]",
+                          "Milestone 2 — Orders: create endpoint [API] [vs:api]"])
+
+
+class TestCliBlockedFixture(unittest.TestCase):
+    def test_blocked_ledger_line_fails_the_gate_and_is_reported(self):
+        code, out, _err = run_cli(
+            "--requirements", str(FIXTURES / "blocked" / "requirements.md"),
+            "--test-report", str(FIXTURES / "blocked" / "test-report.md"),
+        )
+        data = json.loads(out)
+        self.assertEqual(code, 1)
+        self.assertEqual(data["result"], "FAIL")
+        self.assertEqual(data["blocked"], ["FR-2"])
+        self.assertEqual(data["uncovered"], ["FR-2"])
+        self.assertEqual(data["covered"], ["FR-1", "NFR-1"])
+        # BLOCKED is status-bearing, so it earns no status-less warning.
+        self.assertEqual(data["warnings"], [])
 
 
 class TestCliDesignAnnotatedFixture(unittest.TestCase):

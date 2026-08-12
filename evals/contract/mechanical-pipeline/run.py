@@ -35,12 +35,19 @@ UPDATE_STATE = SCRIPTS / "update_state.py"
 CHECK_COMMIT_GATE = SCRIPTS / "check_commit_gate.py"
 RUN_QUIET = SCRIPTS / "run_quiet.py"
 
+# The TOKEN used for --milestone / --set-cursor: deliberately untagged. Cursor
+# and milestone matching are word-boundary token tests, so a cursor written
+# before the [vs:] axis existed still matches a now-tagged heading. That
+# back-compat property is asserted by steps 1 and 8a passing with these values.
 MILESTONE2_TITLE = "Milestone 2 — API Layer"
 MILESTONE3_TITLE = "Milestone 3 — UI Layer"
+# The full HEADING text, which is what next_milestone reports as `title`.
+MILESTONE2_HEADING = f"{MILESTONE2_TITLE} [API] [vs:api]"
+MILESTONE3_HEADING = f"{MILESTONE3_TITLE} [UI] [vs:ui]"
 
 PLAN_TEMPLATE = """# Plan: Proj
 
-## Milestone 1 — Bootstrap [x]
+## Milestone 1 — Bootstrap [API] [vs:api] [x]
 
 ## Task 1: Init repo
 
@@ -48,7 +55,7 @@ PLAN_TEMPLATE = """# Plan: Proj
 
 Repo initialized.
 
-## Milestone 2 — API Layer
+## Milestone 2 — API Layer [API] [vs:api]
 
 ## Task 2: Build endpoint
 
@@ -66,7 +73,7 @@ Implements the contacts endpoint.
 
 Adds request validation.
 
-## Milestone 3 — UI Layer
+## Milestone 3 — UI Layer [UI] [vs:ui]
 
 ## Task 4: Build screen
 
@@ -200,8 +207,9 @@ def run_lifecycle(repo):
     data = parse_json(proc, "1. next_milestone: NEXT / milestone 2 / API / cursor stale")
     if data is not None:
         ok = (proc.returncode == 0 and data.get("result") == "NEXT"
-              and data.get("next_milestone", {}).get("title") == MILESTONE2_TITLE
+              and data.get("next_milestone", {}).get("title") == MILESTONE2_HEADING
               and data.get("next_milestone", {}).get("domain") == "API"
+              and data.get("next_milestone", {}).get("surface") == "api"
               and data.get("cursor", {}).get("stale") is True)
         record("1. next_milestone: NEXT / milestone 2 / API / cursor stale", ok,
                "" if ok else json.dumps(data))
@@ -296,7 +304,10 @@ def run_lifecycle(repo):
 
     # --- Step 8a: mark milestone 2 complete, next_milestone advances to M3 -
     plan_text = plan_path.read_text(encoding="utf-8")
-    marked = plan_text.replace(f"## {MILESTONE2_TITLE}\n", f"## {MILESTONE2_TITLE} [x]\n")
+    # Append [x] to the FULL heading (tags included) -- completion is recorded on
+    # the heading line, which now carries both the domain and [vs:] tags.
+    marked = plan_text.replace(f"## {MILESTONE2_HEADING}\n",
+                                f"## {MILESTONE2_HEADING} [x]\n")
     ok_marked = marked != plan_text
     plan_path.write_text(marked, encoding="utf-8")
 
@@ -304,8 +315,9 @@ def run_lifecycle(repo):
     data = parse_json(proc, "8a. next_milestone: advances to milestone 3 / UI")
     if data is not None:
         ok = (ok_marked and proc.returncode == 0 and data.get("result") == "NEXT"
-              and data.get("next_milestone", {}).get("title") == MILESTONE3_TITLE
-              and data.get("next_milestone", {}).get("domain") == "UI")
+              and data.get("next_milestone", {}).get("title") == MILESTONE3_HEADING
+              and data.get("next_milestone", {}).get("domain") == "UI"
+              and data.get("next_milestone", {}).get("surface") == "ui")
         record("8a. next_milestone: advances to milestone 3 / UI", ok,
                "" if ok else json.dumps(data))
 

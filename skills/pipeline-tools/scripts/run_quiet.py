@@ -10,7 +10,16 @@ off the transcript and onto disk; only noise is dropped from stdout.
 Usage:
     python run_quiet.py --log <path> [--context N] [--tail N] \
         [--timeout SECONDS] -- <command and args...>
+    python run_quiet.py --capture <path> [--capture-field K=V]... \
+        [--log <path>] -- <command and args...>
     python run_quiet.py --self-test
+
+`--capture` additionally writes a conforming runtime-evidence capture
+artifact (contract: runtime-evidence/SKILL.md). The tool owns the
+load-bearing fields -- probe command, timestamp, exit code, duration and
+the captured output -- so an agent cannot author them; `--capture-field`
+supplies only the descriptive header (milestone, surface, transport, base
+URL, environment). A field name the tool owns is rejected, not overwritten.
 
 Pure standard library. Cross-platform (Windows/POSIX).
 """
@@ -20,6 +29,7 @@ import re
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 DEFAULT_CONTEXT = 5
@@ -147,6 +157,69 @@ def write_log(log_path, content):
 
 
 # ---------------------------------------------------------------------------
+# Runtime-evidence capture artifact
+# ---------------------------------------------------------------------------
+
+# Fields the TOOL owns. An agent may not supply these -- that is the whole
+# integrity property of --capture: the fields a gate reads are observed, not
+# authored. Compared case-insensitively.
+TOOL_OWNED_FIELDS = ("probe command", "captured", "exit code", "duration", "log")
+
+
+def parse_capture_field(spec):
+    """Parse `Name=value`. Rejects tool-owned names and empty names."""
+    if "=" not in spec:
+        raise RunQuietError(
+            f"invalid --capture-field value {spec!r}; expected Name=value")
+    name, _, value = spec.partition("=")
+    name = name.strip()
+    if not name:
+        raise RunQuietError(
+            f"invalid --capture-field value {spec!r}; expected Name=value")
+    if name.lower() in TOOL_OWNED_FIELDS:
+        raise RunQuietError(
+            f"--capture-field {name!r} is tool-owned and cannot be supplied; "
+            "run_quiet.py records it from the actual run")
+    return name, value.strip()
+
+
+def fence_for(text):
+    """A backtick fence longer than any run of backticks inside text."""
+    longest = max((len(m) for m in re.findall(r"`+", text)), default=0)
+    return "`" * max(3, longest + 1)
+
+
+def build_capture(fields, cmd, exit_code, duration, output, log_path, timed_out):
+    """Render the capture artifact. `fields` is an ordered list of (name, value)."""
+    title = next((v for n, v in fields if n.lower() == "title"), None)
+    body = [f"# Runtime capture: {title}" if title else "# Runtime capture", ""]
+    for name, value in fields:
+        if name.lower() == "title":
+            continue
+        body.append(f"- {name}: {value}")
+    body.append(f"- Probe command: `{' '.join(cmd)}`")
+    body.append(f"- Captured: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}")
+    body.append(f"- Exit code: {exit_code}")
+    body.append(f"- Duration: {duration:.2f}s")
+    if log_path:
+        body.append(f"- Log: {log_path}")
+    if timed_out:
+        body.append("- NOTE: probe TIMED OUT; process tree killed. This capture "
+                     "records an incomplete observation.")
+    fence = fence_for(output)
+    body += ["", "## Captured output", "", fence, output.rstrip("\n"), fence, ""]
+    return "\n".join(body)
+
+
+def write_capture(capture_path, content):
+    try:
+        Path(capture_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(capture_path).write_text(content, encoding="utf-8")
+    except OSError as exc:
+        raise RunQuietError(f"cannot write capture file {capture_path}: {exc}")
+
+
+# ---------------------------------------------------------------------------
 # Child process execution
 # ---------------------------------------------------------------------------
 
@@ -203,18 +276,26 @@ def run_child(cmd, timeout):
 # Orchestration
 # ---------------------------------------------------------------------------
 
-def execute(log_path, context, tail_n, timeout, cmd):
-    """Run cmd, write the full log, build the plain-text report.
+def execute(log_path, context, tail_n, timeout, cmd,
+            capture_path=None, capture_fields=()):
+    """Run cmd, write the full log and/or capture, build the plain-text report.
 
     Returns (report_text, exit_code).
     """
-    ensure_log_parent(log_path)
+    if log_path:
+        ensure_log_parent(log_path)
     output, exit_code, duration, timed_out = run_child(cmd, timeout)
-    write_log(log_path, output)
+    if log_path:
+        write_log(log_path, output)
+    if capture_path:
+        write_capture(capture_path, build_capture(
+            capture_fields, cmd, exit_code, duration, output, log_path, timed_out))
 
     lines = output.splitlines()
-    report = [format_header(cmd, exit_code, duration, log_path, len(lines),
-                             timed_out, timeout)]
+    report = [format_header(cmd, exit_code, duration, log_path or capture_path,
+                             len(lines), timed_out, timeout)]
+    if capture_path:
+        report.append(f"capture:     {capture_path}")
 
     indices = find_matches(lines)
     if indices:
@@ -244,6 +325,11 @@ def build_parser():
                          help=f"lines in the tail section (default {DEFAULT_TAIL})")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT,
                          help=f"child timeout in seconds (default {DEFAULT_TIMEOUT})")
+    parser.add_argument("--capture",
+                         help="also write a runtime-evidence capture artifact here")
+    parser.add_argument("--capture-field", action="append", default=[],
+                         metavar="Name=value",
+                         help="descriptive header field for --capture (repeatable)")
     parser.add_argument("--self-test", action="store_true")
     return parser
 
@@ -256,12 +342,16 @@ def main(argv):
         return run_self_test()
 
     try:
-        if not args.log:
-            raise RunQuietError("--log is required")
+        if not args.log and not args.capture:
+            raise RunQuietError("one of --log or --capture is required")
+        if args.capture_field and not args.capture:
+            raise RunQuietError("--capture-field requires --capture")
         if not cmd:
             raise RunQuietError("no command given after '--'")
+        capture_fields = [parse_capture_field(s) for s in args.capture_field]
         report_text, exit_code = execute(args.log, args.context, args.tail,
-                                          args.timeout, cmd)
+                                          args.timeout, cmd,
+                                          args.capture, capture_fields)
     except RunQuietError as exc:
         print(f"run_quiet: {exc}", file=sys.stderr)
         return 2
@@ -295,6 +385,13 @@ def run_self_test():
             with contextlib.redirect_stdout(buf):
                 code = main(argv)
             return code, buf.getvalue()
+
+        def _run_raw(self, argv):
+            """main() with a fully-explicit argv (no implicit --log)."""
+            buf, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
+                code = main(argv)
+            return code, buf.getvalue() + err.getvalue()
 
         def test_passing_command_reports_no_errors(self):
             cmd = [sys.executable, "-c", "print('all good')"]
@@ -350,6 +447,86 @@ def run_self_test():
             self.assertEqual(code, 124)
             self.assertIn("TIMEOUT", out)
             self.assertLess(elapsed, 20)  # killed well before the 30s sleep
+
+        # ---- --capture (runtime-evidence artifact) ----
+
+        def test_capture_writes_artifact_with_observed_fields(self):
+            cap = self.dir / "evidence" / "runtime" / "m1-probe.md"
+            cmd = [sys.executable, "-c", "print('{\"isSuccess\": true}')"]
+            code, out = self._run_raw([
+                "--capture", str(cap),
+                "--capture-field", "Title=GET /api/orders",
+                "--capture-field", "Milestone=M1 — Orders [API] [vs:api]",
+                "--capture-field", "Transport=out-of-process HTTP",
+                "--", *cmd])
+            self.assertEqual(code, 0)
+            self.assertTrue(cap.is_file())
+            text = cap.read_text(encoding="utf-8")
+            self.assertIn("# Runtime capture: GET /api/orders", text)
+            self.assertIn("- Milestone: M1 — Orders [API] [vs:api]", text)
+            self.assertIn("- Transport: out-of-process HTTP", text)
+            self.assertIn("- Exit code: 0", text)
+            self.assertIn("## Captured output", text)
+            self.assertIn('{"isSuccess": true}', text)
+            # the tool stamps the timestamp itself
+            self.assertRegex(text, r"- Captured: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+            self.assertIn(str(cap), out)
+
+        def test_capture_records_real_nonzero_exit(self):
+            cap = self.dir / "evidence" / "runtime" / "m1-fail.md"
+            cmd = [sys.executable, "-c", "raise SystemExit(7)"]
+            code, _ = self._run_raw(["--capture", str(cap), "--", *cmd])
+            self.assertEqual(code, 7)
+            self.assertIn("- Exit code: 7", cap.read_text(encoding="utf-8"))
+
+        def test_capture_field_cannot_forge_a_tool_owned_field(self):
+            cap = self.dir / "c.md"
+            for forged in ("Exit code=0", "Captured=1999-01-01T00:00:00Z",
+                            "Probe command=`curl real-thing`", "exit CODE=0"):
+                code, out = self._run_raw([
+                    "--capture", str(cap), "--capture-field", forged,
+                    "--", sys.executable, "-c", "pass"])
+                self.assertEqual(code, 2, forged)
+                self.assertIn("tool-owned", out)
+                self.assertFalse(cap.exists(), forged)
+
+        def test_capture_field_without_capture_exits_2(self):
+            code, out = self._run_raw([
+                "--log", str(self.log), "--capture-field", "Surface=api",
+                "--", sys.executable, "-c", "pass"])
+            self.assertEqual(code, 2)
+            self.assertIn("--capture-field requires --capture", out)
+
+        def test_malformed_capture_field_exits_2(self):
+            code, out = self._run_raw([
+                "--capture", str(self.dir / "c.md"), "--capture-field", "nokey",
+                "--", sys.executable, "-c", "pass"])
+            self.assertEqual(code, 2)
+            self.assertIn("expected Name=value", out)
+
+        def test_fence_survives_backticks_in_output(self):
+            cap = self.dir / "c.md"
+            cmd = [sys.executable, "-c", "print('a ``` b ```` c')"]
+            code, _ = self._run_raw(["--capture", str(cap), "--", *cmd])
+            self.assertEqual(code, 0)
+            text = cap.read_text(encoding="utf-8")
+            # fence must be longer than the longest backtick run in the body
+            self.assertIn("`````", text)
+            self.assertIn("a ``` b ```` c", text)
+
+        def test_neither_log_nor_capture_exits_2(self):
+            code, out = self._run_raw(["--", sys.executable, "-c", "pass"])
+            self.assertEqual(code, 2)
+            self.assertIn("one of --log or --capture", out)
+
+        def test_capture_and_log_together_record_log_path(self):
+            cap = self.dir / "c.md"
+            code, _ = self._run_raw([
+                "--log", str(self.log), "--capture", str(cap),
+                "--", sys.executable, "-c", "print('x')"])
+            self.assertEqual(code, 0)
+            self.assertTrue(self.log.is_file())
+            self.assertIn(f"- Log: {self.log}", cap.read_text(encoding="utf-8"))
 
         def test_missing_command_exits_2(self):
             buf = io.StringIO()

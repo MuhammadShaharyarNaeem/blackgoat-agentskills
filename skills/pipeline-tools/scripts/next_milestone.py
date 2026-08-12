@@ -28,6 +28,12 @@ COMPLETE_RE = re.compile(r"\[x\]", re.IGNORECASE)
 UI_TAG_RE = re.compile(r"\[UI\]")
 API_TAG_RE = re.compile(r"\[API\]")
 
+# Verification-surface tag: a second, ORTHOGONAL axis to the domain tag.
+# Lowercase deliberately -- UI_TAG_RE/API_TAG_RE match case-sensitive bracket
+# literals, so `[vs:api]` cannot collide with `[API]`.
+VS_TAG_RE = re.compile(r"\[vs:([a-z+]{2,12})\]")
+VALID_SURFACES = ("api", "ui", "web+api", "rmm", "fn", "none")
+
 EXIT_CODES = {"NEXT": 0, "DONE": 0, "MIXED": 1, "ERROR": 2}
 
 
@@ -66,6 +72,19 @@ def milestone_domain(heading_line, block_text):
     if has_api:
         return "API"
     return "UNTAGGED"
+
+
+def milestone_surface(heading_line, block_text):
+    """The `[vs:<surface>]` verification surface, or None when absent.
+
+    Same authority rule as the domain tag: the heading line wins when it
+    carries one; otherwise the whole block is scanned. Returns the raw key
+    even when invalid, so the caller can distinguish "missing" (None) from
+    "misspelled" (a key not in VALID_SURFACES) -- a typo must not read as an
+    omission and vice versa.
+    """
+    m = VS_TAG_RE.search(heading_line) or VS_TAG_RE.search(block_text)
+    return m.group(1).lower() if m else None
 
 
 def parse_milestones(text):
@@ -121,6 +140,7 @@ def parse_milestones(text):
             "complete": bool(COMPLETE_RE.search(title)),
             "text": block_text,
             "domain": milestone_domain(heading_line, block_text),
+            "surface": milestone_surface(heading_line, block_text),
             "warnings": warnings,
         })
     return milestones
@@ -145,21 +165,39 @@ def derive_next(milestones):
         }
 
     next_m = pending[0]
-    # UNTAGGED is a planning defect like MIXED: build cannot route Mason vs Nova.
+    # Three distinct planning defects, one verdict. `MIXED` is the family name
+    # for "the plan cannot be executed as written" — the Orchestrator's action
+    # is identical in every case (halt, route back through Alex), so they share
+    # an exit code and are told apart by the warning, not the verdict.
+    defect = False
     if next_m["domain"] in ("MIXED", "UNTAGGED"):
-        result = "MIXED"
+        defect = True
         if next_m["domain"] == "UNTAGGED":
             warnings.append(
                 f"milestone {next_m['title']!r} has no [UI]/[API] task tags "
                 f"— treat as planning defect (halt for re-tag), same as MIXED")
-    else:
-        result = "NEXT"
+    if next_m["surface"] is None:
+        defect = True
+        warnings.append(
+            f"milestone {next_m['title']!r} carries no [vs:<surface>] "
+            f"verification-surface tag — planning defect (halt for re-tag). "
+            f"Valid: {', '.join(VALID_SURFACES)}. A milestone whose surface is "
+            f"undeclared cannot have its evidence requirement checked, which is "
+            f"exactly how an unverified claim reaches a commit")
+    elif next_m["surface"] not in VALID_SURFACES:
+        defect = True
+        warnings.append(
+            f"milestone {next_m['title']!r} declares unknown verification "
+            f"surface [vs:{next_m['surface']}] — planning defect (halt for "
+            f"re-tag). Valid: {', '.join(VALID_SURFACES)}")
+    result = "MIXED" if defect else "NEXT"
     warnings += next_m.get("warnings", [])
 
     return {
         "result": result,
         "next_milestone": {"title": next_m["title"], "line": next_m["line"],
-                           "domain": next_m["domain"]},
+                           "domain": next_m["domain"],
+                           "surface": next_m["surface"]},
         "milestone_text": next_m["text"],
         "remaining": [m["title"] for m in pending],
         "completed_count": completed_count,
@@ -275,7 +313,7 @@ def run_self_test():
 Prose only, not a milestone heading: no digit-leading identifier follows
 "Milestone" here.
 
-## Milestone 1 — Setup [x]
+## Milestone 1 — Setup [API] [vs:api] [x]
 
 ## Task 1: Init repo
 
@@ -283,7 +321,7 @@ Prose only, not a milestone heading: no digit-leading identifier follows
 
 Done already.
 
-## Milestone 2 — Persistence
+## Milestone 2 — Persistence [API] [vs:api]
 
 ## Task 2: Add DB layer
 
@@ -295,7 +333,7 @@ Done already.
 
 ### Checkpoint: schema review
 
-## Milestone 3 — Reporting
+## Milestone 3 — Reporting [API] [vs:api]
 
 ## Task 4: Add report UI
 
@@ -304,13 +342,13 @@ Done already.
 
     DONE_PLAN = """# Demo Plan
 
-## Milestone 1 — Setup [x]
+## Milestone 1 — Setup [API] [vs:api] [x]
 
 ## Task 1: Init repo
 
 **Tags:** [API]
 
-## Milestone 2 — Persistence [X]
+## Milestone 2 — Persistence [API] [vs:api] [X]
 
 ## Task 2: Add DB layer
 
@@ -326,7 +364,7 @@ Done already.
 
     MIXED_PLAN = """# Demo Plan
 
-## Milestone 1 — Onboarding
+## Milestone 1 — Onboarding [vs:web+api]
 
 ## Task 1: Build screen
 
@@ -339,16 +377,35 @@ Done already.
 
     UNTAGGED_PLAN = """# Demo Plan
 
-## Milestone 1 — Onboarding
+## Milestone 1 — Onboarding [vs:api]
 
 ## Task 1: Do something
 
 No tags on this task at all.
 """
 
+    # Domain-tagged and routable, but its verification surface is undeclared.
+    NO_SURFACE_PLAN = """# Demo Plan
+
+## Milestone 1 — Onboarding [API]
+
+## Task 1: Add endpoint
+
+**Tags:** [API]
+"""
+
+    BAD_SURFACE_PLAN = """# Demo Plan
+
+## Milestone 1 — Onboarding [API] [vs:apo]
+
+## Task 1: Add endpoint
+
+**Tags:** [API]
+"""
+
     LEVEL3_PLAN = """# Demo Plan
 
-### Milestone 1 — Backend: contacts schema, list endpoint, create endpoint [API]
+### Milestone 1 — Backend: contacts schema, list endpoint, create endpoint [API] [vs:api]
 
 ## Task 1: Create contacts schema
 
@@ -360,7 +417,7 @@ No tags on this task at all.
 
 ### Checkpoint: schema review
 
-### Milestone 2 — Frontend: contacts list view [UI]
+### Milestone 2 — Frontend: contacts list view [UI] [vs:ui]
 
 ## Task 3: Build contacts list UI
 
@@ -375,7 +432,7 @@ No tags on this task at all.
 
     HEADING_TAG_AUTHORITY_PLAN = """# Demo Plan
 
-### Milestone 1 — Backend only [API]
+### Milestone 1 — Backend only [API] [vs:api]
 
 ## Task 1: Do backend work
 
@@ -387,7 +444,7 @@ is out of scope for this milestone.
 
     BACKTICK_TAG_PLAN = """# Demo Plan
 
-### Milestone 1 — Backend only `[API]`
+### Milestone 1 — Backend only `[API]` [vs:api]
 
 ## Task 1: Do backend work
 
@@ -396,7 +453,7 @@ is out of scope for this milestone.
 
     LEVEL2_CHECKPOINT_PLAN = """# Demo Plan
 
-## Milestone 1 — Setup
+## Milestone 1 — Setup [API] [vs:api]
 
 ## Task 1: Init repo
 
@@ -406,7 +463,7 @@ is out of scope for this milestone.
 
 Notes about the checkpoint.
 
-## Milestone 2 — Persistence
+## Milestone 2 — Persistence [API] [vs:api]
 
 ## Task 2: Add DB layer
 
@@ -438,10 +495,10 @@ Notes about the checkpoint.
         def test_happy_path_derives_next(self):
             r = self._run(self._plan(HAPPY_PLAN))
             self.assertEqual(r["result"], "NEXT")
-            self.assertEqual(r["next_milestone"]["title"], "Milestone 2 — Persistence")
+            self.assertEqual(r["next_milestone"]["title"], "Milestone 2 — Persistence [API] [vs:api]")
             self.assertEqual(r["next_milestone"]["domain"], "API")
             self.assertEqual(r["remaining"],
-                             ["Milestone 2 — Persistence", "Milestone 3 — Reporting"])
+                             ["Milestone 2 — Persistence [API] [vs:api]", "Milestone 3 — Reporting [API] [vs:api]"])
             self.assertEqual(r["completed_count"], 1)
             self.assertEqual(r["total_count"], 3)
             self.assertIn("Task 2", r["milestone_text"])
@@ -482,11 +539,57 @@ Notes about the checkpoint.
             self.assertTrue(any("UI" in w and "API" in w for w in r["warnings"]))
             self.assertEqual(EXIT_CODES[r["result"]], 1)
 
+        # ---- verification-surface tag (the non-omissible axis) ----
+
+        def test_missing_surface_tag_is_a_planning_defect(self):
+            r = self._run(self._plan(NO_SURFACE_PLAN))
+            self.assertEqual(r["result"], "MIXED")
+            self.assertEqual(EXIT_CODES[r["result"]], 1)
+            self.assertIsNone(r["next_milestone"]["surface"])
+            self.assertEqual(r["next_milestone"]["domain"], "API")  # routable...
+            self.assertTrue(any("[vs:<surface>]" in w for w in r["warnings"]))
+
+        def test_unknown_surface_tag_is_a_planning_defect(self):
+            r = self._run(self._plan(BAD_SURFACE_PLAN))
+            self.assertEqual(r["result"], "MIXED")
+            self.assertEqual(r["next_milestone"]["surface"], "apo")
+            self.assertTrue(any("unknown verification" in w for w in r["warnings"]))
+
+        def test_surface_reported_on_the_happy_path(self):
+            r = self._run(self._plan(HAPPY_PLAN))
+            self.assertEqual(r["result"], "NEXT")
+            self.assertEqual(r["next_milestone"]["surface"], "api")
+
+        def test_every_valid_surface_is_accepted(self):
+            for surface in VALID_SURFACES:
+                plan = f"# P\n\n## Milestone 1 — X [API] [vs:{surface}]\n\n## Task 1: t\n"
+                r = self._run(self._plan(plan))
+                self.assertEqual(r["result"], "NEXT", surface)
+                self.assertEqual(r["next_milestone"]["surface"], surface)
+
+        def test_heading_surface_wins_over_block_mention(self):
+            plan = ("# P\n\n## Milestone 1 — X [API] [vs:api]\n\n"
+                    "## Task 1: t\n\nprose mentioning [vs:rmm] in passing\n")
+            r = self._run(self._plan(plan))
+            self.assertEqual(r["next_milestone"]["surface"], "api")
+
+        def test_surface_from_block_when_heading_has_none(self):
+            plan = ("# P\n\n## Milestone 1 — X [API]\n\n"
+                    "## Task 1: t\n\n**Verification surface:** [vs:fn]\n")
+            r = self._run(self._plan(plan))
+            self.assertEqual(r["result"], "NEXT")
+            self.assertEqual(r["next_milestone"]["surface"], "fn")
+
+        def test_vs_tag_does_not_collide_with_domain_tag(self):
+            """`[vs:api]` must not read as `[API]` — the axes are orthogonal."""
+            self.assertEqual(milestone_domain("## M 1 — X [vs:api]", ""), "UNTAGGED")
+            self.assertEqual(milestone_surface("## M 1 — X [API]", ""), None)
+
         def test_stale_cursor(self):
             plan = self._plan(HAPPY_PLAN)
             state = self._state("Milestone 3 — Reporting")
             r = self._run(plan, state)
-            self.assertEqual(r["next_milestone"]["title"], "Milestone 2 — Persistence")
+            self.assertEqual(r["next_milestone"]["title"], "Milestone 2 — Persistence [API] [vs:api]")
             self.assertTrue(r["cursor"]["stale"])
             self.assertFalse(r["cursor"]["matches_next"])
             self.assertEqual(EXIT_CODES[r["result"]], 0)
