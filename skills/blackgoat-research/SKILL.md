@@ -28,6 +28,7 @@ Your Orchestrator's delegation brief tells you which mode applies — do not inf
    - `## Data Model` — entities, fields, relationships, and storage mechanisms.
    - `## API Contracts` — endpoints/operations with exact request/response shapes.
    - `## Component Breakdown` — modules/components and their responsibilities and boundaries.
+   - `## Design Direction` — only when the design includes user-facing UI: the committed design tokens, layout concept, signature element, and the generic-default check result (per `{PLUGIN_ROOT}/ui-design-patterns/SKILL.md`; Luna's design-critique axis reads this section).
    - `## Cross-Cutting Concerns` — authentication/authorization, error handling, logging.
    - `## Divergence & Supersession Register` — one row per design decision that contradicts an FR/NFR, a brief-fixed item (tech stack, entity fields, named business rules), or the honing transcript: what changed, why, what it supersedes.
    - `## Risks & Open Questions` — unresolved items, routed to the Orchestrator via your `<handoff>`.

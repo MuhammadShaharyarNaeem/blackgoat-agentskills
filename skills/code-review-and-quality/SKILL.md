@@ -75,7 +75,9 @@ This prevents authors from treating all feedback as mandatory and wasting time o
 
 ### The Review Report
 
-This template is the **single owner** of the review report format — reviewer personas (Luna) defer to it. Save the review report to `.docs/{project-name}/implementation/review-report.md`, **appending** one `## Review:` section per review — never overwrite earlier reviews. If this is part of the `bgpdd-build` pipeline, explicitly flag any "Critical" or "Important" blockers that the Builder (Mason) must resolve before the next phase.
+This template is the **single owner** of the review report format — reviewer personas (Luna) defer to it. Save the review report to `.docs/{project-name}/implementation/review-report.md`, **appending** one `## Review:` section per review — never overwrite earlier reviews. If this is part of the `bgpdd-build` pipeline, explicitly flag any "Critical" or "Important" blockers that the milestone's builder (Mason or Nova) must resolve before the next phase.
+
+The `## Review:` heading must carry the milestone's leading identifier verbatim as written in `plan.md` — the gate matches it as a whole token.
 
 ```markdown
 ## Review: [Milestone/Task title]
@@ -116,6 +118,8 @@ This template is the **single owner** of the review report format — reviewer p
 - [ ] Build succeeds
 - [ ] Manual verification done (if applicable)
 
+**Rendered evidence:** <path>[, <path>]
+
 ### Verdict
 **Verdict:** Approve | Request Changes
 ```
@@ -123,6 +127,8 @@ This template is the **single owner** of the review report format — reviewer p
 **The `**Verdict:**` line is mandatory and machine-read.** Every `## Review:` section ends with exactly one line of the form `**Verdict:** Approve` or `**Verdict:** Request Changes` — the `bgpdd-build` gate reads the latest Verdict for the current milestone, so the exact token is required: no variants (`Approved`, `LGTM`, `approve with notes`), no prose in place of the token.
 
 **`Approve` is unavailable while any Critical or Important finding stands in the same report.** Before writing the verdict, re-read every finding you just wrote *in that report section*. Each Critical and Important one must either be absent or carry an explicit `RESOLVED` marker naming the fix and the evidence that verified it. If even one stands unresolved, the verdict is `Request Changes`. There is no "approve with notes", no closing summary that outranks the findings above it, and no verdict carried over from a previous round. A report that states *"the app will fail to render these components"* and then *"Approve — all blockers resolved"* is not a review; it is two documents that never met. The findings are the review — the verdict is arithmetic over them, not a separate judgement.
+
+**The `**Rendered evidence:**` line is optional, but machine-read when present, on the same exact-token terms as the Verdict line.** Required whenever the review covers a `[UI]` milestone's design-critique axis: list the path(s) — comma-separated — that you (the reviewer) saved under `.docs/{project-name}/implementation/evidence/review/`, the rendered artifacts the design-critique verdict actually rests on. `check_commit_gate.py --require-rendered-evidence` parses this line for `[UI]` milestones; its grammar authority is `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
 
 ### Verification Checklist
 

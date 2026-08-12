@@ -91,7 +91,7 @@ State lives on disk in two distinct scopes, and the pipelines are strict about w
 flowchart LR
     D["/bgpdd-discovery<br/>(Iris, Scout, Echo)"]
     P["/bgpdd-plan<br/>(Rex, Aria, Alex)"]
-    B["/bgpdd-build<br/>(Mason, Quinn, Luna, Max, Dep)"]
+    B["/bgpdd-build<br/>(Mason or Nova - routed by the milestone's [API]/[UI] domain tag, Quinn, Luna, Dep)"]
     S["/bgpdd-shipping<br/>(Vera, Cipher, Dep, Forge)"]
 
     subgraph T1["Tier 1: .docs/summary/ - global, durable, read-only downstream"]
@@ -134,16 +134,17 @@ Every agent lives in `agents/<name>.md` with frontmatter declaring its `role`, `
 | **Rex** | Requirements Analyst | sonnet | Plan 1 — Requirements |
 | **Aria** | System Architect | opus | Plan 2 — Architecture; Build advisor on blast-radius escalations |
 | **Alex** | Strategist & Planner | opus | Plan 3 — Planning |
-| **Mason** | Builder | opus | Build 1 — Implementation |
+| **Mason** | Builder (Backend) — `[API]` milestones | opus | Build 1 — Implementation |
+| **Nova** | Builder (UI) — `[UI]` milestones, builds user-facing interfaces from Aria's contracts and the committed design direction; rendered self-verification | opus | Build 1 — Implementation |
 | **Quinn** | QA Tester — build-phase testing | sonnet | Build 2 — Testing |
 | **Luna** | Code Reviewer | sonnet | Build 3 — Code Review |
-| **Max** | Optimizer / Refactorer | opus | Build 4 — Refactoring (conditional) |
+| **Max** | Optimizer / Refactorer | opus | Ad hoc, on request — not a bgpdd-build pipeline stage |
 | **Vera** | Launch Verifier — pre-launch checklist verification | sonnet | Shipping — Verification (parallel with Cipher) |
 | **Cipher** | Security Auditor | sonnet | Shipping — Security (parallel with Vera); Build [SEC]-milestone reviews |
 | **Dep** | DevOps Engineer | sonnet | Build 5 — Deployment Prep + epic gate; Shipping rollout |
 | **Forge** | Meta-Engineer / System Coach | opus | End of epic (bgpdd-shipping Step 7); `/bgpdd-learn` on demand — always human-approved |
 
-Blurbs, in one line each: Iris scans repos and records the tech stack and Target Scope. Scout maps one feature's fragments inside one API and writes exactly one file. Echo reverse-engineers how an existing feature behaves today, from the Scouts' maps, before any requirements exist. Rex turns a honing transcript into an ID'd, testable spec. Aria designs the data model, contracts, and file structure (design only — a learned squad rule forbids delegating coding to the Architect). Alex converts the blueprint into a dependency-ordered task plan where every task cites the requirements it covers. Mason writes the code, TDD-first, inside a strict blast radius. Quinn proves the build-phase implementation works against the requirements. Luna reviews for correctness, readability, architecture, security, and performance without rewriting anything. Max refactors for clarity with tests staying green. Vera runs the pre-launch verification checklist against the finished codebase. Cipher hardens boundaries. Dep owns containers, CI/CD, rollback plans, and the GO/NO-GO verdict. Forge coaches the squad itself.
+Blurbs, in one line each: Iris scans repos and records the tech stack and Target Scope. Scout maps one feature's fragments inside one API and writes exactly one file. Echo reverse-engineers how an existing feature behaves today, from the Scouts' maps, before any requirements exist. Rex turns a honing transcript into an ID'd, testable spec. Aria designs the data model, contracts, and file structure (design only — a learned squad rule forbids delegating coding to the Architect). Alex converts the blueprint into a dependency-ordered task plan where every task cites the requirements it covers. Mason writes the code for `[API]` milestones, TDD-first, inside a strict blast radius. Nova builds `[UI]` milestones, translating Aria's contracts and the committed design direction into interfaces verified against the rendered result. Quinn proves the build-phase implementation works against the requirements. Luna reviews for correctness, readability, architecture, security, and performance without rewriting anything. Max refactors for clarity with tests staying green, on ad-hoc request outside the build pipeline. Vera runs the pre-launch verification checklist against the finished codebase. Cipher hardens boundaries. Dep owns containers, CI/CD, rollback plans, and the GO/NO-GO verdict. Forge coaches the squad itself.
 
 ---
 
@@ -167,7 +168,7 @@ flowchart TD
         L1["Fit Check → mini-requirements (Orchestrator + user)"] --> L2["Alex: implementation/plan.md"] --> L3["Coverage gate + Game Tape + state file"]
     end
     subgraph S3["Session 3: /bgpdd-build (auto optional)"]
-        C1["Per-milestone loop: Mason, Quinn, Luna, Max - commit each green milestone"]
+        C1["Per-milestone loop: Mason or Nova - routed by the milestone's [API]/[UI] domain tag, Quinn, Luna - commit each green milestone"]
         C1 --> C2["Completion + coverage gates"] --> C3["Dep: ship-decision.md + doubt-driven check"]
         C3 --> C4["Game Tape checkpoint + update state"]
     end
@@ -222,18 +223,18 @@ At hydration, build reads the state file and **establishes a working branch** (a
 
 ```mermaid
 flowchart TD
-    H["Hydrate state + establish branch feature/project-name"] --> M["Mason builds next milestone<br/>(exact milestone text pasted into his briefing)"]
+    H["Hydrate state + establish branch feature/project-name"] --> M["Mason or Nova builds next milestone<br/>(routed by the [API]/[UI] domain tag; exact milestone text pasted into the briefing)"]
     M --> BR{"Blast radius beyond<br/>the active microservice?"}
-    BR -- "yes" --> AR["Aria advisory + user approval,<br/>then a fresh Mason resumes"] --> Q
+    BR -- "yes" --> AR["Aria advisory + user approval,<br/>then the fresh builder resumes"] --> Q
     BR -- "no" --> Q["Quinn tests<br/>appends to test-report.md"]
     Q --> QP{"Tests pass?"}
-    QP -- "fail: rounds 1-3" --> MF["Fresh Mason (bugfix mode)<br/>with exact failing-test logs"] --> Q
+    QP -- "fail: rounds 1-3" --> MF["Fresh builder (bugfix mode)<br/>with exact failing-test logs"] --> Q
     QP -- "fail after round 3" --> HALT1["HALT - surface milestone,<br/>fixes tried, failing logs"]
     QP -- "pass" --> L["Luna 5-axis review<br/>scoped to changed_files"]
     L --> LC{"Critical or Important findings?"}
-    LC -- "yes" --> LF["Fresh Mason resolves,<br/>fixes re-verified"] --> L
+    LC -- "yes" --> LF["Fresh builder resolves,<br/>fixes re-verified"] --> L
     LC -- "no" --> MX{"Suggestion-level findings<br/>or user asks?"}
-    MX -- "yes" --> MAX["Max refactors, tests stay green"] --> COMMIT
+    MX -- "yes" --> MAX["Max refactors ad hoc (outside the loop), tests stay green"] --> COMMIT
     MX -- "no" --> COMMIT["Orchestrator commits the milestone<br/>on the working branch, citing FR/NFR IDs"]
     COMMIT --> NEXT{"Milestones remaining?"}
     NEXT -- "yes" --> M
@@ -245,8 +246,8 @@ flowchart TD
 
 Details worth knowing:
 
-- **Blast radius rule.** Before touching any shared DTO or library, Mason must trace every consumer. If the radius crosses his microservice boundary, he documents it and returns — the Orchestrator brings in Aria as a temporary advisor, gets your approval on her recommendation, and re-delegates a fresh Mason with the ruling.
-- **The rejection loop is bounded.** Mason-fix → Quinn-retest is capped at **3 rounds per milestone**. After round 3 the pipeline HALTs and surfaces everything rather than burn a fourth round on the same wall.
+- **Blast radius rule.** Before touching any shared DTO, component, or library, the builder (Mason or Nova) must trace every consumer. If the radius crosses the active microservice boundary, it documents it and returns — the Orchestrator brings in Aria as a temporary advisor, gets your approval on her recommendation, and re-delegates a fresh builder with the ruling.
+- **The rejection loop is bounded.** Builder-fix → Quinn-retest is capped at **3 rounds per milestone**. After round 3 the pipeline HALTs and surfaces everything rather than burn a fourth round on the same wall.
 - **Every agent carries the circuit breaker.** Each delegation prompt includes verbatim: hit the exact same error 3 times in a row → stop, document, return. No fourth attempt.
 - **The Orchestrator commits.** Each green milestone is committed on the working branch with a message citing the milestone and its FR/NFR IDs. (Committing is pipeline state management, not application coding — it doesn't violate the no-coding rule.) A worker that can't finish in one run commits its partial work before returning, so a fresh delegation can continue from disk.
 - **Auto mode.** `/bgpdd-build auto` runs Build → Test → Review → Refactor per milestone without "proceed" prompts, but drops out and halts on circuit-breaker trips, and always stops for explicit approval before the epic-level Dep phase.
@@ -284,7 +285,7 @@ flowchart TD
     ST1["Stage 1 - Vera alone:<br/>Code Quality, Performance, Accessibility"]
     ST2["Stage 2 - Cipher and Dep in parallel:<br/>Security / Infra, Flags, Rollout, Monitoring"]
     S3{"All three handoffs green?"}
-    FIX["Route failure to Mason or Max via /bgpdd-build<br/>max 2 fix-and-reverify rounds per area"]
+    FIX["Route failure to Mason or Nova (by domain tag) via /bgpdd-build<br/>max 2 fix-and-reverify rounds per area"]
     HALT["HALT - surface area, both attempts, evidence"]
     S35["Step 3.5 - Requirements coverage gate"]
     S4["Step 4 - Compile CHANGELOG + README updates"]
@@ -332,7 +333,7 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **bgpdd-discovery** — global context discovery (Iris, Scout, Echo)
 - **bgpdd-plan** — design & architecture (Rex, Aria, Alex)
 - **bgpdd-lite** — mid-weight planning for well-specified work (Orchestrator mini-requirements + Alex; hands off to bgpdd-build)
-- **bgpdd-build** — execution (Mason, Quinn, Luna, Max, Dep)
+- **bgpdd-build** — execution (Mason or Nova, routed by the milestone's [API]/[UI] domain tag; Quinn, Luna, Dep)
 - **bgpdd-shipping** — verification & Launch Squad (Vera, Cipher, Dep, Forge)
 - **bg-bugfix** — lean RCA → TDD → fix → blast-radius bugfix loop (no squad overhead)
 
@@ -340,19 +341,19 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **blackgoat-idea-honing** — interactive requirements refinement (Rex / main session)
 - **blackgoat-research** — codebase/tech research and system design (Aria)
 - **planning-and-task-breakdown** — ordered, dependency-aware task lists (Alex)
-- **test-driven-development** — RED/GREEN/REFACTOR worker contract (Mason, Quinn)
-- **debugging-and-error-recovery** — root-cause debugging (Mason, Quinn)
-- **source-driven-development** — ground decisions in official docs (Aria, Mason)
+- **test-driven-development** — RED/GREEN/REFACTOR worker contract (Mason, Nova, Quinn)
+- **debugging-and-error-recovery** — root-cause debugging (Mason, Nova, Quinn)
+- **source-driven-development** — ground decisions in official docs (Aria, Mason, Nova)
 - **code-review-and-quality** — multi-axis review (Luna)
 - **code-simplification** — behavior-preserving cleanup (Luna, Max)
 - **performance-optimization** — profiling and bottleneck fixes (Luna, Max)
 - **security-and-hardening** — vulnerability hardening (Cipher)
 - **shipping-and-launch** — pre-launch checklist and rollout (Dep, Launch Squad)
-- **playwright-skill** / **browser-testing-with-devtools** — real-browser E2E and DevTools testing (Quinn)
+- **playwright-skill** / **browser-testing-with-devtools** — real-browser E2E and DevTools testing (Nova, Quinn)
 - **cloud-deploy-patterns** — provider-agnostic deploy baseline + AWS/Azure checklists (Dep, Cipher; conditional)
 - **dotnet-backend-patterns** — .NET solution segregation, CQRS/REPR, EF Core rules (conditional, several agents)
 - **vue3-spa-patterns** — Vue 3 Composition API, Pinia, Axios interceptor contract (conditional, several agents)
-- **ui-design-patterns** — committed visual direction, typography/spacing/color/motion discipline, anti-generic-AI rules, and Luna's design-critique review axis (Aria, Mason, Luna; conditional on user-facing UI)
+- **ui-design-patterns** — committed visual direction, typography/spacing/color/motion discipline, anti-generic-AI rules, and Luna's design-critique review axis (Aria, Nova, Luna; conditional on user-facing UI)
 - **godot-gdscript-patterns** — Godot 4 GDScript patterns (conditional, several agents)
 
 ### Meta skills (operate on the plugin itself)
@@ -375,7 +376,7 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 The plugin's failure doctrine is *halt and surface* — never guess, never silently bypass, never let a loop run unbounded.
 
 - **Circuit breaker (every delegation).** Each agent's prompt includes verbatim: the exact same error 3 times in a row → stop, document what was tried and the exact error in the `<handoff>`, return immediately. No fourth attempt.
-- **Bounded loops, everywhere a loop exists.** Build's Mason ↔ Quinn rejection loop: **3 rounds per milestone**. Plan's artifact auto-fix (e.g., Alex re-delegated on a coverage gap): **2 rounds per artifact**. Shipping's fix routing: **2 rounds per failing checklist area**. Hitting a bound always halts with the full evidence — the milestone, the attempts, the exact failing logs — instead of trying again.
+- **Bounded loops, everywhere a loop exists.** Build's builder (Mason or Nova) ↔ Quinn rejection loop: **3 rounds per milestone**. Plan's artifact auto-fix (e.g., Alex re-delegated on a coverage gap): **2 rounds per artifact**. Shipping's fix routing: **2 rounds per failing checklist area**. Hitting a bound always halts with the full evidence — the milestone, the attempts, the exact failing logs — instead of trying again.
 - **Global error recovery.** A stuck tool-call loop, a hallucinated file path, or 3 consecutive failed attempts at an objective all trigger the same response: halt, output a structured state summary, request human intervention.
 - **No watchdogs needed.** A delegated agent's context is bounded by its own run; it terminates when it returns. Workers that can't finish commit partial work to the working branch and describe the remainder in their handoff, and the Orchestrator re-delegates fresh.
 - **Doubt-driven development.** Before high-stakes outputs reach you (e.g., Dep's ship decision at the end of build), the Orchestrator runs a fresh-context adversarial review over the artifact rather than trusting a confident first draft.

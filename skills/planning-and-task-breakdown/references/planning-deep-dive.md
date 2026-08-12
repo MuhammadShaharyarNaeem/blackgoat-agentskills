@@ -45,12 +45,16 @@ Task 3: Build all UI components
 Task 4: Connect everything
 ```
 
-**Good (vertical slicing):**
+**Good (vertical slicing — one slice at a time, each split into its `[API]`/`[UI]` pair):**
 ```
-Task 1: User can create an account (schema + API + UI for registration)
-Task 2: User can log in (auth schema + API + UI for login)
-Task 3: User can create a task (task schema + API + UI for creation)
-Task 4: User can view task list (query + API + UI for list view)
+Task 1: Registration schema + create-account endpoint [API]
+Task 2: Registration form calling that endpoint [UI]
+Task 3: Auth schema + login endpoint [API]
+Task 4: Login form calling that endpoint [UI]
+Task 5: Task schema + create-task endpoint [API]
+Task 6: Task-creation form calling that endpoint [UI]
+Task 7: List-tasks query endpoint [API]
+Task 8: Task list view rendering it [UI]
 ```
 
 Each vertical slice delivers working, testable functionality.
@@ -83,12 +87,12 @@ Break a task down further when any of these hold:
 - No checkpoints between tasks
 - Dependency order isn't considered
 
-## Checkpoint Example Block
+## Example Checkpoint Block
 
 The explicit checkpoint block required after every 2-3 tasks (Step 5 of the contract):
 
 ```markdown
-## Checkpoint: After Tasks 1-3
+### Checkpoint: After Tasks 1-3
 - [ ] All tests pass
 - [ ] Application builds without errors
 - [ ] RUNTIME EXIT CRITERION — run `[exact command]`; expect `[exact observable output]`
@@ -99,7 +103,9 @@ The explicit checkpoint block required after every 2-3 tasks (Step 5 of the cont
 
 Full template for `.docs/{project-name}/implementation/plan.md` (the required structure is defined in the SKILL.md contract; this is the worked walkthrough).
 
-Why the first-milestone deviation must be disclosed in the plan rather than merely accepted: an undisclosed deviation is indistinguishable from not knowing the rule, so the reviewer cannot tell a reasoned trade-off from an oversight.
+Why the first-slice deviation must be disclosed in the plan rather than merely accepted: an undisclosed deviation is indistinguishable from not knowing the rule, so the reviewer cannot tell a reasoned trade-off from an oversight.
+
+Worked example below: a "contacts" feature. Milestone 1 (`[API]`) and Milestone 2 (`[UI]`) are the first SLICE — one thin end-to-end path, demoable once both land — with `Boundary contracts:` carrying the seam between them (`provides:` on Task 1, matching `consumes:` on Task 2). Milestone 3 widens the slice with a same-domain `[API]` addition.
 
 ```markdown
 # Implementation Plan: [Feature/Project Name]
@@ -112,28 +118,119 @@ Before starting implementation, you MUST read the following documents to underst
 
 ## Task List
 
-### Milestone 1: [Thin end-to-end slice — schema + API + UI for one feature path, deployed/demoable]
-- [ ] Task 1: ...
-- [ ] Task 2: ...
+### Milestone 1 — Contacts: list/create endpoints [API]
+
+## Task 1: Contacts table and list/create endpoints
+
+**Description:** Add the `contacts` table and the two endpoints the list view needs: `GET /api/contacts` and `POST /api/contacts`.
+
+**Tags:** `[API]`
+
+**Requirements covered:** FR-1, FR-2
+
+**Named identifiers:** `db/migrations/0007_contacts.sql` (table `contacts`), `src/api/contacts.ts` (`listContacts`, `createContact`)
+
+**Pattern anchor:** `src/api/tasks.ts` (existing list/create pair)
+
+**Boundary contracts:** provides: contacts.list_endpoint, contacts.create_endpoint;
+Response envelope for both endpoints is `{ data: Contact[] | Contact, error: null }`; `Contact` is `{ id: string, name: string, email: string }` (camelCase over the wire, snake_case in the `contacts` table).
+
+**Do NOT:** touch `src/api/tasks.ts` or any other existing endpoint.
+
+**Acceptance criteria:**
+- [ ] `POST /api/contacts` with a valid body returns `201` and the created `Contact`
+- [ ] `GET /api/contacts` returns every row previously created via `POST`
+
+**Verification:**
+- [ ] Tests pass: `npm test -- --grep "contacts api"`
+- [ ] Build succeeds: `npm run build`
+- [ ] Manual check: `curl -X POST localhost:3000/api/contacts -d '{"name":"A","email":"a@x.com"}'`, then `curl localhost:3000/api/contacts` shows it
+
+**Dependencies:** None
+
+**Estimated scope:** S: 1-2 files
 
 ### Checkpoint: Milestone 1
-- [ ] Tests pass, builds clean
-- [ ] Runtime exit criterion: run `[command]` → expect `[observable output]`
+- [ ] All tests pass
+- [ ] Application builds without errors
+- [ ] RUNTIME EXIT CRITERION — run `curl -s localhost:3000/api/contacts`; expect `{"data":[],"error":null}` on a clean DB
+- [ ] Review with human before proceeding
 
-### Milestone 2: [Widen the slice — additional feature paths or depth]
-- [ ] Task 3: ...
-- [ ] Task 4: ...
+### Milestone 2 — Contacts list view [UI]
+
+## Task 2: Contacts list page
+
+**Description:** Render the contacts list and create form by calling the endpoints Milestone 1 provides.
+
+**Tags:** `[UI]`
+
+**Requirements covered:** FR-3
+
+**Named identifiers:** `src/pages/ContactsPage.tsx`, `src/api-client/contacts.ts` (`fetchContacts`, `postContact`)
+
+**Pattern anchor:** `src/pages/TasksPage.tsx`
+
+**Boundary contracts:** consumes: contacts.list_endpoint, contacts.create_endpoint;
+Reads the `{ data: Contact[], error: null }` envelope from `GET /api/contacts` and posts `{ name, email }` (camelCase) to `POST /api/contacts`, per Task 1's contract.
+
+**Do NOT:** add a new endpoint — this task only consumes Milestone 1's.
+
+**Acceptance criteria:**
+- [ ] Navigating to `/contacts` renders one row per contact returned by the API
+- [ ] Submitting the create form adds a row to the rendered list without a full page reload
+
+**Verification:**
+- [ ] Tests pass: `npm test -- --grep "contacts page"`
+- [ ] Build succeeds: `npm run build`
+- [ ] Manual check: open `/contacts`, submit the form, confirm the new row appears
+
+**Dependencies:** 1
+
+**Estimated scope:** S: 1-2 files
 
 ### Checkpoint: Milestone 2
-- [ ] Runtime exit criterion: run `[command]` → expect `[observable output]`
+- [ ] All tests pass
+- [ ] Application builds without errors
+- [ ] RUNTIME EXIT CRITERION — open `/contacts`, submit the create form; expect the new contact to appear in the rendered list without a reload
+- [ ] Review with human before proceeding
 
-### Milestone 3: [Remaining slices / hardening]
-- [ ] Task 5: ...
-- [ ] Task 6: ...
+### Milestone 3 — Contacts: search and pagination [API]
 
-### Checkpoint: Complete
-- [ ] All acceptance criteria met
-- [ ] Ready for review
+## Task 3: Search and pagination on the list endpoint
+
+**Description:** Extend `GET /api/contacts` with `?q=` and `?page=` so a later widened list view can filter and page.
+
+**Tags:** `[API]`
+
+**Requirements covered:** FR-4
+
+**Named identifiers:** `src/api/contacts.ts` (`listContacts` gains `q`, `page` params)
+
+**Pattern anchor:** `src/api/tasks.ts` (`listTasks` pagination)
+
+**Boundary contracts:** provides: contacts.list_endpoint.query_params;
+`GET /api/contacts?q=<string>&page=<int>` narrows/pages the same response envelope as Task 1; omitting either param preserves Task 1's behavior exactly.
+
+**Do NOT:** change the response envelope shape.
+
+**Acceptance criteria:**
+- [ ] `GET /api/contacts?q=smith` returns only contacts whose name matches `smith`
+- [ ] `GET /api/contacts?page=2` returns the second page, not the first
+
+**Verification:**
+- [ ] Tests pass: `npm test -- --grep "contacts pagination"`
+- [ ] Build succeeds: `npm run build`
+- [ ] Manual check: `curl "localhost:3000/api/contacts?q=smith"` returns only matches
+
+**Dependencies:** 1
+
+**Estimated scope:** S: 1-2 files
+
+### Checkpoint: Milestone 3
+- [ ] All tests pass
+- [ ] Application builds without errors
+- [ ] RUNTIME EXIT CRITERION — run `curl -s "localhost:3000/api/contacts?q=smith"`; expect only name-matching contacts in `data`
+- [ ] Review with human before proceeding
 
 ## Risks and Mitigations
 | Risk | Impact | Mitigation |
@@ -143,6 +240,8 @@ Before starting implementation, you MUST read the following documents to underst
 ## Open Questions
 - [Question needing human input]
 ```
+
+Once the build Orchestrator finishes a milestone, it appends `[x]` to that heading line and nothing else — the completed form of Milestone 1 above reads `### Milestone 1 — Contacts: list/create endpoints [API] [x]`.
 
 ## Plans Model Effects, Not Artifacts — Rationale and More Example Pairs
 

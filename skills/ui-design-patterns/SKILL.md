@@ -1,6 +1,6 @@
 ---
 name: ui-design-patterns
-description: "Provides the UI design execution contract: a committed visual direction (design tokens + signature element) before code, typography/spacing/color/motion discipline, surface modes, anti-generic-AI-aesthetic rules, full state coverage, UX copy rules, and the design-critique review axis. Use when the task involves building or changing user-facing UI. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Adapted from Anthropic's frontend-design skill and pbakaus/impeccable (Apache-2.0)."
+description: "Provides the UI design execution contract: a committed visual direction (design tokens + signature element) before code, typography/spacing/color/motion discipline, surface modes, anti-generic-AI-aesthetic rules, full state coverage, a component-mechanics craft floor, UX copy rules, and the design-critique review axis. Use when the task involves building or changing user-facing UI. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Adapted from Anthropic's frontend-design skill and pbakaus/impeccable (Apache-2.0)."
 ---
 
 # UI Design Patterns
@@ -15,7 +15,7 @@ This is the operational spine. Follow it as written.
 
 Before any UI code exists, a compact direction must be committed — in `detailed-design.md` for pipeline work, or stated in the brief for ad-hoc work:
 
-- **Candidate sourcing (design DB tool)**: when the brief pins no direction, you SHOULD first query the vendored design database for 2–3 candidate styles, palettes, and font pairings before committing anything: `python <this skill's resolved path>/tools/design-db/scripts/search.py "<product/surface description>" --domain style` (also `--domain color|typography|ux`; stdlib-only Python 3). Its results are candidate input, never authority — every pick still passes the generic-default check and every rule in this contract, and **this contract wins over any database recommendation** (the DB freely suggests looks this skill refuses by default, e.g. glass effects). If no Python 3 runtime is available, skip the query and commit the direction from the brief and these rules alone.
+- **Candidate sourcing (design DB tool)**: when the brief pins no direction, you SHOULD first query the vendored design database for 2–3 candidate styles, palettes, and font pairings before committing anything: `python <this skill's resolved path>/tools/design-db/scripts/search.py "<product/surface description>" --domain style` (also `--domain color|typography|ux`; stdlib-only Python 3). Its results are candidate input, never authority — every pick still passes the generic-default check and every rule in this contract, and **this contract wins over any database recommendation** (the DB freely suggests looks this skill refuses by default, e.g. glass effects). If no Python 3 runtime is available, skip the query and commit the direction from the brief and these rules alone. Only this read path is sanctioned — `search.py`'s `--design-system`/`--persist` mode is NOT adopted and must not be run: it writes `design-system/<slug>/MASTER.md` outside the `.docs/` boundary (see the Attribution section's "not adopted" claim, which this line makes enforceable).
 - **Tokens**: 4–6 named palette values; 2–3 type roles (a characterful display face used with restraint, a complementary body face, a utility face for data/captions if needed); a spacing scale.
 - **Layout concept**: one-sentence prose description of the composition.
 - **Signature**: the single element this surface will be remembered by. Spend boldness there; keep everything around it quiet.
@@ -30,7 +30,7 @@ Pick the mode per surface (not per product) and design for what the visitor's su
 - **Read** — the visitor understands something (docs, guides, changelogs): structure for comprehension first.
 - **Experience** — the visitor is inside the work (portfolios, galleries): the artifact leads; the interface recedes.
 
-### Execution Rules (authoring — Mason)
+### Execution Rules (authoring — the UI Builder, Nova)
 
 - **No placeholder/empty wrappers**: Never scaffold empty HTML wrappers (e.g., `<div class="Wrapper"></div>`) for components; fully implement the logic and markup required by the specification so QA checks run against the true implementation.
 - **Typography carries the personality**: deliberate pairing, a clear scale with obvious size/weight steps, body measure 65–75ch, display ≤6rem, tracking no tighter than −0.04em (−0.02 to −0.03em usually reads better). Run the real copy at every breakpoint; fix what overflows.
@@ -59,7 +59,7 @@ Words are design material. Write from the user's side of the screen: name things
 
 ### Verification Checklist
 
-Before marking UI work complete:
+Run this as each component or view lands, and again before marking the milestone complete:
 
 - [ ] A committed direction exists (tokens + signature) and every color/type decision derives from it — no undeclared values
 - [ ] The generic-default check ran: no committed choice is a category default on a free axis
@@ -72,7 +72,7 @@ Before marking UI work complete:
 
 ### Review Mode (Luna — design critique)
 
-When a review delegation covers UI work, run the design-critique axis in [references/design-critique.md](references/design-critique.md): screenshot-driven — see the evidence rule below — Nielsen-heuristic scoring, a design-specificity verdict, and the mechanical craft-floor checks — findings labeled with the standard Critical/Important/Suggestion/Nit taxonomy. Audit only; rewrites route to Mason or Max via the Orchestrator.
+When a review delegation covers UI work, run the design-critique axis in [references/design-critique.md](references/design-critique.md): screenshot-driven — see the evidence rule below — Nielsen-heuristic scoring, a design-specificity verdict, and the mechanical craft-floor checks — findings labeled with the standard Critical/Important/Suggestion/Nit taxonomy. Audit only; rewrites route to the milestone's builder (Nova for [UI] work) via the Orchestrator.
 
 **A design critique without rendered output does not pass rendered properties.** This axis is defined on the built result (see this skill's opening line: *checked on the built result, not the intention*), so its evidence is a screenshot or a computed-style read from a real browser. When browser tooling is unavailable, the app is unbuilt, or it will not boot, every check on a computed or rendered property — contrast ratio, spacing rhythm, type scale at breakpoints, focus visibility, state coverage, whether a token actually resolves — is reported as `NOT VERIFIED — no rendered output` and raised as a blocker on the review, never quietly marked satisfied.
 
@@ -90,6 +90,7 @@ Read on demand — not needed to execute the contract above:
 
 - [AI tells](references/ai-tells.md) — the long-tail catalog behind the generic-default check: fabricated content and data (every surface), decorative metadata, fake product previews, marketing-copy tells, separator/dash rationing, and list-decoration tells — each group scoped to the surface modes it applies to.
 - [Design critique](references/design-critique.md) — Luna's review procedure: evidence gathering (screenshots via browser tools), Nielsen 10-heuristic scoring, design-specificity verdict, cognitive-load checks, the mechanical craft-floor checklist, and the severity mapping into her review-report format.
+- [Component mechanics](references/component-mechanics.md) — mechanical craft floor for tables, forms, autocompletes, spacing, and feedback states: pass/fail on rendered output. Listed here under Deep Dive, but not read-on-demand in practice: the UI Builder loads it when implementing components/views, Quinn loads it for [UI] test assertions, and Luna loads it on [UI] reviews, per their own Methodology Dependencies tables — a deliberate refinement of the read-on-demand default (convention #8).
 
 ## Attribution
 

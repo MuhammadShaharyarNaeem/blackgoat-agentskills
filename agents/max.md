@@ -6,7 +6,7 @@ risk: safe
 source: community
 date_added: "2026-06-11"
 role: Optimizer / Refactorer
-phase: Build 4 — Refactoring
+phase: Ad-hoc — Refactoring (retired from bgpdd-build; explicit optimization requests only)
 squad: agent-squad
 reports-to: agent-squad
 depends-on: mason, luna, quinn
