@@ -110,7 +110,7 @@ This pipeline's only refinement: the artifacts subject to the 2-round bound are 
        --set-artifact design=<governing-stack-contract-skill-path|null> \
        --set-artifact plan=.docs/{project-name}/implementation/plan.md
      ```
-     **`artifacts.design` polymorphism (schema compatibility):** for full `/bgpdd-plan`, `design` is the path to `detailed-design.md`. For lite, it is the governing stack-contract skill path (e.g. `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md`), or JSON `null` when none applies. Downstream `/bgpdd-build` MUST inject a non-null `artifacts.design` into builder/Alex briefs as the architecture reference; when `null`, builders use `requirements` + `plan` only. Resulting shape (documentation only):
+     **`artifacts.design` polymorphism (schema compatibility):** for full `/bgpdd-plan`, `design` is the path to `detailed-design.md`. For lite, it is the governing stack-contract skill path (e.g. `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md`), or JSON `null` when none applies — pass the **literal string** `null` (`--set-artifact design=null`) and `update_state.py` stores JSON `null`, exactly as `--set-cursor`/`--set-feature` do. Downstream `/bgpdd-build` MUST inject a non-null `artifacts.design` into builder/Alex briefs as the architecture reference; when `null`, builders use `requirements` + `plan` only. Resulting shape (documentation only):
 ```json
 {
   "schema": "1",

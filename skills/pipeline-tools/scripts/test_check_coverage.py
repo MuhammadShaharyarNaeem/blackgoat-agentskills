@@ -431,6 +431,32 @@ class TestSupersessionAnnotationLint(unittest.TestCase):
         self.assertEqual(len(failures), 1)
 
 
+class TestFrCitationLint(unittest.TestCase):
+    MUST_HAVE = ["FR-1", "FR-10", "NFR-1", "NFR-10"]
+
+    def _lint(self, design_text):
+        return cc.lint_fr_citations(design_text, self.MUST_HAVE)
+
+    def test_all_cited_passes(self):
+        design = "Covers FR-1, FR-10, NFR-1 and NFR-10."
+        self.assertEqual(self._lint(design), [])
+
+    def test_uncited_id_fails(self):
+        failures = self._lint("Covers FR-1, FR-10 and NFR-10.")
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]["check"], "fr-citation")
+        self.assertEqual(failures[0]["task"], "NFR-1")
+
+    def test_longer_id_does_not_cite_its_prefix(self):
+        """FR-10 must not satisfy FR-1 — whole-token match, never substring."""
+        failures = self._lint("Audit rows are written per FR-10, meeting NFR-10.")
+        self.assertEqual([f["task"] for f in failures], ["FR-1", "NFR-1"])
+
+    def test_nfr_does_not_cite_the_fr_of_the_same_number(self):
+        failures = self._lint("Only NFR-1 and NFR-10 are named here.")
+        self.assertEqual([f["task"] for f in failures], ["FR-1", "FR-10"])
+
+
 class TestLintsArePlanModeOnly(unittest.TestCase):
     def test_test_mode_report_has_empty_lint_failures(self):
         report = cc.build_report(

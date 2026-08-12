@@ -213,7 +213,7 @@ Phase by phase:
 }
 ```
 
-`feature` is the durable Tier 1 id (`null` for greenfield). `pipeline` records the last writer. `branch` and `milestone_cursor` are owned by build: the working branch established at hydration, and the next pending milestone. Shipping's Step 0 refuses to run if `pipeline` isn't `"bgpdd-build"` (or `"bgpdd-shipping"` from a prior checkpointed shipping session), if milestones remain open, or if the `blockers` ledger has standing entries (Step 0.4), and its Step 6 deletes the file once the lifecycle completes — `game-tape.md` alone survives as the epic's durable record.
+`feature` is the durable Tier 1 id (`null` for greenfield). `pipeline` records the last writer. `branch` and `milestone_cursor` are owned by build: the working branch established at hydration, and the next pending milestone. Shipping's Step 0 refuses to run if `pipeline` isn't `"bgpdd-build"` (or `"bgpdd-shipping"` from a prior checkpointed shipping session), if milestones remain open, if build Phase 5's prep `ship-decision.md` is missing or isn't a `GO` (Step 0.4 — relaxed to a shape-only check when resuming a prior shipping session, so a legitimate `NO-GO` refresh can't lock the pipeline out of the stage that resolves it), or if the `blockers` ledger has standing entries (Step 0.5), and its Step 6 deletes the file once the lifecycle completes — `game-tape.md` alone survives as the epic's durable record.
 
 ---
 

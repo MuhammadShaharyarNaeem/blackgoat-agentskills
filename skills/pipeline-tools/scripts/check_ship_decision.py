@@ -3,8 +3,17 @@
 
 Makes Dep's shipping verdict machine-verifiable the same way
 check_agent_report.py gates Vera/Cipher: one unambiguous labeled
-GO or NO-GO, plus a Rollback heading and a post-deploy checklist.
-Matches the dep-ship-decision-shape eval contract.
+GO or NO-GO in the latest verdict-bearing section (last-section-wins,
+so an appended fix round can supersede an earlier verdict), plus a
+Rollback heading and a post-deploy checklist section.
+Matches the dep-ship-decision-shape eval contract on the shape a
+single-shot decision must have; the two deliberately differ on
+multi-section documents, which that eval never produces (its
+grade.ps1 counts verdicts file-wide, this gate scopes to the latest
+section so a pipeline fix round can converge). Note that criterion 5
+there — and therefore this gate — accepts a heading containing
+"Checklist" OR three-plus checkbox items; a checklist heading with
+no items under it passes.
 
 Usage:
     python check_ship_decision.py --report <path> [--require-go]
@@ -24,6 +33,7 @@ VERDICT_LINE_RE = re.compile(
 ROLLBACK_HEADING_RE = re.compile(r"(?im)^#{1,6}\s*.*\brollback\b")
 CHECKLIST_HEADING_RE = re.compile(r"(?im)^#{1,6}\s*.*\bchecklist\b")
 CHECKBOX_RE = re.compile(r"(?m)^\s*[-*]\s*\[[ xX]\]")
+HEADING_RE = re.compile(r"(?m)^#{1,6}\s+\S")
 
 
 class GateError(Exception):
@@ -44,8 +54,31 @@ def normalize_verdict(token):
     return re.sub(r"\s+", "-", token.upper())
 
 
+def split_sections(text):
+    """Split on markdown headings; a preamble before the first heading is its own section."""
+    starts = [m.start() for m in HEADING_RE.finditer(text)]
+    if not starts or starts[0] != 0:
+        starts = [0] + starts
+    return [text[s:e] for s, e in zip(starts, starts[1:] + [len(text)])]
+
+
 def parse_verdicts(text):
-    return [normalize_verdict(m.group(1)) for m in VERDICT_LINE_RE.finditer(text)]
+    """Verdicts from the LAST verdict-bearing section only — last-section-wins.
+
+    Mirrors check_agent_report.py's rule for the same reason: `bgpdd-shipping`
+    Step 3 instructs the re-verifying agent to APPEND a fresh section after a
+    fix round, so a Round-2 GO must be able to supersede a Round-1 NO-GO.
+    Judging ambiguity across the whole file made that document permanently
+    unpassable — the only escape was rewriting history.
+
+    Ambiguity is still caught WITHIN the winning section: a decision that says
+    both GO and NO-GO in one breath is exactly what this gate exists to reject
+    (and what the dep-ship-decision-shape eval's criterion 3 demands).
+    """
+    bearing = [s for s in split_sections(text) if VERDICT_LINE_RE.search(s)]
+    if not bearing:
+        return []
+    return [normalize_verdict(m.group(1)) for m in VERDICT_LINE_RE.finditer(bearing[-1])]
 
 
 def build_report(path, require_go):
@@ -60,7 +93,10 @@ def build_report(path, require_go):
     if not verdicts:
         failures.append("no labeled GO/NO-GO verdict line found")
     elif len(distinct) > 1:
-        failures.append(f"ambiguous verdict - both {' and '.join(distinct)} present")
+        failures.append(
+            f"ambiguous verdict - the latest verdict-bearing section states "
+            f"both {' and '.join(distinct)}"
+        )
 
     verdict = distinct[0] if len(distinct) == 1 else None
     if require_go and verdict == "NO-GO":
@@ -158,6 +194,42 @@ Ship Decision: GO
 Recommendation: NO-GO
 """
 
+    # The bgpdd-shipping Step 3 append pattern: a fix round adds a fresh
+    # section rather than rewriting the file.
+    APPENDED_FIX = """# Ship Decision
+
+## Rollback Strategy
+Revert the feature flag.
+
+## Launch Checklist
+- [x] Health endpoint 200
+- [x] Auth flow works
+- [x] Logs shipping
+
+## Round 1
+Ship Decision: NO-GO — production DB_URL was unset.
+
+## Round 2 (after fix)
+Ship Decision: GO
+"""
+
+    APPENDED_REGRESSION = """# Ship Decision
+
+## Rollback Strategy
+Revert.
+
+## Checklist
+- [x] a
+- [x] b
+- [x] c
+
+## Round 1
+Verdict: GO
+
+## Round 2 (re-verified after Cipher finding)
+Verdict: NO-GO
+"""
+
     class ShipDecisionTests(unittest.TestCase):
         def setUp(self):
             self.dir = Path(tempfile.mkdtemp())
@@ -183,11 +255,23 @@ Recommendation: NO-GO
             report = build_report(str(self.path), require_go=True)
             self.assertFalse(report["pass"])
 
-        def test_ambiguous_fails(self):
+        def test_ambiguous_within_one_section_fails(self):
             self.path.write_text(AMBIGUOUS, encoding="utf-8")
             report = build_report(str(self.path), require_go=False)
             self.assertFalse(report["pass"])
             self.assertTrue(any("ambiguous" in f for f in report["failures"]))
+
+        def test_appended_fix_round_supersedes_earlier_no_go(self):
+            self.path.write_text(APPENDED_FIX, encoding="utf-8")
+            report = build_report(str(self.path), require_go=True)
+            self.assertTrue(report["pass"], report["failures"])
+            self.assertEqual(report["verdict"], "GO")
+
+        def test_appended_regression_supersedes_earlier_go(self):
+            self.path.write_text(APPENDED_REGRESSION, encoding="utf-8")
+            report = build_report(str(self.path), require_go=True)
+            self.assertFalse(report["pass"])
+            self.assertEqual(report["verdict"], "NO-GO")
 
         def test_missing_rollback_fails(self):
             self.path.write_text(

@@ -519,10 +519,16 @@ def lint_fr_citations(design_text, must_have):
 
     Deliberately distinct from supersession-annotation lint: this only
     proves citation presence, not that the design covers the requirement.
+
+    Matching is whole-token (`ID_TOKEN_RE`), never substring — a design that
+    cites only `FR-10` does not thereby cite `FR-1`. The naive `in` test this
+    replaced silently passed every single-digit Must-Have on any requirements
+    set with ten or more requirements.
     """
+    cited = {token.upper() for token in ID_TOKEN_RE.findall(design_text)}
     failures = []
     for req_id in must_have:
-        if req_id not in design_text:
+        if req_id.upper() not in cited:
             failures.append({
                 "check": "fr-citation",
                 "task": req_id,

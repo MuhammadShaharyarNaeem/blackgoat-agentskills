@@ -109,6 +109,9 @@ foreach ($f in $changedFiles) { Write-Output "  - $f" }
 Write-Output ''
 
 $affectedEvals = New-Object System.Collections.Generic.HashSet[string]
+# Mechanical (non-LLM, zero-token) checks. Tracked separately from $affectedEvals
+# because run-evals.ps1 only dispatches 'trigger' and 'contract:*' suites.
+$mechanicalChecks = New-Object System.Collections.Generic.HashSet[string]
 
 foreach ($f in $changedFiles) {
     if ($f -match 'agents/rex\.md$') {
@@ -136,9 +139,22 @@ foreach ($f in $changedFiles) {
     if ($f -match 'skills/bgpdd-learn/') {
         [void]$affectedEvals.Add('trigger')
     }
-    if ($f -match 'skills/pipeline-tools/') {
-        # pipeline-tools is mechanical (no LLM contract eval) — flag trigger only when SKILL.md description changes routing surface.
-        [void]$affectedEvals.Add('trigger')
+    if ($f -match 'skills/pipeline-tools/scripts/') {
+        # pipeline-tools has no LLM contract eval, but it does have a mechanical
+        # one: evals/contract/mechanical-pipeline/run.py drives next_milestone,
+        # update_state, check_commit_gate and run_quiet end-to-end over a real
+        # temp git repo. It is not dispatchable as 'contract:mechanical-pipeline'
+        # (run-evals.ps1 discovers contract suites by case.md + grade.ps1, which
+        # that dir has neither of), so surface it as a direct command instead.
+        # Routing surface is covered separately by the SKILL.md rule below.
+        [void]$mechanicalChecks.Add('python evals/contract/mechanical-pipeline/run.py')
+        # Every script carrying a --self-test. check_dependency_tables.py is
+        # deliberately absent: it has no --self-test flag (it takes a positional
+        # dir) and exits 2 if handed one, so it gets its own line below.
+        # $LASTEXITCODE, not $? - PS 5.1 sets $? false on any native stderr write,
+        # and unittest always reports to stderr even when it passes.
+        [void]$mechanicalChecks.Add("@('check_agent_report','check_blockers','check_commit_gate','check_coverage','check_ship_decision','next_milestone','update_state','run_quiet') | ForEach-Object { python skills/pipeline-tools/scripts/`$_.py --self-test *> `$null; `"`$_ -> exit `$LASTEXITCODE`" }")
+        [void]$mechanicalChecks.Add('python skills/pipeline-tools/scripts/check_dependency_tables.py skills')
     }
     if ($f -match 'SKILL\.md$') {
         # Any SKILL.md's frontmatter `description` is what drives skill routing.
@@ -146,8 +162,18 @@ foreach ($f in $changedFiles) {
     }
 }
 
+if ($mechanicalChecks.Count -gt 0) {
+    Write-Output 'Mechanical checks (no tokens - run these first):'
+    foreach ($m in $mechanicalChecks) { Write-Output "  $m" }
+    Write-Output ''
+}
+
 if ($affectedEvals.Count -eq 0) {
-    Write-Output 'Changed files did not match any known eval mapping. No evals flagged - review manually if that seems wrong.'
+    if ($mechanicalChecks.Count -gt 0) {
+        Write-Output 'No LLM evals flagged - the changes are mechanical only. Run the checks above.'
+    } else {
+        Write-Output 'Changed files did not match any known eval mapping. No evals flagged - review manually if that seems wrong.'
+    }
     exit 0
 }
 

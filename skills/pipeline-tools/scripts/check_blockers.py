@@ -2,7 +2,7 @@
 """Mechanical blockers-ledger gate for orchestrator-state.json.
 
 Exit 0 only when the `blockers` array exists and is empty. Used by
-bgpdd-shipping Step 0.4 (and any other pipeline that must refuse to
+bgpdd-shipping Step 0.5 (and any other pipeline that must refuse to
 proceed over standing ledger entries). Pure standard library.
 
 Usage:

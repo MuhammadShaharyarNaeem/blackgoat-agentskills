@@ -115,12 +115,19 @@ def load_state(path, init, project_name):
 
 
 def parse_artifact_spec(spec):
+    """Parse `name=path`. The literal value `null` stores JSON null.
+
+    Matches --set-cursor / --set-feature. Without this, `design=null` (what
+    bgpdd-lite emits when no stack contract governs) stored the truthy STRING
+    "null", and bgpdd-build's "when non-null, inject artifacts.design as the
+    architecture reference" rule injected it as a path.
+    """
     if "=" not in spec:
         raise GateError(f"invalid --set-artifact value {spec!r}; expected name=path")
     name, _, value = spec.partition("=")
     if not name:
         raise GateError(f"invalid --set-artifact value {spec!r}; expected name=path")
-    return name, value
+    return name, (None if value == "null" else value)
 
 
 def resolve_blocker(state, substring, evidence, timestamp):
@@ -306,6 +313,16 @@ def run_self_test():
                              set_feature="slide"))
             state, _ = apply_updates(ns(self.state_path, set_feature="null"))
             self.assertIsNone(state["feature"])
+
+        def test_set_artifact_null_sets_json_null(self):
+            """bgpdd-lite emits design=null when no stack contract governs."""
+            state, _ = apply_updates(ns(
+                self.state_path, init=True, project_name="demo",
+                set_artifact=["requirements=.docs/demo/requirements.md",
+                              "design=null"]))
+            self.assertIsNone(state["artifacts"]["design"])
+            self.assertEqual(state["artifacts"]["requirements"],
+                             ".docs/demo/requirements.md")
 
         def test_coerces_numeric_schema_1(self):
             self.state_path.write_text(json.dumps({
