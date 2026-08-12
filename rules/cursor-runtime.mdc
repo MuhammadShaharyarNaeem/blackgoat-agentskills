@@ -1,0 +1,58 @@
+---
+description: Runtime contract for operating the Blackgoat agent-squad under Cursor. Applies whenever a bgpdd-* pipeline runs or any squad member is delegated to. Claude Code does not load rules/.
+alwaysApply: true
+---
+
+# Blackgoat Squad -- Cursor Runtime Contract
+
+The squad's skills and personas are written **runtime-neutral** -- they say "delegate to Agent", "read file", "write", "run", without naming a specific tool API. This file tells **Cursor** how to execute that neutral vocabulary. (Claude Code resolves it natively and does not load `rules/`.)
+
+## When this applies
+
+Whenever you invoke a `bgpdd-*` pipeline (`/bgpdd-plan`, `/bgpdd-build`, `/bgpdd-discovery`, `/bgpdd-shipping`, `/bgpdd-lite`, `/bgpdd-learn`) or delegate to any squad member: Rex, Aria, Alex, Mason, Luna, Max, Quinn, Echo, Vera, Cipher, Dep, Forge, Iris, Scout.
+
+## Load the orchestration model first
+
+When you start any `bgpdd-*` pipeline or ad-hoc squad use, first **Read** `skills/agent-squad/SKILL.md` and `skills/agent-squad/orchestrator-contract.md` (under this plugin's install root). Operate under the Orchestrator/delegation model, context-integrity check, structured-relay format, and project-state tracking. Cursor does not auto-follow those references -- you must read them explicitly.
+
+## "Delegate to Agent" means: spawn the custom agent by name
+
+Prefer Cursor's **custom agents** registered from this plugin's `agents/` folder (e.g. Mason, Quinn, Scout). Do **not** roleplay a squad member in the main session.
+
+1. **Identify the agent by name** matching `agents/<name>.md` (frontmatter `name`).
+2. **Brief compressed.** Pass only the Working Memory chunk that agent needs, plus absolute paths to `.docs/{project-name}/` artifacts it should read. Never paste full prior reports or whole conversation history.
+3. **Expand `{PLUGIN_ROOT}`** to this plugin install root's absolute `skills/` directory before the worker sees any path. Confirm the path exists (list/read) before delegating.
+4. **Persona.** Prefer the plugin-registered custom agent (it already carries its persona). If you must construct a subagent manually, inject the persona body from `agents/<name>.md` **verbatim** (strip YAML frontmatter only) -- never summarize from memory.
+5. **Never delegate to `blackgoat`.** That file is an author profile, not a worker.
+
+Do **not** use bare built-in Explore (or similar generic catch-alls) when the squad intends **Scout**, **Iris**, or another named member.
+
+## Subagent lifecycle -- bounded, background when available
+
+Follow `orchestrator-contract.md`:
+
+- Launch delegated agents in the **background** when the runtime can notify on completion; stay responsive; continue on the notification.
+- **Fallback** when notify-on-complete / true background is missing: tell the user *before* launching that you will be unreachable, roughly for how long and how much scope; split long phases into several short bounded delegations rather than one long blocking run.
+- Delegations are **bounded**: the worker returns a handoff and terminates. There is no kill step. On PARTIAL/BLOCKED, re-delegate a **fresh** agent with that handoff -- do not instruct workers to schedule their own timers or spawn replacements.
+- Pass the circuit-breaker, no-nested-delegation, and incremental-persistence rules verbatim per the orchestrator contract.
+
+## Tool mapping (neutral verb to Cursor tool)
+
+- read / search -> `Read`, `Grep`, `Glob`
+- write / edit -> `Write`, `StrReplace`
+- execute -> `Shell`
+- delegate -> Cursor **custom agents** by squad name (Task/subagent only as a last resort when a named custom agent is unavailable -- still load the persona verbatim)
+
+Do **not** map neutral verbs to Antigravity tools (`view_file`, `find_by_name`, `define_subagent`, ...) or to Claude-only Skill-tool invocations for methodology files.
+
+## Methodology dependencies = file Reads
+
+Every "Always" / methodology dependency in a persona or skill is a **file Read** of that skill's `SKILL.md` (and any named companion markdown under the skill folder). Never treat methodology skills as Skill-tool invocables or slash-command substitutes for reading the contract.
+
+## Paths
+
+`{PLUGIN_ROOT}` does not auto-expand. Resolve it to this plugin's `skills/` directory (the `skills/` folder at the plugin install root) and confirm it before passing paths to a subagent.
+
+## MCP
+
+MCP servers ship with this plugin via root `mcp.json` (chrome-devtools, playwright, linear, github). Prefer `playwright` or `chrome-devtools-mcp` for browser/web verification. GitHub MCP needs `GITHUB_PERSONAL_ACCESS_TOKEN` set under Plugins -> Configure when using the marketplace/local plugin install.

@@ -1,0 +1,26 @@
+{
+  "name": "blackgoat-agentskills",
+  "displayName": "Blackgoat Agent Skills",
+  "version": "1.2.0",
+  "description": "Blackgoat's custom skills and agents (agent squad, PDD workflow, dev practices)",
+  "author": {
+    "name": "shaharyar.naeem",
+    "email": "shaharyar.naeem@gorelo.io"
+  },
+  "homepage": "https://github.com/MuhammadShaharyarNaeem/blackgoat-agentskills",
+  "repository": "https://github.com/MuhammadShaharyarNaeem/blackgoat-agentskills",
+  "license": "MIT",
+  "agents": "./agents/",
+  "skills": "./skills/",
+  "rules": "./rules/",
+  "variables": {
+    "type": "object",
+    "properties": {
+      "GITHUB_PERSONAL_ACCESS_TOKEN": {
+        "type": "string",
+        "title": "GitHub personal access token",
+        "description": "Token for the GitHub MCP server (Authorization bearer). Set under Plugins Configure."
+      }
+    }
+  }
+}
