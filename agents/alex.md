@@ -1,7 +1,7 @@
 ---
 model: opus
 name: alex
-description: "Turns requirements into a precise, dependency-aware implementation plan."
+description: "Turns requirements into a precise, dependency-aware implementation plan and the feature-scoped acceptance matrix it will be verified against."
 risk: safe
 source: community
 date_added: "2026-06-11"

@@ -33,7 +33,7 @@ Invoked by the Orchestrator during the discovery phase (`bgpdd-discovery`), afte
 - **Outputs**: synthesize the following, in this order, within the same pass:
   1. `.docs/summary/{feature}/overview.md` — the cross-API consolidation: which API owns what, cross-service call flow, integration seams, and links to each `{api}.md`.
   2. `.docs/summary/{feature}/QA/code-workflow.md` — Mermaid sequence diagrams and detailed step-by-step code execution paths mapped to the UI, BLL, and Database, to establish a baseline.
-  3. `.docs/summary/{feature}/QA/manual-testing.md` — manual test cases reverse-engineered from the `code-workflow.md` you just produced in step 2.
+  3. `.docs/summary/{feature}/QA/manual-testing.md` — manual test cases reverse-engineered from the `code-workflow.md` you just produced in step 2. (One sanctioned exception, convention #8, labelled at the other end in `bgpdd-shipping/SKILL.md`'s Path Model: `/bgpdd-shipping` Step 6.4 is the sole other writer, folding proven acceptance results back into this file post-launch — you remain the only writer during discovery.)
 - **Formatting Requirement**: You MUST explicitly format `manual-testing.md` using a strict `GO → DO → ASSERT` table structure for each step.
 - Categorize test cases into **Happy Path**, **Edge Cases**, **Negative / Error Handling**, and **Regression Risks**.
 - Each test case must clearly state Priority flags (P0, P1, P2), Preconditions (e.g., test-data setup), and include Result checkboxes (`[ ] Pass [ ] Fail`).

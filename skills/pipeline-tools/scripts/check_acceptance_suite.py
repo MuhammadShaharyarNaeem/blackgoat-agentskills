@@ -23,7 +23,10 @@ reasoning note below.
 
 `--lint-only` is a SECOND MODE that gates matrix STRUCTURE at plan time,
 before any code exists. It takes --matrix alone (--results is a usage
-error) and runs only the checks the matrix can support by itself.
+error) and runs only the checks the matrix can support by itself. Given
+--requirements it additionally gates the FR->scenario LINK: every
+Must-Have FR/NFR in requirements.md must be cited by at least one
+scenario heading.
 
 DELIBERATE MODE DIVERGENCE (CLAUDE.md convention #8 — this refines the
 "undeclared_inverse is advisory, non-blocking" rule stated above rather
@@ -46,9 +49,10 @@ internal honesty of a runtime capture is check_runtime_evidence.py's job.
 
 SCOPE LIMIT (--lint-only): structure only. It never judges whether a
 scenario is worth running, whether its ASSERT column asserts the right
-thing, whether an exemption reason is TRUE, or whether the requirement
-IDs in the heading exist. Exemption presence is checkable; exemption
-truth is not.
+thing, or whether an exemption reason is TRUE. Exemption presence is
+checkable; exemption truth is not. With --requirements it checks that a
+Must-Have is CITED by a scenario — never that the scenario actually
+exercises it; that judgment stays with the human reading the matrix.
 
 Pure standard library.
 
@@ -56,7 +60,7 @@ Usage:
     python check_acceptance_suite.py --matrix <path> --results <path> \
         [--repo <dir>] [--require-priority P0[,P1]] [--min-scenarios <N>]
     python check_acceptance_suite.py --lint-only --matrix <path> \
-        [--min-scenarios <N>]
+        [--requirements <path>] [--min-scenarios <N>]
     python check_acceptance_suite.py --self-test
 """
 import argparse
@@ -119,6 +123,21 @@ MUTATING_VERB_RE = re.compile(
     r"detach|link|unlink|rename|publish|unpublish|approve|reject|cancel|set|"
     r"clear|reset|purge|migrate|rotate|invite|register|deregister|onboard|"
     r"offboard|apply|schedule|unschedule)\b")
+
+# --- requirements.md tier vocabulary --------------------------------------
+# Duplicated VERBATIM from check_coverage.py, together with heading_level(),
+# sort_key() and parse_requirements() below, so the two gates recognize the
+# SAME Must-Have document convention rather than two dialects of it. Duplicated
+# rather than imported: this script family has no shared module by convention
+# (GateError is already duplicated in seven files). If that parser's grammar
+# changes, change this with it.
+HEADING_RE = re.compile(r"^(#{1,6})(?:\s|$)")
+TIER_HEADING_RE = re.compile(r"^#{2,4}\s*(Must|Should|Could|Won'?t)\s+Have", re.IGNORECASE)
+FR_BOLD_RE = re.compile(r"\*\*(FR-\d+)\*\*", re.IGNORECASE)
+NFR_BOLD_RE = re.compile(r"\*\*(NFR-\d+)\*\*", re.IGNORECASE)
+NFR_TIER_RE = re.compile(r"-\s*\*\*(NFR-\d+)\*\*\s*\((Must|Should|Could)[^)]*\)", re.IGNORECASE)
+STRUCK_ID_RE = re.compile(r"~~[^~]*?\*\*((?:FR|NFR)-\d+)\*\*[^~]*?~~", re.IGNORECASE)
+ID_TOKEN_RE = re.compile(r"\b(?:FR|NFR)-\d+\b", re.IGNORECASE)
 
 
 class GateError(Exception):
@@ -194,6 +213,102 @@ def is_separator_row(cells):
 
 def split_stores(value):
     return [s.strip().lower() for s in re.split(r"[,/;+]", value or "") if s.strip()]
+
+
+# ---------------------------------------------------------------------------
+# requirements.md parsing (duplicated from check_coverage.py — see the note on
+# HEADING_RE above; keep the two in step)
+# ---------------------------------------------------------------------------
+
+def sort_key(req_id):
+    """Natural sort key so FR-2 sorts before FR-10."""
+    prefix, number = req_id.split("-", 1)
+    return (prefix, int(number))
+
+
+def heading_level(line):
+    match = HEADING_RE.match(line)
+    return len(match.group(1)) if match else None
+
+
+def parse_requirements(text):
+    """Parse a requirements.md body.
+
+    Returns (tier_by_id, warnings, known_ids):
+      tier_by_id  -- {ID: "Must"|"Should"|"Could"} for every non-excluded ID
+      warnings    -- list of warning strings
+      known_ids   -- every ID that appeared anywhere (including Won't-Have),
+                     used to detect "unknown ID cited in the matrix".
+    """
+    warnings = []
+    events = []  # list of (id, tier) in document order
+    struck_ids = set()  # IDs annotated as superseded (strikethrough)
+
+    current_tier = None
+    current_level = None
+
+    for line in text.split("\n"):
+        for match in STRUCK_ID_RE.finditer(line):
+            struck_ids.add(match.group(1).upper())
+
+        level = heading_level(line)
+        if level is not None:
+            tier_match = TIER_HEADING_RE.match(line)
+            if tier_match and 2 <= level <= 4:
+                word = tier_match.group(1).lower()
+                current_tier = "Wont" if word.startswith("won") else word.capitalize()
+                current_level = level
+            elif current_tier is not None and level <= current_level:
+                current_tier = None
+                current_level = None
+
+        if current_tier is not None:
+            for match in FR_BOLD_RE.finditer(line):
+                events.append((match.group(1).upper(), current_tier))
+
+        tier_tagged_ids = set()
+        for match in NFR_TIER_RE.finditer(line):
+            req_id = match.group(1).upper()
+            events.append((req_id, match.group(2).lower().capitalize()))
+            tier_tagged_ids.add(req_id)
+
+        for match in NFR_BOLD_RE.finditer(line):
+            req_id = match.group(1).upper()
+            if req_id not in tier_tagged_ids:
+                warnings.append(
+                    f"{req_id} has a bold ID but no parseable tier tag; "
+                    "defaulting to Must Have")
+                events.append((req_id, "Must"))
+
+    by_id = {}
+    for req_id, tier in events:
+        by_id.setdefault(req_id, []).append(tier)
+
+    tier_by_id = {}
+    known_ids = set(by_id.keys())
+
+    for req_id, tiers in by_id.items():
+        had_wont = "Wont" in tiers
+        others = [t for t in tiers if t != "Wont"]
+        if not others:
+            continue  # Excluded: only ever appeared in Won't Have.
+        final_tier = others[0]
+        if len(set(others)) > 1:
+            warnings.append(
+                f"Duplicate {req_id} found across tiers; first occurrence "
+                f"({final_tier} Have) wins")
+        if had_wont:
+            warnings.append(
+                f"{req_id} appears in both Won't Have and {final_tier} Have; "
+                f"using {final_tier} Have")
+        tier_by_id[req_id] = final_tier
+
+    for req_id in sorted(struck_ids & set(tier_by_id), key=sort_key):
+        warnings.append(
+            f"{req_id} is struck through (supersession annotation) but stays "
+            f"registered at {tier_by_id[req_id]} Have; annotations never change tiers")
+
+    return tier_by_id, warnings, known_ids
 
 
 # ---------------------------------------------------------------------------
@@ -464,6 +579,7 @@ def new_report(args):
     return {
         "matrix": args.matrix,
         "results": args.results,
+        "requirements": args.requirements,
         "lint_only": bool(args.lint_only),
         "require_priority": None,
         "min_scenarios": args.min_scenarios,
@@ -489,6 +605,10 @@ def new_report(args):
         "missing_stores": [],
         "duplicate_keys": [],
         "malformed_steps": [],
+        "must_have": [],
+        "should_have": [],
+        "uncovered_should": [],
+        "lint_failures": [],
         "extra_results": [],
         "warnings": [],
         "result": "FAIL",
@@ -736,6 +856,64 @@ def build_report(args):
 # --lint-only: plan-time structural gate
 # ---------------------------------------------------------------------------
 
+def lint_fr_scenario_coverage(report, scenarios, requirements_path):
+    """Every Must-Have FR/NFR must be cited by at least one scenario heading.
+
+    The FR->scenario link was a prose self-check
+    (planning-and-task-breakdown/SKILL.md) until this: the heading requirement
+    ids were already parsed, but nothing read requirements.md, so "every
+    Must-Have appears in at least one scenario" was enforced only by the
+    planner remembering to look. Convention #9 — a rule that asks an agent to
+    restrain itself at the moment it wants to proceed becomes a gate.
+
+    Must-Have only. A Should-Have with no scenario lands in `uncovered_should`
+    and never blocks — the same tier posture check_coverage.py already applies,
+    and the reason the two report the same two arrays.
+
+    An id cited by a heading but absent from requirements.md WARNS rather than
+    blocks, matching check_coverage.py's unknown-id path; only FR/NFR-shaped
+    tokens are considered, so a matrix citing `EC-2` is not accused of naming
+    an unknown requirement.
+    """
+    # BOM stripped explicitly: this file's read_text() is utf-8 where
+    # check_coverage.py's is utf-8-sig, and a leading BOM would stop
+    # HEADING_RE matching the document's first heading.
+    tier_by_id, warnings, known_ids = parse_requirements(
+        read_text(requirements_path).lstrip(chr(0xFEFF)))
+    report["warnings"].extend(warnings)
+
+    must_have = sorted((i for i, t in tier_by_id.items() if t == "Must"), key=sort_key)
+    should_have = sorted((i for i, t in tier_by_id.items() if t == "Should"), key=sort_key)
+    if not must_have:
+        raise GateError(
+            f"no Must-Have requirements found in {requirements_path} — an "
+            "acceptance matrix cannot be linked to a requirements set that "
+            "declares nothing mandatory")
+    report["must_have"] = must_have
+    report["should_have"] = should_have
+
+    cited = {r.upper() for sc in scenarios for r in sc["requirements"]}
+    for unknown in sorted({i for i in cited if ID_TOKEN_RE.fullmatch(i)} - known_ids,
+                          key=sort_key):
+        report["warnings"].append(
+            f"unknown requirement ID {unknown} cited in an acceptance scenario "
+            "heading")
+
+    report["uncovered_should"] = [i for i in should_have if i not in cited]
+    if report["uncovered_should"]:
+        report["warnings"].append(
+            "ADVISORY (non-blocking): Should-Have requirement(s) cited by no "
+            "scenario heading: " + ", ".join(report["uncovered_should"]))
+
+    report["lint_failures"].extend(
+        {"check": "fr-scenario-coverage", "task": req_id,
+         "detail": (f"Must-Have {req_id} is cited by no acceptance scenario "
+                    "heading — add it to the parenthesized requirement list of "
+                    "the scenario that walks it through, or the feature can "
+                    "ship with nothing agreeing on what 'works' means for it")}
+        for req_id in must_have if req_id not in cited)
+
+
 def lint_report(report, scenarios, matrix_text, args):
     """Structure-only gate over the matrix ALONE. No results file exists yet.
 
@@ -760,6 +938,9 @@ def lint_report(report, scenarios, matrix_text, args):
         report["warnings"].append(
             "--require-priority does not scope --lint-only: structural validity "
             "is priority-blind, so every scenario in the matrix was linted")
+
+    if args.requirements:
+        lint_fr_scenario_coverage(report, scenarios, args.requirements)
 
     seen_scenarios = set()
     for sc in scenarios:
@@ -887,7 +1068,8 @@ def lint_report(report, scenarios, matrix_text, args):
                and not report["malformed_steps"]
                and not report["invalid_exemption"]
                and not report["dangling_inverse"]
-               and not report["undeclared_inverse"])
+               and not report["undeclared_inverse"]
+               and not report["lint_failures"])
     report["result"] = "PASS" if lint_ok else "FAIL"
     return report
 
@@ -900,6 +1082,7 @@ def build_parser():
     p = argparse.ArgumentParser(prog="check_acceptance_suite.py")
     p.add_argument("--matrix")
     p.add_argument("--results")
+    p.add_argument("--requirements")
     p.add_argument("--repo", default=".")
     p.add_argument("--require-priority")
     p.add_argument("--min-scenarios", type=int, default=1)
@@ -927,6 +1110,18 @@ def main(argv):
                               "error": "missing required argument(s): --matrix"}))
             return 2
     else:
+        # Same mode-separation rule --results-with---lint-only enforces, read
+        # from the other end: the FR->scenario link is a PLAN-time question
+        # about the matrix, and answering it says nothing about whether the
+        # matrix was run. A caller passing both has misunderstood which one
+        # they wanted.
+        if args.requirements:
+            print(json.dumps({"result": "ERROR", "error":
+                              "--requirements is only accepted with --lint-only: "
+                              "the FR->scenario link gates matrix STRUCTURE at "
+                              "plan time, not execution. Add --lint-only (and "
+                              "drop --results), or drop --requirements."}))
+            return 2
         missing = [n for n, v in (("--matrix", args.matrix),
                                   ("--results", args.results)) if not v]
         if missing:
@@ -982,15 +1177,32 @@ Surface: web+api | Preconditions: integration connected (AS-1)
         "| distribute |",
         "| distribute [no inverse: a queued job cannot be un-queued] |")
 
+    # Must-Haves FR-1, FR-3 and FR-4 are exactly what MATRIX's two scenario
+    # headings cite; FR-7 and NFR-2 are Should-Haves nothing cites.
+    REQUIREMENTS = """# Requirements — slide-integration
+
+## Must Have
+
+- **FR-1** — the tenant can connect the Slide integration.
+- **FR-3** — the tenant can map a client to a Slide client.
+- **FR-4** — a mapped client renders a green tick.
+
+## Should Have
+
+- **FR-7** — the mapping list is searchable.
+- **NFR-2** (Should Have) — the mapping list renders within 500ms.
+"""
+
     EXPECTED_KEYS = {
-        "matrix", "results", "lint_only", "require_priority", "min_scenarios",
-        "scenarios", "gated_scenarios", "linted_scenarios", "steps",
-        "steps_gated", "passed", "failed", "blocked", "not_run",
+        "matrix", "results", "requirements", "lint_only", "require_priority",
+        "min_scenarios", "scenarios", "gated_scenarios", "linted_scenarios",
+        "steps", "steps_gated", "passed", "failed", "blocked", "not_run",
         "missing_results", "unevidenced_manual", "dangling_inverse",
         "undeclared_inverse", "exempt_steps", "invalid_exemption",
         "missing_priority", "missing_step_table", "missing_columns",
         "unrecognized_mode", "missing_stores", "duplicate_keys",
-        "malformed_steps", "extra_results", "warnings", "result", "error"}
+        "malformed_steps", "must_have", "should_have", "uncovered_should",
+        "lint_failures", "extra_results", "warnings", "result", "error"}
 
     def results(lines):
         return ("# Acceptance Results — slide-integration\n\n"
@@ -1021,10 +1233,17 @@ Surface: web+api | Preconditions: integration connected (AS-1)
 
         def _args(self, **kw):
             base = dict(matrix=str(self.matrix), results=str(self.results),
-                        repo=str(self.dir), require_priority=None,
-                        min_scenarios=1, lint_only=False, self_test=False)
+                        requirements=None, repo=str(self.dir),
+                        require_priority=None, min_scenarios=1,
+                        lint_only=False, self_test=False)
             base.update(kw)
             return argparse.Namespace(**base)
+
+        def _requirements(self, text=None):
+            path = self.impl / "requirements.md"
+            path.write_text(REQUIREMENTS if text is None else text,
+                            encoding="utf-8")
+            return str(path)
 
         def _lint(self, matrix=None, **kw):
             if matrix is not None:
@@ -1581,6 +1800,63 @@ Surface: web+api | Preconditions: integration connected (AS-1)
             self.assertEqual(len(r["invalid_exemption"]), 1)
             self.assertTrue(any("BLOCKS under --lint-only" in w
                                 for w in r["warnings"]))
+
+        # ---- --lint-only: the FR -> scenario link (--requirements) ----
+
+        def test_lint_every_must_have_cited_passes(self):
+            r = self._lint(LINT_CLEAN, requirements=self._requirements())
+            self.assertEqual(r["result"], "PASS", r)
+            self.assertEqual(r["must_have"], ["FR-1", "FR-3", "FR-4"])
+            self.assertEqual(r["lint_failures"], [])
+
+        def test_lint_uncited_must_have_blocks(self):
+            """The escape this closed: an FR nothing walks through."""
+            r = self._lint(LINT_CLEAN, requirements=self._requirements(
+                REQUIREMENTS.replace(
+                    "- **FR-4**",
+                    "- **FR-9** — the tenant can unmap a client.\n- **FR-4**")))
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual([f["check"] for f in r["lint_failures"]],
+                             ["fr-scenario-coverage"])
+            self.assertEqual(r["lint_failures"][0]["task"], "FR-9")
+
+        def test_lint_uncited_should_have_never_blocks(self):
+            r = self._lint(LINT_CLEAN, requirements=self._requirements())
+            self.assertEqual(r["result"], "PASS", r)
+            self.assertEqual(r["uncovered_should"], ["FR-7", "NFR-2"])
+            self.assertTrue(any("ADVISORY" in w and "Should-Have" in w
+                                for w in r["warnings"]), r["warnings"])
+
+        def test_lint_unknown_cited_requirement_only_warns(self):
+            r = self._lint(LINT_CLEAN.replace("(FR-1)", "(FR-1, FR-99)"),
+                           requirements=self._requirements())
+            self.assertEqual(r["result"], "PASS", r)
+            self.assertTrue(any("unknown requirement ID FR-99" in w
+                                for w in r["warnings"]), r["warnings"])
+
+        def test_non_fr_scenario_citation_is_not_an_unknown_id(self):
+            """`EC-2` in AS-2's heading is not a requirement id."""
+            r = self._lint(LINT_CLEAN, requirements=self._requirements())
+            self.assertFalse(any("EC-2" in w for w in r["warnings"]),
+                             r["warnings"])
+
+        def test_requirements_without_lint_only_is_exit_2(self):
+            self.results.write_text(results(GREEN), encoding="utf-8")
+            self.assertEqual(
+                main(["--matrix", str(self.matrix), "--results",
+                      str(self.results), "--requirements",
+                      self._requirements()]), 2)
+
+        def test_unreadable_or_must_have_less_requirements_is_exit_2(self):
+            with self.assertRaises(GateError):
+                build_report(self._args(lint_only=True, results=None,
+                                        requirements=str(self.dir / "nope.md")))
+            with self.assertRaises(GateError):
+                build_report(self._args(
+                    lint_only=True, results=None,
+                    requirements=self._requirements(
+                        "# Requirements\n\n## Should Have\n\n"
+                        "- **FR-7** — the mapping list is searchable.\n")))
 
         # ---- CLI ----
 

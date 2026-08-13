@@ -47,7 +47,7 @@ Every milestone carries a `[vs:<surface>]` tag assigned at planning. The tag sel
 1. **START** the application the way a user starts it, using the start command declared in the milestone's `RUNTIME PROBE:` line. Never invent the command — see *Escalate When*.
 2. **REPOINT** whatever configuration is needed so the surfaces under test talk to the local instances, and record exactly what you changed.
 3. **PROBE** using the declared probe command through the transport below.
-4. **CAPTURE** the output to a file under `evidence/runtime/` via `{PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture`, which writes the command, timestamp, exit code and output itself.
+4. **CAPTURE** the output to a file under `evidence/runtime/` via `{PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture`, which writes the command, timestamp, exit code and output itself. When no Python 3 runtime is available, hand-write the capture with the complete field list from *The Capture Artifact* below; `--capture` is preferred because those fields are tool-authored and therefore cannot be faked.
 5. **CITE** the capture path in your report.
 
 **You do not author the probe you are graded on.** The probe and its expected observable come from the plan. A probe invented at verification time is invented by the party motivated to soften it.
@@ -63,7 +63,7 @@ Read the transport's own contract on demand; this file does not restate it.
 | `rmm` | The platform's own service/package query, run on the target device | (project-declared in the `RUNTIME PROBE:` line) |
 | `fn` | The sink's own client — queue peek, cache read, table query | (project-declared) |
 
-An in-process test client is **not a transport**. Naming one in a capture is a gate failure, not a shortcut.
+An in-process test client is **not a transport**. Naming one in a capture is a gate failure, not a shortcut. The recognizable ones are `WebApplicationFactory`/`TestServer` (.NET), `supertest` (Node), `MockMvc` (Spring), and their equivalents in any stack: each is the Tier-2 integration instrument — real routing, real handler logic, real data access, never the wire. The mechanically-enforced tell list lives in `{PLUGIN_ROOT}/pipeline-tools/scripts/check_runtime_evidence.py` (byte-locked to `check_coverage.py`'s plan lint); the prose list here is the recognition aid, not the gate.
 
 ### The Capture Artifact
 
@@ -85,6 +85,8 @@ This file is the single owner of the grammar. Emit it in your report — `test-r
 ```
 
 Paths are relative to the report's own directory. Cite every capture that backs a claim in that block, including failure-path captures.
+
+The third consumer cites differently: in `acceptance-results.md` the capture path goes **inline in the result line's detail field** (grammar owner: `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`), never as a marker line. That second form is deliberate (convention #8) — that file's per-step line grammar is one line per step, with no room for a marker line beside it.
 
 ### When You Cannot Probe
 
