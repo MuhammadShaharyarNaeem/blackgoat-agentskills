@@ -9,7 +9,7 @@ The squad's skills and personas are written **runtime-neutral** — they say "de
 
 ## When this applies
 
-Whenever you invoke a `bgpdd-*` pipeline (`/bgpdd-plan`, `/bgpdd-build`, `/bgpdd-discovery`, `/bgpdd-shipping`, `/bgpdd-lite`) or delegate to any squad member: Rex, Aria, Alex, Mason, Luna, Max, Quinn, Echo, Vera, Cipher, Dep, Forge, Iris, Scout.
+Whenever you invoke a `bgpdd-*` pipeline (`/bgpdd-plan`, `/bgpdd-build`, `/bgpdd-discovery`, `/bgpdd-shipping`, `/bgpdd-lite`, `/bgpdd-learn`) or delegate to any squad member: Rex, Aria, Alex, Mason, Nova, Luna, Max, Quinn, Echo, Vera, Cipher, Dep, Forge, Iris, Scout.
 
 ## Load the orchestration model first
 
@@ -47,5 +47,5 @@ Use these directly. Do NOT reach for Playwright / chrome-devtools to work around
 
 ## MCP & shell
 
-- MCP servers are configured in `mcp_config.json`. For browser/web testing prefer `playwright` or `chrome-devtools-mcp`.
+- MCP servers are configured in `mcp.json` (Claude Code uses `.mcp.json` at the plugin root — same content family). For browser/web testing prefer `playwright` or `chrome-devtools-mcp`.
 - Prefix shell commands with `rtk` to conserve tokens (e.g. `rtk git status`).

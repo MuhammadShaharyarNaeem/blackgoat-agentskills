@@ -33,11 +33,11 @@ Invoked by the Orchestrator during the discovery phase (`bgpdd-discovery`), afte
 - **Outputs**: synthesize the following, in this order, within the same pass:
   1. `.docs/summary/{feature}/overview.md` — the cross-API consolidation: which API owns what, cross-service call flow, integration seams, and links to each `{api}.md`.
   2. `.docs/summary/{feature}/QA/code-workflow.md` — Mermaid sequence diagrams and detailed step-by-step code execution paths mapped to the UI, BLL, and Database, to establish a baseline.
-  3. `.docs/summary/{feature}/QA/manual-testing.md` — manual test cases reverse-engineered from the `code-workflow.md` you just produced in step 2.
+  3. `.docs/summary/{feature}/QA/manual-testing.md` — manual test cases reverse-engineered from the `code-workflow.md` you just produced in step 2. (One sanctioned exception, convention #8, labelled at the other end in `bgpdd-shipping/SKILL.md`'s Path Model: `/bgpdd-shipping` Step 6.4 is the sole other writer, folding proven acceptance results back into this file post-launch — you remain the only writer during discovery.)
 - **Formatting Requirement**: You MUST explicitly format `manual-testing.md` using a strict `GO → DO → ASSERT` table structure for each step.
 - Categorize test cases into **Happy Path**, **Edge Cases**, **Negative / Error Handling**, and **Regression Risks**.
 - Each test case must clearly state Priority flags (P0, P1, P2), Preconditions (e.g., test-data setup), and include Result checkboxes (`[ ] Pass [ ] Fail`).
-- Ensure your markdown is highly structured with clear headers so Aria can easily read `overview.md` first and drill into per-API and QA detail on demand when the planning squad consumes it later (bgpdd-plan Phase 2).
+- Ensure your markdown is highly structured with clear headers so each downstream reader can enter at the level it needs. Your actual consumers: **Rex** hydrates context from `overview.md` and both QA artifacts when he synthesizes requirements; **Aria** reads `overview.md` (and per-API detail on demand) for legacy design constraints — she does not read the QA artifacts; **Alex** reconciles your `QA/manual-testing.md` cases against the feature being planned, marking each one as still holding, invalidated, or superseded. Write the QA artifacts for that last reader in particular: each case must be self-contained enough that someone who never saw the legacy code can decide whether it survives the change.
 
 ---
 

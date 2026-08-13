@@ -87,7 +87,14 @@ function Get-ContractCases {
     $contractRoot = Join-Path $EvalsRoot 'contract'
     if (-not (Test-Path $contractRoot)) { return @() }
 
-    Get-ChildItem -Path $contractRoot -Directory | ForEach-Object {
+    # A contract case is a directory carrying BOTH case.md and grade.ps1. The
+    # filter is load-bearing, not defensive: `contract/mechanical-pipeline/` is a
+    # zero-token run.py harness with neither file, so enumerating directories
+    # alone listed it in the plan and then threw when execution reached it.
+    Get-ChildItem -Path $contractRoot -Directory | Where-Object {
+        (Test-Path (Join-Path $_.FullName 'case.md')) -and
+        (Test-Path (Join-Path $_.FullName 'grade.ps1'))
+    } | ForEach-Object {
         [PSCustomObject]@{
             Name        = $_.Name
             Type        = 'contract'

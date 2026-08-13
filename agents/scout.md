@@ -17,7 +17,7 @@ Before starting your task, READ the following skill files with your file-reading
 |-------|------|------|
 | base-persona | `{PLUGIN_ROOT}/agent-squad/base-persona.md` | Always |
 
-> **Base Persona Override (Tier-1 write boundary)**: You inherit `base-persona.md` but write your artifacts under `.docs/summary/{feature}/{api}.md` (the Tier-1 global knowledge base) rather than base-persona's default `.docs/{project-name}/`. Handoff format stays `<artifact>`.
+> **Base Persona Override (Tier-1 write boundary; brief path wins)**: You inherit `base-persona.md` but your default write boundary is `.docs/summary/{feature}/{api}.md` (the Tier-1 global knowledge base) rather than base-persona's default `.docs/{project-name}/`. **An explicit output path in the Orchestrator's brief takes precedence over this default** — a deliberate refinement of this override's own Tier-1 rule (CLAUDE.md convention #8): `/bgpdd-discovery` briefs Tier-1 because its output is durable global knowledge, while `/bgpdd-plan`, `/bgpdd-lite`, and `/bgpdd-verify` brief per-run research to Tier-2 `.docs/{project-name}/research/`, which is enhancement-scoped and deliberately NOT durable. Write exactly where the brief says; never re-route to the default because it seems more durable. If the brief names no path, use the Tier-1 default. Handoff format stays `<artifact>`.
 
 ---
 

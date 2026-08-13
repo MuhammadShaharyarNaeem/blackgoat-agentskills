@@ -119,6 +119,7 @@ The `## Review:` heading must carry the milestone's leading identifier verbatim 
 - [ ] Manual verification done (if applicable)
 
 **Rendered evidence:** <path>[, <path>]
+**Runtime evidence:** <path>[, <path>]
 
 ### Verdict
 **Verdict:** Approve | Request Changes
@@ -129,6 +130,8 @@ The `## Review:` heading must carry the milestone's leading identifier verbatim 
 **`Approve` is unavailable while any Critical or Important finding stands in the same report.** Before writing the verdict, re-read every finding you just wrote *in that report section*. Each Critical and Important one must either be absent or carry an explicit `RESOLVED` marker naming the fix and the evidence that verified it. If even one stands unresolved, the verdict is `Request Changes`. There is no "approve with notes", no closing summary that outranks the findings above it, and no verdict carried over from a previous round. A report that states *"the app will fail to render these components"* and then *"Approve — all blockers resolved"* is not a review; it is two documents that never met. The findings are the review — the verdict is arithmetic over them, not a separate judgement.
 
 **The `**Rendered evidence:**` line is optional, but machine-read when present, on the same exact-token terms as the Verdict line.** Required whenever the review covers a `[UI]` milestone's design-critique axis: list the path(s) — comma-separated — that you (the reviewer) saved under `.docs/{project-name}/implementation/evidence/review/`, the rendered artifacts the design-critique verdict actually rests on. `check_commit_gate.py --require-rendered-evidence` parses this line for `[UI]` milestones; its grammar authority is `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
+
+**The `**Runtime evidence:**` line is optional on the same terms — machine-read when present.** Emit it whenever your review passes judgement on behavior a client, person, or device receives: list the observed-runtime capture(s) your judgement actually rests on. Unlike rendered evidence it need not be reviewer-produced — citing the capture the milestone's verifier wrote is legitimate, provided you read it. **This template owns the slot, not the contract**: the citation grammar, the capture artifact's required fields, and the transport rules all belong to `{PLUGIN_ROOT}/runtime-evidence/SKILL.md`, which is their single owner — read it there and do not restate or vary it here.
 
 ### Verification Checklist
 

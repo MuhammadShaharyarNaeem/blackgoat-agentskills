@@ -3,7 +3,8 @@
 ## What this proves
 
 An integration eval for `skills/pipeline-tools/scripts/`: `next_milestone.py`,
-`update_state.py`, `check_commit_gate.py`, and `run_quiet.py` each have their own
+`update_state.py`, `check_commit_gate.py`, `run_quiet.py`,
+`check_runtime_evidence.py` and `check_acceptance_suite.py` each have their own
 `--self-test` (unit level, in-process, no real git). Nothing previously proved that
 they **compose** correctly across a real milestone's lifecycle against a real
 on-disk git repo — that `next_milestone.py`'s output feeds a milestone title
@@ -11,8 +12,18 @@ on-disk git repo — that `next_milestone.py`'s output feeds a milestone title
 gates the same milestone in `check_commit_gate.py`, that a resolved blocker actually
 clears the gate, that `--verify-tree` sees real `git status` output, that a real
 `--commit` produces a real commit `git log` can see. This case builds a disposable
-temp git repo and walks one milestone start-to-finish through all four tools,
+temp git repo and walks one milestone start-to-finish through all six tools,
 asserting exact exit codes and JSON fields at each step.
+
+The two evidence gates (steps 10-11) are here for one composition in particular:
+`check_acceptance_suite.py` proves a manual step's cited capture **exists** under
+`evidence/runtime/`, while `check_runtime_evidence.py` is what **opens** that same file
+and judges whether the observation inside it is honest. Step 11a's manual step cites the
+very capture step 10a accepted, so "running both is the point"
+(`skills/pipeline-tools/SKILL.md`) is asserted rather than assumed. This is also the only
+place the milestone-scoped runtime gate and the feature-scoped acceptance gate are
+exercised against the same on-disk tree — and it costs zero tokens, which is why the pair
+earns its keep here rather than in an LLM contract case.
 
 ## Why this needs no `claude -p` and is exempt from runs=5
 
@@ -26,8 +37,11 @@ out **LLM output variance** across repeated persona runs — there is no varianc
 source here to average out. A single run is a legitimate final verdict, which is
 also why this case does not follow the `case.md` + `fixture/` + `grade.ps1` shape
 `run-evals.ps1` expects: it isn't a `claude -p` contract case, it's a plain script.
-It is **not** wired into `run-evals.ps1` or `weekly-check.ps1` for this reason —
-running it costs nothing and needs no `-Confirm` gate.
+It is therefore **not dispatchable** by `run-evals.ps1` (which discovers contract suites
+by `case.md` + `grade.ps1`, neither of which this directory has). `weekly-check.ps1` does
+surface it, but as a direct command under its zero-token **Mechanical checks** heading
+rather than as an eval to be confirmed — running it costs nothing and needs no `-Confirm`
+gate.
 
 ## How to run
 
@@ -43,11 +57,12 @@ fixtures) and removes it unconditionally, including on failure.
 ## When to run it
 
 After any change to `skills/pipeline-tools/scripts/{next_milestone,update_state,
-check_commit_gate,run_quiet}.py`, `check_commit_gate.py`'s JSON shape, or the
-`bgpdd-build` milestone lifecycle it encodes (cursor -> Request Changes -> blocker
--> resolve -> verify-tree -> commit -> advance -> rendered-evidence gate). Each
-tool's own `--self-test` should still be run first (it's faster and pinpoints unit
-failures); this case is the composition check on top of that.
+check_commit_gate,run_quiet,check_runtime_evidence,check_acceptance_suite}.py`, any of
+those tools' JSON shapes, or the `bgpdd-build` milestone lifecycle it encodes (cursor ->
+Request Changes -> blocker -> resolve -> verify-tree -> commit -> advance ->
+rendered-evidence gate -> runtime-evidence gate -> acceptance gate). Each tool's own
+`--self-test` should still be run first (it's faster and pinpoints unit failures); this
+case is the composition check on top of that.
 
 ## Fixture shape
 
@@ -70,9 +85,32 @@ blocker -> resolve the blocker (rejected without `--evidence`, accepted with it,
 remove it, `--verify-tree --commit` succeeds and a real commit lands -> mark
 milestone 2 `[x]` -> derive next milestone (asserts NEXT / milestone 3 / UI) ->
 `--require-rendered-evidence` fails with no evidence cited -> cite it (with a
-backslash path, `evidence\m3.png`) and create the file -> gate passes -> a noisy
+**backslash** path, `evidence\review\m3.png` — three segments, because the provenance
+predicate requires `evidence/review/` plus at least one more, and rejects a two-segment
+`evidence\m3.png`) and create the file -> gate passes -> a noisy
 `run_quiet.py` child (80 noise lines + 1 `error CS1002` line, exit 1) is asserted to
 keep stdout short while the on-disk log holds all 81 lines.
+
+Then the two evidence gates, on fixtures the script writes into the same repo:
+
+- `.docs/proj/implementation/evidence/runtime/m2-contacts-get.md` and its `-bare`
+  sibling — identical captures (out-of-process `curl` transport, `http://localhost:5142`,
+  status 200, mtime set from the synthetic clock **after** `src/api.cs`) differing in one
+  thing only: the envelope body vs. the bare `{"id":1,"total":9}`. That is the 2026-08
+  incident reduced to its single variable, and it is what makes 10a/10b a real pair rather
+  than two unrelated cases.
+- `.docs/proj/acceptance-matrix.md` — one `AS-1` scenario, 3 steps, one `manual`, with
+  `[inverse of 1]` on the delete step; plus a green `acceptance-results.md` whose manual
+  step cites the 10a capture, and an `acceptance-results-unevidenced.md` whose manual step
+  reports `PASS` on the agent's word alone.
+
+`check_runtime_evidence.py` accepts the envelope capture (exit 0, `fresh: true`,
+`status: 200`) and rejects the bare one (exit 1,
+`missing_keys: ["isSuccess","notifications"]`, nothing stale, no in-process transport) ->
+`check_acceptance_suite.py` passes the green walkthrough (exit 0, 3 gated steps, 3 passed)
+and fails the unevidenced one (exit 1, `unevidenced_manual: ["AS-1.3"]`, the same key in
+`not_run`, `failed` empty) — an unevidenced manual `PASS` reading as NOT RUN rather than as
+a failure is the crux of that gate and is asserted field-by-field.
 
 ## Tool defect found
 
@@ -135,7 +173,10 @@ for this eval-authoring pass.
 
 ## Result of the last authored run
 
-All 13 steps passed (`RESULT: PASS (13/13 steps passed)`), re-run twice more for
+All 17 steps passed (`RESULT: PASS (17/17 steps passed)`), re-run twice more for
 determinism (no flakiness from mtime/clock races — the script uses a synthetic
 monotonic clock with `os.utime` rather than relying on real-clock resolution for
 staleness ordering).
+
+Step count history: 13 steps before the two evidence gates were added (steps 10a, 10b,
+11a, 11b), 17 after.

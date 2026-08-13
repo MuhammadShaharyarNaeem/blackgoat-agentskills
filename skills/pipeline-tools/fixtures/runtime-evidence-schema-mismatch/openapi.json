@@ -1,0 +1,61 @@
+{
+  "openapi": "3.0.1",
+  "info": { "title": "Orders", "version": "1.4.2" },
+  "paths": {
+    "/api/orders": {
+      "post": {
+        "operationId": "CreateOrder",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OrderEnvelope" }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OrderEnvelope" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "OrderEnvelope": {
+        "type": "object",
+        "properties": {
+          "statusCode": { "type": "integer", "format": "int32" },
+          "isSuccess": { "type": "boolean" },
+          "data": { "$ref": "#/components/schemas/Order" },
+          "dataContext": { "type": "object", "nullable": true },
+          "notifications": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Notification" }
+          }
+        }
+      },
+      "Order": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "total": { "type": "number", "format": "double" }
+        }
+      },
+      "Notification": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "string" },
+          "message": { "type": "string" },
+          "propertyName": { "type": "string", "nullable": true }
+        }
+      }
+    }
+  }
+}

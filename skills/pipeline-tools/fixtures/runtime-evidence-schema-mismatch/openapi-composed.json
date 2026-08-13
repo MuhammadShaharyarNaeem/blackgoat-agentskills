@@ -1,0 +1,49 @@
+{
+  "openapi": "3.0.1",
+  "info": { "title": "Orders (composed response)", "version": "1.4.2" },
+  "paths": {
+    "/api/orders": {
+      "post": {
+        "operationId": "CreateOrder",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/EnvelopeBase" },
+                    {
+                      "type": "object",
+                      "properties": { "data": { "$ref": "#/components/schemas/Order" } }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "EnvelopeBase": {
+        "type": "object",
+        "properties": {
+          "statusCode": { "type": "integer" },
+          "isSuccess": { "type": "boolean" },
+          "dataContext": { "type": "object", "nullable": true },
+          "notifications": { "type": "array", "items": { "type": "object" } }
+        }
+      },
+      "Order": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "total": { "type": "number" }
+        }
+      }
+    }
+  }
+}

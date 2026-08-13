@@ -197,7 +197,7 @@ Phase by phase:
 
 ```json
 {
-  "schema": 1,
+  "schema": "1",
   "project_name": "slide-enhancement",
   "feature": "slide",
   "pipeline": "bgpdd-plan",
@@ -213,7 +213,7 @@ Phase by phase:
 }
 ```
 
-`feature` is the durable Tier 1 id (`null` for greenfield). `pipeline` records the last writer. `branch` and `milestone_cursor` are owned by build: the working branch established at hydration, and the next pending milestone. Shipping's Step 0 refuses to run if `pipeline` isn't `"bgpdd-build"` (or `"bgpdd-shipping"` from a prior checkpointed shipping session), if milestones remain open, or if the `blockers` ledger has standing entries (Step 0.4), and its Step 6 deletes the file once the lifecycle completes — `game-tape.md` alone survives as the epic's durable record.
+`feature` is the durable Tier 1 id (`null` for greenfield). `pipeline` records the last writer. `branch` and `milestone_cursor` are owned by build: the working branch established at hydration, and the next pending milestone. Shipping's Step 0 refuses to run if `pipeline` isn't `"bgpdd-build"` (or `"bgpdd-shipping"` from a prior checkpointed shipping session), if milestones remain open, if build Phase 5's prep `ship-decision.md` is missing or isn't a `GO` (Step 0.4 — relaxed to a shape-only check when resuming a prior shipping session, so a legitimate `NO-GO` refresh can't lock the pipeline out of the stage that resolves it), or if the `blockers` ledger has standing entries (Step 0.5), and its Step 6 deletes the file once the lifecycle completes — `game-tape.md` alone survives as the epic's durable record.
 
 ---
 
@@ -270,7 +270,7 @@ flowchart LR
     R --> A --> X --> G1 --> Q --> G2 --> G3
 ```
 
-The gates are enforced, not decorative: plan's Upgraded Chain-of-Thought checks *content contracts* (an artifact must satisfy its structural requirements, not merely exist), the Phase 3.5 gate re-delegates Alex on any uncovered Must-Have (bounded to 2 auto-fix rounds, then halt), build refuses to invoke Dep while any Must-Have lacks a passing test, and shipping blocks documentation and the PR on the same check. If a requirement silently disappears between planning and launch, three separate gates are positioned to catch it. All three now execute a deterministic script (`skills/pipeline-tools/scripts/check_coverage.py`) that returns a machine-readable uncovered-ID list, falling back to the manual read described above when no Python runtime exists.
+The gates are enforced, not decorative: plan's Upgraded Chain-of-Thought checks *content contracts* (an artifact must satisfy its structural requirements, not merely exist), the Phase 3.5 gate re-delegates Alex on any uncovered Must-Have (bounded to 2 auto-fix rounds, then halt), build refuses to invoke Dep while any Must-Have lacks a passing test, and shipping blocks documentation and the PR on the same check. If a requirement silently disappears between planning and launch, three separate gates are positioned to catch it. All three execute a deterministic script (`skills/pipeline-tools/scripts/check_coverage.py`) that returns a machine-readable uncovered-ID list; if Python is unavailable the pipeline HALTs rather than substituting a manual judgment path.
 
 ---
 

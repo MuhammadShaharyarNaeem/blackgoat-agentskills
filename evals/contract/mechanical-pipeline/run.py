@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Zero-LLM integration eval: walks a milestone's full lifecycle through the
 pipeline-tools mechanical CLI family (next_milestone.py, update_state.py,
-check_commit_gate.py, run_quiet.py) against a disposable temp git repo.
+check_commit_gate.py, run_quiet.py, check_runtime_evidence.py,
+check_acceptance_suite.py) against a disposable temp git repo.
 
 Deliberately needs no `claude -p` -- it exercises only the mechanical layer
 (deterministic stdlib Python CLIs), so it is safe to run unconfirmed and is
@@ -34,13 +35,22 @@ NEXT_MILESTONE = SCRIPTS / "next_milestone.py"
 UPDATE_STATE = SCRIPTS / "update_state.py"
 CHECK_COMMIT_GATE = SCRIPTS / "check_commit_gate.py"
 RUN_QUIET = SCRIPTS / "run_quiet.py"
+CHECK_RUNTIME_EVIDENCE = SCRIPTS / "check_runtime_evidence.py"
+CHECK_ACCEPTANCE_SUITE = SCRIPTS / "check_acceptance_suite.py"
 
+# The TOKEN used for --milestone / --set-cursor: deliberately untagged. Cursor
+# and milestone matching are word-boundary token tests, so a cursor written
+# before the [vs:] axis existed still matches a now-tagged heading. That
+# back-compat property is asserted by steps 1 and 8a passing with these values.
 MILESTONE2_TITLE = "Milestone 2 — API Layer"
 MILESTONE3_TITLE = "Milestone 3 — UI Layer"
+# The full HEADING text, which is what next_milestone reports as `title`.
+MILESTONE2_HEADING = f"{MILESTONE2_TITLE} [API] [vs:api]"
+MILESTONE3_HEADING = f"{MILESTONE3_TITLE} [UI] [vs:ui]"
 
 PLAN_TEMPLATE = """# Plan: Proj
 
-## Milestone 1 — Bootstrap [x]
+## Milestone 1 — Bootstrap [API] [vs:api] [x]
 
 ## Task 1: Init repo
 
@@ -48,7 +58,7 @@ PLAN_TEMPLATE = """# Plan: Proj
 
 Repo initialized.
 
-## Milestone 2 — API Layer
+## Milestone 2 — API Layer [API] [vs:api]
 
 ## Task 2: Build endpoint
 
@@ -66,7 +76,7 @@ Implements the contacts endpoint.
 
 Adds request validation.
 
-## Milestone 3 — UI Layer
+## Milestone 3 — UI Layer [UI] [vs:ui]
 
 ## Task 4: Build screen
 
@@ -75,6 +85,80 @@ Adds request validation.
 **Requirements covered:** None
 
 Builds the contacts panel.
+"""
+
+# --- Steps 10-11 fixtures: the two evidence gates ---------------------------
+# The response body the platform's envelope requires, and the bare body the
+# 2026-08 incident actually shipped. Only the body differs between the 10a and
+# 10b captures: same honest transport, same local host, same runtime probe, same
+# 200 -- which is the whole point, because only the body reveals the defect.
+ENVELOPE_BODY = ('{"statusCode":200,"isSuccess":true,"notifications":[],'
+                 '"data":{"id":1,"total":9}}')
+BARE_BODY = '{"id":1,"total":9}'
+
+CAPTURE_TEMPLATE = """# Runtime capture: GET /api/contacts
+
+- Milestone: {milestone}
+- Requirement IDs: FR-1
+- Surface: api
+- Transport: out-of-process HTTP (curl)
+- Base URL: http://localhost:5142
+- Probe command: `curl -sS -i http://localhost:5142/api/contacts`
+- Captured: 2026-08-12T10:00:00Z
+- Exit code: 0
+
+## Captured output
+
+```
+HTTP/1.1 200 OK
+content-type: application/json
+
+{body}
+```
+"""
+
+RUNTIME_REPORT_TEMPLATE = """# Contacts — Test Report
+
+#Task [2]:
+
+**Runtime evidence:** {capture}
+
+- FR-1: PASS — `curl -sS -i http://localhost:5142/api/contacts` — exit 0
+"""
+
+# One scenario, three steps, one of them `manual` -- the manual step is where the
+# two gates meet: check_acceptance_suite only checks that its cited evidence
+# EXISTS under evidence/runtime/, while check_runtime_evidence is what opens the
+# same file and judges whether the observation is honest. Step 11a cites the very
+# capture step 10a accepted, so the composition is asserted rather than assumed.
+ACCEPTANCE_MATRIX = """# Acceptance Matrix — proj
+
+## AS-1 Contacts endpoint lifecycle — P0 — (FR-1)
+Surface: api | Preconditions: none
+
+| # | GO | DO | ASSERT | Stores | Mode |
+|---|----|----|--------|--------|------|
+| 1 | Contacts API | create a contact | 200 + row stored | api, db | auto |
+| 2 | Contacts API | delete the contact [inverse of 1] | 200 + row gone | api, db | auto |
+| 3 | Contacts API | read the response off the wire | body carries isSuccess and notifications | api | manual |
+"""
+
+ACCEPTANCE_RESULTS_GREEN = """# Acceptance Results — proj
+
+## Execution
+
+- AS-1.1: PASS — exit 0 — 200 + row stored
+- AS-1.2: PASS — exit 0 — 200 + row gone
+- AS-1.3: PASS — evidence/runtime/m2-contacts-get.md — envelope observed on the wire
+"""
+
+ACCEPTANCE_RESULTS_UNEVIDENCED = """# Acceptance Results — proj
+
+## Execution
+
+- AS-1.1: PASS — exit 0 — 200 + row stored
+- AS-1.2: PASS — exit 0 — 200 + row gone
+- AS-1.3: PASS — checked it by hand, looked right
 """
 
 # Monotonically increasing fake-clock seconds, used with os.utime so mtime
@@ -200,8 +284,9 @@ def run_lifecycle(repo):
     data = parse_json(proc, "1. next_milestone: NEXT / milestone 2 / API / cursor stale")
     if data is not None:
         ok = (proc.returncode == 0 and data.get("result") == "NEXT"
-              and data.get("next_milestone", {}).get("title") == MILESTONE2_TITLE
+              and data.get("next_milestone", {}).get("title") == MILESTONE2_HEADING
               and data.get("next_milestone", {}).get("domain") == "API"
+              and data.get("next_milestone", {}).get("surface") == "api"
               and data.get("cursor", {}).get("stale") is True)
         record("1. next_milestone: NEXT / milestone 2 / API / cursor stale", ok,
                "" if ok else json.dumps(data))
@@ -296,7 +381,10 @@ def run_lifecycle(repo):
 
     # --- Step 8a: mark milestone 2 complete, next_milestone advances to M3 -
     plan_text = plan_path.read_text(encoding="utf-8")
-    marked = plan_text.replace(f"## {MILESTONE2_TITLE}\n", f"## {MILESTONE2_TITLE} [x]\n")
+    # Append [x] to the FULL heading (tags included) -- completion is recorded on
+    # the heading line, which now carries both the domain and [vs:] tags.
+    marked = plan_text.replace(f"## {MILESTONE2_HEADING}\n",
+                                f"## {MILESTONE2_HEADING} [x]\n")
     ok_marked = marked != plan_text
     plan_path.write_text(marked, encoding="utf-8")
 
@@ -304,8 +392,9 @@ def run_lifecycle(repo):
     data = parse_json(proc, "8a. next_milestone: advances to milestone 3 / UI")
     if data is not None:
         ok = (ok_marked and proc.returncode == 0 and data.get("result") == "NEXT"
-              and data.get("next_milestone", {}).get("title") == MILESTONE3_TITLE
-              and data.get("next_milestone", {}).get("domain") == "UI")
+              and data.get("next_milestone", {}).get("title") == MILESTONE3_HEADING
+              and data.get("next_milestone", {}).get("domain") == "UI"
+              and data.get("next_milestone", {}).get("surface") == "ui")
         record("8a. next_milestone: advances to milestone 3 / UI", ok,
                "" if ok else json.dumps(data))
 
@@ -373,6 +462,109 @@ def run_lifecycle(repo):
            "" if ok else
            f"rc={proc.returncode}, stdout_lines={len(stdout_lines)}, log_lines={len(log_lines)}, "
            f"error_in_stdout={'error CS1002' in proc.stdout}")
+
+    # --- Step 10a: check_runtime_evidence accepts an honest capture ----------
+    # Scoped to milestone 2 ([vs:api]) because an envelope is a response claim.
+    # The capture's mtime comes from the synthetic clock AFTER api_cs's (step 3),
+    # so the freshness check resolves deterministically instead of racing
+    # real-clock resolution -- the same reason every other mtime here is faked.
+    runtime_dir = impl_dir / "evidence" / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+
+    good_capture = runtime_dir / "m2-contacts-get.md"
+    good_capture.write_text(
+        CAPTURE_TEMPLATE.format(milestone=MILESTONE2_HEADING, body=ENVELOPE_BODY),
+        encoding="utf-8")
+    set_mtime(good_capture)
+
+    good_report = impl_dir / "test-report.md"
+    good_report.write_text(
+        RUNTIME_REPORT_TEMPLATE.format(capture="evidence/runtime/m2-contacts-get.md"),
+        encoding="utf-8")
+
+    evidence_common = ["--milestone", MILESTONE2_TITLE, "--repo", repo,
+                       "--changed-files", api_cs,
+                       "--require-key", "isSuccess", "--require-key", "notifications",
+                       "--expect-status", 200]
+
+    proc = run_py(CHECK_RUNTIME_EVIDENCE, ["--report", good_report] + evidence_common)
+    data = parse_json(proc, "10a. check_runtime_evidence: honest out-of-process capture -> exit 0")
+    if data is not None:
+        captures = data.get("captures", [])
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and data.get("accepted") == ["evidence/runtime/m2-contacts-get.md"]
+              and data.get("missing_keys") == []
+              and len(captures) == 1
+              and captures[0].get("fresh") is True
+              and captures[0].get("status") == 200)
+        record("10a. check_runtime_evidence: honest out-of-process capture -> exit 0", ok,
+               "" if ok else json.dumps(data))
+
+    # --- Step 10b: same capture minus the envelope -> exit 1 -----------------
+    # The 2026-08 incident, mechanically: everything honest except the body.
+    bare_capture = runtime_dir / "m2-contacts-get-bare.md"
+    bare_capture.write_text(
+        CAPTURE_TEMPLATE.format(milestone=MILESTONE2_HEADING, body=BARE_BODY),
+        encoding="utf-8")
+    set_mtime(bare_capture)
+
+    bare_report = impl_dir / "test-report-bare.md"
+    bare_report.write_text(
+        RUNTIME_REPORT_TEMPLATE.format(capture="evidence/runtime/m2-contacts-get-bare.md"),
+        encoding="utf-8")
+
+    proc = run_py(CHECK_RUNTIME_EVIDENCE, ["--report", bare_report] + evidence_common)
+    data = parse_json(proc, "10b. check_runtime_evidence: envelope keys absent -> exit 1")
+    if data is not None:
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and data.get("missing_keys") == ["isSuccess", "notifications"]
+              and data.get("accepted") == []
+              and data.get("rejected") == ["evidence/runtime/m2-contacts-get-bare.md"]
+              and data.get("in_process_transport") == []
+              and data.get("stale") == [])
+        record("10b. check_runtime_evidence: envelope keys absent -> exit 1", ok,
+               "" if ok else json.dumps(data))
+
+    # --- Step 11a: check_acceptance_suite, green walkthrough -> exit 0 -------
+    # The manual step cites the capture 10a just accepted: the acceptance gate
+    # only proves the file EXISTS under evidence/runtime/, the runtime gate is
+    # what proves the observation inside it is honest. Running both is the point.
+    matrix_path = docs_dir / "acceptance-matrix.md"
+    matrix_path.write_text(ACCEPTANCE_MATRIX, encoding="utf-8")
+
+    green_results = impl_dir / "acceptance-results.md"
+    green_results.write_text(ACCEPTANCE_RESULTS_GREEN, encoding="utf-8")
+
+    proc = run_py(CHECK_ACCEPTANCE_SUITE, ["--matrix", matrix_path,
+                                           "--results", green_results,
+                                           "--repo", repo])
+    data = parse_json(proc, "11a. check_acceptance_suite: green walkthrough -> exit 0")
+    if data is not None:
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and data.get("gated_scenarios") == ["AS-1"]
+              and data.get("steps_gated") == 3 and data.get("passed") == 3
+              and data.get("unevidenced_manual") == []
+              and data.get("dangling_inverse") == []
+              and data.get("missing_results") == [])
+        record("11a. check_acceptance_suite: green walkthrough -> exit 0", ok,
+               "" if ok else json.dumps(data))
+
+    # --- Step 11b: unevidenced manual PASS reads as NOT RUN -> exit 1 -------
+    unevidenced_results = impl_dir / "acceptance-results-unevidenced.md"
+    unevidenced_results.write_text(ACCEPTANCE_RESULTS_UNEVIDENCED, encoding="utf-8")
+
+    proc = run_py(CHECK_ACCEPTANCE_SUITE, ["--matrix", matrix_path,
+                                           "--results", unevidenced_results,
+                                           "--repo", repo])
+    data = parse_json(proc, "11b. check_acceptance_suite: unevidenced manual PASS -> exit 1")
+    if data is not None:
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and data.get("unevidenced_manual") == ["AS-1.3"]
+              and "AS-1.3" in data.get("not_run", [])
+              and data.get("failed") == []
+              and data.get("missing_results") == [])
+        record("11b. check_acceptance_suite: unevidenced manual PASS -> exit 1", ok,
+               "" if ok else json.dumps(data))
 
 
 if __name__ == "__main__":

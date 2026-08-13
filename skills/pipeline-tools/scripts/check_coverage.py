@@ -14,6 +14,7 @@ Pure standard library. See ../SKILL.md for the full contract (JSON shape,
 exit codes, parsing rules).
 """
 import argparse
+import bisect
 import json
 import re
 import sys
@@ -33,6 +34,18 @@ COVERED_FIELD_RE = re.compile(r"\*\*Requirements covered:\*\*", re.IGNORECASE)
 ID_TOKEN_RE = re.compile(r"\b(?:FR|NFR)-\d+\b", re.IGNORECASE)
 FAIL_TOKEN_RE = re.compile(r"\b(?:FAILED|FAIL)\b|❌", re.IGNORECASE)
 PASS_TOKEN_RE = re.compile(r"\b(?:PASSED|PASS)\b|✅", re.IGNORECASE)
+# BLOCKED: a check whose precondition was absent, so nothing ran. Required by
+# agents/quinn.md §6 and base-persona.md's Evidence Integrity section; without
+# a machine-visible slot an honest agent must either write FAIL (which asserts
+# a test ran and failed — a different fabrication) or omit the line (which
+# hides the gap). Status-bearing, and counted as NOT covered.
+#
+# Deliberate divergence (CLAUDE.md convention #8) from check_agent_report.py's
+# four-token grammar: NOT RUN is deliberately absent here. In the coverage
+# ledger omission already means "not run" — parse_test_report() already warns
+# on a status-less mention and leaves the ID uncovered — so a fourth token
+# would add a second spelling for a state the gate already reports.
+BLOCKED_TOKEN_RE = re.compile(r"\bBLOCKED\b", re.IGNORECASE)
 STRUCK_ID_RE = re.compile(r"~~[^~]*?\*\*((?:FR|NFR)-\d+)\*\*[^~]*?~~", re.IGNORECASE)
 
 # --- plan-mode lint vocabulary -------------------------------------------
@@ -57,6 +70,76 @@ EMPTY_VALUES = {"none", "n/a", "na", "nothing", "-", "tbd"}
 # (dot+whitespace) is a safe sentence-break terminator; ` — ` (space-emdash-
 # space) is the other observed prose-introduction shape.
 SENTENCE_BREAK_RE = re.compile(r"\.\s|\s—\s")
+
+# --- runtime-criterion lint vocabulary ------------------------------------
+# Milestone block extents MUST stay consistent with next_milestone.py's
+# parse_milestones(): level-2 OR level-3 `Milestone <n>` headings open a block;
+# the block runs to the next milestone heading or the next level-2 heading
+# whose text starts with neither "Task" nor "Checkpoint". If that parser's
+# extents change, change these with it — a checkpoint that falls outside its
+# milestone here loses the `[vs:<surface>]` tag that decides which probe
+# fields this lint requires.
+MILESTONE_HEADING_RE = re.compile(r"^#{2,3}\s*Milestone\b\s+\d")
+LEVEL2_HEADING_RE = re.compile(r"^##(?!#)\s*(.*)$")
+# Level-3 `### Checkpoint:` is the canonical writer form. Level-2 is the
+# deprecated form next_milestone.py tolerates-with-a-warning inside a block;
+# both are linted here so the deprecated spelling is not an escape hatch from
+# the probe requirement.
+CHECKPOINT_HEADING_RE = re.compile(r"^#{2,3}\s*Checkpoint\b", re.IGNORECASE)
+HEADING_TEXT_RE = re.compile(r"^#+\s*")
+LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]|\d+\.)\s")
+# Verification-surface tag — duplicated verbatim from next_milestone.py's
+# VS_TAG_RE. Same heading-line-wins-then-scan-the-block semantics.
+VS_TAG_RE = re.compile(r"\[vs:([a-z+]{2,12})\]")
+# Surfaces whose evidence is a response, so the probe must declare what to
+# assert on it (planning-and-task-breakdown/SKILL.md).
+RESPONSE_SURFACES = ("api", "web+api", "fn")
+PROBE_MARKER_RE = re.compile(r"RUNTIME\s+PROBE\s*:", re.IGNORECASE)
+JUSTIFICATION_RE = re.compile(r"\bjustification\s*:", re.IGNORECASE)
+# Same shape as CONTRACT_TOKEN_RE: a keyword's value runs to the next `;`,
+# newline, or sibling keyword. Scope limit: a `;` inside a probe command
+# therefore truncates the value — the documented cost of a `;`-delimited
+# field grammar shared with `Boundary contracts:`.
+PROBE_FIELD_RE = re.compile(
+    r"\b(start|probe|expect-status|require-keys|justification)\s*:\s*"
+    r"((?:(?!\b(?:start|probe|expect-status|require-keys|justification)\s*:)[^\n;])*)",
+    re.IGNORECASE,
+)
+# Transports that never open a socket, and commands that prove the code was
+# written rather than that it runs. Both tuples are duplicated VERBATIM from
+# check_runtime_evidence.py (IN_PROCESS_TELLS / NON_RUNTIME_PROBE_RES) and must
+# stay identical: this lint rejects at plan time exactly what that gate rejects
+# at evidence time. Duplicated rather than imported — this script family has no
+# shared module by convention (GateError is duplicated in 7 files).
+IN_PROCESS_TELLS = (
+    "webapplicationfactory", "createclient(", "testserver", "testclient",
+    "supertest", "mockmvc", "asgitransport", "rack-test", "httptestingcontroller",
+    "inmemorytransport", "app.test_client(",
+    # Honest self-descriptions of an in-process probe. A framework name is the
+    # strong signal; these catch the author who describes the transport in prose
+    # instead ("direct handler call", "in-process HTTP"). They do nothing against
+    # someone who misdescribes the transport -- but nothing here does, and the
+    # list is documented as a blocklist and therefore incomplete.
+    "in-process", "in process", "direct handler", "handler directly",
+    "direct invocation", "invoked directly", "same process",
+)
+NON_RUNTIME_PROBE_RES = (
+    re.compile(r"\b(?:dotnet|go|cargo|mvn|gradle)\s+(?:build|restore|compile)\b"),
+    re.compile(r"\b(?:dotnet|go|cargo|mvn|gradle)\s+test\b"),
+    # `node --test` is flag-shaped rather than subcommand-shaped, so it slipped
+    # past every pattern here and a capture declaring it passed the gate with a
+    # hand-written envelope body: the same escape this file exists to stop,
+    # through a different hole. Found 2026-08-12 by the eval fixture.
+    re.compile(r"\bnode\s+--test\b"),
+    re.compile(r"\b(?:deno|bun|swift|rails|ctest)\s+test\b"),
+    re.compile(r"\b(?:rspec|phpunit|vstest|testcafe|minitest)\b"),
+    re.compile(r"\b(?:npm|pnpm)\s+(?:ci|test|run\s+(?:build|test))\b"),
+    re.compile(r"\byarn\s+(?:build|test)\b"),
+    re.compile(r"\b(?:pytest|jest|vitest|mocha|karma|nunit|xunit)\b"),
+    re.compile(r"\btsc\b|--no-?emit\b|\bmsbuild\b"),
+    re.compile(r"\b(?:grep|rg|ripgrep|findstr|ack)\b"),
+    re.compile(r"\bmake\s+(?:build|all)\b"),
+)
 
 # --- design-mode lint vocabulary -----------------------------------------
 REGISTER_HEADING_RE = re.compile(
@@ -398,6 +481,227 @@ def lint_path_hygiene(blocks):
     return failures
 
 
+def split_milestone_blocks(lines):
+    """[(title, heading_line, start_index, end_index)] per milestone heading.
+
+    Mirrors next_milestone.py's parse_milestones() block extents exactly — see
+    the note on MILESTONE_HEADING_RE; the two must stay consistent. One
+    deliberate difference: this returns an empty list rather than raising when
+    a plan declares no milestone headings, because the coverage gate also runs
+    against plans that predate the milestone convention and next_milestone.py
+    already halts the build on a milestone-less plan.
+    """
+    milestone_idxs = [i for i, line in enumerate(lines) if MILESTONE_HEADING_RE.match(line)]
+    if not milestone_idxs:
+        return []
+
+    terminator_idxs = set(milestone_idxs)
+    for index, line in enumerate(lines):
+        match = LEVEL2_HEADING_RE.match(line)
+        if not match:
+            continue
+        heading_text = match.group(1).strip().lower()
+        if heading_text.startswith("task") or heading_text.startswith("checkpoint"):
+            continue  # stays inside the block
+        terminator_idxs.add(index)
+    terminator_idxs = sorted(terminator_idxs)
+
+    blocks = []
+    for index in milestone_idxs:
+        position = bisect.bisect_right(terminator_idxs, index)
+        end = terminator_idxs[position] if position < len(terminator_idxs) else len(lines)
+        blocks.append((HEADING_TEXT_RE.sub("", lines[index]).rstrip(), lines[index], index, end))
+    return blocks
+
+
+def milestone_surface(heading_line, block_text):
+    """The `[vs:<surface>]` key, or None when absent.
+
+    Duplicated semantics from next_milestone.py's milestone_surface(): the
+    heading line wins when it carries a tag, otherwise the whole block is
+    scanned. The raw key is returned even when invalid so a typo never reads
+    as an omission.
+    """
+    match = VS_TAG_RE.search(heading_line) or VS_TAG_RE.search(block_text)
+    return match.group(1).lower() if match else None
+
+
+def checkpoint_blocks(lines):
+    """[(index, label, block_text)] for every checkpoint heading in a plan.
+
+    A checkpoint block runs from its heading to the next heading of ANY level,
+    or EOF. Because a milestone block always ends at a heading, this extent is
+    identical whether computed plan-wide or within one milestone.
+    """
+    blocks = []
+    for index, line in enumerate(lines):
+        if not CHECKPOINT_HEADING_RE.match(line):
+            continue
+        stop = len(lines)
+        for follow in range(index + 1, len(lines)):
+            if heading_level(lines[follow]) is not None:
+                stop = follow
+                break
+        blocks.append((index, HEADING_TEXT_RE.sub("", line).rstrip(),
+                       "\n".join(lines[index:stop])))
+    return blocks
+
+
+def _probe_text(block):
+    """The `RUNTIME PROBE:` field text, or None when the line is absent.
+
+    Continuation lines fold in until a blank line, a heading, or a new list
+    item — the same field-extent rule as _boundary_contract_text.
+    """
+    lines = block.split("\n")
+    for index, line in enumerate(lines):
+        match = PROBE_MARKER_RE.search(line)
+        if not match:
+            continue
+        collected = [line[match.end():]]
+        for follow in lines[index + 1:]:
+            if (not follow.strip()
+                    or heading_level(follow) is not None
+                    or LIST_ITEM_RE.match(follow)):
+                break
+            collected.append(follow)
+        return "\n".join(collected)
+    return None
+
+
+def _probe_fields(probe_text):
+    """{keyword: value} for the probe line; first occurrence of a keyword wins."""
+    fields = {}
+    for match in PROBE_FIELD_RE.finditer(probe_text):
+        fields.setdefault(match.group(1).lower(), match.group(2).strip().strip("`").strip())
+    return fields
+
+
+def _field_absent(fields, name):
+    value = fields.get(name, "")
+    return not value or value.lower() in EMPTY_VALUES
+
+
+def _checkpoint_failures(task_label, checkpoint, surface, block):
+    """Every runtime-criterion failure for one checkpoint block."""
+    probe_text = _probe_text(block)
+    if probe_text is None:
+        # Single root cause: with no probe line at all, every field is missing.
+        return [
+            _failure(
+                "runtime-criterion",
+                task_label,
+                f"checkpoint \"{checkpoint}\" carries no 'RUNTIME PROBE:' line; add "
+                f"'RUNTIME PROBE: start: <start command>; probe: <probe command>; "
+                f"expect-status: <N>; require-keys: <k1, k2>' so the exit criterion "
+                f"is executable by someone other than its author",
+            )
+        ]
+
+    fields = _probe_fields(probe_text)
+    probe_missing = _field_absent(fields, "probe")
+    failures = []
+
+    if surface == "none":
+        # `[vs:none]` replaces the probe fields with a justification sentence.
+        # Presence only: no gate can check whether a sentence is true.
+        if "justification" not in fields and not JUSTIFICATION_RE.search(block):
+            failures.append(
+                _failure(
+                    "runtime-criterion",
+                    task_label,
+                    f"checkpoint \"{checkpoint}\" is on a [vs:none] milestone but "
+                    f"carries no 'justification:' field; [vs:none] is an explicit, "
+                    f"reviewable claim that nothing is observable, not an exemption "
+                    f"from declaring one",
+                )
+            )
+    elif probe_missing:
+        failures.append(
+            _failure(
+                "runtime-criterion",
+                task_label,
+                f"checkpoint \"{checkpoint}\" declares no 'probe:' command; an exit "
+                f"criterion that names no command is satisfied by opinion",
+            )
+        )
+
+    if not probe_missing:
+        probe = fields["probe"].lower()
+        for tell in IN_PROCESS_TELLS:
+            if tell in probe:
+                failures.append(
+                    _failure(
+                        "runtime-criterion",
+                        task_label,
+                        f"checkpoint \"{checkpoint}\" probe names an IN-PROCESS test "
+                        f"client ({tell!r}); an in-process observation can fail a wire "
+                        f"claim but never pass one — probe the running system over its "
+                        f"real transport",
+                    )
+                )
+                break
+        for pattern in NON_RUNTIME_PROBE_RES:
+            match = pattern.search(probe)
+            if match:
+                failures.append(
+                    _failure(
+                        "runtime-criterion",
+                        task_label,
+                        f"checkpoint \"{checkpoint}\" probe is a build/typecheck/search/"
+                        f"test-runner command ({match.group(0)!r}), not a runtime probe; "
+                        f"it proves the code was written or that a suite is green, never "
+                        f"that the running system emits this",
+                    )
+                )
+                break
+
+    if surface in RESPONSE_SURFACES:
+        missing = [name for name in ("expect-status", "require-keys")
+                   if _field_absent(fields, name)]
+        if missing:
+            failures.append(
+                _failure(
+                    "runtime-criterion",
+                    task_label,
+                    f"checkpoint \"{checkpoint}\" is on a [vs:{surface}] milestone but "
+                    f"its probe declares no " + " and no ".join(f"'{n}:'" for n in missing)
+                    + "; these become check_runtime_evidence.py's --expect-status / "
+                    "--require-key arguments verbatim, so a surface whose evidence is a "
+                    "response must say what to assert on it",
+                )
+            )
+
+    return failures
+
+
+def lint_runtime_criterion(text):
+    """Every checkpoint's `RUNTIME PROBE:` line must be executable and complete.
+
+    Scope limits (deliberate): a plan with no `### Checkpoint:` block yields no
+    failures — the presence of checkpoints is Step 5's own review item, and
+    making absence a failure here would retroactively fail every plan written
+    before the convention. A checkpoint outside every milestone block has no
+    surface, so only the surface-independent rules apply. The probe itself is
+    never executed: this lint checks the SHAPE of the declared command, and
+    check_runtime_evidence.py gates the capture it later produces.
+    """
+    lines = text.split("\n")
+    milestones = split_milestone_blocks(lines)
+
+    failures = []
+    for index, label, block in checkpoint_blocks(lines):
+        owner = next((m for m in milestones if m[2] <= index < m[3]), None)
+        if owner is None:
+            task_label, surface = label, None
+        else:
+            title, heading_line, start, end = owner
+            task_label = title
+            surface = milestone_surface(heading_line, "\n".join(lines[start:end]))
+        failures.extend(_checkpoint_failures(task_label, label, surface, block))
+    return failures
+
+
 def run_plan_lints(text):
     """Run every plan-mode lint over a plan.md body."""
     blocks = split_task_blocks(text)
@@ -405,6 +709,7 @@ def run_plan_lints(text):
         lint_literal_counts(blocks)
         + lint_boundary_contracts(blocks)
         + lint_path_hygiene(blocks)
+        + lint_runtime_criterion(text)
     )
 
 
@@ -514,6 +819,31 @@ def requirement_blocks(text):
     return {req_id: "\n".join(parts) for req_id, parts in blocks.items()}
 
 
+def lint_fr_citations(design_text, must_have):
+    """Every Must-Have FR/NFR ID must appear at least once in the design body.
+
+    Deliberately distinct from supersession-annotation lint: this only
+    proves citation presence, not that the design covers the requirement.
+
+    Matching is whole-token (`ID_TOKEN_RE`), never substring — a design that
+    cites only `FR-10` does not thereby cite `FR-1`. The naive `in` test this
+    replaced silently passed every single-digit Must-Have on any requirements
+    set with ten or more requirements.
+    """
+    cited = {token.upper() for token in ID_TOKEN_RE.findall(design_text)}
+    failures = []
+    for req_id in must_have:
+        if req_id.upper() not in cited:
+            failures.append({
+                "check": "fr-citation",
+                "task": req_id,
+                "detail": (
+                    f"Must-Have {req_id} is never cited in detailed-design.md"
+                ),
+            })
+    return failures
+
+
 def lint_supersession_annotations(requirements_text, rows, known_ids):
     """Every register row's subject requirement must be annotated in requirements.md.
 
@@ -567,8 +897,14 @@ def lint_supersession_annotations(requirements_text, rows, known_ids):
 def parse_test_report(text):
     """Parse a test-report.md body into (status_by_id, warnings).
 
-    Latest status-bearing mention of an ID wins. IDs whose only mentions
-    lack a status token get a warning and are not considered covered.
+    Latest status-bearing mention of an ID wins, so a BLOCKED line written
+    after a stale PASS downgrades it. IDs whose only mentions lack a status
+    token get a warning and are not considered covered.
+
+    Precedence when one line carries several tokens: FAIL > BLOCKED > PASS.
+    This extends the original "both PASS and FAIL on one line counts as FAIL"
+    rule with the same conservative logic — the worst status on the line wins,
+    and only PASS ever counts as covered.
     """
     warnings = []
     status_by_id = {}
@@ -582,10 +918,12 @@ def parse_test_report(text):
 
         mentioned_ids |= ids_in_line
         has_fail = bool(FAIL_TOKEN_RE.search(line))
+        has_blocked = bool(BLOCKED_TOKEN_RE.search(line))
         has_pass = bool(PASS_TOKEN_RE.search(line))
 
-        if has_fail or has_pass:
-            status = "FAIL" if has_fail else "PASS"  # both present => conservative FAIL
+        if has_fail or has_blocked or has_pass:
+            # Worst status on the line wins: FAIL > BLOCKED > PASS.
+            status = "FAIL" if has_fail else "BLOCKED" if has_blocked else "PASS"
             for req_id in ids_in_line:
                 status_by_id[req_id] = status
                 status_bearing_ids.add(req_id)
@@ -611,6 +949,7 @@ def _base_report(mode, requirements_path, target_path):
         "covered": [],
         "uncovered": [],
         "uncovered_should": [],
+        "blocked": [],
         "warnings": [],
         "lint_failures": [],
         "result": "ERROR",
@@ -652,8 +991,9 @@ def build_report(mode, requirements_path, target_path):
                 f"unknown requirement ID {unknown_id} cited in design register"
             )
         report["warnings"].extend(design_warnings)
-        report["lint_failures"] = lint_supersession_annotations(
-            requirements_text, rows, known_ids
+        report["lint_failures"] = (
+            lint_supersession_annotations(requirements_text, rows, known_ids)
+            + lint_fr_citations(target_text, must_have)
         )
         report["result"] = "FAIL" if report["lint_failures"] else "PASS"
         return report
@@ -668,6 +1008,15 @@ def build_report(mode, requirements_path, target_path):
         else:
             status_by_id, target_warnings = parse_test_report(target_text)
             covered_ids = {i for i, status in status_by_id.items() if status == "PASS"}
+            # BLOCKED is reported verbatim — unfiltered by tier or known-ness,
+            # so an ID the requirements never declared still surfaces here
+            # rather than vanishing. Only PASS ever lands in `covered`, so a
+            # Must-Have marked BLOCKED lands in `uncovered` and fails the gate:
+            # honesty routes the work, it never passes it.
+            report["blocked"] = sorted(
+                (i for i, status in status_by_id.items() if status == "BLOCKED"),
+                key=sort_key,
+            )
     except GateError as exc:
         report["error"] = str(exc)
         return report

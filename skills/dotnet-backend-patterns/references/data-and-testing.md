@@ -72,14 +72,30 @@ public sealed class GetOrderSummaryTests : IClassFixture<DevDbApiFactory>
         _db.Orders.Add(order);
         await _db.SaveChangesAsync();
 
-        // Act: real HTTP → real pipeline → real SQL
-        var res = await _client.GetFromJsonAsync<BaseResponse<GetOrderSummary.Response>>(
-            $"/orders/{order.Id}/summary");
+        // Act: IN-PROCESS pipeline via WebApplicationFactory — real handlers,
+        // real middleware registrations, real SQL. NOT a socket: no Kestrel, no
+        // host startup/config chain, no Swagger. This tier cannot falsify a
+        // wire-shape claim (see the Tier ladder in SKILL.md).
+        var res = await _client.GetAsync($"/orders/{order.Id}/summary");
 
-        // Assert
-        Assert.True(res!.IsSuccess);
-        Assert.Equal(order.Id, res.Data!.Id);
-        Assert.Equal(order.Lines.Sum(l => l.Price * l.Qty), res.Data.Total);
+        // Assert the ENVELOPE on the raw body BEFORE binding. Closed-set over
+        // top-level property names, per test-driven-development's closed-set
+        // rule: a superset means payload fields leaked to the top level, a
+        // subset means the envelope was only partly applied. All five keys are
+        // expected because BaseResponse is serialized with stock
+        // JsonSerializerDefaults.Web, which writes nulls (response-and-errors.md).
+        var raw = await res.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(raw);
+        Assert.Equal(
+            new HashSet<string> { "statusCode", "isSuccess", "data", "dataContext", "notifications" },
+            doc.RootElement.EnumerateObject().Select(p => p.Name).ToHashSet());
+
+        // Only now bind and assert the payload.
+        var envelope = JsonSerializer.Deserialize<BaseResponse<GetOrderSummary.Response>>(
+            raw, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.True(envelope!.IsSuccess);
+        Assert.Equal(order.Id, envelope.Data!.Id);
+        Assert.Equal(order.Lines.Sum(l => l.Price * l.Qty), envelope.Data.Total);
     }
 }
 
@@ -92,3 +108,17 @@ public sealed class GetOrderSummaryTests : IClassFixture<DevDbApiFactory>
 var mockDb = new Mock<AppDbContext>();
 mockDb.Setup(d => d.Orders).ReturnsDbSet(fakeOrders);   // FORBIDDEN
 ```
+
+```csharp
+// BAD: binding straight into BaseResponse<T> and asserting a member.
+var res = await _client.GetFromJsonAsync<BaseResponse<GetOrderSummary.Response>>(url);
+Assert.True(res!.IsSuccess);
+```
+
+Deserializing an **unwrapped** body into `BaseResponse<T>` throws nothing: no property
+matches, so every member takes its default and `IsSuccess` is `false`. The test fails —
+but it fails looking exactly like a logic bug, and the cheapest way to make it green is
+to change the generic parameter to the bare DTO. That "fix" makes the test pass and
+leaves the API wrong. This is the observed 2026-08 failure: the envelope was green in
+this tier and absent in local Swagger. Assert the wire shape on the raw body, and prove
+the wire shape itself at Tier 3 — never here.

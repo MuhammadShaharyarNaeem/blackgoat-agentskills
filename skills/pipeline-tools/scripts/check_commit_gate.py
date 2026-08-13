@@ -147,9 +147,19 @@ def _cited_under_evidence_review(candidate):
     './'. This is a check on the CITED string itself -- the same string
     resolved against the review dir or --repo for existence -- so it applies
     regardless of which of the two bases resolved it.
+
+    Rejects any '..' segment. Fixed 2026-08-12: the previous normalization
+    was `lstrip("./")`, which strips ANY leading run of '.' and '/'
+    characters rather than a single './' -- so '../evidence/review/x.png'
+    collapsed to 'evidence/review/x.png' and satisfied provenance from
+    outside the repo. `check_runtime_evidence.py` refuses traversal the same
+    way; the two predicates differ only in anchoring (prefix here,
+    containment there), deliberately and for documented reasons.
     """
-    normalized = candidate.replace("\\", "/").lstrip("./")
-    parts = [p for p in normalized.split("/") if p]
+    normalized = candidate.replace("\\", "/")
+    parts = [p for p in normalized.split("/") if p and p != "."]
+    if ".." in parts:
+        return False
     return (len(parts) >= 3 and parts[0].lower() == "evidence"
             and parts[1].lower() == "review")
 
@@ -293,6 +303,66 @@ def check_undeclared_tree(changed_files, repo):
     return undeclared
 
 
+RUNTIME_GATE = Path(__file__).parent / "check_runtime_evidence.py"
+
+
+def run_runtime_gate(args):
+    """Delegate to check_runtime_evidence.py. Returns (ok, its JSON payload).
+
+    Subprocess rather than import: this family has no shared module by
+    convention, and duplicating existence/provenance/freshness/content logic
+    into a second file is the worse cost. `sys.executable` keeps the child on
+    the same interpreter, and the file already shells out for git.
+    """
+    if not RUNTIME_GATE.is_file():
+        raise GateError(f"runtime-evidence gate not found at {RUNTIME_GATE}")
+    cmd = [sys.executable, str(RUNTIME_GATE),
+           "--report", args.runtime_report,
+           "--milestone", args.milestone,
+           "--repo", args.repo]
+    if args.changed_files:
+        cmd += ["--changed-files"] + [str(p) for p in args.changed_files]
+    if args.surface:
+        cmd += ["--surface", args.surface]
+    for key in args.require_key:
+        cmd += ["--require-key", key]
+    for host in args.forbid_host:
+        cmd += ["--forbid-host", host]
+    if args.expect_status is not None:
+        cmd += ["--expect-status", str(args.expect_status)]
+    if args.require_build_marker:
+        cmd += ["--require-build-marker", args.require_build_marker]
+    # The OpenAPI assertions must forward too, or the commit-time re-run is
+    # strictly weaker than the earlier build-phase run — and this gate is the
+    # one that owns the commit, so it is the one where the restraint has to
+    # bind. Same reasoning as --verify-tree running here rather than only
+    # earlier.
+    if args.require_openapi_reachable:
+        cmd += ["--require-openapi-reachable"]
+    if args.openapi_doc:
+        cmd += ["--openapi-doc", args.openapi_doc,
+                "--openapi-route", args.openapi_route]
+        if args.openapi_method:
+            cmd += ["--openapi-method", args.openapi_method]
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise GateError(f"cannot run the runtime-evidence gate: {exc}")
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        raise GateError(
+            f"runtime-evidence gate emitted unparseable output "
+            f"(exit {proc.returncode}): {proc.stdout[:400]!r}")
+    if proc.returncode == 2:
+        # Its structural failure is our structural failure -- an artifact or
+        # environment defect, never a silently-passed gate.
+        raise GateError(
+            f"runtime-evidence gate structural failure: {payload.get('error')}")
+    return proc.returncode == 0, payload
+
+
 def build_report(args):
     report = {
         "milestone": args.milestone,
@@ -305,6 +375,8 @@ def build_report(args):
         "unscoped_blockers": [],
         "rendered_evidence": [],
         "rendered_evidence_ok": not args.require_rendered_evidence,
+        "runtime_evidence": None,
+        "runtime_evidence_ok": not args.require_runtime_evidence,
         "undeclared_changes": [],
         "tree_verified": True,
         "warnings": [],
@@ -353,6 +425,19 @@ def build_report(args):
                 f"({args.repo}) — evidence under evidence/build/ or "
                 "elsewhere does not satisfy this gate")
 
+    if args.require_runtime_evidence:
+        runtime_ok, payload = run_runtime_gate(args)
+        report["runtime_evidence_ok"] = runtime_ok
+        report["runtime_evidence"] = payload
+        if not runtime_ok:
+            accepted = payload.get("accepted") or []
+            report["warnings"].append(
+                "--require-runtime-evidence set but the runtime-evidence gate "
+                f"failed for this milestone ({len(accepted)} accepted "
+                "capture(s)); see the 'runtime_evidence' object for the "
+                "per-capture cause. An in-process suite cannot pass a claim "
+                "about observed behavior")
+
     if args.verify_tree:
         undeclared = check_undeclared_tree(args.changed_files, args.repo)
         report["undeclared_changes"] = undeclared
@@ -365,6 +450,7 @@ def build_report(args):
     gate_ok = (found and verdict == "Approve" and not stale and not scoped
                and (args.ignore_unscoped or not unscoped)
                and report["rendered_evidence_ok"]
+               and report["runtime_evidence_ok"]
                and report["tree_verified"])
     report["result"] = "PASS" if gate_ok else "FAIL"
 
@@ -374,7 +460,13 @@ def build_report(args):
     return report
 
 
-def main(argv):
+def build_parser():
+    """Single source of truth for the CLI surface.
+
+    Extracted from main() so the self-test parses real argv instead of
+    hand-building argparse.Namespace objects -- every hand-built namespace is
+    a place a newly-added flag raises AttributeError instead of being tested.
+    """
     parser = argparse.ArgumentParser(prog="check_commit_gate.py")
     parser.add_argument("--review-report")
     parser.add_argument("--state")
@@ -386,8 +478,26 @@ def main(argv):
     parser.add_argument("--ignore-unscoped", action="store_true")
     parser.add_argument("--require-rendered-evidence", action="store_true")
     parser.add_argument("--verify-tree", action="store_true")
+    # Runtime-evidence delegation. This gate owns the commit, so the restraint
+    # has to live here -- but the checking logic lives once, in
+    # check_runtime_evidence.py, rather than being duplicated across two files.
+    parser.add_argument("--require-runtime-evidence", action="store_true")
+    parser.add_argument("--runtime-report")
+    parser.add_argument("--surface")
+    parser.add_argument("--require-key", action="append", default=[])
+    parser.add_argument("--expect-status", type=int)
+    parser.add_argument("--forbid-host", action="append", default=[])
+    parser.add_argument("--require-build-marker")
+    parser.add_argument("--require-openapi-reachable", action="store_true")
+    parser.add_argument("--openapi-doc")
+    parser.add_argument("--openapi-route")
+    parser.add_argument("--openapi-method")
     parser.add_argument("--self-test", action="store_true")
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv):
+    args = build_parser().parse_args(argv)
 
     if args.self_test:
         return run_self_test()
@@ -406,6 +516,29 @@ def main(argv):
     if not args.changed_files:
         print(json.dumps({"result": "ERROR",
                           "error": "--changed-files requires at least one path"}))
+        return 2
+    if args.require_runtime_evidence and not args.runtime_report:
+        print(json.dumps({"result": "ERROR",
+                          "error": "--require-runtime-evidence requires --runtime-report "
+                                    "(the test or verification report carrying the "
+                                    "**Runtime evidence:** citations)"}))
+        return 2
+    forwarded = [n for n, v in (("--runtime-report", args.runtime_report),
+                                 ("--surface", args.surface),
+                                 ("--require-key", args.require_key),
+                                 ("--expect-status", args.expect_status),
+                                 ("--forbid-host", args.forbid_host),
+                                 ("--require-build-marker", args.require_build_marker),
+                                 ("--require-openapi-reachable",
+                                  args.require_openapi_reachable),
+                                 ("--openapi-doc", args.openapi_doc),
+                                 ("--openapi-route", args.openapi_route),
+                                 ("--openapi-method", args.openapi_method))
+                 if v and not args.require_runtime_evidence]
+    if forwarded:
+        print(json.dumps({"result": "ERROR",
+                          "error": f"{', '.join(forwarded)} given without "
+                                    "--require-runtime-evidence"}))
         return 2
 
     try:
@@ -457,20 +590,25 @@ def run_self_test():
             os.utime(older, (1000, 1000))
             os.utime(newer, (2000, 2000))
 
+        def _ns(self, milestone="M3", changed=None, repo=None, extra=None,
+                commit=False, message=None):
+            """Parse real argv -- never hand-build a Namespace.
+
+            A hand-built Namespace silently lacks any newly-added flag and
+            raises AttributeError instead of exercising it, which is how a new
+            gate term can ship untested.
+            """
+            argv = ["--review-report", str(self.review),
+                    "--state", str(self.state),
+                    "--milestone", milestone,
+                    "--changed-files"] + (changed or [str(self.changed)]) + [
+                    "--repo", repo or str(self.dir)]
+            if commit:
+                argv += ["--commit", "--message", message or "m"]
+            return build_parser().parse_args(argv + (extra or []))
+
         def _run(self, extra=None):
-            argv = ["--review-report", str(self.review), "--state",
-                    str(self.state), "--milestone", "M3",
-                    "--changed-files", str(self.changed)] + (extra or [])
-            args = argparse.ArgumentParser()
-            # reuse main's parsing by calling build_report via a namespace
-            ns = argparse.Namespace(
-                review_report=str(self.review), state=str(self.state),
-                milestone="M3", changed_files=[str(self.changed)],
-                commit=False, message=None, repo=str(self.dir),
-                ignore_unscoped="--ignore-unscoped" in (extra or []),
-                require_rendered_evidence="--require-rendered-evidence" in (extra or []),
-                verify_tree="--verify-tree" in (extra or []))
-            return build_report(ns)
+            return build_report(self._ns(extra=extra))
 
         def test_happy_path_passes(self):
             self.review.write_text(REVIEW_OK)
@@ -534,12 +672,7 @@ def run_self_test():
             self.review.write_text(
                 "## Review: M10 — Unrelated milestone\n\n**Verdict:** Approve\n")
             self._order(self.changed, self.review)
-            ns = argparse.Namespace(
-                review_report=str(self.review), state=str(self.state),
-                milestone="M1", changed_files=[str(self.changed)],
-                commit=False, message=None, repo=str(self.dir),
-                ignore_unscoped=False, require_rendered_evidence=False,
-                verify_tree=False)
+            ns = self._ns(milestone="M1")
             r = build_report(ns)
             self.assertFalse(r["review_found"])
             self.assertEqual(r["result"], "FAIL")
@@ -551,12 +684,7 @@ def run_self_test():
             changed = self.dir / "m1_file.py"
             changed.write_text("code\n")
             self._order(changed, self.review)
-            ns = argparse.Namespace(
-                review_report=str(self.review), state=str(self.state),
-                milestone="M1", changed_files=[str(changed)],
-                commit=False, message=None, repo=str(self.dir),
-                ignore_unscoped=False, require_rendered_evidence=False,
-                verify_tree=False)
+            ns = self._ns(milestone="M1", changed=[str(changed)])
             r = build_report(ns)
             self.assertTrue(r["review_found"])
             self.assertEqual(r["result"], "PASS")
@@ -572,12 +700,7 @@ def run_self_test():
             self._order(self.changed, self.review)
             self.state.write_text(json.dumps(
                 {"blockers": ["M10: unrelated finding open"]}))
-            ns = argparse.Namespace(
-                review_report=str(self.review), state=str(self.state),
-                milestone="M1", changed_files=[str(self.changed)],
-                commit=False, message=None, repo=str(self.dir),
-                ignore_unscoped=False, require_rendered_evidence=False,
-                verify_tree=False)
+            ns = self._ns(milestone="M1")
             r = build_report(ns)
             self.assertEqual(r["blocking"], [])
             self.assertEqual(len(r["unscoped_blockers"]), 1)
@@ -586,6 +709,125 @@ def run_self_test():
             ns.ignore_unscoped = True
             r2 = build_report(ns)
             self.assertEqual(r2["result"], "PASS")
+
+        # ---- --require-runtime-evidence (delegates to check_runtime_evidence) ----
+
+        def _runtime_fixtures(self, body, openapi=None):
+            """A test-report citing one capture with the given response body."""
+            impl = self.dir / ".docs" / "p" / "implementation"
+            (impl / "evidence" / "runtime").mkdir(parents=True, exist_ok=True)
+            cap = impl / "evidence" / "runtime" / "m3.md"
+            cap.write_text(
+                "# Runtime capture\n\n"
+                "- Milestone: M3 — auth endpoints [API] [vs:api]\n"
+                "- Surface: api\n"
+                "- Transport: out-of-process HTTP\n"
+                + (f"- OpenAPI: {openapi}\n" if openapi else "")
+                + "- Base URL: http://localhost:5142\n"
+                "- Probe command: `curl -sS -i http://localhost:5142/api/auth`\n"
+                "- Captured: 2026-08-12T14:03:11Z\n"
+                "- Exit code: 0\n\n"
+                "## Captured output\n\n```\nHTTP/1.1 200 OK\n\n" + body + "\n```\n",
+                encoding="utf-8")
+            report = impl / "test-report.md"
+            report.write_text(
+                "#Task [1]:\n\n**Runtime evidence:** evidence/runtime/m3.md\n"
+                "- FR-1: PASS — AuthTests.cs\n", encoding="utf-8")
+            # capture must postdate the diff
+            os.utime(self.changed, (1000, 1000))
+            os.utime(cap, (3000, 3000))
+            os.utime(report, (3000, 3000))
+            return str(report)
+
+        def test_runtime_evidence_envelope_present_passes(self):
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            rep = self._runtime_fixtures('{"isSuccess":true,"notifications":[]}')
+            r = build_report(self._ns(extra=[
+                "--require-runtime-evidence", "--runtime-report", rep,
+                "--require-key", "isSuccess", "--require-key", "notifications"]))
+            self.assertTrue(r["runtime_evidence_ok"], r["runtime_evidence"])
+            self.assertEqual(r["result"], "PASS")
+
+        @unittest.skipUnless(shutil.which("git"), "git not on PATH")
+        def test_runtime_evidence_missing_envelope_blocks_the_commit(self):
+            """The load-bearing case: everything else green, no commit exists."""
+            run_git(["init", "-q"], str(self.dir))
+            run_git(["config", "user.email", "gate@test"], str(self.dir))
+            run_git(["config", "user.name", "gate"], str(self.dir))
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            rep = self._runtime_fixtures('{"id":1,"total":9}')   # bare payload
+            r = build_report(self._ns(
+                milestone="M3", commit=True, message="M3: auth endpoints",
+                extra=["--require-runtime-evidence", "--runtime-report", rep,
+                       "--require-key", "isSuccess", "--require-key", "notifications"]))
+            self.assertFalse(r["runtime_evidence_ok"])
+            self.assertEqual(r["verdict"], "Approve")      # review was fine
+            self.assertEqual(r["result"], "FAIL")
+            self.assertFalse(r["committed"])
+            # `git log` ERRORS on a repo with no commits, so count instead --
+            # zero commits is the proof the gate blocked rather than reported.
+            self.assertEqual(
+                run_git(["rev-list", "--all", "--count"], str(self.dir)).strip(), "0")
+
+        def test_openapi_flag_forwards_to_the_child_gate(self):
+            """A commit-time re-run must not be weaker than the earlier run.
+
+            The flag has to reach the child process, so the assertion is that
+            the SAME capture passes without it and fails with it.
+            """
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            rep = self._runtime_fixtures('{"isSuccess":true,"notifications":[]}')
+            base = ["--require-runtime-evidence", "--runtime-report", rep]
+            r = build_report(self._ns(extra=base))
+            self.assertTrue(r["runtime_evidence_ok"], r["runtime_evidence"])
+            r2 = build_report(self._ns(extra=base + ["--require-openapi-reachable"]))
+            self.assertFalse(r2["runtime_evidence_ok"])
+            self.assertEqual(r2["result"], "FAIL")
+
+        def test_openapi_flag_passes_when_the_capture_records_it(self):
+            """The forwarded assertion is satisfiable, not a dead end."""
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            rep = self._runtime_fixtures(
+                '{"isSuccess":true,"notifications":[]}',
+                openapi="http://localhost:5142/swagger/v1/swagger.json — 200")
+            r = build_report(self._ns(extra=[
+                "--require-runtime-evidence", "--runtime-report", rep,
+                "--require-openapi-reachable"]))
+            self.assertTrue(r["runtime_evidence_ok"], r["runtime_evidence"])
+            self.assertEqual(r["result"], "PASS")
+
+        def test_runtime_evidence_flag_unset_is_backcompat(self):
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            r = self._run()
+            self.assertTrue(r["runtime_evidence_ok"])
+            self.assertIsNone(r["runtime_evidence"])
+            self.assertEqual(r["result"], "PASS")
+
+        def test_runtime_report_missing_is_exit_2_not_a_pass(self):
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            with self.assertRaises(GateError):
+                build_report(self._ns(extra=[
+                    "--require-runtime-evidence",
+                    "--runtime-report", str(self.dir / "nope.md")]))
+
+        def test_usage_errors_for_the_delegating_flags(self):
+            base = ["--review-report", str(self.review), "--state", str(self.state),
+                    "--milestone", "M3", "--changed-files", str(self.changed)]
+            # --require-runtime-evidence without --runtime-report
+            self.assertEqual(main(base + ["--require-runtime-evidence"]), 2)
+            # forwarded flags without the gate flag
+            self.assertEqual(main(base + ["--require-key", "isSuccess"]), 2)
+            self.assertEqual(main(base + ["--expect-status", "200"]), 2)
+            self.assertEqual(main(base + ["--require-openapi-reachable"]), 2)
+            self.assertEqual(main(base + ["--openapi-doc", "x.json",
+                                          "--openapi-route", "/a"]), 2)
+            self.assertEqual(main(base + ["--openapi-method", "post"]), 2)
 
         def test_nonstandard_verdict_token_fails(self):
             self.review.write_text("## Review: M3\n\n**Verdict:** Approved\n")
@@ -663,6 +905,20 @@ def run_self_test():
             self.assertFalse(r["rendered_evidence_ok"])
             self.assertEqual(r["rendered_evidence"], [])
 
+        def test_provenance_refuses_parent_traversal(self):
+            """`lstrip("./")` collapsed '../evidence/review/x' to a passing path."""
+            self.assertFalse(_cited_under_evidence_review("../evidence/review/x.png"))
+            self.assertFalse(_cited_under_evidence_review("../../evidence/review/x.png"))
+            # unchanged acceptances
+            self.assertTrue(_cited_under_evidence_review("evidence/review/x.png"))
+            self.assertTrue(_cited_under_evidence_review("./evidence/review/x.png"))
+            self.assertTrue(_cited_under_evidence_review("/evidence/review/x.png"))
+            self.assertTrue(_cited_under_evidence_review("evidence\\review\\x.png"))
+            # still prefix-anchored: a nested prefix does NOT satisfy this
+            # predicate (deliberate; check_runtime_evidence.py scans instead)
+            self.assertFalse(_cited_under_evidence_review(
+                ".docs/p/implementation/evidence/review/x.png"))
+
         @unittest.skipUnless(shutil.which("git"), "git not on PATH")
         def test_commit_on_pass(self):
             run_git(["init", "-q"], str(self.dir))
@@ -670,12 +926,8 @@ def run_self_test():
             run_git(["config", "user.name", "gate"], str(self.dir))
             self.review.write_text(REVIEW_OK)
             self._order(self.changed, self.review)
-            ns = argparse.Namespace(
-                review_report=str(self.review), state=str(self.state),
-                milestone="M3", changed_files=[str(self.changed)],
-                commit=True, message="M3: auth endpoints (FR-1, FR-2)",
-                repo=str(self.dir), ignore_unscoped=False,
-                require_rendered_evidence=False, verify_tree=False)
+            ns = self._ns(milestone="M3", commit=True,
+                           message="M3: auth endpoints (FR-1, FR-2)")
             r = build_report(ns)
             self.assertEqual(r["result"], "PASS")
             self.assertTrue(r["committed"])
@@ -771,12 +1023,9 @@ def run_self_test():
                 self.review.write_text(REVIEW_OK)
                 self._order(self.changed, declared_file)
                 self._order(declared_file, self.review)
-                ns = argparse.Namespace(
-                    review_report=str(self.review), state=str(self.state),
-                    milestone="M3", changed_files=[str(self.changed), str(declared_file)],
-                    commit=False, message=None, repo=str(repo_dir),
-                    ignore_unscoped=False, require_rendered_evidence=False,
-                    verify_tree=True)
+                ns = self._ns(milestone="M3",
+                              changed=[str(self.changed), str(declared_file)],
+                              repo=str(repo_dir), extra=["--verify-tree"])
                 r = build_report(ns)
                 self.assertEqual(r["result"], "PASS")
                 self.assertTrue(r["tree_verified"])
@@ -796,12 +1045,9 @@ def run_self_test():
                 (stray_dir / "file.py").write_text("surprise\n")
                 self.review.write_text(REVIEW_OK)
                 self._order(self.changed, self.review)
-                ns = argparse.Namespace(
-                    review_report=str(self.review), state=str(self.state),
-                    milestone="M3", changed_files=[str(self.changed)],
-                    commit=False, message=None, repo=str(repo_dir),
-                    ignore_unscoped=False, require_rendered_evidence=False,
-                    verify_tree=True)
+                ns = self._ns(milestone="M3",
+                              changed=[str(self.changed)],
+                              repo=str(repo_dir), extra=["--verify-tree"])
                 r = build_report(ns)
                 self.assertEqual(r["result"], "FAIL")
                 self.assertFalse(r["tree_verified"])
