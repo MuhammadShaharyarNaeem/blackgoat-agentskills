@@ -10,15 +10,15 @@ Every working session generates lessons — user corrections, agent failures, fr
 
 ## Path Resolution
 
-Skill paths use `{PLUGIN_ROOT}` as a placeholder for the plugin's `skills/` directory. When this skill is invoked, its base directory is provided to you. List files to confirm a path exists before referencing it.
+Skill and agent paths in this document use `{PLUGIN_ROOT}` as a placeholder for the plugin's `skills/` directory. When this skill is invoked, its base directory is provided to you; `{PLUGIN_ROOT}` is that `skills/` directory (the agents live at `{PLUGIN_ROOT}/../agents/`). List files to confirm a path exists before referencing it.
+
+When you inject a resolved `base-persona.md` path into a delegation brief, it lives at `{PLUGIN_ROOT}/agent-squad/base-persona.md` — inside the `agent-squad` skill folder, NOT the `agents/` folder. The `agents/` folder holds ONLY persona files (`rex.md`, `alex.md`, `scout.md`, …); base-persona is a skill, not a persona. Injecting `{PLUGIN_ROOT}/../agents/base-persona.md` is the recurring defect that makes every delegated agent flag base-persona as missing. Verify the base-persona path resolves to an existing file before delegating.
 
 ## Global System Constraints
 
 > ### MANDATORY FIRST READ — the Orchestrator Contract
 >
-> **Before Step 1, you MUST read `{PLUGIN_ROOT}/agent-squad/orchestrator-contract.md` in full.** It carries the cross-cutting Orchestrator rules this skill depends on and deliberately does NOT restate — the ones exercised when delegating and resuming Forge: delegation discipline and **background execution**, the circuit breaker you pass to every delegated agent, no nested delegation, and incremental persistence.
->
-> Those rules are **not optional and not summarized here**. Running this skill without having read that file means delegating Forge without a circuit breaker and without background execution — proceeding on that basis is non-compliant, not a shortcut. If the file does not resolve, STOP and report the broken path; do not improvise the rules from memory.
+> **Before Step 1, you MUST read `{PLUGIN_ROOT}/agent-squad/orchestrator-contract.md` in full.** Do not improvise those rules from memory. If the file does not resolve, STOP and report the broken path.
 
 ## Orchestrator Execution Contract
 
@@ -34,7 +34,7 @@ Scan the live conversation for user corrections, agent failures and retries, cir
 
 ### Step 2: DELEGATE (Forge — Learning Triage mode)
 
-Pass Forge: the evidence brief, the list of skills/agents involved, and the transcript path (when available). Forge applies his `agent-orchestration-improve-agent` methodology (Phase 2 root cause, Phase 3 generalized rule + Pruning Protocol) plus its Destination Triage rubric.
+Pass Forge: the evidence brief, the list of skills/agents involved, the transcript path (when available), and **the absolute path of this plugin's `skills/` directory as his `{PLUGIN_ROOT}`**. Forge is a spawned subagent and cannot compute his own on-disk location — without that path injected he must either guess or scan the filesystem to reach his own methodology and the destination files, which his Path Resolution rule forbids. Resolve it from this skill's provided base directory (its parent) and state it explicitly in the brief. Forge applies his `agent-orchestration-improve-agent` methodology (Phase 2 root cause, Phase 3 generalized rule + Pruning Protocol) plus its Destination Triage rubric.
 
 State the hard filtered-read rule in the delegation: Forge NEVER full-reads a transcript file — transcripts embed every tool result. He greps targeted slices only (user messages, correction phrases, `<handoff>` blocks, error/circuit-breaker patterns, skill invocations), then reads just those line ranges.
 
@@ -48,7 +48,7 @@ Relay the plan from Forge's handoff to the user and halt. Never apply without ex
 
 ### Step 5: APPLY
 
-On approval, resume the SAME Forge instance that produced the plan — continue it via SendMessage with its context intact — and paste only the approved lessons (rule + destination per lesson); Forge applies them per his Vector A/B edit scoping. Do NOT spawn a fresh Forge for this: the agent that authored the plan already holds the analysis in context, and a cold re-delegation wastes a full re-read of the same evidence. Spawn a fresh Forge only if the original instance is no longer resumable (e.g. a new session).
+On approval, resume the same Forge instance if the runtime supports warm continuation; otherwise delegate a **fresh** Forge with the approved plan only (align with `bgpdd-shipping` Step 7's fresh-on-apply when non-resumable). Paste only the approved lessons (rule + destination per lesson); Forge applies them per his Vector A/B edit scoping. Do NOT re-send the full evidence brief to a fresh Forge — the approved plan is the briefing.
 
 ### Escalate When
 

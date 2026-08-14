@@ -295,7 +295,7 @@ public static class ValidationFilterExtensions
 The same pattern applies to any cross-cutting concern:
 
 - **`LoggingFilter`** — Log request/response timing.
-- **`TransactionFilter`** — Wrap the handler in a database transaction and auto-commit/rollback.
+- **`TransactionFilter`** — Wrap the handler in a database transaction and auto-commit/rollback. **Apply it only to handlers whose work is entirely in-process database work.** The filter's span covers the whole handler, so any outbound HTTP, SDK, or queue call the handler makes executes *inside* the transaction, holding a pooled connection and every locked row for the remote round-trip. A handler that must call an external dependency does not get this filter — it manages its own short transactions on either side of the call.
 - **`AuthorizationFilter`** — Custom per-endpoint authorization checks.
 
 ---
@@ -442,15 +442,45 @@ builder.Services.AddScoped<CreateOrderService>();
 builder.Services.AddExceptionHandler<BaseResponseExceptionHandler>();
 builder.Services.AddProblemDetails();
 
+// Contract surface (dev only) — the endpoint a human opens to falsify a wire claim.
+builder.Services.AddOpenApi();
+
 var app = builder.Build();
 
-app.UseExceptionHandler();
+// ORDER IS LOAD-BEARING — see 7.1 below.
+app.UseExceptionHandler();          // 1. must precede anything that can throw
+
+if (app.Environment.IsDevelopment())
+{
+    app.MapOpenApi();               // 2. dev-only contract surface
+    app.UseSwaggerUI();
+}
 
 // Central Route Registration
-app.MapFeatureEndpoints();
+app.MapFeatureEndpoints();          // 3. TERMINAL — nothing registered after this
+                                    //    sees a request or shapes a response.
 
 app.Run();
 ```
+
+### 7.1 Middleware order
+
+`MapFeatureEndpoints()` is terminal. Anything that shapes a **response** must be registered
+*before* it; anything registered *after* it never runs. Each misordering below fails
+silently — the code is present, reads correctly, and does nothing:
+
+| Misordering | Silent failure |
+|---|---|
+| An envelope-shaping filter or middleware **after** `MapFeatureEndpoints()` | Never sees the response. Bare payloads ship. **This is the 2026-08 envelope failure.** |
+| `UseExceptionHandler()` **after** the endpoints | Thrown exceptions bypass the `BaseResponseExceptionHandler`; clients get framework `ProblemDetails`, not `Notifications` |
+| Auth/CORS **after** the endpoints | The endpoint runs unauthenticated; the check is dead code |
+| An envelope wrapper inside `if (app.Environment.IsDevelopment())` | Works locally, absent in every deployed environment — the inverse of the failure above, and invisible to a local probe |
+
+**None of these is detectable by reading `Program.cs` alone** — a correctly-written wrapper
+in the wrong position is indistinguishable from a correct one on the page. They are
+detectable only at **Tier 3**: start the app and read the bytes back. Two captures, one
+success and one deliberately-thrown failure, cover the whole table. See
+[SKILL.md](../SKILL.md)'s Tier ladder and `{PLUGIN_ROOT}/runtime-evidence/SKILL.md`.
 
 ---
 
@@ -459,8 +489,18 @@ app.Run();
 ### 8.1 Do NOT Mock the Database
 Mocking `DbContext` or Repositories tests LINQ-to-Objects, not LINQ-to-SQL. A query that passes with mocks can fail in production. (See [data-and-testing.md](data-and-testing.md) for the shared zero-mock doctrine.)
 
-### 8.2 Integration Tests (Primary)
+### 8.2 Integration Tests (Tier 2 — in-process host)
 Test the full Vertical Slice: Route → Filter → Handler → Database.
+
+`WebApplicationFactory` + `CreateClient()` is an **in-process** transport over an
+in-memory pipe. It exercises real handlers, real filter registrations and real SQL — but
+it opens no socket, runs no Kestrel, resolves no host startup/config chain, and serves no
+Swagger. It therefore **cannot** prove the serialized wire shape, which
+`JsonSerializerOptions` resolved, middleware/filter ordering, environment-branch
+behavior, or that a contract surface a human can open exists. Any requirement about those
+is proven at **Tier 3** only (see the Tier ladder in [SKILL.md](SKILL.md)); asserting them
+here is the observed 2026-08 envelope failure. Assert wire shape on the raw body, per
+[data-and-testing.md](data-and-testing.md) §3.
 
 ```csharp
 [Fact]

@@ -15,6 +15,8 @@ This is the operational spine. Follow it as written. Pipelines delegate the chec
 
 The Security, Performance, and Accessibility sections below are the delegation subset — the root `{PLUGIN_ROOT}/../references/` checklists (see "See Also") are authoritative; update those first.
 
+**The sections below are a floor, not the whole checklist.** Where the project has a numbered requirements set, every Must-Have FR and NFR additionally gets its own row, cited by ID, each carrying the evidence that verified it. A requirement with no row is not a pass — it is an unperformed check, and the recommendation is `NO-GO` until it has one. Enumerate from the requirements document, never from the built feature list: requirements expressed as *qualities* rather than features (accessibility, contrast, performance, theming, responsiveness) are exactly the ones a feature-shaped review cannot see and a generic template silently omits.
+
 #### Code Quality
 
 - [ ] All tests pass (unit, integration, e2e)
@@ -24,6 +26,19 @@ The Security, Performance, and Accessibility sections below are the delegation s
 - [ ] No TODO comments that should be resolved before launch
 - [ ] No `console.log` debugging statements in production code
 - [ ] Error handling covers expected failure modes
+
+#### Pre-Merge Local Runtime Smoke
+
+**Vera-owned. Pre-merge, local.** Run from a clean checkout of the branch under review, before it merges — not after a deploy, and not against a shared staging host. In `bgpdd-shipping` this section is part of Vera's Stage 1 assignment alongside Code Quality, Performance, and Accessibility.
+
+- [ ] The application starts from a clean checkout using the start command **declared in the plan** — never one you inferred; a milestone with no declared start command is a planning defect to escalate, not a blank to fill
+- [ ] Every endpoint the epic touched returns its declared response envelope, observed from outside the process
+- [ ] The contract surface (OpenAPI/Swagger) is reachable, wherever the stack exposes one
+- [ ] In a multi-service estate, every service's configuration is repointed at local URLs, and the manifest records which service was reached at which URL
+
+The tier ladder, the out-of-process probe, the capture artifact and the `**Runtime evidence:**` citation that carries it are owned by `{PLUGIN_ROOT}/runtime-evidence/SKILL.md` — read it before running this section; none of it is restated here. An item whose precondition is absent (the app will not start, the environment cannot be repointed, the transport is unavailable) is `BLOCKED` naming what was missing, never `PASS`.
+
+**Deliberate divergence (convention #8) from the deployment-time health checks in this same file.** Those are Dep's, they run against a deployed environment, and this section neither replaces nor duplicates them: Infrastructure's *"Health check endpoint exists and responds"*; Staged Rollout step 1's *"Full test suite in staging environment"* and *"Manual smoke test of critical flows"* and step 2's *"Verify deployment succeeded (health check)"*; Post-Launch Verification's *"Check health endpoint returns 200"* and *"Test the critical user flow manually"*; and the after-deploying Verification items *"Health check returns 200"* and *"Critical user flow works"*. Every one of those presupposes a deployed artifact and answers **did the deploy land**. This section answers a different question, earlier and cheaper: **does the change work at all when a person runs it** — the question a green in-process test suite cannot answer, and the one that went unasked before merge.
 
 #### Security
 
@@ -189,6 +204,10 @@ Every deployment needs a rollback plan before it happens:
 ### Documenting the Ship Decision
 
 If running within the `bgpdd-build` or `bgpdd-shipping` pipelines, save your final Rollback Strategy and Launch Checklist to `.docs/{project-name}/implementation/ship-decision.md` with a final `GO` or `NO-GO` recommendation.
+
+The decision certifies **one exact tree state**: record the commit SHA it was taken against and confirm the working tree is clean at the moment of the verdict. Uncommitted changes at verdict time are a `NO-GO`, not a footnote. Any change landing afterward invalidates the artifact — reissue the decision against the new SHA rather than leaving a document that certifies a tree no longer on disk.
+
+**Reconcile against the ledger before you write the verdict, and reproduce it.** The pipeline's persisted state file (`.docs/{project-name}/orchestrator-state.json` or its equivalent) carries the run's open blocker entries; read it and copy **every open entry verbatim** into the decision document. An open entry forces `NO-GO` unless the user has explicitly waived that specific entry, and a waiver is recorded beside the entry it waives — never inferred from silence, an elapsed phase, or another agent's confidence that the item is minor. Writing `blockers: None` asserts that you read the ledger and found it empty; it is never a default value, never a summary of your own view of the build, and never a statement about the blockers *you personally* encountered. The same holds for the checklist beside it: **a verification the checklist never performed is an unperformed check, not a pass** — no aggregate phrasing ("all features, NFRs, and gates complete") converts an absent row into a satisfied one, and a summary sentence that outruns the rows above it is the defect this section exists to prevent.
 
 ### See Also
 

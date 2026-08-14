@@ -8,7 +8,11 @@
     shells out to skills/pipeline-tools/scripts/check_coverage.py to confirm the report
     is structurally parseable. Distinguishes a shape failure (exit 2) from a legitimate
     coverage result (exit 0 or 1) — this eval only checks shape, not whether Quinn's
-    tests actually passed. See case.md for the numbered criteria this implements.
+    tests actually passed. Criteria 6 and 7 add the shape of *evidence*: agents/quinn.md
+    requires every PASS to carry the verbatim command and its captured output, and until
+    they were added nothing in her only eval looked for a command, an exit code, or any
+    sign that something ran. See case.md for the numbered criteria this implements and
+    for the honest limit on what a shape checker can conclude from them.
 
 .PARAMETER TargetDir
     Root of the temp working copy the eval run executed in.
@@ -66,12 +70,18 @@ if ($reportContent -match '(?m)^#Task\s*\[?\d+\]?\s*:') {
     Write-Output '[3] FAILED: no #Task [N]: header found'
 }
 
-# [4] at least one Coverage Ledger line (- FR-n / NFR-n: PASS or FAIL)
-if ($reportContent -match '(?m)^-\s*(FR|NFR)-\d+:\s*(PASS|FAIL)\b') {
-    Write-Output '[4] PASSED: at least one Coverage Ledger line (- FR/NFR-n: PASS|FAIL) present'
+# [4] at least one Coverage Ledger line (- FR-n / NFR-n: PASS, FAIL or BLOCKED).
+# BLOCKED is a real coverage token, not a near-miss: agents/quinn.md makes it the only
+# honest status for a check whose precondition was absent, and check_coverage.py reports
+# it in its own `blocked` array. A regex that omitted it would read an honest BLOCKED
+# report as a shapeless one.
+$ledgerLineRe = '^-\s*((?:FR|NFR)-\d+):\s*(PASS|FAIL|BLOCKED)\b(.*)$'
+$ledgerMatches = [regex]::Matches($reportContent, $ledgerLineRe, 'Multiline')
+if ($ledgerMatches.Count -gt 0) {
+    Write-Output "[4] PASSED: $($ledgerMatches.Count) Coverage Ledger line(s) (- FR/NFR-n: PASS|FAIL|BLOCKED) present"
 } else {
-    $failures.Add("4: no Coverage Ledger line found in the documented '- FR-n: PASS/FAIL' shape")
-    Write-Output "[4] FAILED: no Coverage Ledger line found in the documented '- FR-n: PASS/FAIL' shape"
+    $failures.Add("4: no Coverage Ledger line found in the documented '- FR-n: PASS/FAIL/BLOCKED' shape")
+    Write-Output "[4] FAILED: no Coverage Ledger line found in the documented '- FR-n: PASS/FAIL/BLOCKED' shape"
 }
 
 # [5] check_coverage.py can structurally parse the report: exit 0 or 1, never 2
@@ -94,6 +104,43 @@ if (-not $jsonParsedOk) {
     Write-Output "[5] FAILED: check_coverage.py returned exit 2 (structural failure): $($report.error)"
 } else {
     Write-Output "[5] PASSED: check_coverage.py parsed the report structurally (exit=$exitCode, result=$($report.result))"
+}
+
+# [6] every ledger line names what produced its status: a backticked command or a
+# `file::test-name` reference. agents/quinn.md's strongest rule - every PASS carries the
+# verbatim command and its captured output - was entirely unenforced by her only eval
+# before this criterion existed. A status token with no producer named is an opinion.
+$backtickedRe = '`[^`]+`'
+$testRefRe = '[\w./\\-]+::[\w.\-]+'
+$unevidenced = New-Object System.Collections.Generic.List[string]
+foreach ($m in $ledgerMatches) {
+    $id = $m.Groups[1].Value
+    $rest = $m.Groups[3].Value
+    if (($rest -notmatch $backtickedRe) -and ($rest -notmatch $testRefRe)) {
+        $unevidenced.Add($id)
+    }
+}
+if ($ledgerMatches.Count -eq 0) {
+    $failures.Add('6: no ledger line to check for an evidence field (see [4])')
+    Write-Output '[6] FAILED: no ledger line to check for an evidence field (see [4])'
+} elseif ($unevidenced.Count -gt 0) {
+    $joined = ($unevidenced | Select-Object -Unique) -join ', '
+    $failures.Add("6: ledger line(s) name no command and no file::test-name reference: $joined")
+    Write-Output "[6] FAILED: ledger line(s) name no command and no file::test-name reference: $joined"
+} else {
+    Write-Output "[6] PASSED: all $($ledgerMatches.Count) ledger line(s) name a backticked command or a file::test-name reference"
+}
+
+# [7] the report shows that something RAN: at least one fenced output block, or an
+# `exit <N>` citation. Cheapest possible discriminator between a report written from a
+# terminal and one written from memory.
+$fenceCount = @([regex]::Matches($reportContent, '(?m)^\s*```')).Count
+$hasExitCitation = $reportContent -match '(?i)\bexit\s+(?:code\s+)?-?\d+\b'
+if ($fenceCount -ge 2 -or $hasExitCitation) {
+    Write-Output "[7] PASSED: report carries run output (fenced blocks=$fenceCount, exit-code citation=$hasExitCitation)"
+} else {
+    $failures.Add('7: report carries neither a fenced output block nor an exit-code citation - nothing indicates a command was executed')
+    Write-Output '[7] FAILED: report carries neither a fenced output block nor an exit-code citation - nothing indicates a command was executed'
 }
 
 Write-Output ''

@@ -321,7 +321,7 @@ Bug found? Write failing test reproducing it. Follow TDD cycle. Test proves fix 
 Never fix bugs without a test.
 
 ## Subagent Orchestration
-If you are tasked with building a large feature implementation plan that contains multiple independent testing and building tasks, launch parallel builders concurrently by delegating to multiple builder agents in parallel, in a single batch. Do not build them sequentially yourself.
+If you are tasked with building a large feature implementation plan that contains multiple testing and building tasks, delegate to a single builder agent, working the task list in dependency-graph order. Do not build them yourself.
 
 ## Limitations
 - Use this skill only when the task clearly matches the scope described above.

@@ -40,6 +40,9 @@ Iteratively guide the user through a series of questions to refine the initial c
 ### Phase 1 Q&A Checklist
 
 - [ ] **Visual Design & Component Styling Requirement**: Explicitly inquire about visual styling requirements, UI design constraints, color schemes/themes, and whether multi-frontend applications require a centralized shared component library (e.g. `packages/ui` or `packages/shared-components`) for consistent UI controls (Buttons, Inputs, Dropdowns/Selects, Autocompletes, Date/Time Pickers). Document these as standard non-functional requirements in the normal `NFR-<n>` sequence, each with a MoSCoW tier.
+- [ ] **Check-then-act gates on counted or summed state**: for every rule of the form "at most N", "only if the total is under X", or "only while capacity remains" — quota, balance, rate, seat, credit — ask explicitly what happens when two requests arrive at once. Ask it for **every** such gate in the domain, not just the first one you find: these travel in families, and catching one instance is not catching the class.
+- [ ] **Externally-supplied amounts that move money**: for every number arriving from outside the trust boundary — webhook payload, callback, redirect parameter, client-submitted total — that moves money or changes a balance, ask what it is validated against internally. "The provider signs it" answers authenticity, not correctness.
+- [ ] **MoSCoW tiers must discriminate**: MoSCoW is information only if some requirements are not Must. Ask the cut question on the Must candidates — *"if this one thing were missing, would you still ship?"* — and record the answer; a requirement the user would ship without is not a Must. If nearly everything lands in Must-Have, the tiering has failed: you have relabelled the requirement list, not tiered it, and every downstream gate that keys on Must-Have has lost its ability to prioritize.
 
 ### Step 3: Iteration & Completion Checkpoint
 

@@ -24,9 +24,7 @@ When you inject a resolved `base-persona.md` path into a delegation brief, it li
 
 > ### MANDATORY FIRST READ — the Orchestrator Contract
 >
-> **Before Phase 1, you MUST read `{PLUGIN_ROOT}/agent-squad/orchestrator-contract.md` in full.** It carries the cross-cutting Orchestrator rules this pipeline depends on and deliberately does NOT restate: delegation discipline and **background execution**, progressive disclosure, phase-transition confirmation, command-timeout discipline, the full error-recovery skeleton (halt-and-escalate, circuit breaker, no nested delegation, incremental persistence, context checkpoints, bounded autonomous rejection), **state hydration and persistence** (plan order as the authority over any stored cursor, green-is-not-evidence, the `blockers` ledger, per-persistence evidence checkpoints), and your role boundaries.
->
-> Those rules are **not optional and not summarized here**. Running this pipeline without having read that file means operating without a circuit breaker, without the anti-work-loss rules, and without background execution — proceeding on that basis is non-compliant, not a shortcut. If the file does not resolve, STOP and report the broken path; do not improvise the rules from memory.
+> **Before Phase 1, you MUST read `{PLUGIN_ROOT}/agent-squad/orchestrator-contract.md` in full.** Do not improvise those rules from memory. If the file does not resolve, STOP and report the broken path.
 
 The sections below carry ONLY this pipeline's refinements on top of that contract.
 
@@ -43,7 +41,7 @@ The sections below carry ONLY this pipeline's refinements on top of that contrac
 
 **The error-recovery skeleton lives in the Orchestrator Contract (§2)** — halt-and-escalate triggers, the circuit breaker you pass to every agent, no-nested-delegation, incremental persistence, context checkpoints, and 2-round bounded autonomous rejection. Read it there; it is not restated here.
 
-This pipeline's only refinement: the artifacts subject to the 2-round bound are `requirements.md` and `plan.md`; checkpoint your own state to `.docs/{project-name}/orchestrator-state.json` using Phase 3's schema.
+This pipeline's only refinement: the artifacts subject to the 2-round bound are `requirements.md` and `plan.md`; checkpoint your own state to `.docs/{project-name}/orchestrator-state.json` via `update_state.py` (Phase 3) — never hand-edit.
 
 ---
 
@@ -94,14 +92,43 @@ This pipeline's only refinement: the artifacts subject to the 2-round bound are 
      The full CLI contract (JSON shape, exit codes, parsing rules) lives in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
   2. Read the JSON object from stdout. Exit code 0 = every Must-Have `FR`/`NFR` is covered — report any `warnings` and `uncovered_should` entries to the user as non-blocking notes, then proceed to Phase 3. Exit code 1 = the `uncovered` array lists the Must-Have gaps. Exit code 2 = an artifact failed its structural contract (e.g. no task blocks, no Must-Have IDs) — treat this as a defect in the artifact, not the tool.
   3. On exit 1 or 2, re-delegate to **Alex** (a fresh delegation) quoting the exact `uncovered` IDs and `warnings` (or the `error` message) — subject to the 2-round auto-fix bound in Global Error Recovery (§2). If unresolved after 2 rounds, halt and surface to the user. After each fix, re-run step 1 to verify.
-  4. **Fallback (no Python runtime)**: If the script cannot run because no Python 3 interpreter is available, perform the check manually instead: read `.docs/{project-name}/requirements.md` and `.docs/{project-name}/implementation/plan.md`, verify every Must-Have FR and NFR ID maps to at least one task's "Requirements covered:" field in plan.md, and that every task cites the requirement ID(s) it satisfies; apply the same re-delegation rule as step 3.
+  4. **If Python is unavailable: HALT** and surface the missing interpreter — do not substitute a manual judgment path for a mechanical gate.
   5. Once coverage is confirmed, proceed to Phase 3.
 
 ### Phase 3: Handoff to Build (Orchestrator)
 - **Delegated Agent**: None — the Orchestrator performs this phase directly. No delegation, no halt.
 - **Workflow**:
   1. **Game Tape checkpoint**: While your session context is still alive, append a `## bgpdd-lite — [date]` section to `.docs/{project-name}/implementation/game-tape.md` (create the file if it does not exist). At most 10 bullets, covering: user corrections made, agent failures/retries, re-delegation rounds and why, circuit-breaker trips, gates that were rubber-stamped vs. genuinely exercised, and this session's id/transcript path if the runtime exposes it.
-  2. **State Persistence**: Write `.docs/{project-name}/orchestrator-state.json` using the exact schema defined in `bgpdd-plan` Phase 4 (fields: `schema`, `project_name`, `feature`, `pipeline`, `branch`, `milestone_cursor`, `artifacts`, `blockers`, `updated`), with these lite-specific values: `"pipeline": "bgpdd-lite"`, `branch` and `milestone_cursor` `null` (owned by `bgpdd-build`), and `artifacts.design` set to the governing stack-contract skill path (or `null` if none) — `artifacts.requirements` and `artifacts.plan` point at the files produced above.
+  2. **State Persistence**: Write orchestrator state via `update_state.py` — never hand-edit JSON. Schema authority is `update_state.py` (schema version string `"1"`). If Python is unavailable: HALT and surface the missing interpreter.
+     ```bash
+     python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py \
+       --state .docs/{project-name}/orchestrator-state.json \
+       --init --project-name "{project-name}" \
+       --set-pipeline bgpdd-lite \
+       --set-feature <feature|null> \
+       --set-artifact requirements=.docs/{project-name}/requirements.md \
+       --set-artifact design=<governing-stack-contract-skill-path|null> \
+       --set-artifact plan=.docs/{project-name}/implementation/plan.md \
+       --set-artifact acceptance_matrix=null
+     ```
+     **`artifacts.design` polymorphism (schema compatibility):** for full `/bgpdd-plan`, `design` is the path to `detailed-design.md`. For lite, it is the governing stack-contract skill path (e.g. `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md`), or JSON `null` when none applies — pass the **literal string** `null` (`--set-artifact design=null`) and `update_state.py` stores JSON `null`, exactly as `--set-cursor`/`--set-feature` do. Downstream `/bgpdd-build` MUST inject a non-null `artifacts.design` into builder/Alex briefs as the architecture reference; when `null`, builders use `requirements` + `plan` only. Resulting shape (documentation only):
+```json
+{
+  "schema": "1",
+  "project_name": "{project-name}",
+  "feature": null,
+  "pipeline": "bgpdd-lite",
+  "branch": null,
+  "milestone_cursor": null,
+  "artifacts": {
+    "requirements": ".docs/{project-name}/requirements.md",
+    "design": "{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md",
+    "plan": ".docs/{project-name}/implementation/plan.md"
+  },
+  "blockers": [],
+  "updated": "<ISO-8601 timestamp>"
+}
+```
   3. Prompt the user to open a fresh chat session and trigger **`/bgpdd-build`** to execute the plan (suggest the `auto` argument — lite work is well-specified by definition). Note: `/bgpdd-shipping` still requires build to complete first — lite changes nothing downstream.
 
 ## Procedural Memories (Learned Lessons)

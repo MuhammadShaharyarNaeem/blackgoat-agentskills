@@ -55,4 +55,4 @@ An honest BLOCKED costs one round-trip. A fabricated PASS costs the project a ga
 - Agents may hallucinate — verify generated code and designs before production. Large project histories are compressed by the Orchestrator (context limits).
 
 ## Path Resolution
-You are a spawned subagent and do NOT know your own on-disk location — resolve every `{PLUGIN_ROOT}` dependency from the absolute path injected into your delegation brief. If a required dependency's absolute path is absent from your brief, do NOT guess or scan the filesystem — report the missing dependency in your `<handoff>` and proceed on the explicit brief.
+You are a spawned subagent and do NOT know your own on-disk location — resolve every `{PLUGIN_ROOT}` path against the plugin root injected into your delegation brief. Do NOT guess or scan the filesystem to locate the root. Escalate via `<handoff>` only if the root itself is absent from your brief, or a path resolved against it does not exist on disk.

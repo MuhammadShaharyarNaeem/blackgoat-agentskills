@@ -1,0 +1,44 @@
+{
+  "skill_name": "prompt-engineering",
+  "evals": [
+    {
+      "id": 0,
+      "eval_name": "vague-prompt-asks-one-question",
+      "prompt": "improve this prompt: help me write python code",
+      "expected_output": "A single targeted clarifying question (e.g., what kind of Python code). No generated prompt yet, no multiple questions, no framework jargon.",
+      "files": [],
+      "assertions": [
+        "Response contains exactly one clarifying question, not a list of multiple questions",
+        "Response does NOT yet contain a final optimized prompt in a code block",
+        "Response does not name or explain any prompting framework (RTF, RISEN, RODES, RACE, RISE, STAR, SOAP, CLEAR, GROW, Chain of Density)",
+        "The question carries its own finding: it offers concrete options or states what differs between possible answers"
+      ]
+    },
+    {
+      "id": 1,
+      "eval_name": "ambiguous-intent-asks-one-question",
+      "prompt": "transform into prompt: I want to improve my process",
+      "expected_output": "A single clarifying question probing what process the user means, with concrete options. No generated prompt yet.",
+      "files": [],
+      "assertions": [
+        "Response contains exactly one clarifying question, not a list of multiple questions",
+        "Response does NOT yet contain a final optimized prompt in a code block",
+        "Response does not name or explain any prompting framework",
+        "The question carries its own finding: it offers concrete options or states what differs between possible answers"
+      ]
+    },
+    {
+      "id": 2,
+      "eval_name": "mid-thread-followup-or-final-prompt",
+      "prompt": "Conversation so far:\nUser: improve this prompt: help me write python code\nAssistant: What kind of Python code do you need help with — data analysis, web scraping, automation, or API/backend work? Each leads to a very different prompt.\nUser: web scraping\n\nContinue the conversation.",
+      "expected_output": "Either ONE follow-up question drilling into the web-scraping thread (target site, data format, scale) OR a final self-contained optimized prompt in a code block. Never multiple questions at once, never framework meta-commentary.",
+      "files": [],
+      "assertions": [
+        "Response is either a single follow-up question OR a final optimized prompt in a code block - not both mixed with meta-commentary",
+        "If a follow-up question, it builds on the web scraping answer (depth-first) rather than switching to an unrelated topic",
+        "If a final prompt, it is self-contained: includes a role, a specific task, requirements, and an output format",
+        "Response contains no framework names or explanations of which framework was used"
+      ]
+    }
+  ]
+}

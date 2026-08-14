@@ -12,7 +12,7 @@ The Main Agent is the single point of contact between the user and the squad. It
 > **When a `bgpdd-*` pipeline is running, this file is not loaded** — the pipeline's own sections are authoritative for its phases. Do not add a dependency on this file from a pipeline, and do not treat rules here as overriding a pipeline's own. If a rule here and a rule in the active pipeline disagree, the pipeline wins.
 >
 > **You must still read `agent-squad/orchestrator-contract.md` for ad-hoc use.** Two sibling files in this folder are loaded everywhere, and cross-cutting rules belong in them rather than here:
-> - **`agent-squad/orchestrator-contract.md`** — cross-cutting rules for the **Orchestrator**: delegation discipline and background execution, progressive disclosure, phase-transition confirmation, command-timeout discipline, error recovery and the circuit breaker, incremental persistence, and role boundaries. Every `bgpdd-*` pipeline reads it as a mandatory first read; ad-hoc squad use obeys it too. It exists so those rules live in ONE place instead of being inlined per pipeline — five near-identical copies is why a stale claim once survived in three files at once. **Never restate a contract rule here or in a pipeline.**
+> - **`agent-squad/orchestrator-contract.md`** — cross-cutting rules for the **Orchestrator**: delegation discipline and background execution, phase-transition confirmation, command-timeout discipline, error recovery and the circuit breaker, incremental persistence, and role boundaries. Every `bgpdd-*` pipeline reads it as a mandatory first read; ad-hoc squad use obeys it too. It exists so those rules live in ONE place instead of being inlined per pipeline — five near-identical copies is why a stale claim once survived in three files at once. **Never restate a contract rule here or in a pipeline.**
 > - **`agent-squad/base-persona.md`** — cross-cutting rules for **subagents**: every persona lists it as an "Always" methodology dependency, in pipeline runs and ad-hoc runs alike.
 >
 > This file's remaining job is narrow and ad-hoc-only: the roster, the routing triggers, the briefing and relay formats, and the project state object.
@@ -40,12 +40,13 @@ Log: "⚠️ Context integrity check failed — rebuilt from semantic memory."
 | Rex | Analyst | Requirements | New project, new feature, scope change |
 | Aria | Architect | Architecture | After Rex, or "design the system" |
 | Alex | Strategist | Planning | After Aria, or "plan this out" |
-| Mason | Builder | Implementation | After Alex, or "build this" |
-| Quinn | QA Tester | Testing | After Mason, or "write tests / test this" |
+| Mason | Builder (Backend) | Implementation | After Alex, or "build this" ([API]/backend work) |
+| Nova | UI Builder | Implementation | After Alex for `[UI]` milestones, or "build the UI" |
+| Quinn | QA Tester | Testing | After Mason/Nova, or "write tests / test this" |
 | Luna | Reviewer | Code Review | After Quinn's tests pass, or "review this code" |
-| Max | Optimizer | Refactoring | After Luna's review, or explicit request |
+| Max | Optimizer | Refactoring | On explicit optimization request (retired from bgpdd-build) |
 | Vera | Launch Verifier | Shipping | bgpdd-shipping Stage 1, or "run the pre-launch checklist" |
-| Cipher | Security Auditor | Deployment | After the build cycle completes (Max), [SEC]-tagged build milestones, or "audit security / check for vulnerabilities" |
+| Cipher | Security Auditor | Deployment | After the build cycle completes, [SEC]-tagged build milestones, or "audit security / check for vulnerabilities" |
 | Dep | DevOps | Deployment | After/with Cipher (parallel in shipping Stage 2), or "deploy / containerize / CI setup" |
 | Forge | System Coach | Agent Improvement | After Dep, or "optimize squad / analyze logs" |
 
@@ -191,7 +192,7 @@ All six accumulated memories were cross-cutting Orchestrator rules that applied 
 | Architect Coding Delegation Constraint | §3 Role Boundaries — never delegate coding to the Architect |
 | Strict Orchestration Boundary under Subagent Tool Friction | §3 Role Boundaries — you never write application code |
 | Specialist-First Routing | §1 Delegation construction — route to the matching squad member |
-| Verbatim Persona & Tool Capability Delegation Standard | §1 Delegation construction — inject persona verbatim, declare capabilities |
+| Verbatim Persona & Tool Capability Delegation Standard | §1 Delegation construction — three-tier persona sourcing (native agent type → path injection → verbatim last resort), declare capabilities |
 | Advisor, Not Yes-Man | §3 Role Boundaries — advisor, not yes-man |
 | Capture Systemic Lessons on Correction | §3 Role Boundaries — capture systemic lessons on correction |
 

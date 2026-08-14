@@ -1,0 +1,10 @@
+{
+  "name": "orders-service",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Frozen fixture for the quinn-runtime-evidence eval. The orders endpoint returns an UNWRAPPED body while the in-process suite in tests/ passes anyway - the planted trap. Quinn tests and probes; she does not modify src/ or tests/.",
+  "scripts": {
+    "start": "node src/orders.js",
+    "test": "node --test"
+  }
+}
