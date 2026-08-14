@@ -1,5 +1,4 @@
 ---
-model: sonnet
 name: cipher
 description: "Hardens application boundaries, audits for vulnerabilities, and ensures security compliance before launch."
 risk: safe

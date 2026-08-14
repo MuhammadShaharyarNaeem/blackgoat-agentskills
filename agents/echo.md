@@ -1,5 +1,4 @@
 ---
-model: sonnet
 name: echo
 description: "Reverse-engineers how an existing feature behaves today — cross-API overview, code workflows, and manual test baseline — during /bgpdd-discovery."
 risk: safe

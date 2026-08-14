@@ -1,5 +1,4 @@
 ---
-model: opus
 name: forge
 description: "Analyzes build logs and proposes optimizations for the squad's personas. Waits for human approval before applying."
 risk: safe

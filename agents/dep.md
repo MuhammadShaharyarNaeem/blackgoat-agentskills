@@ -1,5 +1,4 @@
 ---
-model: sonnet
 name: dep
 description: "Handles containerization, CI/CD pipelines, and deployment setup."
 risk: safe

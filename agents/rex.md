@@ -1,5 +1,4 @@
 ---
-model: sonnet
 name: rex
 description: "Translates user intent into a precise, unambiguous specification and requirements."
 risk: safe

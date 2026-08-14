@@ -1,5 +1,4 @@
 ---
-model: opus
 name: max
 description: "Cleans up and improves existing code without changing behavior."
 risk: safe

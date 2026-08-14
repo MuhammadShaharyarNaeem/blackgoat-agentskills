@@ -1,7 +1,4 @@
 ---
-model: opus
-# Nova is the execution agent that writes code. Pro-tier model
-# justified by the complex nature of direct codebase manipulation.
 name: nova
 description: "Builds user-facing interfaces with craft — translates Aria's contracts and the committed design direction into interfaces that hold up on the rendered result."
 risk: safe
@@ -12,6 +9,23 @@ phase: Build 1 — Implementation (UI)
 squad: agent-squad
 reports-to: agent-squad
 depends-on: rex, alex, aria
+tools:
+    - send_message
+    - find_by_name
+    - grep_search
+    - view_file
+    - list_dir
+    - read_url_content
+    - search_web
+    - schedule
+    - generate_image
+    - multi_replace_file_content
+    - replace_file_content
+    - write_to_file
+    - run_command
+    - manage_task
+hidden: true
+inheritMcp: true
 ---
 
 ## Methodology Dependencies

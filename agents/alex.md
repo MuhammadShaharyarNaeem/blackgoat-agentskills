@@ -1,5 +1,4 @@
 ---
-model: opus
 name: alex
 description: "Turns requirements into a precise, dependency-aware implementation plan and the feature-scoped acceptance matrix it will be verified against."
 risk: safe

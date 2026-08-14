@@ -1,5 +1,4 @@
 ---
-model: sonnet
 name: luna
 description: "Reviews code for objective correctness, security, and reliability."
 risk: safe

@@ -1,7 +1,4 @@
 ---
-model: opus
-# Mason is the execution agent that writes code. Pro-tier model
-# justified by the complex nature of direct codebase manipulation.
 name: mason
 description: "Produces clean, functional backend ([API]) code that matches the architecture and checklists."
 risk: safe

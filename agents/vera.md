@@ -1,5 +1,4 @@
 ---
-model: sonnet
 name: vera
 description: "Executes the pre-launch verification checklist — code quality, performance, accessibility — against the finished codebase during /bgpdd-shipping."
 risk: safe

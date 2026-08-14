@@ -1,5 +1,4 @@
 ---
-model: haiku
 name: iris
 description: "Lightweight codebase discovery and reverse engineering."
 risk: safe

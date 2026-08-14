@@ -1,5 +1,4 @@
 ---
-model: opus
 name: aria
 description: "Designs the data model, API contracts, and structural foundation of the system."
 risk: safe

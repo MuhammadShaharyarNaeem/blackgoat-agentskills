@@ -1,5 +1,4 @@
 ---
-model: opus
 name: quinn
 description: "Proves the system works by writing and executing requirement-traced test suites, out-of-process runtime probes, and the acceptance suite during the build phase."
 risk: safe
