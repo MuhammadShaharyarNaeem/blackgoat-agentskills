@@ -5,22 +5,9 @@ description: Grounds every implementation decision in official documentation. Us
 
 # Source-Driven Development
 
-Every framework-specific code decision must be backed by official documentation. Don't implement from memory — verify, cite, and let the user see your sources. Training data goes stale, APIs get deprecated, best practices evolve; every pattern must trace back to an authoritative source the user can check.
+Every framework-specific code decision traces to official documentation, never memory — training data goes stale and APIs deprecate.
 
 ## Worker Execution Contract
-
-This is the operational spine. Follow it as written.
-
-### The Process
-
-```
-DETECT ──→ FETCH ──→ IMPLEMENT ──→ CITE
-  │          │           │            │
-  ▼          ▼           ▼            ▼
- What       Get the    Follow the   Show your
- stack?     relevant   documented   sources
-            docs       patterns
-```
 
 ### Step 1: Detect Stack and Versions
 
@@ -35,9 +22,7 @@ Cargo.toml      → Rust
 Gemfile         → Ruby/Rails
 ```
 
-State the detected stack and versions explicitly before fetching docs.
-
-If versions are missing or ambiguous, **ask the user** (main session) or **surface the ambiguity in your `<handoff>`** (delegated worker). Don't guess — the version determines which patterns are correct.
+State the detected stack and versions explicitly before fetching docs. Don't guess — the version determines which patterns are correct. Missing/ambiguous versions: see Escalate When.
 
 ### Step 2: Fetch Official Documentation
 
@@ -59,25 +44,19 @@ Fetch the specific documentation page for the feature you're implementing. Not t
 - AI-generated documentation or summaries
 - Your own training data (that is the whole point — verify it)
 
-**Be precise with what you fetch:**
+Be precise with what you fetch — the specific reference page, not the homepage (examples: [deep dive](references/source-driven-deep-dive.md)).
 
-```
-BAD:  Fetch the React homepage
-GOOD: Fetch react.dev/reference/react/useActionState
-```
-
-After fetching, extract the key patterns and note any deprecation warnings or migration guidance. When official sources conflict with each other (e.g. a migration guide contradicts the API reference), surface the discrepancy to the user and verify which pattern actually works against the detected version.
+After fetching, extract key patterns and note deprecation/migration guidance. Official sources conflicting with each other (e.g. migration guide vs. API reference) → surface the discrepancy and verify which pattern works against the detected version.
 
 ### Step 3: Implement Following Documented Patterns
 
 Write code that matches what the documentation shows:
 
-- Use the API signatures from the docs, not from memory
-- Never guess framework-specific component tags or props (e.g. Quasar or Vuetify components) — verify the exact names and API usage in the official documentation before writing the code
-- If the docs show a new way to do something, use the new way
-- If the docs deprecate a pattern, don't use the deprecated version
-- If the docs don't cover something, flag it as unverified
-- When docs conflict with existing project code, surface the conflict to the user with both options. Don't silently pick one.
+- Use the API signatures from the docs, never from memory.
+- Never guess framework-specific component tags or props (e.g. Quasar, Vuetify) — verify exact names and usage in official docs first.
+- Docs show a new way → use it. Docs deprecate a pattern → don't use it.
+- Docs don't cover something → flag it as unverified.
+- Docs conflict with existing project code → surface the conflict with both options to the user. NEVER silently pick one.
 
 ### Step 4: Cite Your Sources
 
@@ -86,7 +65,7 @@ Every framework-specific pattern gets a citation. The user must be able to verif
 **Citation rules:**
 
 - Full URLs, not shortened
-- Prefer deep links with anchors where possible (e.g. `/useActionState#usage` over `/useActionState`) — anchors survive doc restructuring better than top-level pages
+- Prefer deep links with anchors (e.g. `/useActionState#usage`) — they survive doc restructuring better than top-level pages
 - Quote the relevant passage when it supports a non-obvious decision
 - Include browser/runtime support data when recommending platform features
 - If you cannot find documentation for a pattern, say so explicitly:
@@ -96,8 +75,6 @@ UNVERIFIED: I could not find official documentation for this
 pattern. This is based on training data and may be outdated.
 Verify before using in production.
 ```
-
-Honesty about what you couldn't verify is more valuable than false confidence.
 
 ### Verification
 

@@ -71,6 +71,32 @@ For detailed performance review checks, see `{PLUGIN_ROOT}/../references/perform
 - Any missing pagination on list endpoints?
 - Any large objects created in hot paths?
 
+## Why the Critical rules exist
+
+Rationale for the rules the spine states as bare obligations. Nothing here changes a rule; it explains the escape each one closes.
+
+### Ambiguous-outcome encoding
+
+Both shapes the spine names — the dispatch construct with no exhaustive-failure arm, and the error path returning a legitimate negative outcome's value — convert a failure into a plausible answer. That is why the severity is Critical rather than a style nit: no build, no type check, and no status assertion can catch either one, because the returned value is well-typed and success-shaped. The cost is not the single wrong answer; it is that every downstream observation of that code path loses its diagnosability, since "genuinely absent" and "my probe broke" arrive at the caller as the same bytes.
+
+### Remediation fidelity
+
+A remediation that satisfies a finding's wording while violating the rule behind it is the natural output of an author optimizing for the sentence the reviewer wrote. Such fixes read as compliant at a glance — the finding is *literally* addressed — which is exactly why only the rule, restated before the re-review, can catch them. Naming the rule first is the whole mechanism; re-reading the finding text and looking for it in the diff will pass every one of them.
+
+### Undeclared substitution and addition
+
+Both defects hide from a task-level read because the code is competent and the task is silent. They survive review whenever the reviewer checks the change against the task that paraphrased the requirement instead of the requirement text itself.
+
+The consequences differ by direction. A requirement counted "covered" by a substitute nobody declared is a coverage gate reporting a number it cannot support. An unrequested feature that reaches the ship summary was never designed, reviewed, or scoped by anyone. Filing the supersession or divergence first restores both: the requirement stops lying about what was built, and the addition enters the pipeline through a door someone is watching.
+
+### The verdict is arithmetic over the findings
+
+A report that states *"the app will fail to render these components"* and then *"Approve — all blockers resolved"* is not a review; it is two documents that never met. The `Approve`-unavailable rule exists because the closing summary is written last, when the author of the review is thinking about the round rather than the findings, and a summary written in that state routinely outranks the text above it. Re-reading the findings in the same section before writing the token is the restraint; carrying a previous round's verdict forward is the most common way the restraint is skipped.
+
+### Why severity labels are mandatory
+
+Labelling every comment prevents authors from treating all feedback as mandatory and spending the round on optional suggestions. An unlabelled review is a review whose cost the author cannot budget.
+
 ## Change Sizing
 
 Small, focused changes are easier to review, faster to merge, and safer to deploy. Target these sizes:

@@ -161,3 +161,23 @@ This is why the manifest is a **caller** artifact rather than a discovered one. 
 ```
 
 Two properties make this manifest load-bearing rather than documentation. The **repointing map's "Ships as" column** is what lets a reviewer see that a capture reading `inventory.dev.internal` was probing the wrong estate — without it, the forbidden-hosts list is a rule with no stated baseline. And the **capability table's "Confirmed by" column** is what turns the preflight into an observation instead of an assertion: each row names the cheapest action that proves the capability exists, so "confirmed" means someone ran something.
+
+## 8. The shared-dev false-green, the named subset, and the economics of deferring
+
+**Why a probe command is not an environment.** On a microservice estate the feature under test needs several services running *and pointed at each other locally*. The failure shape is quiet: the probe succeeds against shared dev, because that is what the checked-in config still points at. The resulting capture is fresh, well-formed, out-of-process, and about the wrong system — and unlike a repointing error that breaks something, this one returns working answers from a working system, so nothing in the body looks odd.
+
+**Why `[vs:none]` is a claim rather than an exemption.** The tag converts "nobody thought about verification" into "someone wrote down why there is nothing to observe". The first is invisible; the second is a sentence a reviewer can disagree with. That is the whole difference, and it is why the plan must carry a written justification line rather than an empty tag.
+
+**Why the subset must be named, not merely chosen.** The manifest describes the whole estate a feature *can* need; a given change almost never needs all of it. An icon fix needs the web app. An API fix needs the API and whatever exercises it. A device-agent change needs the build → copy → run → pair chain and a target machine. Selecting a smaller set is correct engineering — but the reviewer's question is *what did this claim actually cover*, and only the `Environment` field answers it. Three services and eight services produce identically-shaped captures.
+
+**Why a missing capability is requested at detection but blocks at the evidence boundary.** Detection usually happens early, when the human can act in parallel — install Docker, provision the device, mint a credential — while the agent writes the code. Halting on the spot spends that parallelism for nothing. But a request alone decays: by the third milestone it is a note nobody re-reads. So the request is what parallelizes the wait, and the paired blocker is what keeps the deferral honest; neither works without the other. The boundary in step 4 — self-verification, the verifier's capture, the gate that reads it — is exactly the point where a deferral would otherwise turn into a shipped claim with nothing behind it, which is why the stop lands there and not one step past. And because a milestone cannot close while a blocker stands, the deferral is bounded by a mechanism rather than by anyone remembering it.
+
+## 9. Why the `OpenAPI` field earns its place
+
+It is the cheapest field in the capture artifact and the one that most directly separates a started application from a test host. The contract document is typically served behind the same environment branch an in-process host never resolves, so an in-process run cannot produce a reachable one even by accident. Recording it costs one line; faking it requires standing up the thing it is checking for.
+
+Its scope is deliberately narrow: it answers *is the surface up and is its schema being served*, and nothing about whether a response body is correct — that is what the captured output and the asserted keys are for. Scoping it that way is what keeps it cheap; widening it into a schema-correctness claim would make it another thing to argue about rather than a fast discriminator.
+
+The failure-path sibling needs it for a mechanical reason rather than an evidential one: the gate scopes per capture, so a sibling missing the field fails the whole milestone regardless of how complete the success capture is.
+
+**Why a version-only build marker is not one.** Two builds of the same version are routinely identical in length and report an identical `FileVersion`, so a version-only marker cannot discriminate the build you meant from the one before it — it is the stale-process hazard (§3) wearing a marker. Ordering matters for the same reason: the marker tracks HEAD, so building before committing stamps the *previous* commit onto a binary carrying the new behavior. That capture is fresh, well-formed, and lying — worse than a missing marker, which at least reads as unknown.

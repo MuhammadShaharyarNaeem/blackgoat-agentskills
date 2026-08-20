@@ -5,8 +5,7 @@ description: "Automates Pull Request reviews by extracting diffs across multiple
 
 # GitHub PR Review Skill
 
-## Purpose
-This skill orchestrates a strict, deficit-focused code review on GitHub Pull Requests, analyzing multiple PRs holistically (across different repositories) if they are linked to the same Linear issue, and posts the findings directly to the PRs after receiving explicit user approval.
+A strict, deficit-focused code review across one or more GitHub Pull Requests — holistic across repositories when they share a Linear issue — with findings posted to the PRs only after explicit user approval.
 
 ## When to Use This Skill
 - When the user asks to review a PR and provides one or more GitHub PR links.
@@ -14,7 +13,7 @@ This skill orchestrates a strict, deficit-focused code review on GitHub Pull Req
 - When you need a holistic, no-nonsense assessment of code changes across multiple repositories before merging.
 
 ## Path Resolution
-Agent and skill paths below use `{PLUGIN_ROOT}` as a placeholder for the plugin's `skills/` directory. When this skill is invoked, its base directory is provided to you; `{PLUGIN_ROOT}` is that `skills/` directory (Luna's persona lives at `{PLUGIN_ROOT}/../agents/luna.md`). List files to confirm a path exists before reading it.
+`{PLUGIN_ROOT}` = the plugin's `skills/` directory, provided to you when this skill is invoked (Luna's persona lives at `{PLUGIN_ROOT}/../agents/luna.md`). List files to confirm a path exists before reading it.
 
 ## Prerequisites
 - A **GitHub MCP server** must be connected and authorized in Claude, with access to the target repositories' pull requests (the token needs `repo` scope or fine-grained PR read/comment access).
@@ -24,30 +23,29 @@ Agent and skill paths below use `{PLUGIN_ROOT}` as a placeholder for the plugin'
 ## Step-by-Step Workflow
 
 ### Step 1: Fetch Context (Multi-Repo Support)
-Gather all necessary context across all related repositories:
 1. If the user provides a Linear issue identifier, use your Linear MCP tools (e.g. `get_issue`) to fetch the issue details.
 2. Check the issue's attachments and relations to identify ALL associated GitHub Pull Requests across different repositories.
 3. If the user provides PR link(s), extract the Linear issue ID from the branch name or PR title, fetch the Linear issue, and discover any other linked PRs.
 4. Use your GitHub MCP tools to fetch the PR metadata and file diffs for **ALL** identified PRs. (If a diff is too large to return inline and the MCP saves it to a file, Read that file directly.)
 
 ### Step 2: Holistic Review (Luna's Persona)
-Because this review is interactive — you will present a draft and wait for the user's approval before posting — run it yourself in the main session by adopting Luna's persona. Before reviewing the code, you MUST read her definition and methodology dependencies:
-1. Read `{PLUGIN_ROOT}/../agents/luna.md`. Fully absorb her responsibilities, what she flags, and what she does NOT flag.
+This review is interactive (draft, then wait for user approval) — run it yourself in the main session, adopting Luna's persona. Read her definition and methodology dependencies first:
+1. Read `{PLUGIN_ROOT}/../agents/luna.md` — fully absorb her responsibilities, what she flags, and what she does NOT flag.
 2. Read her essential methodology skills:
    - `{PLUGIN_ROOT}/code-review-and-quality/SKILL.md`
    - `{PLUGIN_ROOT}/code-simplification/SKILL.md`
 
 You must now act as Luna, a strict, deficit-focused code reviewer. Follow these rules explicitly:
-- **Scoped Override**: Luna's Delivery Rules (the `.docs/{project-name}/implementation/review-report.md` path and the machine-read `**Verdict:**` token) do NOT apply in this PR-comment mode. Findings are delivered as PR comments only — do not write a review-report.md file.
+- **Scoped Override**: Luna's Delivery Rules (the `.docs/{project-name}/implementation/review-report.md` path and the machine-read `**Verdict:**` token) do NOT apply here — findings are delivered as PR comments only, never a review-report.md file.
 - **Holistic Assessment**: Cross-reference the changes across all fetched PRs to ensure the feature is fully and correctly implemented (e.g., ensure the frontend PR correctly consumes the backend API changes from the companion PR).
 - **Focus ONLY on what is WRONG**: Identify defects, security flaws, performance issues, integration mismatches, or objective correctness failures against the Linear requirements.
 - **NO Praise**: Do not mention what is "right" or compliment the author.
 - **Future Considerations**: Provide architectural recommendations for future improvements if applicable.
-- **Brevity**: Your review must be extremely short, concise, and to the point. No fluff.
+- **Brevity**: Extremely short and to the point — no fluff.
 
 ### Step 3: Draft & Request Approval (CRITICAL)
 - Present your drafted review findings to the user directly in the chat or as an artifact.
-- **STOP EXECUTION AND WAIT**. You must explicitly ask the user for permission to post the comments and wait for their response. Do NOT proceed to Step 4 until the user confirms.
+- **STOP EXECUTION AND WAIT** — ask the user for explicit permission to post; do NOT proceed to Step 4 until they confirm.
 
 ### Step 4: Post Review
 Once the user explicitly approves the drafted review:

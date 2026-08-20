@@ -10,11 +10,10 @@ date_added: "2026-02-27"
 
 ## Purpose
 
-This skill transforms raw, unstructured user prompts into highly optimized prompts using established prompting frameworks. It analyzes user intent, identifies task complexity, and intelligently selects the most appropriate framework(s) to maximize Claude/ChatGPT output quality.
+Transforms raw, unstructured prompts into optimized ones: analyze intent, hone it interactively, then apply the best-fitting prompting framework(s).
 
-Framework selection operates in "magic mode" - it happens silently, and users receive polished, ready-to-use prompts without technical explanations or framework jargon. Requirements gathering, however, is interactive: the skill hones the user's intent through targeted one-at-a-time questions before generating the prompt.
-
-This is a **universal skill** that works in any terminal context, not limited to Obsidian vaults or specific project structures.
+- **Framework selection is silent ("magic mode")** — the user gets a polished, ready-to-use prompt, never framework jargon or an explanation of the choice.
+- **Requirements gathering is interactive** — hone intent through one-at-a-time questions before generating anything.
 
 ## When to Use
 Invoke this skill when:
@@ -33,18 +32,13 @@ Invoke this skill when:
 
 **Objective:** Understand what the user truly wants to accomplish.
 
-**Actions:**
-1. Read the raw prompt provided by the user
-2. Detect task characteristics:
-   - **Type:** coding, writing, analysis, design, learning, planning, decision-making, creative, etc.
-   - **Complexity:** simple (one-step), moderate (multi-step), complex (requires reasoning/design)
-   - **Clarity:** clear intention vs. ambiguous/vague
-   - **Domain:** technical, business, creative, academic, personal, etc.
-3. Identify implicit requirements:
-   - Does user need examples?
-   - Is output format specified?
-   - Are there constraints (time, resources, scope)?
-   - Is this exploratory or execution-focused?
+Read the raw prompt, then classify it:
+- **Type:** coding, writing, analysis, design, learning, planning, decision-making, creative, etc.
+- **Complexity:** simple (one-step), moderate (multi-step), complex (requires reasoning/design)
+- **Clarity:** clear intention vs. ambiguous/vague
+- **Domain:** technical, business, creative, academic, personal, etc.
+
+Then name the implicit requirements: examples needed? output format specified? constraints (time, resources, scope)? exploratory or execution-focused?
 
 **Detection Patterns:**
 - **Simple tasks:** Short prompts (<50 chars), single verb, no context
@@ -55,21 +49,16 @@ Invoke this skill when:
 
 ### Step 2: Interactive Questioning (Idea Honing)
 
-**Objective:** Iteratively refine the user's raw prompt into a fully specified intent through targeted Q&A — never assume what the user did not say.
+**Objective:** Refine the raw prompt into a fully specified intent through targeted Q&A — never assume what the user did not say.
 
 **Constraints:**
-- **Ask ONLY ONE question at a time** and wait for the user's response before asking the next.
-- Do NOT list multiple questions at once, as this overwhelms the user.
-- **Every question is multiple-choice.** Offer 2-4 concrete, mutually exclusive options so the user picks instead of composing an answer. Each option states its consequence for the final prompt (see "carries its own finding" below). The user may always answer outside the options — treat a free-form reply as valid. In Claude Code, present the question via the AskUserQuestion tool when available (it renders options natively and includes "Other" automatically); otherwise render options as a lettered list (A/B/C/D).
-- Do NOT pre-populate answers or assume user preferences.
-- **A question must carry its own finding.** When a gap or ambiguity forces a choice, the question must be answerable without the user reconstructing your analysis. State the concrete consequence of each option and what actually differs between them — not just the choice.
-- **Teach the finding when asked, then re-ask.** If the user replies asking for explanation rather than choosing ("I don't understand this", "explain more"), that is a defect in how you posed the question, not user friction. Explain plainly — what each option changes about the final prompt — then re-ask. Never treat a request for clarification as a decision, and never let an unanswered question fall through into the generated prompt as a silent assumption.
-- **Follow the thread.** There is no cap on question count or depth. If an answer raises new questions, surfaces a contradiction, or opens an area that needs clarification, drill into it with follow-up questions before moving to the next topic. Depth is preferred over breadth — fully resolve one thread before starting another.
-- Follow this exact sequence for each question:
-  1. Formulate a single, targeted question.
-  2. Present the question to the user.
-  3. Wait for the user's complete response.
-  4. If the answer raises follow-ups, ask those next (one at a time) until the thread is resolved; otherwise proceed to the next topic.
+- **ONE question at a time.** Ask, wait for the complete response, then ask the next. NEVER list multiple questions at once — it overwhelms the user.
+- **Every question is multiple-choice.** 2-4 concrete, mutually exclusive options, so the user picks instead of composing. In Claude Code use the AskUserQuestion tool when available (native options, automatic "Other"); otherwise a lettered list (A/B/C/D). A free-form reply outside the options is always valid.
+- NEVER pre-populate answers or assume user preferences.
+- **A question must carry its own finding.** State each option's concrete consequence for the final prompt and what actually differs between them — the user must not have to reconstruct your analysis to answer.
+- **Teach the finding when asked, then re-ask.** A reply asking for explanation ("I don't understand this", "explain more") is a defect in how you posed the question, not user friction. Explain what each option changes about the final prompt, then re-ask. NEVER read a request for clarification as a decision. NEVER let an unanswered question fall through into the generated prompt as a silent assumption.
+- **Follow the thread.** No cap on question count or depth. An answer that raises a new question, surfaces a contradiction, or opens an unclear area gets drilled first — depth over breadth, one thread fully resolved before the next.
+- Per-question sequence: formulate one targeted question → present it → wait for the complete response → ask any follow-ups (one at a time) until the thread resolves → move to the next topic.
 
 **What to probe** (in rough priority order, skipping anything already answered by the raw prompt):
 - Task type — coding vs. writing vs. analysis vs. design, if ambiguous
@@ -97,7 +86,7 @@ Q2: "What are you building?
   C) Fine-tuning a model — prompt covers data prep and training strategy"
 ```
 
-**Completion:** Continue — however many rounds it takes — until all critical uncertainties are resolved and no thread is left dangling, then move straight to Step 3 and deliver the optimized prompt. No summaries, no confirmation round-trips, no transcript files — just questions, then the prompt.
+**Completion:** Continue — however many rounds it takes — until every critical uncertainty is resolved and no thread dangles, then go straight to Step 3 and deliver the optimized prompt. No summaries, no confirmation round-trips, no transcript files — just questions, then the prompt.
 
 
 ### Step 3: Select Framework(s)
@@ -120,18 +109,19 @@ Q2: "What are you building?
 | **Goal-setting** (OKRs, objectives, targets) | **CLEAR** (Collaborative, Limited, Emotional, Appreciable, Refinable) | Goal clarity and actionability |
 | **Coaching/development** (mentoring, growth) | **GROW** (Goal, Reality, Options, Will) | Developmental conversation structure |
 
-**Blending Strategy:**
-- **Combine 2-3 frameworks** when task spans multiple types
-- Example: Complex technical project → **RODES + Chain of Thought** (structure + reasoning)
-- Example: Leadership decision → **CLEAR + GROW** (goal clarity + development)
+**Selection rules:**
+- Primary framework = best match to the core task type; secondary framework(s) cover additional complexity dimensions.
+- **Blend 2-3 frameworks** when the task spans multiple types. Complex technical project → **RODES + Chain of Thought**; leadership decision → **CLEAR + GROW**.
+- Avoid over-engineering: simple tasks get simple frameworks.
+- **Critical Rule:** selection happens **silently** — never explain the framework choice to the user.
 
-**Selection Criteria:**
-- Primary framework = best match to core task type
-- Secondary framework(s) = address additional complexity dimensions
-- Avoid over-engineering: simple tasks get simple frameworks
+### Step 4: Generate the Optimized Prompt
 
-**Critical Rule:** This selection happens **silently** - do not explain framework choice to user.
+**Objective:** Compose the final prompt in a Markdown code block, weaving the selected framework(s) in without naming them.
 
+Example composition (the bracketed framework tags are authoring notes — they never appear in the delivered prompt):
+
+```
 Role: You are a senior software architect. [RTF - Role]
 
 Objective: Design a microservices architecture for [system]. [RODES - Objective]
@@ -287,12 +277,7 @@ Include a working example to verify the fix.
 
 ## Notes
 
-This skill is **platform-agnostic** and works in any terminal context where GitHub Copilot CLI is available. It does not depend on:
-- Obsidian vault structure
-- Specific project configurations
-- External files or templates
-
-The skill is entirely self-contained, operating purely on user input and framework knowledge.
+Platform-agnostic and entirely self-contained: operates purely on user input and framework knowledge. No dependency on Obsidian vault structure, specific project configurations, or external files and templates.
 
 ## Limitations
 - Use this skill only when the task clearly matches the scope described above.

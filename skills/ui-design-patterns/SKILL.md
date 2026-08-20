@@ -5,48 +5,50 @@ description: "Provides the UI design execution contract: a committed visual dire
 
 # UI Design Patterns
 
-Visual craft with the same rigor as engineering correctness. Direction is committed before code; every rule below is checked on the built result, not the intention. **The brief wins**: a pinned aesthetic, palette, font, or era in the requirements or brand guidelines overrides anything here — redirecting a clear brief toward your own taste is failure.
+Visual craft held to engineering rigor. Direction is committed before code; every rule below is checked on the built result, not the intention. **The brief wins**: a pinned aesthetic, palette, font, or era in the requirements or brand guidelines overrides anything here — redirecting a clear brief toward your own taste is failure.
 
 ## Worker Execution Contract
 
-This is the operational spine. Follow it as written.
-
 ### Design Direction First (plan-time — Aria, or the brief)
 
-Before any UI code exists, a compact direction must be committed — in `detailed-design.md` for pipeline work, or stated in the brief for ad-hoc work:
+Commit a compact direction before any UI code — in `detailed-design.md` for pipeline work, in the brief for ad-hoc work:
 
-- **Candidate sourcing (design DB tool)**: when the brief pins no direction, you SHOULD first query the vendored design database for 2–3 candidate styles, palettes, and font pairings before committing anything: `python <this skill's resolved path>/tools/design-db/scripts/search.py "<product/surface description>" --domain style` (also `--domain color|typography|ux`; stdlib-only Python 3). Its results are candidate input, never authority — every pick still passes the generic-default check and every rule in this contract, and **this contract wins over any database recommendation** (the DB freely suggests looks this skill refuses by default, e.g. glass effects). If no Python 3 runtime is available, skip the query and commit the direction from the brief and these rules alone. Only this read path is sanctioned — `search.py`'s `--design-system`/`--persist` mode is NOT adopted and must not be run: it writes `design-system/<slug>/MASTER.md` outside the `.docs/` boundary (see the Attribution section's "not adopted" claim, which this line makes enforceable).
+- **Candidate sourcing (design DB tool)** — brief pins no direction:
+  - SHOULD query first, for 2–3 candidate styles, palettes, and font pairings: `python <this skill's resolved path>/tools/design-db/scripts/search.py "<product/surface description>" --domain style` (also `--domain color|typography|ux`; stdlib-only Python 3).
+  - Results are candidate input, never authority: every pick still passes the generic-default check, and **this contract wins over any database recommendation** — the DB freely suggests looks this skill refuses by default.
+  - No Python 3 runtime → skip the query; commit from the brief and these rules alone.
+  - NEVER run `search.py`'s `--design-system`/`--persist` mode — it writes `design-system/<slug>/MASTER.md` outside the `.docs/` boundary (makes the Attribution section's "not adopted" claim enforceable).
 - **Tokens**: 4–6 named palette values; 2–3 type roles (a characterful display face used with restraint, a complementary body face, a utility face for data/captions if needed); a spacing scale.
 - **Layout concept**: one-sentence prose description of the composition.
 - **Signature**: the single element this surface will be remembered by. Spend boldness there; keep everything around it quiet.
-- **Generic-default check**: AI-generated design clusters around known looks (cream background + high-contrast serif + terracotta accent; near-black + one acid accent; broadsheet hairlines + zero radius). If any committed choice is one you would produce for *any* similar brief, it is a default, not a decision — revise it and say why. A brief that explicitly asks for one of these looks wins, as always. The long-tail catalog behind this check — fabricated data, decorative metadata, fake previews, separator texture — is [references/ai-tells.md](references/ai-tells.md); read it when the surface carries substantial static content or demo data.
+- **Generic-default check**: known AI clusters — cream background + high-contrast serif + terracotta accent; near-black + one acid accent; broadsheet hairlines + zero radius. A committed choice you would produce for *any* similar brief is a default, not a decision — revise it and say why (a brief that explicitly asks for one of these looks still wins). Long-tail catalog: [references/ai-tells.md](references/ai-tells.md) — read it when the surface carries substantial static content or demo data.
 
 ### Surface Modes
 
-Pick the mode per surface (not per product) and design for what the visitor's success looks like there:
+Pick the mode per surface (not per product); design for the visitor's success there:
 
-- **Persuade** — the visitor decides and acts (landing, marketing, pricing): design earns attention and action.
-- **Operate** — the visitor completes a task (app UI, dashboards, admin, settings): scanability, consistency, and platform expectations outrank expression; brand lives in precise details.
-- **Read** — the visitor understands something (docs, guides, changelogs): structure for comprehension first.
-- **Experience** — the visitor is inside the work (portfolios, galleries): the artifact leads; the interface recedes.
+- **Persuade** — visitor decides and acts (landing, marketing, pricing): design earns attention and action.
+- **Operate** — visitor completes a task (app UI, dashboards, admin, settings): scanability, consistency, and platform expectations outrank expression; brand lives in precise details.
+- **Read** — visitor understands something (docs, guides, changelogs): structure for comprehension first.
+- **Experience** — visitor is inside the work (portfolios, galleries): the artifact leads; the interface recedes.
 
 ### Execution Rules (authoring — the UI Builder, Nova)
 
-- **No placeholder/empty wrappers**: Never scaffold empty HTML wrappers (e.g., `<div class="Wrapper"></div>`) for components; fully implement the logic and markup required by the specification so QA checks run against the true implementation.
-- **Typography carries the personality**: deliberate pairing, a clear scale with obvious size/weight steps, body measure 65–75ch, display ≤6rem, tracking no tighter than −0.04em (−0.02 to −0.03em usually reads better). Run the real copy at every breakpoint; fix what overflows.
+- **No placeholder/empty wrappers**: NEVER scaffold an empty HTML wrapper (e.g. `<div class="Wrapper"></div>`) — implement the specified logic and markup fully, so QA runs against the true implementation.
+- **Typography carries the personality**: deliberate pairing; a clear scale with obvious size/weight steps; body measure 65–75ch; display ≤6rem; tracking no tighter than −0.04em (−0.02 to −0.03em usually reads better). Run the real copy at every breakpoint; fix what overflows.
 - **Spacing is rhythm**: tight within groups, generous between them; more space above a heading than below it. Verify computed values, not intentions.
-- **Color**: contrast ≥4.5:1 for body/placeholder text, ≥3:1 for large text. On colored surfaces, tint secondary text from that hue or the foreground — never plain gray. The accent is spent deliberately, not sprayed.
+- **Color**: contrast ≥4.5:1 body/placeholder text, ≥3:1 large text. On colored surfaces tint secondary text from that hue or the foreground — never plain gray. Spend the accent deliberately; never spray it.
 - **Structure encodes information**: numbering, eyebrows, dividers, and labels must state something true about the content (a real sequence, a real category) — never decoration.
-- **Depth & elevation**: declare elevation once — border OR shadow, not both (a 1px border under a wide soft shadow is the ghost card). Shadows carry an offset and soft blur; a zero-offset colored halo is decoration.
-- **Motion**: one authored moment, not scattered effects and not the same entrance on every section. Exponential ease-out from an already-visible default; respect `prefers-reduced-motion`. No bounce easing by default.
+- **Depth & elevation**: declare elevation once — border OR shadow, never both (a 1px border under a wide soft shadow is the ghost card). Shadows carry an offset and soft blur; a zero-offset colored halo is decoration.
+- **Motion**: one authored moment — never scattered effects, never the same entrance on every section. Exponential ease-out from an already-visible default; respect `prefers-reduced-motion`. No bounce easing by default.
 - **States are the design**: hover, focus-visible, disabled, loading, error, and empty states are designed, not defaulted. An empty screen is an invitation to act; an error names the problem and the recovery.
-- **Font substitution that changes meaning, not just appearance, must never `swap`**: `font-display: swap` renders the fallback until the webfont arrives, which is correct when substitution costs you only the *look* of the text. It is wrong whenever the glyphs are semantically load-bearing — an icon ligature font being the canonical case, since the swap window paints the ligature's **source text** (`arrow_forward`, `account_circle`) to the user on every cold load, on every page. Use `block` or `optional` for those faces and keep `swap` for body and display text. Decide this per face by asking what the fallback actually shows the user, not by copying one `@font-face` rule across all of them.
-- **When a component library and a token/utility layer coexist, the committed direction names which layer owns each visual property** — surface color, radius, border, elevation, typography, density — *before* code. Unowned properties mean the two layers fight at runtime and the build converges on specificity warfare. **Reaching for `!important`, a selector into the library's internal class names, or a global element-level override in order to land a design decision is a defect signal, not a technique**: the property has no owner, the override survives only until the library's internals change, and that surface is now silently detached from the design system. Extend the token/theme layer through the library's own supported theming surface instead; where the library exposes none for that property, escalate it as a direction decision rather than overriding locally.
-- **Quality floor**: responsive down to mobile, keyboard focus visible, real content and working controls — built without announcing the checklist.
+- **NEVER `font-display: swap` on a face whose glyphs are semantically load-bearing** — icon ligature fonts above all: the swap window paints the ligature's source text (`arrow_forward`, `account_circle`) to the user. Use `block` or `optional` there; keep `swap` for body and display text. Decide per face, never by copying one `@font-face` rule across all of them. (Mechanism: `references/ui-design-rationale.md`.)
+- **Component library + token/utility layer coexisting**: the committed direction names which layer owns each visual property — surface color, radius, border, elevation, typography, density — *before* code. `!important`, a selector into the library's internal class names, or a global element-level override to land a design decision is a **defect signal, not a technique** — that surface is now silently detached from the design system. Extend the token/theme layer through the library's own supported theming surface; where it exposes none for that property, escalate as a direction decision rather than overriding locally. (Why: `references/ui-design-rationale.md`.)
+- **Quality floor**: responsive down to mobile, keyboard focus visible, real content and working controls.
 
 ### Category Defaults to Refuse
 
-These are defaults, not bans — the brief's own words can earn any of them. Reaching for one when the axis is free means you were not deciding; rewrite the element rather than softening it:
+Defaults, not bans — the brief's own words can earn any. Reaching for one on a free axis means you were not deciding; rewrite the element rather than soften it.
 
 - Same-size icon+heading+text card grids as page structure; nested cards (always wrong); the hero-metric template (big number, small label, stats, accent).
 - A tracked uppercase eyebrow over every section; section numbers (01/02/03) when order carries no information; a modal for a task needing neither interruption nor protected focus.
@@ -55,7 +57,12 @@ These are defaults, not bans — the brief's own words can earn any of them. Rea
 
 ### UX Copy
 
-Words are design material. Write from the user's side of the screen: name things by what people control ("notifications", not "webhook config"). Active voice; a control says exactly what happens ("Save changes", not "Submit") and keeps its name through the whole flow (a "Publish" button produces a "Published" toast). Sentence case, plain verbs, no filler; each element does exactly one job.
+Write from the user's side of the screen:
+
+- Name things by what people control ("notifications", not "webhook config").
+- Active voice; a control says exactly what happens ("Save changes", not "Submit").
+- A control keeps its name through the whole flow (a "Publish" button produces a "Published" toast).
+- Sentence case, plain verbs, no filler; each element does exactly one job.
 
 ### Verification Checklist
 
@@ -72,30 +79,31 @@ Run this as each component or view lands, and again before marking the milestone
 
 ### Review Mode (Luna — design critique)
 
-When a review delegation covers UI work, run the design-critique axis in [references/design-critique.md](references/design-critique.md): screenshot-driven — see the evidence rule below — Nielsen-heuristic scoring, a design-specificity verdict, and the mechanical craft-floor checks — findings labeled with the standard Critical/Important/Suggestion/Nit taxonomy. Audit only; rewrites route to the milestone's builder (Nova for [UI] work) via the Orchestrator.
+A review delegation covering UI work runs the design-critique axis — procedure in [references/design-critique.md](references/design-critique.md). Audit only; rewrites route to the milestone's builder (Nova for [UI] work) via the Orchestrator.
 
-**A design critique without rendered output does not pass rendered properties.** This axis is defined on the built result (see this skill's opening line: *checked on the built result, not the intention*), so its evidence is a screenshot or a computed-style read from a real browser. When browser tooling is unavailable, the app is unbuilt, or it will not boot, every check on a computed or rendered property — contrast ratio, spacing rhythm, type scale at breakpoints, focus visibility, state coverage, whether a token actually resolves — is reported as `NOT VERIFIED — no rendered output` and raised as a blocker on the review, never quietly marked satisfied.
+**A design critique without rendered output does not pass rendered properties.** The axis is defined on the built result, so its evidence is a screenshot or a computed-style read from a real browser. No browser tooling, app unbuilt, or it will not boot → every check on a computed or rendered property is reported `NOT VERIFIED — no rendered output` and raised as a blocker on the review. NEVER quietly marked satisfied. Which properties, and the failure narrative behind this rule: `references/design-critique.md` §1.3 and §5.
 
-Source reading is a strictly one-directional instrument here: it can **fail** a check but never **pass** one. A hardcoded literal where the design system mandates a token, a missing `:focus-visible` rule, an absent empty state — all source-visible defects, so report them. But source cannot tell you what the user saw: a correct token reference still renders wrong if the token is undefined, overridden, or the stylesheet never loads. Recording *"uses the correct hairline"* from a source read while the file hardcodes the hex value is the exact failure this rule exists to prevent — the critique ran, produced a clean pass, and the surface was wrong on screen.
+Source reading is a strictly one-directional instrument here: it can **fail** a check but never **pass** one. Report every source-visible defect — a hardcoded literal where the design system mandates a token, a missing `:focus-visible` rule, an absent empty state. NEVER pass a rendered property from a source read: a correct token reference still renders wrong if the token is undefined, overridden, or the stylesheet never loads.
 
 ### Escalate When
 
-- The brief pins no visual direction and the surface is customer-facing → report to the Orchestrator with 2–3 proposed directions; do not silently invent brand identity.
-- Brand assets/guidelines are referenced but missing → report; do not substitute lookalikes.
-- The committed direction conflicts with an accessibility floor (contrast, focus, reduced motion) → the floor wins; report the conflict rather than shipping either violation.
+- No visual direction pinned and the surface is customer-facing → report to the Orchestrator with 2–3 proposed directions; NEVER silently invent brand identity.
+- Brand assets/guidelines referenced but missing → report; NEVER substitute lookalikes.
+- Committed direction conflicts with an accessibility floor (contrast, focus, reduced motion) → the floor wins; report the conflict rather than shipping either violation.
 
 ## Deep Dive
 
 Read on demand — not needed to execute the contract above:
 
-- [AI tells](references/ai-tells.md) — the long-tail catalog behind the generic-default check: fabricated content and data (every surface), decorative metadata, fake product previews, marketing-copy tells, separator/dash rationing, and list-decoration tells — each group scoped to the surface modes it applies to.
-- [Design critique](references/design-critique.md) — Luna's review procedure: evidence gathering (screenshots via browser tools), Nielsen 10-heuristic scoring, design-specificity verdict, cognitive-load checks, the mechanical craft-floor checklist, and the severity mapping into her review-report format.
-- [Component mechanics](references/component-mechanics.md) — mechanical craft floor for tables, forms, autocompletes, spacing, and feedback states: pass/fail on rendered output. Listed here under Deep Dive, but not read-on-demand in practice: the UI Builder loads it when implementing components/views, Quinn loads it for [UI] test assertions, and Luna loads it on [UI] reviews, per their own Methodology Dependencies tables — a deliberate refinement of the read-on-demand default (convention #8).
+- [AI tells](references/ai-tells.md) — the long-tail catalog behind the generic-default check; each group scoped to the surface modes it applies to.
+- [Design critique](references/design-critique.md) — Luna's full review procedure (loaded via Review Mode above).
+- [Component mechanics](references/component-mechanics.md) — mechanical craft floor for tables, forms, autocompletes, spacing, and feedback states: pass/fail on rendered output. Listed here but NOT read-on-demand — Nova (building components/views), Quinn (`[UI]` assertions), and Luna (`[UI]` reviews) load it per their own dependency tables; deliberately refines the read-on-demand default (convention #8).
+- [Rationale](references/ui-design-rationale.md) — why the font-substitution and library-ownership rules are shaped as they are.
 
 ## Attribution
 
 Adapted for this squad from [Anthropic's frontend-design skill](https://github.com/anthropics/skills) and [pbakaus/impeccable](https://github.com/pbakaus/impeccable) (Apache-2.0). Impeccable's command/detector orchestration is intentionally not carried over — orchestration belongs to the squad's Orchestrator, not to a methodology.
 
-The AI-tells catalog in `references/ai-tells.md` is adapted from the "AI Tells" section of [leonxlnx/taste-skill](https://github.com/leonxlnx/taste-skill) (MIT). Only that section is carried over, made framework-neutral and re-scoped by surface mode: the source mandates a React/Next/Tailwind/shadcn stack and self-declares dashboards and multi-step product UI out of scope, so its stack conventions, dial system, and brief-inference stage are intentionally not adopted — stack rules belong to the framework playbooks (`vue3-spa-patterns`, `dotnet-backend-patterns`) and brief inference belongs to the pipeline's requirements and design-direction phases.
+The AI-tells catalog in `references/ai-tells.md` is adapted from the "AI Tells" section of [leonxlnx/taste-skill](https://github.com/leonxlnx/taste-skill) (MIT). Only that section is carried over, made framework-neutral and re-scoped by surface mode (grounds: that file's own Attribution). Its stack conventions, dial system, and brief-inference stage are intentionally not adopted — stack rules belong to the framework playbooks (`vue3-spa-patterns`, `dotnet-backend-patterns`), brief inference to the pipeline's requirements and design-direction phases.
 
 The `tools/design-db/` search tool (BM25 CSV database of UI styles, palettes, font pairings, and UX guidelines) is vendored from [nextlevelbuilder/ui-ux-pro-max-skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) (MIT — see `tools/design-db/LICENSE`). Only its data and search scripts are carried over: its self-activating skill surface, doctrine, and design-system generator are intentionally not adopted — this contract remains the sole authority on what ships, and the DB is consulted only as candidate input during Design Direction.

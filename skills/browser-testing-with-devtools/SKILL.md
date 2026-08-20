@@ -5,13 +5,13 @@ description: Squad-internal execution contract for verifying browser behavior wi
 
 # Browser Testing with DevTools
 
-Use Chrome DevTools MCP to inspect, debug, and verify web application behavior with real browser data. This gives the agent eyes into the browser — see what the user sees, read the DOM, console, and network instead of guessing at runtime.
+Chrome DevTools MCP gives the agent eyes into the browser — the DOM, console, and network as they actually run, not as assumed.
 
 ## Worker Execution Contract
 
 ### Core Principle
 
-Use Chrome DevTools MCP to inspect, debug, and verify web application behavior with real browser data. Never trust assumptions — verify with actual runtime state.
+Never trust assumptions — inspect, debug, and verify with actual runtime state.
 
 ### Available Tools
 

@@ -10,6 +10,17 @@ On-demand companion to the shipping-and-launch `SKILL.md` — rationale, code sa
 - Opening a beta or early access program
 - Any deployment that carries risk (all of them)
 
+## Pre-Merge Smoke vs. Deployment-Time Health Checks
+
+The `SKILL.md` Pre-Merge Local Runtime Smoke section is a deliberate convention #8 divergence from this same file's deployment-time health checks — narrower in scope, not a duplicate. This is the full enumeration of which items on each side it neither replaces nor duplicates:
+
+- Infrastructure's *"Health check endpoint exists and responds"*
+- Staged Rollout step 1's *"Full test suite in staging environment"* and *"Manual smoke test of critical flows"*, and step 2's *"Verify deployment succeeded (health check)"*
+- Post-Launch Verification's *"Check health endpoint returns 200"* and *"Test the critical user flow manually"*
+- The after-deploying Verification items *"Health check returns 200"* and *"Critical user flow works"*
+
+Every one of those presupposes a deployed artifact and answers **did the deploy land**. Pre-Merge Local Runtime Smoke answers a different question, earlier and cheaper: **does the change work at all when a person runs it** — the question a green in-process test suite cannot answer, and the one that went unasked before merge.
+
 ## Feature Flag Check (code sample)
 
 ```typescript

@@ -5,7 +5,7 @@ description: Hardens code against vulnerabilities. Use when handling user input,
 
 # Security and Hardening
 
-Security-first development practices for web applications. Treat every external input as hostile, every secret as sacred, and every authorization check as mandatory. Security isn't a phase — it's a constraint on every line of code that touches user data, authentication, or external systems.
+Treat every external input as hostile, every secret as sacred, every authorization check as mandatory. Security isn't a phase — it constrains every line of code touching user data, authentication, or external systems.
 
 ## Worker Execution Contract
 
@@ -13,11 +13,11 @@ This is the operational spine. Follow it as written.
 
 ### Process: Threat Model First
 
-Controls bolted on without a threat model are guesses. Before hardening, spend five minutes thinking like an attacker:
+Controls bolted on without a threat model are guesses. Spend five minutes thinking like an attacker before hardening:
 
-1. **Map the trust boundaries.** Where does untrusted data cross into your system? HTTP requests, form fields, file uploads, webhooks, third-party APIs, message queues, and **LLM output**. Every boundary is attack surface.
-2. **Name the assets.** What's worth stealing or breaking? Credentials, PII, payment data, admin actions, money movement.
-3. **Run STRIDE over each boundary** — a quick lens, not a ceremony:
+1. **Map trust boundaries.** Where untrusted data enters: HTTP requests, form fields, file uploads, webhooks, third-party APIs, message queues, **LLM output**. Every boundary is attack surface.
+2. **Name the assets.** Credentials, PII, payment data, admin actions, money movement.
+3. **Run STRIDE per boundary** — a quick lens, not a ceremony:
 
 | Threat | Ask | Typical mitigation |
 |---|---|---|
@@ -28,9 +28,9 @@ Controls bolted on without a threat model are guesses. Before hardening, spend f
 | **D**enial of service | Can it be overwhelmed? | Rate limiting, input size caps, timeouts |
 | **E**levation of privilege | Can a user gain rights they shouldn't? | Authorization checks, least privilege |
 
-4. **Write abuse cases next to use cases.** For each feature, ask "how would I misuse this?" — then make that your first test.
+4. **Write abuse cases beside use cases.** For each feature: "how would I misuse this?" → make that the first test.
 
-If you can't name the trust boundaries for a feature, you're not ready to secure it. This is OWASP **A04: Insecure Design** — most breaches begin in design, not code.
+Can't name the trust boundaries for a feature → not ready to secure it. OWASP **A04: Insecure Design** — most breaches begin in design, not code.
 
 ### The Three-Tier Boundary System
 
@@ -44,7 +44,7 @@ If you can't name the trust boundaries for a feature, you're not ready to secure
 - **Set security headers** (CSP, HSTS, X-Frame-Options, X-Content-Type-Options)
 - **Use httpOnly, secure, sameSite cookies** for sessions
 - **Run `npm audit`** (or equivalent) before every release
-- **Mask PII in UI**: Never render sensitive Personally Identifiable Information (PII) in plain text in UI components; always apply a UI-level masking function or component before rendering.
+- **Mask PII in UI**: never render Personally Identifiable Information (PII) in plain text; apply a UI-level masking function before rendering.
 
 #### Ask First (Requires Human Approval)
 
@@ -143,13 +143,15 @@ After implementing security-relevant code:
 
 ### Escalate When
 
-- Any "Ask First" boundary item comes up → stop and report to the Orchestrator (manager) for approval before proceeding.
-- A critical/high vulnerability has no available fix → report to the Orchestrator (manager) with your triage findings.
-- You can't name the trust boundaries for a feature → escalate to the Orchestrator (manager) rather than hardening blind.
+| WHEN | DO |
+|---|---|
+| Any "Ask First" boundary item comes up | Stop; report to the Orchestrator (manager) for approval before proceeding |
+| A critical/high vulnerability has no available fix | Report to the Orchestrator (manager) with triage findings |
+| Can't name the trust boundaries for a feature | Escalate to the Orchestrator (manager) rather than harden blind |
 
 ## See Also
 
-For detailed security checklists and pre-commit verification steps, see `{PLUGIN_ROOT}/../references/security-checklist.md`.
+Detailed checklists and pre-commit verification steps: `{PLUGIN_ROOT}/../references/security-checklist.md`.
 
 ## Deep Dive
 

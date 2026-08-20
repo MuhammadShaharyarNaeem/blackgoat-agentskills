@@ -13,13 +13,13 @@ Whenever you invoke a `bgpdd-*` pipeline (`/bgpdd-plan`, `/bgpdd-build`, `/bgpdd
 
 ## Load the orchestration model first
 
-When you start any `bgpdd-*` pipeline, first `view_file` on `skills/agent-squad/SKILL.md` and operate under it (the Orchestrator/delegation model, context-integrity check, structured-relay format, project-state tracking). Antigravity does not auto-follow references, so you must read it explicitly.
+When you start any `bgpdd-*` pipeline, first `view_file` on `skills/agent-squad/orchestrator-contract.md` — every pipeline names it as the mandatory first read, and Antigravity does not auto-follow references, so read it explicitly. For **ad-hoc squad use outside a pipeline**, read `skills/agent-squad/SKILL.md` as well (the Orchestrator/delegation model, context-integrity check, structured-relay format, project-state tracking) — that file governs ad-hoc orchestration, not pipeline runs.
 
 ## "Delegate to <Agent>" means: define → grant → invoke
 
 There is no pre-registered squad subagent to call directly. To delegate:
 
-1. **Read the persona.** `view_file` on `agents/<name>.md`. Take its full body **verbatim** (strip only the YAML frontmatter) as the subagent's `system_prompt` — never summarize or rewrite it. Expand any `{PLUGIN_ROOT}` to this plugin's absolute `skills/` path.
+1. **Read the persona.** `view_file` on `agents/<name>.md`. Take its full body **verbatim** (strip only the YAML frontmatter) as the subagent's `system_prompt` — never summarize or rewrite it. Expand any `{PLUGIN_ROOT}` to this plugin's absolute `skills/` path. *(Deliberate divergence, repo convention #8: the Orchestrator Contract §1 offers three injection tiers; this runtime pins the verbatim tier because Antigravity has no registered agent types to reference.)*
 2. **Define with grants.** Call `define_subagent` with that `system_prompt`, setting `enable_write_tools: true` and `enable_mcp_tools: true`. Every worker writes files, runs tests, and may call MCP tools — without these grants the subagent fails or wastes cycles hunting for a way in.
 3. **Invoke.** Call `invoke_subagent` with a **compressed briefing** — only the "Working Memory" chunk that agent needs, plus paths to the `.docs/{project-name}/` artifacts it should read. Never paste full prior reports.
 4. **Workspace.** Default to `inherit`/`share`; use an isolated `branch` workspace only when explicitly required.

@@ -2,6 +2,17 @@
 
 Engine-neutral rationale behind the Worker Execution Contract in `SKILL.md`. These principles apply regardless of how you drive the browser; the MCP `browser_*` tools are the execution surface.
 
+## Anti-Pattern Illustrations
+
+The three anti-patterns the `SKILL.md` Rules forbid, spelled out. Both of the first two pass against a broken product and are *reported* as coverage, which makes them worse than absent coverage:
+
+| Anti-pattern | The tell |
+|---|---|
+| **It mocks what it asserts** | a `route`/`fulfill` whose URL matches the endpoint the requirement is about. A QA cannot hand the app its own answer |
+| **It teleports** | `goto('/<entity>-detail/<hard-coded-id>')`. A QA reaches a record through the menu, the list and a click — never by typing an id they were handed |
+
+A third failure mode outranks both, because it hides them: **a step that silently does nothing still reports green.** A route matcher on a path the app never serves, a guarded branch whose predicate is false, a negative assertion in an environment that satisfies it anyway. Prove every predicate fired.
+
 ## When to Write E2E vs Unit Tests
 
 The testing pyramid:

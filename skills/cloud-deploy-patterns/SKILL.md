@@ -5,7 +5,7 @@ description: "Provides the cloud deployment execution contract: a provider-agnos
 
 # Cloud Deploy Patterns
 
-Provider-agnostic contract first, provider checklist second. Nothing ships with `latest`, wildcard permissions, or secrets outside a vault.
+Provider-agnostic contract first, provider checklist second — nothing ships with `latest`, wildcard permissions, or secrets outside a vault.
 
 ## Worker Execution Contract
 

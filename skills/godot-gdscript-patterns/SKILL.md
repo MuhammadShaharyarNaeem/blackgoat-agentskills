@@ -8,37 +8,19 @@ date_added: "2026-02-27"
 
 # Godot GDScript Patterns
 
-Production patterns for Godot 4.x game development with GDScript, covering architecture, signals, scenes, and optimization.
+Production patterns for Godot 4.x game development with GDScript: architecture, signals, scenes, and optimization.
 
-## Use this skill when
+## Worker Execution Contract
 
-- Building games with Godot 4
-- Implementing game systems in GDScript
-- Designing scene architecture
-- Managing game state
-- Optimizing GDScript performance
-- Learning Godot best practices
+This is the operational spine. Follow it as written.
 
-## Do not use this skill when
+- Scope: game systems, scene architecture, state management, and performance optimization in Godot 4 / GDScript — not a different domain or tool.
+- Apply the patterns below; validate outcomes before marking work complete. Output is not a substitute for environment-specific validation, testing, or expert review.
+- Detailed patterns, checklists, and code samples (state machine, autoload singletons, resource-based data, object pooling, component system, scene management, save system, performance tips, Do's/Don'ts) live in [resources/implementation-playbook.md](resources/implementation-playbook.md) — open it before authoring any of these.
 
-- The task is unrelated to godot gdscript patterns
-- You need a different domain or tool outside this scope
+### Escalate When
 
-## Instructions
-
-- Clarify goals, constraints, and required inputs.
-- Apply relevant best practices and validate outcomes.
-- Provide actionable steps and verification.
-- If detailed examples are required, open `resources/implementation-playbook.md`.
-
-## Resources
-
-- `resources/implementation-playbook.md` for detailed patterns and examples.
-
-## Limitations
-- Use this skill only when the task clearly matches the scope described above.
-- Do not treat the output as a substitute for environment-specific validation, testing, or expert review.
-- Stop and ask for clarification if required inputs, permissions, safety boundaries, or success criteria are missing.
+- Required inputs, permissions, safety boundaries, or success criteria are missing → stop and ask for clarification; never assume.
 
 ## Procedural Memories (Learned Lessons)
 

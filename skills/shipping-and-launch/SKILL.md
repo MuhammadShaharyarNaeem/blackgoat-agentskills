@@ -5,7 +5,7 @@ description: Squad-internal execution contract for production launch preparation
 
 # Shipping and Launch
 
-Ship with confidence. The goal is not just to deploy — it's to deploy safely, with monitoring in place, a rollback plan ready, and a clear understanding of what success looks like. Every launch should be reversible, observable, and incremental.
+Ship safely: monitoring in place, a rollback plan ready, success criteria defined. Every launch is reversible, observable, and incremental.
 
 ## Worker Execution Contract
 
@@ -15,7 +15,7 @@ This is the operational spine. Follow it as written. Pipelines delegate the chec
 
 The Security, Performance, and Accessibility sections below are the delegation subset — the root `{PLUGIN_ROOT}/../references/` checklists (see "See Also") are authoritative; update those first.
 
-**The sections below are a floor, not the whole checklist.** Where the project has a numbered requirements set, every Must-Have FR and NFR additionally gets its own row, cited by ID, each carrying the evidence that verified it. A requirement with no row is not a pass — it is an unperformed check, and the recommendation is `NO-GO` until it has one. Enumerate from the requirements document, never from the built feature list: requirements expressed as *qualities* rather than features (accessibility, contrast, performance, theming, responsiveness) are exactly the ones a feature-shaped review cannot see and a generic template silently omits.
+**A floor, not the whole checklist.** With a numbered requirements set, every Must-Have FR and NFR additionally gets its own row, cited by ID, carrying the evidence that verified it. A requirement with no row is an unperformed check, not a pass — `NO-GO` until it has one. Enumerate from the requirements document, never the built feature list: requirements expressed as *qualities* rather than features (accessibility, contrast, performance, theming, responsiveness) are exactly what a feature-shaped review misses and a generic template silently omits.
 
 #### Code Quality
 
@@ -29,7 +29,7 @@ The Security, Performance, and Accessibility sections below are the delegation s
 
 #### Pre-Merge Local Runtime Smoke
 
-**Vera-owned. Pre-merge, local.** Run from a clean checkout of the branch under review, before it merges — not after a deploy, and not against a shared staging host. In `bgpdd-shipping` this section is part of Vera's Stage 1 assignment alongside Code Quality, Performance, and Accessibility.
+**Vera-owned, pre-merge, local.** Run from a clean checkout of the branch under review before it merges — never after a deploy or against shared staging. Part of Vera's Stage 1 assignment in `bgpdd-shipping`, alongside Code Quality, Performance, and Accessibility.
 
 - [ ] The application starts from a clean checkout using the start command **declared in the plan** — never one you inferred; a milestone with no declared start command is a planning defect to escalate, not a blank to fill
 - [ ] Every endpoint the epic touched returns its declared response envelope, observed from outside the process
@@ -38,7 +38,7 @@ The Security, Performance, and Accessibility sections below are the delegation s
 
 The tier ladder, the out-of-process probe, the capture artifact and the `**Runtime evidence:**` citation that carries it are owned by `{PLUGIN_ROOT}/runtime-evidence/SKILL.md` — read it before running this section; none of it is restated here. An item whose precondition is absent (the app will not start, the environment cannot be repointed, the transport is unavailable) is `BLOCKED` naming what was missing, never `PASS`.
 
-**Deliberate divergence (convention #8) from the deployment-time health checks in this same file.** Those are Dep's, they run against a deployed environment, and this section neither replaces nor duplicates them: Infrastructure's *"Health check endpoint exists and responds"*; Staged Rollout step 1's *"Full test suite in staging environment"* and *"Manual smoke test of critical flows"* and step 2's *"Verify deployment succeeded (health check)"*; Post-Launch Verification's *"Check health endpoint returns 200"* and *"Test the critical user flow manually"*; and the after-deploying Verification items *"Health check returns 200"* and *"Critical user flow works"*. Every one of those presupposes a deployed artifact and answers **did the deploy land**. This section answers a different question, earlier and cheaper: **does the change work at all when a person runs it** — the question a green in-process test suite cannot answer, and the one that went unasked before merge.
+**Deliberate divergence (convention #8):** narrower than this file's deployment-time health checks (Infrastructure, Staged Rollout, Post-Launch Verification, and the after-deploying Verification items) — those are Dep's, run against a deployed environment, and answer **did the deploy land**. This section answers a cheaper, earlier question: **does the change work at all when a person runs it** — the question a green in-process test suite cannot answer, and the one that went unasked before merge. Neither set replaces or duplicates the other; full enumeration of the non-duplicated items: [shipping deep dive](references/shipping-deep-dive.md#pre-merge-smoke-vs-deployment-time-health-checks).
 
 #### Security
 
@@ -137,7 +137,7 @@ Ship behind feature flags to decouple deployment from release.
    └── Clean up feature flag
 ```
 
-**Rollout Decision Thresholds** — use these to decide whether to advance, hold, or roll back at each stage:
+**Rollout Decision Thresholds** — advance, hold, or roll back at each stage:
 
 | Metric | Advance (green) | Hold and investigate (yellow) | Roll back (red) |
 |--------|-----------------|-------------------------------|-----------------|
@@ -203,11 +203,18 @@ Every deployment needs a rollback plan before it happens:
 
 ### Documenting the Ship Decision
 
-If running within the `bgpdd-build` or `bgpdd-shipping` pipelines, save your final Rollback Strategy and Launch Checklist to `.docs/{project-name}/implementation/ship-decision.md` with a final `GO` or `NO-GO` recommendation.
+In `bgpdd-build` or `bgpdd-shipping`, save the final Rollback Strategy and Launch Checklist to `.docs/{project-name}/implementation/ship-decision.md`, ending in a `GO` or `NO-GO` recommendation.
 
-The decision certifies **one exact tree state**: record the commit SHA it was taken against and confirm the working tree is clean at the moment of the verdict. Uncommitted changes at verdict time are a `NO-GO`, not a footnote. Any change landing afterward invalidates the artifact — reissue the decision against the new SHA rather than leaving a document that certifies a tree no longer on disk.
+The decision certifies **one exact tree state**:
+- Record the commit SHA it was taken against; confirm the working tree is clean at verdict time.
+- Uncommitted changes at verdict time → `NO-GO`, not a footnote.
+- Any change landing afterward invalidates the artifact — reissue against the new SHA rather than leave a document certifying a tree no longer on disk.
 
-**Reconcile against the ledger before you write the verdict, and reproduce it.** The pipeline's persisted state file (`.docs/{project-name}/orchestrator-state.json` or its equivalent) carries the run's open blocker entries; read it and copy **every open entry verbatim** into the decision document. An open entry forces `NO-GO` unless the user has explicitly waived that specific entry, and a waiver is recorded beside the entry it waives — never inferred from silence, an elapsed phase, or another agent's confidence that the item is minor. Writing `blockers: None` asserts that you read the ledger and found it empty; it is never a default value, never a summary of your own view of the build, and never a statement about the blockers *you personally* encountered. The same holds for the checklist beside it: **a verification the checklist never performed is an unperformed check, not a pass** — no aggregate phrasing ("all features, NFRs, and gates complete") converts an absent row into a satisfied one, and a summary sentence that outruns the rows above it is the defect this section exists to prevent.
+**Reconcile against the ledger before writing the verdict, and reproduce it:**
+- Read the pipeline's persisted state file (`.docs/{project-name}/orchestrator-state.json` or its equivalent); copy every open blocker entry verbatim into the decision document.
+- An open entry forces `NO-GO` unless the user has explicitly waived that specific entry, recorded beside the entry it waives — NEVER inferred from silence, an elapsed phase, or another agent's confidence the item is minor.
+- Writing `blockers: None` asserts you read the ledger and found it empty — NEVER a default value, a summary of your own view of the build, or a statement about only the blockers *you personally* encountered.
+- **A verification the checklist never performed is an unperformed check, not a pass.** No aggregate phrasing ("all features, NFRs, and gates complete") converts an absent row into a satisfied one; a summary sentence that outruns the rows above it is the defect this section exists to prevent.
 
 ### See Also
 
@@ -236,9 +243,11 @@ After deploying:
 
 ### Escalate When
 
-- Any Pre-Launch Checklist section cannot be brought green → report to the Orchestrator (manager) with the failing items and a `NO-GO` recommendation.
-- A rollout metric crosses a red threshold and rollback fails or its outcome is unclear → halt and escalate to the Orchestrator immediately.
-- No viable rollback plan exists (e.g. an irreversible migration) → escalate to the Orchestrator before deploying, not after.
+| WHEN | DO |
+|---|---|
+| Any Pre-Launch Checklist section cannot be brought green | Report to the Orchestrator (manager) with the failing items and a `NO-GO` recommendation |
+| A rollout metric crosses a red threshold and rollback fails or its outcome is unclear | Halt; escalate to the Orchestrator immediately |
+| No viable rollback plan exists (e.g. an irreversible migration) | Escalate to the Orchestrator before deploying, not after |
 
 ## Deep Dive
 

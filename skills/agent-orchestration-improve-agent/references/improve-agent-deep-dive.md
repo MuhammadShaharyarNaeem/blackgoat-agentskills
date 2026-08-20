@@ -68,6 +68,10 @@ When invoked via `/bgpdd-learn` (or whenever a lesson's home is not predetermine
 
 Every proposed lesson must name its destination and a one-line rationale for that layer. If a lesson seems to belong at two layers, generalize it until it belongs at one.
 
+## Proposal Scoping (Delegation 1, step 5)
+
+Why a write-boundary amendment must be enumerated as its own line item rather than left implicit in the rule that needs it: a behavioral change and a permission change are two approvals, not one. An unstated widening is applied invisibly — the approving human never sees it, the applying agent infers it from the rule's wording, and only a runtime guard will ever question it. Enumerating it separately, with its exact scope limits, is what makes the permission change reviewable at all.
+
 ## Editing Details (Delegation 2)
 
 - **Vector A scope**: a `## Procedural Memories` heading with no rule under it is placeholder scaffolding and must not be written.

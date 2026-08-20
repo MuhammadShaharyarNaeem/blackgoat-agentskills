@@ -8,20 +8,35 @@ risk: safe
 # BG-Bugfix
 
 ## Purpose
-To provide a lean, sequential methodology for fixing bugs without the bureaucratic overhead of a multi-agent squad. It enforces root cause analysis and test-driven development (TDD) through structured pair-programming.
+
+Lean, sequential bugfix methodology — no multi-agent squad. Enforces root cause analysis before any edit, and a test-driven proof before any fix.
 
 ## When to Use This Skill
-- When the user reports a bug or defect in the code.
-- When you need to trace an error stack before writing a fix.
+- The user reports a bug or defect in the code.
+- You need to trace an error stack before writing a fix.
 - Trigger phrases: "fix this bug", "debug this error", "use bg-bugfix".
 
 ## Execution Workflow
 
-Follow this strict 5-phase sequence sequentially. Do not skip phases.
+Run the 5 phases in order. NEVER skip a phase.
 
-> **Conditional methodology loading**: If the bug involves a PowerShell script — a standalone `.ps1` or a script embedded in a host-language string (e.g. a C# string literal) — read `{PLUGIN_ROOT}/powershell-script-patterns/SKILL.md` before Phase 2 and follow its Worker Execution Contract (extract-test-re-embed, execution testing, external URL verification). `{PLUGIN_ROOT}` = this plugin's `skills/` directory (the directory containing this skill's folder). You are the main session, not a delegated subagent — where that contract says to escalate via `<handoff>` to the Orchestrator, ask the user directly instead.
+`{PLUGIN_ROOT}` = this plugin's `skills/` directory (the directory containing this skill's folder).
 
-> **Conditional methodology loading — runtime-observable bugs**: If the bug is observable at a boundary a client, person, or device reaches — a wrong response body/status/header, a wrong rendered state, a wrong device effect — or it arrived with a runtime capture (e.g. routed from `/bgpdd-verify`), read `{PLUGIN_ROOT}/runtime-evidence/SKILL.md` before Phase 2 and hold its line: an in-process test can fail this bug but never prove it fixed. Phase 2's reproduction then includes an out-of-process observation of the wrong behavior (a capture per that contract), and Phase 3's gate additionally requires a fresh post-fix capture showing the correct behavior — the in-process regression test stays, the capture is added, neither substitutes for the other (this refines Phase 2's "unit or integration test" wording for this bug class; deliberate, convention #8). Cite both capture paths when you state the fix to the user, so the claim is checkable against files rather than taken on the suite's green. Same main-session adaptation as above: where that contract says to report to the Orchestrator, tell the user directly.
+**Main-session adaptation**: you are the main session, not a delegated subagent. Where a loaded contract says to escalate via `<handoff>` or report to the Orchestrator, ask or tell the user directly.
+
+### Conditional methodology loading (read before Phase 2)
+
+| WHEN | READ |
+|---|---|
+| The bug involves a PowerShell script — a standalone `.ps1`, or one embedded in a host-language string (e.g. a C# string literal) | `{PLUGIN_ROOT}/powershell-script-patterns/SKILL.md` — follow its Worker Execution Contract |
+| The bug is observable at a boundary a client, person, or device reaches — wrong response body/status/header, wrong rendered state, wrong device effect — **or** it arrived with a runtime capture (e.g. routed from `/bgpdd-verify`) | `{PLUGIN_ROOT}/runtime-evidence/SKILL.md` — then apply the rules below |
+
+Runtime-observable bugs (deliberately refines Phase 2's "unit or integration test" wording for this bug class — convention #8):
+- An in-process test can FAIL this bug; it can NEVER prove it fixed.
+- Phase 2's reproduction adds an out-of-process capture of the wrong behavior.
+- Phase 3's gate additionally requires a fresh post-fix capture of the correct behavior.
+- Both stay — the in-process regression test AND the capture. Neither substitutes for the other.
+- MUST cite both capture paths when stating the fix, so the claim is checkable against files rather than the suite's green.
 
 ### Phase 1: Root Cause Analysis (RCA)
 1. **Trace**: Use Grep and Read to trace the execution path.

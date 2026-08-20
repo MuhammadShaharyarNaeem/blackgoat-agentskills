@@ -5,7 +5,7 @@ description: "Optimizes application performance. Use when performance requiremen
 
 # Performance Optimization
 
-Measure before optimizing. Performance work without measurement is guessing — and guessing leads to premature optimization that adds complexity without improving what matters. Profile first, identify the actual bottleneck, fix it, measure again. Optimize only what measurements prove matters.
+Measure before optimizing — guessing leads to premature complexity that doesn't help. Profile, find the actual bottleneck, fix it, measure again. Optimize only what measurements prove matters.
 
 ## Worker Execution Contract
 
@@ -29,10 +29,10 @@ This is the operational spine. Follow it as written.
 5. GUARD    → Add monitoring or tests to prevent regression
 ```
 
-Two complementary measurement approaches — use both:
+Use both, complementary:
 
-- **Synthetic (Lighthouse, DevTools Performance tab):** Controlled conditions, reproducible. Best for CI regression detection and isolating specific issues.
-- **RUM (web-vitals library, CrUX):** Real user data in real conditions. Required to validate that a fix actually improved user experience.
+- **Synthetic** (Lighthouse, DevTools Performance tab): controlled, reproducible — best for CI regression detection and isolating issues.
+- **RUM** (web-vitals library, CrUX): real user data — required to confirm a fix improved actual user experience.
 
 ### Where to Start Measuring
 
@@ -121,9 +121,11 @@ After any performance-related change:
 
 ### Escalate When
 
-- A fix requires architectural change beyond current scope → report to the Orchestrator.
-- Measurements cannot be taken in your environment → report to the Orchestrator.
-- A performance target conflicts with a requirement → report to the Orchestrator with evidence.
+| WHEN | DO |
+|---|---|
+| A fix requires architectural change beyond current scope | Report to the Orchestrator |
+| Measurements cannot be taken in your environment | Report to the Orchestrator |
+| A performance target conflicts with a requirement | Report to the Orchestrator with evidence |
 
 ## Deep Dive
 

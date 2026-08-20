@@ -185,7 +185,7 @@ flowchart TD
 
 Phase by phase:
 
-- **`/bgpdd-discovery` (Phase 0)** — brownfield only. The Orchestrator establishes the Target Scope (repos, branch, local paths) up front, Iris writes `context.md`, you name the APIs holding the feature's fragments (the SOP hard-halts rather than hallucinate a list; a single Scout can run a footprint search if you don't know), Scouts fan out in parallel, and Echo synthesizes the cross-API overview plus a reverse-engineered QA baseline. Phase 5 offers an optional `/bgpdd-learn` run — discovery is global-tier and outside any epic, so no game tape exists to catch its lessons later.
+- **`/bgpdd-discovery` (Phase 0)** — brownfield only. The Orchestrator establishes the Target Scope (repos, branch, local paths) up front, Iris writes `context.md`, you name the APIs holding the feature's fragments (the SOP hard-halts rather than hallucinate a list; a single Scout can run a footprint search if you don't know), Scouts fan out in parallel, and Echo synthesizes the cross-API overview plus a reverse-engineered QA baseline. Phase 4b then records the runtime-environment recipe with you — how the feature is actually stood up locally (bring-up order, repointing, test identities, capabilities) — so no later build or verify run re-derives it. Phase 5 offers an optional `/bgpdd-learn` run — discovery is global-tier and outside any epic, so no game tape exists to catch its lessons later.
 - **`/bgpdd-plan` (Phase 1)** — has a brownfield Pre-Flight Check that halts if the Tier 1 knowledge base is missing. Honing is **hybrid**: the live one-question-at-a-time Q&A runs in the main session (a delegated agent can't pause to ask you things), then an isolated Rex synthesizes `requirements.md` from the transcript. Aria designs, Alex plans, the Phase 3.5 gate checks coverage, and Phase 4 writes the game tape and the state file.
 - **`/bgpdd-lite` (Plan, lite)** — agents: Alex (+ Orchestrator mini-requirements). Produces `requirements.md`, `implementation/plan.md`, and `orchestrator-state.json` → hands off to `/bgpdd-build`. No honing, no Aria; the governing stack contract stands in for the blueprint, and the same coverage gate still applies.
 - **`/bgpdd-build` (Phase 2)** — the milestone loop, detailed below.
@@ -228,13 +228,13 @@ flowchart TD
     BR -- "yes" --> AR["Aria advisory + user approval,<br/>then the fresh builder resumes"] --> Q
     BR -- "no" --> Q["Quinn tests<br/>appends to test-report.md"]
     Q --> QP{"Tests pass?"}
-    QP -- "fail: rounds 1-3" --> MF["Fresh builder (bugfix mode)<br/>with exact failing-test logs"] --> Q
+    QP -- "fail: rounds 1-3" --> MF["Same builder, follow-up<br/>fix + fix_verification, exact failing-test logs"] --> Q
     QP -- "fail after round 3" --> HALT1["HALT - surface milestone,<br/>fixes tried, failing logs"]
-    QP -- "pass" --> L["Luna 5-axis review<br/>scoped to changed_files"]
+    QP -- "pass" --> L["Luna 6-axis review<br/>scoped to changed_files"]
     L --> LC{"Critical or Important findings?"}
-    LC -- "yes" --> LF["Fresh builder resolves,<br/>fixes re-verified"] --> L
+    LC -- "yes" --> LF["Same builder fixes (fix_verification),<br/>re-tested by Quinn"] --> Q
     LC -- "no" --> MX{"Suggestion-level findings<br/>or user asks?"}
-    MX -- "yes" --> MAX["Max refactors ad hoc (outside the loop), tests stay green"] --> COMMIT
+    MX -- "yes" --> MAX["Builder follow-up applies them,<br/>Quinn re-runs regression"] --> COMMIT
     MX -- "no" --> COMMIT["Orchestrator commits the milestone<br/>on the working branch, citing FR/NFR IDs"]
     COMMIT --> NEXT{"Milestones remaining?"}
     NEXT -- "yes" --> M
@@ -360,12 +360,10 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **agent-audit** — audits personas/dependencies against 14 structural heuristics
 - **agent-orchestration-improve-agent** — log parsing → procedural-memory generation (Forge's core methodology)
 - **bgpdd-learn** — `/bgpdd-learn`, the on-demand session-learning triage (Orchestrator + Forge)
-- **skill-creator** — scaffolds new CLI skills to Anthropic best practices
 
 ### Standalone tools
 - **pipeline-tools** — deterministic coverage-gate CLI (`check_coverage.py`) executed by the Orchestrator at the bgpdd plan/build/shipping coverage gates; the manual check remains the fallback
 - **doubt-driven-development** — adversarial fresh-context verification of decisions (run by the main-session Orchestrator, never by subagents)
-- **spec-driven-development** — write a spec before coding
 - **github-pr-review** — Linear-driven multi-repo PR review via GitHub MCP
 - **prompt-engineering** — prompting patterns and optimization guidance
 

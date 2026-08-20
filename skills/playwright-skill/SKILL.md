@@ -8,26 +8,17 @@ date_added: "2026-02-27"
 
 # Playwright E2E Testing (MCP)
 
-Drive real user flows through a browser using the Playwright **MCP tool surface** and verify that critical paths work. E2E tests are slow and expensive — reach for them only when unit/integration tests cannot cover the behavior.
+Drive real user flows through the Playwright **MCP tool surface** to verify critical paths. E2E tests are slow and expensive — reach for them only when unit/integration tests cannot cover the behavior.
 
 ## Worker Execution Contract
 
 ### Core Principle
 
-**A Playwright spec is an automated pass of what a manual QA would do — no more exotic than that, and no less honest.** The entire value of a browser test is that it exercises the system the way a person does: through the real UI, against the real backend, starting where a user actually starts. Every deviation buys speed by deleting exactly the coverage the test existed to provide.
+**A Playwright spec is an automated pass of what a manual QA would do — no more exotic than that, and no less honest.** It exercises the system the way a person does: real UI, real backend, starting where a user starts. Every deviation buys speed by deleting exactly the coverage the test existed to provide.
 
-The governing test, applied to every step you write: **could a QA on a fresh login perform this step by hand, and would they observe what it asserts?** If not, that step is not evidence about the product — it is evidence about your fixture.
+The governing test for every step you write: **could a QA on a fresh login perform this step by hand, and would they observe what it asserts?** If not, the step is evidence about your fixture, not the product.
 
-Two specs are therefore never authored. Both pass against a broken product, and both are *reported* as coverage, which makes them worse than absent coverage:
-
-| Anti-pattern | The tell |
-|---|---|
-| **It mocks what it asserts** | a `route`/`fulfill` whose URL matches the endpoint the requirement is about. A QA cannot hand the app its own answer |
-| **It teleports** | `goto('/<entity>-detail/<hard-coded-id>')`. A QA reaches a record through the menu, the list and a click — never by typing an id they were handed |
-
-A third failure mode outranks both, because it hides them: **a step that silently does nothing still reports green.** A route matcher on a path the app never serves, a guarded branch whose predicate is false, a negative assertion in an environment that satisfies it anyway. Prove every predicate fired.
-
-E2E tests are slow and expensive — write them only for critical paths that unit/integration tests cannot cover. One user flow per test; don't chain unrelated flows.
+Three failure modes follow from this — mocking what you assert, teleporting past the journey, and a predicate-guarded step silently doing nothing while still reporting green — each fully specified as a Rule below (anti-pattern illustrations: [deep dive](references/playwright-deep-dive.md)).
 
 ### Workflow
 
@@ -51,9 +42,9 @@ E2E tests are slow and expensive — write them only for critical paths that uni
 
 - Use **accessible selectors**: `role`, `text`, `label`, `placeholder` — **NOT** CSS classes or XPaths.
 - **Derive locators from the RENDERED DOM, never from component source.** Run the app and snapshot the accessibility tree to obtain selectors; do not transcribe `id`s/attributes off a component template during scouting or planning. UI frameworks that wrap native inputs (e.g. Quasar `QInput`/`QSelect` with `inheritAttrs: false`) strip or rewrite template `id`s, so a source-scouted `#id` looks authoritative but never renders. Confirm every scouted selector resolves against a live snapshot before it enters a plan or a spec.
-- **Anything activated by a predicate must prove it fired — guarded branches and network interception alike.** A conditional step, a route matcher, a stub, an injection: if a predicate decides whether it runs, a wrong predicate makes it a silent no-op, and a green run can never falsify what never ran. Three obligations: **(1)** emit a marker/log when the path is taken and assert the marker, so a mis-scoped predicate fails loudly instead of passing by omission; **(2)** key matchers on the **distinctive tail** of a path, never on a base-URL shape — a prefix or origin the environment can be repointed away from stops matching with no error the moment the app is pointed elsewhere, and the spec still reports itself as mock-driven; **(3)** pair every negative assertion with a positive control — an assertion that something is hidden or absent, in an environment that satisfies it anyway, is vacuous whether or not the setup worked. Verify predicates against the paths the app **actually serves**, not the paths you expect.
-- **Never stub, mock, or intercept the endpoint whose behavior the requirement asserts.** A spec that installs a route handler returning the success value and then asserts the success state is testing its own fixture: it passes identically against a broken product, and its green is worse than absent coverage because it is *reported* as coverage. Mock only collaborators outside the claim, and name which ones and why in the spec. Any flow whose requirement is "this call succeeds/fails" is driven against the real endpoint, or recorded BLOCKED.
-- **Reach the feature the way a user reaches it — never deep-link past the journey.** A spec that jumps straight to `/<entity>-detail/<hard-coded-id>` skips the menu, list, search and row-open path, so it cannot fail when any of those break, and it silently couples the suite to an id that exists in one environment. Drive the real navigation and locate the target by **user-visible name**, not id. Keep a deep-link case only as an explicitly-labelled **cold-load** test: arriving cold from a bookmark or refresh is a distinct real scenario a warm click-through cannot cover, and it is where uninitialised-state defects surface (a null current-entity on cold load that never fires the detail fetch). A failed journey must fail loudly — never silently fall back to a deep link.
+- **Anything activated by a predicate must prove it fired — guarded branches and network interception alike.** If a predicate decides whether a conditional step, route matcher, stub, or injection runs, a wrong predicate makes it a silent no-op that a green run can never falsify. Three obligations: **(1)** emit a marker/log when the path is taken and assert it, so a mis-scoped predicate fails loudly instead of passing by omission; **(2)** key matchers on the **distinctive tail** of a path, never a base-URL shape — a prefix the environment can be repointed away from stops matching silently; **(3)** pair every negative assertion with a positive control — asserting something hidden/absent in an environment that satisfies it anyway is vacuous either way. Verify predicates against the paths the app **actually serves**, not the paths you expect.
+- **Never stub, mock, or intercept the endpoint whose behavior the requirement asserts** (rationale: [deep dive](references/playwright-deep-dive.md), "It mocks what it asserts"). Mock only collaborators outside the claim, naming which ones and why. A flow whose requirement is "this call succeeds/fails" drives against the real endpoint, or is recorded BLOCKED.
+- **Reach the feature the way a user reaches it — never deep-link past the journey** (rationale: deep dive, "It teleports"). Drive real navigation; locate the target by **user-visible name**, not id. A deep-link case is allowed only as an explicitly-labelled **cold-load** test — arriving cold from a bookmark/refresh is a distinct scenario a warm click-through can't cover, and is where uninitialised-state defects surface (e.g. a null current-entity that never fires the detail fetch on cold load). A failed journey must fail loudly — never silently fall back to a deep link.
 - Wait for elements before interacting: use `browser_wait_for` with reasonable timeouts.
 - **Never use a hard-coded `sleep`** — wait for a specific condition instead.
 - One user flow per test. Don't chain unrelated flows.
@@ -81,4 +72,4 @@ E2E tests are slow and expensive — write them only for critical paths that uni
 
 ## Deep Dive
 
-For engine-neutral rationale — when to write E2E vs unit tests, selector philosophy, waiting strategies, and common pitfalls — see [references/playwright-deep-dive.md](references/playwright-deep-dive.md).
+For engine-neutral rationale — anti-pattern illustrations, when to write E2E vs unit tests, selector philosophy, waiting strategies, and common pitfalls — see [references/playwright-deep-dive.md](references/playwright-deep-dive.md).

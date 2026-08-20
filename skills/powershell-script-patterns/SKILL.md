@@ -5,7 +5,7 @@ description: "Provides the PowerShell scripting execution contract: extract embe
 
 # PowerShell Script Patterns
 
-A PowerShell script is untested theory until it has been executed and its external URLs fetched. Reading a script and declaring it correct is not validation.
+A PowerShell script is untested theory until it has been executed and its external URLs fetched — reading it and declaring it correct is not validation.
 
 ## Worker Execution Contract
 
@@ -30,7 +30,7 @@ When the script lives inside a host-language string (e.g. a C# string literal, a
 ### Missing Parameters — Escalate, Don't Invent
 
 - If the script requires parameters or values you cannot infer from the codebase or the task brief (tenant IDs, install paths, license keys, service names), do NOT invent plausible-looking values.
-- Escalate via your standard `<handoff>` (status BLOCKED, blocker naming the exact parameters and why they are un-inferable). The Orchestrator asks the user — you cannot ask the user directly.
+- Escalate via your standard `<handoff>` (status BLOCKED, blocker naming the exact parameters and why they are un-inferable) — the Orchestrator asks the user; you cannot ask directly.
 
 ### External URL Verification
 

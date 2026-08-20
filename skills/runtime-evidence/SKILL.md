@@ -5,7 +5,7 @@ description: Squad-internal execution contract for proving a claim against the a
 
 # Runtime Evidence
 
-A test suite proves the code you wrote does what you think. It does not prove the running application does. This contract governs the difference: how to observe the real system, what artifact records the observation, and what to write when you cannot make the observation at all.
+A test suite proves the code you wrote behaves; it does not prove the running application does. This contract governs the difference: how to observe the real system, what artifact records the observation, and what to write when you cannot observe at all.
 
 ## Worker Execution Contract
 
@@ -13,7 +13,7 @@ A test suite proves the code you wrote does what you think. It does not prove th
 
 **An in-process observation is a strictly one-directional instrument: it can fail a wire claim but never pass one.**
 
-This is a deliberate refinement (convention #8) of `{PLUGIN_ROOT}/ui-design-patterns/SKILL.md`'s rule — *"Source reading is a strictly one-directional instrument here: it can fail a check but never pass one."* That rule bounds **source reading** against **rendered output**. This one bounds **in-process execution** against **observed output**, and it is stricter in one respect: a source read fails obviously, while an in-process test executes real code and therefore *looks* like evidence. A green in-process suite is the most convincing false pass available — real handlers, real queries, real assertions, everything true except the one thing the claim was about.
+Deliberate refinement (convention #8) of `{PLUGIN_ROOT}/ui-design-patterns/SKILL.md`'s rule — *"Source reading is a strictly one-directional instrument here: it can fail a check but never pass one."* That rule bounds **source reading** against **rendered output**; this one bounds **in-process execution** against **observed output**, and is stricter in one respect: a source read fails obviously, while a green in-process suite is the most convincing false pass available (rationale §1).
 
 Corollary: **an effect asserted in one store is not asserted.** If a requirement says a client is mapped, the UI indicator, the database row, and any downstream agent or device state are three separate sources of truth. Reading one and inferring the others is a proxy substitution, and `base-persona.md`'s Evidence Integrity rules require you to name it.
 
@@ -40,11 +40,11 @@ Every milestone carries a `[vs:<surface>]` tag assigned at planning. The tag sel
 | `fn` | The function invoked and the effect read back from its sink — queue, cache, table, blob |
 | `none` | No client-observable effect. Requires a **written justification line** in the plan |
 
-`[vs:none]` is an explicit, reviewable claim, not an exemption. It converts "nobody thought about verification" into "someone wrote down why there is nothing to observe" — which a reader can challenge.
+`[vs:none]` is an explicit, reviewable claim, not an exemption — a written reason a reader can challenge, never silence (rationale §8).
 
 ### The Environment Manifest
 
-A probe command is not an environment. On a microservice estate the feature under test needs several services running **and pointed at each other locally**, and a probe that quietly succeeds against shared dev — because that is what the checked-in config still points at — produces a capture that is fresh, well-formed, and about the wrong system.
+A probe command is not an environment. A probe that quietly succeeds against shared dev — what the checked-in config still points at — yields a capture that is fresh, well-formed, and about the wrong system (rationale §8).
 
 The facts that make a probe runnable are **caller-supplied**, and they live in a manifest with these blocks:
 
@@ -67,19 +67,19 @@ The facts that make a probe runnable are **caller-supplied**, and they live in a
 
 A Tier-2 file standing alongside a Tier-1 recipe carries **deltas only** — each naming what it overrides. Never a silent second copy.
 
-**Run the minimal subset, and record which subset you ran.** The manifest describes the *whole* estate a feature can need; a given change almost never needs all of it. An icon fix needs the web app. An API fix needs the API and whatever exercises it. A device-agent change needs the build → copy → run → pair chain and a target machine. Select the smallest set of bring-up steps whose `Needed for` covers the milestone's `[vs:<surface>]` tag, run those, and **name the subset in the capture's `Environment` field** — the reviewer needs to know a claim was made against three services and not eight. A step you skipped is a scoping decision; a step you skipped silently is an unstated assumption about what the claim covers.
+**Run the minimal subset, and record which subset you ran.** The manifest describes the *whole* estate a feature can need; a given change almost never needs all of it. Select the smallest set of bring-up steps whose `Needed for` covers the milestone's `[vs:<surface>]` tag, run those, and **name the subset in the capture's `Environment` field**. A step you skipped is a scoping decision; a step you skipped silently is an unstated assumption about what the claim covers.
 
-**A missing capability is requested immediately and blocks at the evidence boundary — not at detection.** Docker is not installed, the browser tooling is absent, the test device is unprovisioned, a credential has no source. Halting the run on the spot wastes the one resource the situation actually gives you: the human can install Docker while you write the code. So:
+**A missing capability is requested immediately and blocks at the evidence boundary — not at detection.** Docker not installed, browser tooling absent, test device unprovisioned, a credential with no source. Why the split (rationale §8): the human can install Docker while you write the code.
 
-1. **Ask now**, naming exactly what and why — *"Docker Desktop, to run the local Postgres this API's integration tier needs"*. Specific enough to act on without a follow-up question.
-2. **Record it as a blocker in the same breath** (`update_state.py --add-blocker`). The request is what parallelizes the wait; the blocker is what keeps the deferral honest. Never one without the other — a request with no blocker is a note that gets forgotten by the third milestone.
-3. **Keep working on everything that does not need it.** Write the code. Run the tiers you can reach. A missing Tier-3 capability does not make Tier 1 and 2 unavailable.
-4. **Stop at the first step that needs it** — your own self-verification, the verifier's capture, the gate that reads it. Not one step past. That boundary is exactly where a deferral would otherwise turn into a shipped claim with nothing behind it.
-5. **The blocker clears only on evidence** that the capability now works — `--resolve-blocker` requires it, and the exercise-it-once check is what to cite. Since a milestone cannot close while any blocker stands, the deferral is bounded by a mechanism rather than by anyone remembering it.
+1. **Ask now**, naming exactly what and why — *"Docker Desktop, to run the local Postgres this API's integration tier needs"*. Actionable without a follow-up question.
+2. **Record it as a blocker in the same breath** (`update_state.py --add-blocker`). Never one without the other.
+3. **Keep working on everything that does not need it.** Write the code; run the tiers you can reach. A missing Tier-3 capability does not make Tier 1 and 2 unavailable.
+4. **Stop at the first step that needs it** — your own self-verification, the verifier's capture, the gate that reads it. Not one step past.
+5. **The blocker clears only on evidence** that the capability now works — `--resolve-blocker` requires it; cite the exercise-it-once check.
 
-What each stage checks differs, and the divergence is deliberate (**convention #8**): planning checks *capabilities* only — greenfield services do not exist yet and brownfield ones are build's to start — while build checks capabilities **and** starts the services, because by then they are real. Neither stage halts on detection; both route through the ledger above.
+Planning and build check different things, and the divergence is deliberate (**convention #8**): planning checks *capabilities* only — greenfield services do not exist yet, brownfield ones are build's to start — while build checks capabilities **and** starts the services. Neither halts on detection; both route through the ledger above.
 
-**No agent authors this file, and no agent fills a gap in it.** A start command you cannot find, a port nobody wrote down, a base URL you would have to infer from a compose file, a credential you were not given, a browser you do not have: each is context the caller owes you, not a blank to fill from convention. Escalate it via `<handoff>` and stop — this is the environment-scoped case of *you do not author the probe you are graded on*. **A missing capability is reported the same way, and before the work starts**, never at capture time: at that point the only remaining move is a lower tier, which the Tier Ladder forbids.
+**No agent authors this file, and no agent fills a gap in it.** A start command you cannot find, a port nobody wrote down, a base URL you would infer from a compose file, a credential you were not given, a browser you do not have: each is context the caller owes you, not a blank to fill from convention. Escalate via `<handoff>` and stop — the environment-scoped case of *you do not author the probe you are graded on*. **A missing capability is reported the same way, and before the work starts**, never at capture time: by then the only remaining move is a lower tier, which the Tier Ladder forbids.
 
 The manifest is what makes the capture's `Environment` and `Config repointed` fields fillable, and what a reviewer diffs a suspiciously-green capture against.
 
@@ -88,10 +88,10 @@ The manifest is what makes the capture's `Environment` and `Config repointed` fi
 1. **START** the application the way a user starts it, using the start command declared in the milestone's `RUNTIME PROBE:` line. Never invent the command — see *Escalate When*.
 2. **REPOINT** whatever configuration is needed so the surfaces under test talk to the local instances, and record exactly what you changed.
 3. **PROBE** using the declared probe command through the transport below.
-4. **CAPTURE** the output to a file under `evidence/runtime/` via `{PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture`, which writes the command, timestamp, exit code and output itself. When no Python 3 runtime is available, hand-write the capture with the complete field list from *The Capture Artifact* below; `--capture` is preferred because those fields are tool-authored and therefore cannot be faked.
+4. **CAPTURE** the output to a file under `evidence/runtime/` via `{PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture`, which writes the command, timestamp, exit code and output itself. With no Python 3 runtime available, hand-write the capture with the complete field list from *The Capture Artifact* below; `--capture` is preferred because those fields are tool-authored and therefore cannot be faked.
 5. **CITE** the capture path in your report.
 
-**You do not author the probe you are graded on.** The probe and its expected observable come from the plan. A probe invented at verification time is invented by the party motivated to soften it.
+**You do not author the probe you are graded on.** The probe and its expected observable come from the plan; one invented at verification time is invented by the party motivated to soften it.
 
 ### Transports
 
@@ -104,7 +104,7 @@ Read the transport's own contract on demand; this file does not restate it.
 | `rmm` | The platform's own service/package query, run on the target device | (project-declared in the `RUNTIME PROBE:` line) |
 | `fn` | The sink's own client — queue peek, cache read, table query | (project-declared) |
 
-An in-process test client is **not a transport**. Naming one in a capture is a gate failure, not a shortcut. The recognizable ones are `WebApplicationFactory`/`TestServer` (.NET), `supertest` (Node), `MockMvc` (Spring), and their equivalents in any stack: each is the Tier-2 integration instrument — real routing, real handler logic, real data access, never the wire. The mechanically-enforced tell list lives in `{PLUGIN_ROOT}/pipeline-tools/scripts/check_runtime_evidence.py` (byte-locked to `check_coverage.py`'s plan lint); the prose list here is the recognition aid, not the gate.
+An in-process test client is **not a transport**. Naming one in a capture is a gate failure, not a shortcut. The recognizable ones — `WebApplicationFactory`/`TestServer` (.NET), `supertest` (Node), `MockMvc` (Spring), and their equivalents in any stack — are the Tier-2 integration instrument: real routing, real handler logic, real data access, never the wire. The mechanically-enforced tell list lives in `{PLUGIN_ROOT}/pipeline-tools/scripts/check_runtime_evidence.py` (byte-locked to `check_coverage.py`'s plan lint); the prose list here is the recognition aid, not the gate.
 
 ### The Capture Artifact
 
@@ -112,8 +112,8 @@ One file per probe, at `.docs/{project-name}/implementation/evidence/runtime/<mi
 
 Required: `Milestone`, `Requirement IDs`, `Surface`, `Transport`, `Base URL` (or the device/sink identifier), `Probe command`, `Captured`, `Exit code`.
 Required when the surface is `web+api` or wider: `Environment` (every service and the local URL it was reached at) and `Config repointed` (what you changed, and from what).
-Required when the surface is `api` or `web+api`: `OpenAPI` — the contract-document URL and the status it returned, as `- OpenAPI: <url> — <status>`. Record it for the **failure-path capture too**, not just the success one; the gate scopes per capture, so a sibling missing the field fails the whole milestone. This is the cheapest field in the artifact and the one that most directly separates a started application from a test host: the document is typically served behind the same environment branch an in-process host never resolves. It answers *is the surface up and is its schema being served* — nothing about whether a response body is correct, which is what the captured output and the asserted keys are for.
-Required wherever the running artifact can echo any identity, and **the identity must be commit-bearing**: `Build marker` — the commit the running service reports (`ProductVersion`/informational version, a `git log -1` hash for a from-source run, a build-info endpoint). An assembly or file version is **not** a build marker: two builds of the same version are routinely identical in length and report an identical `FileVersion`, so a version-only marker cannot discriminate the build you meant from the one before it. **And the build must postdate the commit containing the change** — the marker tracks HEAD, so building before committing stamps the *previous* commit onto a binary carrying the new behavior: fresh, well-formed, and lying, which is worse than a missing marker. Without a commit-bearing marker, a service started before your change and never restarted produces a capture that is fresh, non-empty and wrong.
+Required when the surface is `api` or `web+api`: `OpenAPI` — the contract-document URL and the status it returned, as `- OpenAPI: <url> — <status>`. Record it for the **failure-path capture too**, not just the success one; the gate scopes per capture, so a sibling missing the field fails the whole milestone. It proves the surface is up and serving its schema — nothing about whether a response body is correct, which is what the captured output and the asserted keys are for. Why this is the cheapest discriminator between a started application and a test host: rationale §9.
+Required wherever the running artifact can echo any identity, and **the identity must be commit-bearing**: `Build marker` — the commit the running service reports (`ProductVersion`/informational version, a `git log -1` hash for a from-source run, a build-info endpoint). An assembly or file version is **not** a build marker: two builds of the same version are routinely identical in length and report an identical `FileVersion`, so a version-only marker cannot discriminate the build you meant from the one before it. **And the build must postdate the commit containing the change** — the marker tracks HEAD, so building before committing stamps the *previous* commit onto a binary carrying the new behavior: fresh, well-formed, and lying, which is worse than a missing marker.
 
 Captures are **gating** and belong to whoever verifies. A builder's own self-check capture goes to `evidence/build/` instead and does not satisfy a gate — the same producer split `evidence/review/` already uses for rendered evidence.
 
@@ -131,7 +131,7 @@ The third consumer cites differently: in `acceptance-results.md` the capture pat
 
 ### When You Cannot Probe
 
-If the application will not start, the environment cannot be repointed, the device is unreachable, or the transport is unavailable:
+The application will not start, the environment cannot be repointed, the device is unreachable, or the transport is unavailable:
 
 - Record the claim as **`BLOCKED — <what was missing>`**. Never `PASS`. Never omit it.
 - Say explicitly what you observed *instead*, if anything: `BLOCKED — app will not start; Tier 2 suite green only`. An unnamed proxy is a fabrication in effect (`{PLUGIN_ROOT}/agent-squad/base-persona.md`, Evidence Integrity).
@@ -162,4 +162,4 @@ An honest `BLOCKED` costs one round-trip. A Tier-2 pass on a Tier-3 claim costs 
 
 For rationale, the failure histories these rules encode, and per-surface worked examples, read on demand:
 
-- [`references/runtime-evidence-rationale.md`](references/runtime-evidence-rationale.md) — why the in-process tier is the most dangerous false pass, the 2026-08 response-envelope incident traced end to end, the stale-process hazard and its partial mitigations, worked captures for each surface including a device/agent example, the reasoning behind gating captures on freshness rather than authorship, and **a worked multi-service environment manifest** with the reasoning behind caller-supplied environment facts.
+- [`references/runtime-evidence-rationale.md`](references/runtime-evidence-rationale.md) — §1 why the in-process tier is the most dangerous false pass; §2 the 2026-08 response-envelope incident traced end to end; §3 the stale-process hazard and its partial mitigations; §4 freshness vs authorship; §5 worked captures per surface, device/agent included; §6 why environment facts are caller-supplied; §7 **a worked multi-service environment manifest**; §8 the shared-dev false-green, named subsets, and the request-now/block-later economics; §9 the `OpenAPI` field and commit-bearing build markers.

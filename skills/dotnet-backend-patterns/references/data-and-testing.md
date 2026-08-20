@@ -32,6 +32,10 @@ builder.Entity<Invoice>(e =>
 });
 ```
 
+### Why the transaction span stays in-process
+
+Nothing between `BeginTransactionAsync` and `CommitAsync` may await an out-of-process dependency — no `HttpClient`, supplier SDK, gateway, or broker call. Locking a row that is shared across all callers (a global settlement, clearing, or sequence account) and then awaiting a remote call serializes the whole endpoint at that remote's latency. Where the span existed to make a locked check-then-write atomic, it is replaced by a committed reservation before the call and a second short transaction after it — never merely by widening the gap between check and write. REPR's `TransactionFilter` caveat ([repr-playbook.md](repr-playbook.md) §4.3) is this same rule applied to a filter-shaped span.
+
 ## 2. Async + CancellationToken Propagation
 
 ```csharp

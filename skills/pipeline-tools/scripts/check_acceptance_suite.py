@@ -558,7 +558,8 @@ def needs_manual_evidence(entry):
     alone): execution mode is now STRICTER. A present-but-unrecognized Mode
     also owes evidence.
 
-    Fail-closed doctrine (base-persona.md:49): of the two readings available
+    Fail-closed doctrine (base-persona.md, Evidence Integrity — "a gate you
+    author fails closed"): of the two readings available
     for an unreadable Mode cell, `manual` is the one that DEMANDS evidence, so
     it must be the one an unrecognized value falls back to. Reading `semi` or
     `Manual!` as `auto` made a one-character typo the cheapest way to buy a

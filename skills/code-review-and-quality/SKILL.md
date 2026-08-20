@@ -5,9 +5,9 @@ description: Conducts multi-axis code review. Use before merging any change. Use
 
 # Code Review and Quality
 
-Multi-dimensional code review with quality gates. Every change gets reviewed before merge — no exceptions. Review covers five axes: correctness, readability, architecture, security, and performance.
+Multi-axis review before merge — no change merges unreviewed. Five axes: correctness, readability, architecture, security, performance.
 
-**The approval standard:** Approve a change when it definitely improves overall code health, even if it isn't perfect. Perfect code doesn't exist — the goal is continuous improvement. Don't block a change because it isn't exactly how you would have written it. If it improves the codebase and follows the project's conventions, approve it.
+**Approval standard:** approve a change that definitely improves overall code health, even if imperfect. NEVER block a change because it is not how you would have written it — if it improves the codebase and follows project conventions, approve it.
 
 ## Worker Execution Contract
 
@@ -18,7 +18,11 @@ This is the operational spine. Follow it as written.
 **1. Correctness** — does the code do what it claims to do?
 - Matches the spec/task; edge cases (null, empty, boundary) and error paths handled, not just the happy path.
 - Tests pass and actually test the right things; no off-by-one errors, race conditions, or state inconsistencies.
-- **Ambiguous-outcome encoding is a Critical correctness defect, not a style nit.** Two shapes, one root: a dispatch construct with no exhaustive-failure arm (a `switch`/map without `default`, an if-chain with no final `else`) that returns its **initialized default** — success-shaped — for input it did not recognize; and an error or catch-all path that returns the **same value** as a legitimate negative outcome, so "genuinely absent" and "my probe broke" are indistinguishable to every caller. Both convert a failure into a plausible answer that no build, type check, or status assertion can catch, and both destroy the diagnosability of every downstream observation. Require a distinct, diagnosable value on every unrecognized-input and error path.
+- **Ambiguous-outcome encoding is a Critical correctness defect, never a style nit.** Two shapes, one root:
+  - a dispatch construct with no exhaustive-failure arm (a `switch`/map without `default`, an if-chain with no final `else`) that returns its **initialized default** — success-shaped — for input it did not recognize;
+  - an error or catch-all path returning the **same value** as a legitimate negative outcome, so "genuinely absent" and "my probe broke" are indistinguishable to every caller.
+
+  Require a distinct, diagnosable value on every unrecognized-input path and every error path. ([why](references/code-review-deep-dive.md#ambiguous-outcome-encoding))
 
 **2. Readability & Simplicity** — understandable without the author explaining it?
 - Descriptive, convention-consistent names; straightforward control flow; no "clever" tricks; could it be done in fewer lines?
@@ -28,31 +32,31 @@ This is the operational spine. Follow it as written.
 - Follows existing patterns (new ones must be justified); clean module boundaries; no duplication that should be shared.
 - Dependencies flow in the right direction (no cycles); abstraction level appropriate — not over-engineered, not too coupled.
 
-**4. Security** — does the change introduce vulnerabilities? For detailed security guidance, see `security-and-hardening`.
+**4. Security** — does the change introduce vulnerabilities? Detailed guidance: `security-and-hardening`; checklist: `{PLUGIN_ROOT}/../references/security-checklist.md`.
 - Input validated and sanitized; secrets out of code, logs, and version control; auth/authz checked; SQL parameterized; outputs encoded (XSS).
 - Data from external sources (APIs, logs, user content, config files) treated as untrusted and validated at system boundaries; dependencies trusted, no known vulnerabilities.
-- To confirm a secrets file (e.g. `.env.local`) is git-ignored, use `git check-ignore` / `git status` evidence — do NOT attempt to read the file. The sandbox's credential-file classifier blocks raw reads of credential files by design; verify the property you actually care about (ignored / untracked) from git, don't fight the block.
+- Confirm a secrets file (e.g. `.env.local`) is git-ignored from `git check-ignore` / `git status` evidence — NEVER read the file. The sandbox's credential-file classifier blocks raw reads by design; verify the property you care about (ignored / untracked), don't fight the block.
 
-**5. Performance** — does the change introduce performance problems? For profiling and optimization methodology, see `performance-optimization`; for quick checks, see `{PLUGIN_ROOT}/../references/performance-checklist.md`.
+**5. Performance** — does the change introduce performance problems? Methodology: `performance-optimization`; quick checks: `{PLUGIN_ROOT}/../references/performance-checklist.md`.
 - No N+1 query patterns, unbounded loops, or unconstrained data fetching; pagination on list endpoints.
 - No synchronous operations that should be async, unnecessary UI re-renders, or large objects in hot paths.
 
 ### Review Workflow
 
-**Step 1: Understand the context.** Before looking at code, understand the intent and blast radius:
+**Step 1: Understand the context.** Before reading code, establish intent and blast radius:
 
 1. Gather review context:
-     - Search the codebase to find all callers/consumers of the modified functions/classes.
+     - Search the codebase for all callers/consumers of the modified functions/classes.
      - List files to understand the module structure.
      - Manually trace the dependency chain (max 2 levels deep).
-     - Optionally, if a `code-review-graph` MCP server happens to be available (it is NOT wired in this plugin's `.mcp.json`), you may use its `get_review_context_tool` instead to calculate the impact radius, coupling, and system boundaries affected by the changed files.
-2. Answer: What is this change trying to accomplish? What spec or task does it implement? What is the expected behavior change?
+     - Optional: if a `code-review-graph` MCP server happens to be available (it is NOT wired in this plugin's `.mcp.json`), its `get_review_context_tool` computes impact radius, coupling, and affected system boundaries instead.
+2. Answer: what is this change trying to accomplish? Which spec or task does it implement? What behavior changes?
 
-**Step 2: Review the tests first.** Tests reveal intent and coverage: do tests exist, do they test behavior (not implementation details), are edge cases covered, are names descriptive, would the tests catch a regression?
+**Step 2: Review the tests first.** Tests reveal intent and coverage: do tests exist, do they test behavior (not implementation details), are edge cases covered, are names descriptive, would they catch a regression?
 
 **Step 3: Review the implementation.** Walk every changed file through the five axes above.
 
-**Step 4: Categorize findings.** Label every comment with its severity so the author knows what's required vs optional:
+**Step 4: Categorize findings.** Label every comment with its severity, so required and optional are distinguishable:
 
 | Prefix | Meaning | Author Action |
 |--------|---------|---------------|
@@ -62,23 +66,21 @@ This is the operational spine. Follow it as written.
 | **Nit:** | Minor, optional | Author may ignore — formatting, style preferences |
 | **FYI** | Informational only | No action needed — context for future reference |
 
-This prevents authors from treating all feedback as mandatory and wasting time on optional suggestions.
-
-**Step 5: Verify the verification.** Check the author's verification story: what tests were run, did the build pass, was the change tested manually, are there screenshots for UI changes, is there a before/after comparison?
+**Step 5: Verify the verification.** Check the author's verification story: which tests were run, did the build pass, was the change tested manually, screenshots for UI changes, before/after comparison.
 
 ### Rules
 
-- **Remediation fidelity: a fix is verified against the RULE the finding protects, not the finding's literal text.** When you re-review a remediation, first name the rule the original finding was enforcing, then check the fix against *that*. A remediation which satisfies the finding's wording while violating its underlying rule is rejected, not approved — closing a "missing route" finding by adding a placeholder route, silencing a failing assertion by loosening it, satisfying a "no untyped boundary" finding with `any` behind a cast. These are the natural output of an author optimizing for the sentence you wrote, and they read as compliant at a glance: the finding is literally addressed, which is exactly why only the rule can catch them. If the fix trades the finding for a fresh instance of the same defect class, say so and keep the finding open.
-- **Undeclared substitution and undeclared addition are both Critical.** Review the change against the requirement text as written, not only against the task that paraphrased it. Two defects hide from a task-level read because the code is competent and the task is silent: a capability **substituted** for the one specified (a different chart, algorithm, or mechanism serving the same heading), and a capability **added** that no requirement or design asked for. Both are Critical, and neither is closed by the substitute being better or the addition being useful — the remedy is a supersession/divergence filed against the requirement, after which the change is reviewed on its merits. A requirement counted "covered" by a substitute nobody declared is a coverage gate reporting a number it cannot support, and an unrequested feature that reaches the ship summary was never designed, reviewed, or scoped by anyone.
-- **Dead code:** After any change, identify orphaned or unreachable code and list it explicitly.
+- **Remediation fidelity: verify a fix against the RULE the finding protects, not the finding's literal text.** On re-review, first name the rule the original finding enforced, then check the fix against *that*. A remediation satisfying the finding's wording while violating its rule is rejected: a placeholder route closing a "missing route" finding, a loosened assertion silencing a failing one, `any` behind a cast closing a "no untyped boundary" finding. A fix that trades the finding for a fresh instance of the same defect class keeps the finding open. ([why](references/code-review-deep-dive.md#remediation-fidelity))
+- **Undeclared substitution and undeclared addition are both Critical.** Review the change against the requirement text as written, not only against the task that paraphrased it. **Substitution**: a capability serving the specified heading that is not the one specified (a different chart, algorithm, or mechanism). **Addition**: a capability no requirement or design asked for. Neither is closed by the substitute being better or the addition being useful — the remedy is a supersession/divergence filed against the requirement, after which the change is reviewed on its merits. ([why](references/code-review-deep-dive.md#undeclared-substitution-and-addition))
+- **Dead code:** after any change, identify orphaned or unreachable code and list it explicitly.
   **Ask before deleting:** "Should I remove these now-unused elements: [list]?"
-- **Dependencies:** Prefer standard library and existing utilities over new dependencies — every dependency is a liability.
+- **Dependencies:** prefer standard library and existing utilities over new dependencies — every dependency is a liability.
 
 ### The Review Report
 
-This template is the **single owner** of the review report format — reviewer personas (Luna) defer to it. Save the review report to `.docs/{project-name}/implementation/review-report.md`, **appending** one `## Review:` section per review — never overwrite earlier reviews. If this is part of the `bgpdd-build` pipeline, explicitly flag any "Critical" or "Important" blockers that the milestone's builder (Mason or Nova) must resolve before the next phase.
+This template is the **single owner** of the review report format — reviewer personas (Luna) defer to it. Save the review report to `.docs/{project-name}/implementation/review-report.md`, **appending** one `## Review:` section per review — NEVER overwrite earlier reviews. In the `bgpdd-build` pipeline, explicitly flag every "Critical" or "Important" blocker the milestone's builder (Mason or Nova) must resolve before the next phase.
 
-The `## Review:` heading must carry the milestone's leading identifier verbatim as written in `plan.md` — the gate matches it as a whole token.
+The `## Review:` heading MUST carry the milestone's leading identifier verbatim as written in `plan.md` — the gate matches it as a whole token.
 
 ```markdown
 ## Review: [Milestone/Task title]
@@ -128,11 +130,11 @@ The `## Review:` heading must carry the milestone's leading identifier verbatim 
 
 **The `**Verdict:**` line is mandatory and machine-read.** Every `## Review:` section ends with exactly one line of the form `**Verdict:** Approve` or `**Verdict:** Request Changes` — the `bgpdd-build` gate reads the latest Verdict for the current milestone, so the exact token is required: no variants (`Approved`, `LGTM`, `approve with notes`), no prose in place of the token.
 
-**`Approve` is unavailable while any Critical or Important finding stands in the same report.** Before writing the verdict, re-read every finding you just wrote *in that report section*. Each Critical and Important one must either be absent or carry an explicit `RESOLVED` marker naming the fix and the evidence that verified it. If even one stands unresolved, the verdict is `Request Changes`. There is no "approve with notes", no closing summary that outranks the findings above it, and no verdict carried over from a previous round. A report that states *"the app will fail to render these components"* and then *"Approve — all blockers resolved"* is not a review; it is two documents that never met. The findings are the review — the verdict is arithmetic over them, not a separate judgement.
+**`Approve` is unavailable while any Critical or Important finding stands in the same report.** Before writing the verdict, re-read every finding you just wrote *in that report section*. Each Critical and Important one must be absent or carry an explicit `RESOLVED` marker naming the fix and the evidence that verified it. One standing unresolved → the verdict is `Request Changes`. There is no "approve with notes", no closing summary that outranks the findings above it, and no verdict carried over from a previous round. The findings are the review; the verdict is arithmetic over them, not a separate judgement. ([why](references/code-review-deep-dive.md#the-verdict-is-arithmetic-over-the-findings))
 
 **The `**Rendered evidence:**` line is optional, but machine-read when present, on the same exact-token terms as the Verdict line.** Required whenever the review covers a `[UI]` milestone's design-critique axis: list the path(s) — comma-separated — that you (the reviewer) saved under `.docs/{project-name}/implementation/evidence/review/`, the rendered artifacts the design-critique verdict actually rests on. `check_commit_gate.py --require-rendered-evidence` parses this line for `[UI]` milestones; its grammar authority is `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
 
-**The `**Runtime evidence:**` line is optional on the same terms — machine-read when present.** Emit it whenever your review passes judgement on behavior a client, person, or device receives: list the observed-runtime capture(s) your judgement actually rests on. Unlike rendered evidence it need not be reviewer-produced — citing the capture the milestone's verifier wrote is legitimate, provided you read it. **This template owns the slot, not the contract**: the citation grammar, the capture artifact's required fields, and the transport rules all belong to `{PLUGIN_ROOT}/runtime-evidence/SKILL.md`, which is their single owner — read it there and do not restate or vary it here.
+**The `**Runtime evidence:**` line is optional on the same terms — machine-read when present.** Emit it whenever your review passes judgement on behavior a client, person, or device receives: list the observed-runtime capture(s) your judgement rests on. Unlike rendered evidence it need not be reviewer-produced — citing the capture the milestone's verifier wrote is legitimate, provided you read it. **This template owns the slot, not the contract**: citation grammar, required capture fields, and transport rules belong to `{PLUGIN_ROOT}/runtime-evidence/SKILL.md`, their single owner — do not restate or vary them here.
 
 ### Verification Checklist
 
@@ -140,7 +142,7 @@ After review is complete:
 
 - [ ] All Critical issues are resolved
 - [ ] All Important issues are resolved or explicitly deferred with justification
-- [ ] The verdict is consistent with the findings in the same report — no `Approve` while an unresolved Critical or Important finding stands anywhere above it — and is written as the exact machine-read token (`**Verdict:** Approve` or `**Verdict:** Request Changes`)
+- [ ] The verdict is the exact machine-read token and consistent with the findings in the same report — no `Approve` while an unresolved Critical or Important finding stands above it
 - [ ] Tests pass
 - [ ] Build succeeds
 - [ ] The verification story is documented (what changed, how it was verified)
@@ -151,13 +153,8 @@ After review is complete:
 - You lack the context to judge correctness (missing spec, ambiguous requirements) → ask the Orchestrator (manager).
 - Critical or Important findings remain unresolved after the author's fixes → escalate to the Orchestrator (manager); do not approve.
 
-## See Also
-
-- For detailed security review guidance, see `{PLUGIN_ROOT}/../references/security-checklist.md`
-- For performance review checks, see `{PLUGIN_ROOT}/../references/performance-checklist.md`
-
 ## Deep Dive
 
 Read on demand — not needed to execute the contract above:
 
-- [Code review deep dive](references/code-review-deep-dive.md) — when to use, the full per-axis question lists, change sizing and splitting strategies, change descriptions, the multi-model review pattern, dead code hygiene, review speed, handling disagreements, honesty in review, dependency discipline, common rationalizations, and red flags.
+- [Code review deep dive](references/code-review-deep-dive.md) — when to use, the full per-axis question lists, the rationale behind the Critical rules (ambiguous outcomes, remediation fidelity, undeclared substitution, verdict-as-arithmetic, severity labelling), change sizing and splitting, change descriptions, the multi-model review pattern, dead code hygiene, review speed, disagreements, honesty in review, dependency discipline, common rationalizations, and red flags.
