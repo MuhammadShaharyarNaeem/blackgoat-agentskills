@@ -13,7 +13,7 @@ Whenever you invoke a `bgpdd-*` pipeline (`/bgpdd-plan`, `/bgpdd-build`, `/bgpdd
 
 ## Load the orchestration model first
 
-When you start any `bgpdd-*` pipeline or ad-hoc squad use, first **Read** `skills/agent-squad/SKILL.md` and `skills/agent-squad/orchestrator-contract.md` (under this plugin's install root). Operate under the Orchestrator/delegation model, context-integrity check, structured-relay format, and project-state tracking. Cursor does not auto-follow those references -- you must read them explicitly.
+When you start any `bgpdd-*` pipeline, first **Read** `skills/agent-squad/orchestrator-contract.md` (under this plugin's install root) -- every pipeline names it as the mandatory first read, and Cursor does not auto-follow references, so read it explicitly. For **ad-hoc squad use outside a pipeline**, also **Read** `skills/agent-squad/SKILL.md` (the Orchestrator/delegation model, context-integrity check, structured-relay format, and project-state tracking) -- that file governs ad-hoc orchestration, not pipeline runs.
 
 ## "Delegate to Agent" means: spawn the custom agent by name
 

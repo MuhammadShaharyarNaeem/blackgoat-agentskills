@@ -4,7 +4,7 @@
 
 A Claude Code plugin that packages an **agent squad** and a **Prompt-Driven Development (PDD)** workflow into reusable skills and personas. An Orchestrator delegates self-contained tasks to specialized subagents, each of which runs in isolation and returns a structured `<handoff>`. Instead of one agent trying to hold an entire project in context, work is split across a squad of narrow specialists coordinated through slash-command SOPs — with requirement traceability enforced from the first honing question to the final pre-launch gate.
 
-- **Plugin:** `blackgoat-agentskills` v1.2.0 — see [CHANGELOG.md](CHANGELOG.md)
+- **Plugin:** `blackgoat-agentskills` v2.0.0 — see [CHANGELOG.md](CHANGELOG.md)
 - **Author:** shaharyar.naeem (shaharyar.naeem@gorelo.io)
 
 ![blackgoat-agentskills: claude plugin validate passing, the plugin manifest, and the 15-agent squad inventory](assets/preview.svg)
@@ -157,18 +157,19 @@ flowchart TD
     subgraph S1["Session 1: /bgpdd-discovery (brownfield only)"]
         A1["Iris: tech stack + Target Scope"] --> A2["Scouts in parallel: one per API group"]
         A2 --> A3["Orchestrator: synthesis gate"] --> A4["Echo: overview + QA baseline"]
-        A4 --> A5["Phase 5: optional /bgpdd-learn offer"]
+        A4 --> A4b["Phase 4b: runtime-environment.md recipe (Orchestrator + user)"] --> A5["Phase 5: optional /bgpdd-learn offer"]
     end
     subgraph S2["Session 2: /bgpdd-plan"]
         B1["Hybrid honing: main session Q&A, then isolated Rex writes requirements.md"]
         B1 --> B2["Aria: detailed-design.md"] --> B3["Alex: implementation/plan.md"]
-        B3 --> B4["Phase 3.5 coverage gate"] --> B5["Game Tape checkpoint + write orchestrator-state.json"]
+        B3 --> B4["Phase 3.5 coverage gate"] --> B36["Phase 3.6: environment manifest resolve/derive + capability check"] --> B5["Game Tape checkpoint + write orchestrator-state.json"]
     end
     subgraph S2L["Alt Session 2: /bgpdd-lite (well-specified work)"]
         L1["Fit Check → mini-requirements (Orchestrator + user)"] --> L2["Alex: implementation/plan.md"] --> L3["Coverage gate + Game Tape + state file"]
     end
     subgraph S3["Session 3: /bgpdd-build (auto optional)"]
-        C1["Per-milestone loop: Mason or Nova - routed by the milestone's [API]/[UI] domain tag, Quinn, Luna - commit each green milestone"]
+        C0["Phase 0: resolve environment manifest by precedence + minimal-subset preflight"]
+        C0 --> C1["Per-milestone loop: Mason or Nova - routed by the milestone's [API]/[UI] domain tag, Quinn, Luna - commit each green milestone"]
         C1 --> C2["Completion + coverage gates"] --> C3["Dep: ship-decision.md + doubt-driven check"]
         C3 --> C4["Game Tape checkpoint + update state"]
     end
@@ -186,10 +187,11 @@ flowchart TD
 Phase by phase:
 
 - **`/bgpdd-discovery` (Phase 0)** — brownfield only. The Orchestrator establishes the Target Scope (repos, branch, local paths) up front, Iris writes `context.md`, you name the APIs holding the feature's fragments (the SOP hard-halts rather than hallucinate a list; a single Scout can run a footprint search if you don't know), Scouts fan out in parallel, and Echo synthesizes the cross-API overview plus a reverse-engineered QA baseline. Phase 4b then records the runtime-environment recipe with you — how the feature is actually stood up locally (bring-up order, repointing, test identities, capabilities) — so no later build or verify run re-derives it. Phase 5 offers an optional `/bgpdd-learn` run — discovery is global-tier and outside any epic, so no game tape exists to catch its lessons later.
-- **`/bgpdd-plan` (Phase 1)** — has a brownfield Pre-Flight Check that halts if the Tier 1 knowledge base is missing. Honing is **hybrid**: the live one-question-at-a-time Q&A runs in the main session (a delegated agent can't pause to ask you things), then an isolated Rex synthesizes `requirements.md` from the transcript. Aria designs, Alex plans, the Phase 3.5 gate checks coverage, and Phase 4 writes the game tape and the state file.
+- **`/bgpdd-plan` (Phase 1)** — has a brownfield Pre-Flight Check that halts if the Tier 1 knowledge base is missing. Honing is **hybrid**: the live one-question-at-a-time Q&A runs in the main session (a delegated agent can't pause to ask you things), then an isolated Rex synthesizes `requirements.md` from the transcript. Aria designs, Alex plans, the Phase 3.5 gate checks coverage, Phase 3.6 resolves or derives the environment manifest and halts only on a capability that blocks the build itself, and Phase 4 writes the game tape and the state file.
 - **`/bgpdd-lite` (Plan, lite)** — agents: Alex (+ Orchestrator mini-requirements). Produces `requirements.md`, `implementation/plan.md`, and `orchestrator-state.json` → hands off to `/bgpdd-build`. No honing, no Aria; the governing stack contract stands in for the blueprint, and the same coverage gate still applies.
-- **`/bgpdd-build` (Phase 2)** — the milestone loop, detailed below.
+- **`/bgpdd-build` (Phase 2)** — Phase 0 resolves the environment manifest by precedence (the discovery recipe, else plan's derived file, else author it now) and runs a minimal-subset preflight before the first builder delegation; the milestone loop that follows is detailed below.
 - **`/bgpdd-shipping` (Phase 3)** — the Launch Squad, gates, PR, and the epic's single Forge run, detailed below.
+- **`/bgpdd-verify`** — a standalone verification lane for an already-discovered feature, outside the plan/build pipeline: derives a lint-gated acceptance matrix from Echo's QA baseline, delegates Quinn to automate it as permanent Playwright specs run against the actually-running application, and consumes the environment manifest rather than re-deriving it. Product defects it finds route to `/bg-bugfix`.
 
 ### The state file
 
@@ -206,7 +208,8 @@ Phase by phase:
   "artifacts": {
     "requirements": ".docs/{project-name}/requirements.md",
     "design": ".docs/{project-name}/design/detailed-design.md",
-    "plan": ".docs/{project-name}/implementation/plan.md"
+    "plan": ".docs/{project-name}/implementation/plan.md",
+    "environment_manifest": ".docs/{project-name}/implementation/environment-manifest.md"
   },
   "blockers": [],
   "updated": "<ISO-8601 timestamp>"
@@ -219,11 +222,12 @@ Phase by phase:
 
 ## Inside bgpdd-build: The Milestone Loop
 
-At hydration, build reads the state file and **establishes a working branch** (asks for your naming convention, defaults to `feature/{project-name}`, never builds on main). Then it loops over milestones from `plan.md`:
+At hydration, build reads the state file and **establishes a working branch** (asks for your naming convention, defaults to `feature/{project-name}`, never builds on main). Phase 0 then resolves the environment manifest by precedence and runs a minimal-subset preflight, once per session, before the first builder delegation. Then it loops over milestones from `plan.md`:
 
 ```mermaid
 flowchart TD
-    H["Hydrate state + establish branch feature/project-name"] --> M["Mason or Nova builds next milestone<br/>(routed by the [API]/[UI] domain tag; exact milestone text pasted into the briefing)"]
+    P0["Phase 0: resolve environment manifest by precedence<br/>(discovery recipe, else plan's derived file, else author it) + minimal-subset preflight"]
+    P0 --> H["Hydrate state + establish branch feature/project-name"] --> M["Mason or Nova builds next milestone<br/>(routed by the [API]/[UI] domain tag; exact milestone text pasted into the briefing)"]
     M --> BR{"Blast radius beyond<br/>the active microservice?"}
     BR -- "yes" --> AR["Aria advisory + user approval,<br/>then the fresh builder resumes"] --> Q
     BR -- "no" --> Q["Quinn tests<br/>appends to test-report.md"]
@@ -282,7 +286,7 @@ The gates are enforced, not decorative: plan's Upgraded Chain-of-Thought checks 
 flowchart TD
     S0["Step 0 - Hydration gates:<br/>state pipeline is bgpdd-build, milestones done,<br/>plan.md all checked, test-report.md exists"]
     S1["Step 1 - Read shipping-and-launch skill;<br/>paste exact checklist text into each briefing"]
-    ST1["Stage 1 - Vera alone:<br/>Code Quality, Performance, Accessibility"]
+    ST1["Stage 1 - Vera alone:<br/>Code Quality, Performance, Accessibility<br/>(starts the app from the environment manifest, never re-derives it)"]
     ST2["Stage 2 - Cipher and Dep in parallel:<br/>Security / Infra, Flags, Rollout, Monitoring"]
     S3{"All three handoffs green?"}
     FIX["Route failure to Mason or Nova (by domain tag) via /bgpdd-build<br/>max 2 fix-and-reverify rounds per area"]
@@ -335,6 +339,7 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **bgpdd-lite** — mid-weight planning for well-specified work (Orchestrator mini-requirements + Alex; hands off to bgpdd-build)
 - **bgpdd-build** — execution (Mason or Nova, routed by the milestone's [API]/[UI] domain tag; Quinn, Luna, Dep)
 - **bgpdd-shipping** — verification & Launch Squad (Vera, Cipher, Dep, Forge)
+- **bgpdd-verify** — standalone regression lane for an already-discovered feature: acceptance matrix from Echo's QA baseline, automated by Quinn as permanent Playwright specs against the running application (Echo's baseline, Quinn)
 - **bg-bugfix** — lean RCA → TDD → fix → blast-radius bugfix loop (no squad overhead)
 
 ### Methodology skills (execution contracts loaded by agents via their dependency tables)
@@ -355,9 +360,10 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **vue3-spa-patterns** — Vue 3 Composition API, Pinia, Axios interceptor contract (conditional, several agents)
 - **ui-design-patterns** — committed visual direction, typography/spacing/color/motion discipline, anti-generic-AI rules, and Luna's design-critique review axis (Aria, Nova, Luna; conditional on user-facing UI)
 - **godot-gdscript-patterns** — Godot 4 GDScript patterns (conditional, several agents)
+- **runtime-evidence** — the tier ladder (unit / in-process integration / observed runtime), the verification-surface registry, and the environment manifest grammar consumed at `/bgpdd-discovery` Phase 4b, `/bgpdd-plan` Phase 3.6, and `/bgpdd-build` Phase 0 (Mason, Nova, Quinn, Vera, Cipher; loaded whenever a requirement asserts client- or device-observable behavior)
 
 ### Meta skills (operate on the plugin itself)
-- **agent-audit** — audits personas/dependencies against 14 structural heuristics
+- **agent-audit** — audits personas/dependencies against 18 structural heuristics
 - **agent-orchestration-improve-agent** — log parsing → procedural-memory generation (Forge's core methodology)
 - **bgpdd-learn** — `/bgpdd-learn`, the on-demand session-learning triage (Orchestrator + Forge)
 
