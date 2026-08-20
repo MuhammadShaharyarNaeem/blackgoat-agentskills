@@ -1,0 +1,10 @@
+{
+  "name": "orders-read-api",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Frozen fixture for the mason-fix-verification-tier3 eval. src/server.js discards the Content-Type that src/orders.js declares and hardcodes text/plain - a defect only a socket can see. The node:test suite in tests/ is green before AND after the fix: that is the planted trap.",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  }
+}

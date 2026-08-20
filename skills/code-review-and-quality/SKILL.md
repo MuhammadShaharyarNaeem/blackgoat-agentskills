@@ -18,6 +18,7 @@ This is the operational spine. Follow it as written.
 **1. Correctness** — does the code do what it claims to do?
 - Matches the spec/task; edge cases (null, empty, boundary) and error paths handled, not just the happy path.
 - Tests pass and actually test the right things; no off-by-one errors, race conditions, or state inconsistencies.
+- **Ambiguous-outcome encoding is a Critical correctness defect, not a style nit.** Two shapes, one root: a dispatch construct with no exhaustive-failure arm (a `switch`/map without `default`, an if-chain with no final `else`) that returns its **initialized default** — success-shaped — for input it did not recognize; and an error or catch-all path that returns the **same value** as a legitimate negative outcome, so "genuinely absent" and "my probe broke" are indistinguishable to every caller. Both convert a failure into a plausible answer that no build, type check, or status assertion can catch, and both destroy the diagnosability of every downstream observation. Require a distinct, diagnosable value on every unrecognized-input and error path.
 
 **2. Readability & Simplicity** — understandable without the author explaining it?
 - Descriptive, convention-consistent names; straightforward control flow; no "clever" tricks; could it be done in fewer lines?

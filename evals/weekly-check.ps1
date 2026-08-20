@@ -143,6 +143,13 @@ foreach ($f in $changedFiles) {
         # statusCode) the case's gate invocation requires.
         [void]$affectedEvals.Add('contract:quinn-runtime-evidence')
     }
+    if ($f -match 'agents/mason\.md$' -or $f -match 'skills/debugging-and-error-recovery/' -or $f -match 'skills/runtime-evidence/') {
+        # mason-fix-verification-tier3 measures the *which* in
+        # debugging-and-error-recovery step 7: VERIFY runs at the tier the failure was
+        # reported at. It pairs Mason's fix-round <fix_verification> contract with the
+        # tier ladder, so a change to any of the three files can move the answer.
+        [void]$affectedEvals.Add('contract:mason-fix-verification-tier3')
+    }
     if ($f -match 'agents/echo\.md$' -or $f -match 'agents/iris\.md$' -or $f -match 'agents/scout\.md$' -or $f -match 'skills/bgpdd-discovery/') {
         [void]$affectedEvals.Add('contract:echo-qa-discovery-shape')
     }
