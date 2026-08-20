@@ -195,6 +195,20 @@ function Invoke-ContractRun {
         New-Item -ItemType Directory -Force -Path $destination | Out-Null
         Copy-Item -Path (Join-Path $CaseInfo.FixtureDir '*') -Destination $destination -Recurse -Force
 
+        # Copy the plugin's agents/ and skills/ into the temp working copy so the
+        # case prompts' relative paths (agents/mason.md, skills/runtime-evidence/...)
+        # resolve for the agent-under-test. Without this, every persona-compliance
+        # criterion fails for a wiring reason: the agent codes fine but never sees
+        # its contract. The copy also isolates the run from the live repo, so an
+        # agent-under-test can never mutate real plugin files.
+        $pluginRoot = Split-Path -Parent $EvalsRoot
+        foreach ($pluginDir in @('agents', 'skills')) {
+            $src = Join-Path $pluginRoot $pluginDir
+            $dst = Join-Path $tempDir $pluginDir
+            New-Item -ItemType Directory -Force -Path $dst | Out-Null
+            Copy-Item -Path (Join-Path $src '*') -Destination $dst -Recurse -Force
+        }
+
         $command = Get-ContractCaseCommand -CaseMdPath $CaseInfo.CaseMd
 
         Push-Location $tempDir

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`planning-and-task-breakdown/SKILL.md`'s Definition of Done requires "every task
+`planning-and-task-breakdown/SKILL.md`'s task template (its `### Verification` obligations) requires "every task
 carries exactly one domain tag (`[UI]` or `[API]`), and every milestone is
 domain-homogeneous" — this is what makes `next_milestone.py`'s `[UI]`/`[API]`
 routing (and the `MIXED` planning-defect exit) meaningful at all. Alex's own

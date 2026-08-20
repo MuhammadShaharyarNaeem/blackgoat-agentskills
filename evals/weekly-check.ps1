@@ -150,6 +150,23 @@ foreach ($f in $changedFiles) {
         # tier ladder, so a change to any of the three files can move the answer.
         [void]$affectedEvals.Add('contract:mason-fix-verification-tier3')
     }
+    if ($f -match 'skills/bgpdd-build/') {
+        # The build pipeline's contract surfaces: the fix-round <fix_verification>
+        # precondition (Phase 2 step 3), the Runtime Evidence Gate, and Quinn's
+        # ledger/report grammars it briefs. mechanical-pipeline (zero-token,
+        # surfaced separately below via pipeline-tools) covers its gate composition.
+        [void]$affectedEvals.Add('contract:mason-fix-verification')
+        [void]$affectedEvals.Add('contract:mason-fix-verification-tier3')
+        [void]$affectedEvals.Add('contract:quinn-runtime-evidence')
+        [void]$affectedEvals.Add('contract:quinn-test-report-shape')
+    }
+    if ($f -match 'skills/bgpdd-verify/') {
+        # The verify lane consumes the acceptance-matrix grammar (alex case) and
+        # the runtime-evidence capture contract (quinn case); no case invokes the
+        # lane's Orchestrator itself.
+        [void]$affectedEvals.Add('contract:alex-acceptance-matrix')
+        [void]$affectedEvals.Add('contract:quinn-runtime-evidence')
+    }
     if ($f -match 'agents/echo\.md$' -or $f -match 'agents/iris\.md$' -or $f -match 'agents/scout\.md$' -or $f -match 'skills/bgpdd-discovery/') {
         [void]$affectedEvals.Add('contract:echo-qa-discovery-shape')
     }
@@ -158,6 +175,28 @@ foreach ($f in $changedFiles) {
     }
     if ($f -match 'agents/dep\.md$' -or $f -match 'agents/cipher\.md$' -or $f -match 'skills/shipping-and-launch/' -or $f -match 'skills/cloud-deploy-patterns/' -or $f -match 'skills/bgpdd-shipping/') {
         [void]$affectedEvals.Add('contract:dep-ship-decision-shape')
+    }
+    if ($f -match 'agents/aria\.md$' -or $f -match 'skills/blackgoat-research/' -or $f -match 'skills/pipeline-tools/scripts/check_coverage\.py$') {
+        # aria-supersession-writeback plants a research finding that falsifies an FR;
+        # the graded obligations are the register row + in-place requirements
+        # annotation, gated by check_coverage.py design mode.
+        [void]$affectedEvals.Add('contract:aria-supersession-writeback')
+    }
+    if ($f -match 'agents/forge\.md$' -or $f -match 'agents/max\.md$' -or $f -match 'skills/agent-orchestration-improve-agent/' -or $f -match 'CLAUDE\.md$') {
+        # forge-blackgoat-carveout plants an approved surgery plan whose second item
+        # edits agents/blackgoat.md; the carve-out (repo convention #7) must hold.
+        [void]$affectedEvals.Add('contract:forge-blackgoat-carveout')
+    }
+    if ($f -match 'agents/luna\.md$' -or $f -match 'skills/code-review-and-quality/') {
+        # luna-verdict-arithmetic plants an IDOR + a swallowed rejection behind a
+        # green suite; graded on finding both and on the verdict being arithmetic
+        # over the findings (Request Changes, never approve-with-notes).
+        [void]$affectedEvals.Add('contract:luna-verdict-arithmetic')
+    }
+    if ($f -match 'agents/max\.md$' -or $f -match 'skills/code-simplification/') {
+        # max-behavior-preservation plants a genuine simplification beside a
+        # load-bearing 'redundancy'; graded on a runtime value probe, not a grep.
+        [void]$affectedEvals.Add('contract:max-behavior-preservation')
     }
     if ($f -match 'agents/nova\.md$' -or $f -match 'agents/mason\.md$' -or $f -match 'agents/luna\.md$') {
         # None of the three builders/reviewers has a dedicated contract eval: no
