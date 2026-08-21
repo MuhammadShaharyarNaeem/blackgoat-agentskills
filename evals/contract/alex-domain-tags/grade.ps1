@@ -66,56 +66,47 @@ Write-Output '[2] PASSED: plan.md exists'
 
 $planContent = Get-Content -Path $planPath -Raw
 
-# --- (a) every ## Task block carries exactly one of [UI] / [API] -----------
-$taskBlocks = [regex]::Split($planContent, '(?m)(?=^##\s*Task\s*\[?\d+\]?\s*:)') |
-    Where-Object { $_ -match '(?m)^##\s*Task\s*\[?\d+\]?\s*:' }
+# --- (a)+(b) domain tags and milestone homogeneity: defer to the plugin's
+# own domain-tag lint (check_coverage.py plan mode) instead of reimplementing
+# its block-splitting here. The previous inline regex split task blocks only
+# on task headings, so the LAST task of every milestone swallowed the NEXT
+# milestone heading's [UI]/[API] token and false-failed as "both tags" --
+# proven against a fully conformant, lint-clean plan on 2026-08-22. The lint
+# scopes the check to each task's **Tags:** field; deferring to it keeps this
+# grader byte-consistent with the contract the pipeline actually enforces.
+$coverageOutput = & python $checkCoveragePy --requirements $requirementsPath --plan $planPath
+$coverageExit = $LASTEXITCODE
+$report = $null
+try { $report = $coverageOutput | ConvertFrom-Json } catch { }
 
-if ($taskBlocks.Count -eq 0) {
-    Write-Output "FAILED: [3] no '## Task [N]:' blocks found in plan.md"
-    $failures.Add('3: no task blocks found')
+if (-not $report) {
+    $failures.Add("3: check_coverage.py output unparseable (raw: $coverageOutput)")
+    Write-Output "[3] FAILED: check_coverage.py output unparseable"
+    $failures.Add('4: check_coverage.py output unparseable')
+    Write-Output "[4] FAILED: check_coverage.py output unparseable"
 } else {
-    $badTasks = New-Object System.Collections.Generic.List[string]
-    foreach ($block in $taskBlocks) {
-        $headingLine = ($block -split "`n")[0].Trim()
-        $hasUI = [regex]::IsMatch($block, '\[UI\]')
-        $hasAPI = [regex]::IsMatch($block, '\[API\]')
-        # exactly one of [UI]/[API] -- both or neither is a violation
-        if ($hasUI -eq $hasAPI) {
-            $badTasks.Add($headingLine)
-        }
-    }
-    if ($badTasks.Count -eq 0) {
-        Write-Output "[3] PASSED: all $($taskBlocks.Count) task block(s) carry exactly one of [UI]/[API]"
-    } else {
-        $joined = $badTasks -join '; '
-        $failures.Add("3: task(s) missing exactly one domain tag: $joined")
-        Write-Output "[3] FAILED: task(s) missing exactly one domain tag: $joined"
-    }
-}
+    $domainFailures = @($report.lint_failures | Where-Object { $_.check -eq 'domain-tag' })
+    $taskLevel = @($domainFailures | Where-Object { $_.task -match '^\d+$' })
+    $milestoneLevel = @($domainFailures | Where-Object { $_.task -notmatch '^\d+$' })
 
-# --- (b) every ## Milestone block is domain-homogeneous ---------------------
-$milestoneBlocks = [regex]::Split($planContent, '(?m)(?=^#{2,3}\s*Milestone\b\s+\d)') |
-    Where-Object { $_ -match '(?m)^#{2,3}\s*Milestone\b\s+\d' }
-
-if ($milestoneBlocks.Count -eq 0) {
-    Write-Output "FAILED: [4] no '## Milestone <n>' / '### Milestone <n>' headings found in plan.md"
-    $failures.Add('4: no milestone headings found')
-} else {
-    $mixedMilestones = New-Object System.Collections.Generic.List[string]
-    foreach ($block in $milestoneBlocks) {
-        $headingLine = ($block -split "`n")[0].Trim()
-        $hasUI = [regex]::IsMatch($block, '\[UI\]')
-        $hasAPI = [regex]::IsMatch($block, '\[API\]')
-        if ($hasUI -and $hasAPI) {
-            $mixedMilestones.Add($headingLine)
-        }
-    }
-    if ($mixedMilestones.Count -eq 0) {
-        Write-Output "[4] PASSED: all $($milestoneBlocks.Count) milestone(s) are domain-homogeneous"
+    if ($taskLevel.Count -eq 0) {
+        Write-Output "[3] PASSED: domain-tag lint reports no task-level violations (every task's **Tags:** line carries exactly one of [UI]/[API])"
     } else {
-        $joined = $mixedMilestones -join '; '
-        $failures.Add("4: mixed-domain milestone(s): $joined")
-        Write-Output "[4] FAILED: mixed-domain milestone(s): $joined"
+        $joined = ($taskLevel | ForEach-Object { "Task $($_.task): $($_.detail)" }) -join '; '
+        $failures.Add("3: task-level domain-tag lint failure(s): $joined")
+        Write-Output "[3] FAILED: task-level domain-tag lint failure(s): $joined"
+    }
+
+    $milestoneHeadingCount = ([regex]::Matches($planContent, '(?m)^#{2,3}\s*Milestone\b\s+\d')).Count
+    if ($milestoneHeadingCount -eq 0) {
+        $failures.Add('4: no milestone headings found')
+        Write-Output "FAILED: [4] no '## Milestone <n>' / '### Milestone <n>' headings found in plan.md"
+    } elseif ($milestoneLevel.Count -eq 0) {
+        Write-Output "[4] PASSED: $milestoneHeadingCount milestone(s), domain-tag lint reports no heading or homogeneity violations"
+    } else {
+        $joined = ($milestoneLevel | ForEach-Object { "$($_.task): $($_.detail)" }) -join '; '
+        $failures.Add("4: milestone-level domain-tag lint failure(s): $joined")
+        Write-Output "[4] FAILED: milestone-level domain-tag lint failure(s): $joined"
     }
 }
 
@@ -129,9 +120,7 @@ if ($nextMilestoneExit -eq 0) {
     Write-Output "[5] FAILED: next_milestone.py exited $nextMilestoneExit (1 = MIXED = planning defect)"
 }
 
-# --- (d) check_coverage.py --requirements ... --plan ... exits 0 -----------
-$coverageOutput = & python $checkCoveragePy --requirements $requirementsPath --plan $planPath
-$coverageExit = $LASTEXITCODE
+# --- (d) check_coverage.py exits 0 (reuses the criterion-3/4 invocation) ---
 if ($coverageExit -eq 0) {
     Write-Output '[6] PASSED: check_coverage.py exits 0 (every Must-Have FR/NFR covered, no lint failures)'
 } else {
