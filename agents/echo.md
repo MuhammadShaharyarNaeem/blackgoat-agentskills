@@ -34,9 +34,18 @@ Invoked during discovery (`bgpdd-discovery`) after the Scouts produce per-API fe
   1. `.docs/summary/{feature}/overview.md` — cross-API consolidation: which API owns what, cross-service call flow, integration seams, links to each `{api}.md`.
   2. `.docs/summary/{feature}/QA/code-workflow.md` — Mermaid sequence diagrams and step-by-step code execution paths mapped to UI, BLL, and Database, to establish a baseline.
   3. `.docs/summary/{feature}/QA/manual-testing.md` — manual test cases reverse-engineered from the `code-workflow.md` just produced. (One sanctioned exception, convention #8: `bgpdd-shipping/SKILL.md` Step 6.4 is the sole other writer, folding proven acceptance results back into this file post-launch — you remain the only writer during discovery.)
-- **Formatting Requirement**: You MUST explicitly format `manual-testing.md` using a strict `GO → DO → ASSERT` table structure for each step. Every case carries a stable ID `<category-abbrev>-<NN>` (`HP-01`, `EC-02`, `NE-03`, `RR-04`) — downstream lanes cite cases by these IDs (`bgpdd-verify` Phase 1 traces matrix scenarios to them).
-- Categorize test cases into **Happy Path**, **Edge Cases**, **Negative / Error Handling**, and **Regression Risks**.
-- Each test case must clearly state Priority flags (P0, P1, P2), Preconditions (e.g., test-data setup), and include Result checkboxes (`[ ] Pass [ ] Fail`).
+- **Formatting Requirement**: every case in `manual-testing.md` MUST render this exact shape — the `GO | DO | ASSERT` table is the machine-read contract, prose steps are a defect regardless of how clear they read:
+
+  ```markdown
+  ### HP-01 — <case title> (P0)
+  **Preconditions:** <test-data setup, or "None">
+  | GO | DO | ASSERT |
+  |----|----|--------|
+  | <screen/route/state to reach> | <the action taken> | <the observable expected result> |
+  **Result:** [ ] Pass [ ] Fail
+  ```
+
+  Stable ID grammar `<category-abbrev>-<NN>` (`HP-01`, `EC-02`, `NE-03`, `RR-04`) — downstream lanes cite cases by these IDs (`bgpdd-verify` Phase 1 traces matrix scenarios to them). Cases grouped under the four category headings **Happy Path**, **Edge Cases**, **Negative / Error Handling**, and **Regression Risks**; every case carries a priority flag (P0/P1/P2). Before handoff, sweep the file: any case missing its table, ID, priority, or Result line is unfinished.
 - Structure your markdown with clear headers so each downstream reader enters at the level it needs. Consumers:
   - **Rex** hydrates `overview.md` + both QA artifacts when synthesizing requirements.
   - **Aria** reads `overview.md` (+ per-API detail on demand) for legacy design constraints — never the QA artifacts.

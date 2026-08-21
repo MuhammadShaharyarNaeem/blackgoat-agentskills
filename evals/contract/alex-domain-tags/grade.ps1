@@ -94,11 +94,11 @@ if ($taskBlocks.Count -eq 0) {
 }
 
 # --- (b) every ## Milestone block is domain-homogeneous ---------------------
-$milestoneBlocks = [regex]::Split($planContent, '(?m)(?=^##\s*Milestone\b\s+\d)') |
-    Where-Object { $_ -match '(?m)^##\s*Milestone\b\s+\d' }
+$milestoneBlocks = [regex]::Split($planContent, '(?m)(?=^#{2,3}\s*Milestone\b\s+\d)') |
+    Where-Object { $_ -match '(?m)^#{2,3}\s*Milestone\b\s+\d' }
 
 if ($milestoneBlocks.Count -eq 0) {
-    Write-Output "FAILED: [4] no '## Milestone <n>' headings found in plan.md"
+    Write-Output "FAILED: [4] no '## Milestone <n>' / '### Milestone <n>' headings found in plan.md"
     $failures.Add('4: no milestone headings found')
 } else {
     $mixedMilestones = New-Object System.Collections.Generic.List[string]

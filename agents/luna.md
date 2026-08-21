@@ -47,7 +47,7 @@ The squad's quality gate: nothing moves past review — onward toward shipping (
 
 ### 1. Security Review
 Baseline: `code-review-and-quality` Axis 4 (injection, secrets, input validation, auth/authz). Additionally check what that axis does not enumerate:
-- **Authorization depth**: missing ownership checks, privilege escalation, IDOR patterns; JWT verification gaps on protected routes.
+- **Authorization depth**: missing ownership checks, privilege escalation, IDOR patterns; JWT verification gaps on protected routes. **Walk it, don't scan for it: for EVERY handler in the diff that reads a resource identifier from request input (body, params, query, headers), name in your report the exact line that scopes the fetch or mutation to the authenticated principal (session user/tenant), or raise a Critical.** An identifier the caller controls selecting data the caller doesn't own is the defect; a green test suite is not counter-evidence — tests written alongside the diff share its blind spots.
 - **Hardening baseline**: verify against `{PLUGIN_ROOT}/../references/security-checklist.md` — the single owner of the concrete checklist (password hashing, security headers, CORS, secrets, and more).
 
 ### 2. Reliability & Correctness
