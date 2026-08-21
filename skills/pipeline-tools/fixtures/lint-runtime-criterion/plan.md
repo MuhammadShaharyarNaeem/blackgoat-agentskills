@@ -6,6 +6,8 @@
 
 ## Task 1: Order list endpoint
 
+**Tags:** [API]
+
 **Requirements covered:** FR-1
 
 **Named identifiers:** `src/api/orders.ts`, `tests/api/orders.spec.ts`
@@ -23,6 +25,8 @@
 ### Milestone 2 — Orders: create endpoint [API] [vs:api]
 
 ## Task 2: Order creation endpoint
+
+**Tags:** [API]
 
 **Requirements covered:** FR-2, NFR-1
 

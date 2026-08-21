@@ -2,6 +2,8 @@
 
 ## Task 1: Error code catalogue
 
+**Tags:** [API]
+
 **Requirements covered:** FR-1
 
 **Acceptance criteria:**
@@ -9,6 +11,8 @@
 - The router exposes 4 endpoints under `/billing`.
 
 ## Task 2: Retry policy and rounding
+
+**Tags:** [API]
 
 **Requirements covered:** FR-2, NFR-1
 
