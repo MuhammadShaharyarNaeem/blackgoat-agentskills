@@ -63,7 +63,11 @@ $EstUsdPerThousandTokens = 0.01
 function Get-ContractCaseCommand {
     param([Parameter(Mandatory = $true)][string]$CaseMdPath)
 
-    $text = Get-Content -Path $CaseMdPath -Raw
+    # -Encoding UTF8 is load-bearing: case.md files are BOM-less UTF-8, and PS 5.1's
+    # ANSI default mangles an em-dash into a sequence containing U+201D — a smart
+    # quote PowerShell accepts as a string delimiter, so the extracted command
+    # becomes unparseable (dep-ship-decision-shape died this way on every run).
+    $text = Get-Content -Path $CaseMdPath -Raw -Encoding UTF8
     $pattern = '(?ms)^##\s*Command.*?```(?:powershell)?\s*(.*?)\s*```'
     $match = [regex]::Match($text, $pattern)
     if (-not $match.Success) {
@@ -75,7 +79,7 @@ function Get-ContractCaseCommand {
 function Get-ContractCaseDocsPath {
     param([Parameter(Mandatory = $true)][string]$CaseMdPath)
 
-    $text = Get-Content -Path $CaseMdPath -Raw
+    $text = Get-Content -Path $CaseMdPath -Raw -Encoding UTF8
     $match = [regex]::Match($text, '(?m)^-\s*Copies to:\s*`([^`]+)`')
     if (-not $match.Success) {
         throw "No '- Copies to: ``path``' line found in $CaseMdPath"
