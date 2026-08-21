@@ -7,7 +7,7 @@ A Claude Code plugin that packages an **agent squad** and a **Prompt-Driven Deve
 - **Plugin:** `blackgoat-agentskills` v2.0.0 — see [CHANGELOG.md](CHANGELOG.md)
 - **Author:** shaharyar.naeem (shaharyar.naeem@gorelo.io)
 
-![blackgoat-agentskills: claude plugin validate passing, the plugin manifest, and the 15-agent squad inventory](assets/preview.svg)
+![blackgoat-agentskills 2.0: the agent squad wired through the discovery-plan-build-ship-learn pipeline, a runtime-evidence capture panel, and the tagline "green is not evidence. nothing ships on assertion."](assets/social-preview.jpg)
 
 ---
 
