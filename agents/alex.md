@@ -9,7 +9,7 @@ role: Strategist & Planner
 phase: Plan 3 — Planning
 squad: agent-squad
 reports-to: agent-squad
-depends-on: rex
+depends-on: rex, aria # aria is plan-pipeline only; /bgpdd-lite runs without her
 ---
 
 ## Methodology Dependencies
