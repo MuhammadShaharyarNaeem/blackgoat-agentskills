@@ -13,7 +13,7 @@ This skill enables collaborative technical research, technology analysis, and sy
 
 Your Orchestrator's delegation brief tells you which mode applies — do not infer it.
 
-- **Mode 1 — Blueprint** (`bgpdd-plan` Phase 2, the default): execute the full Unified Workflow below (steps 1–8), producing `.docs/{project-name}/design/detailed-design.md`.
+- **Mode 1 — Blueprint** (`bgpdd-plan` Phase 2, the default): execute the full Unified Workflow below (steps 1–9), producing `.docs/{project-name}/design/detailed-design.md`.
 - **Mode 2 — Scoped Advisory** (`bgpdd-build` Phase 1 blast-radius review): execute steps 1–3 only, scoped strictly to the blast-radius report in your brief, and return your architectural recommendation directly in your `<handoff>`. Do NOT create or modify `detailed-design.md` — the epic's blueprint is already signed off; skip steps 4–7 entirely. Apply step 6's self-consistency reasoning to any snippet you put in your `<handoff>` regardless.
 
 ## Unified Workflow
@@ -40,7 +40,10 @@ Your Orchestrator's delegation brief tells you which mode applies — do not inf
    - **Assertion sets are checked as sets.** Pairwise consistency is not set consistency: for any declared set of numbered assertions, invariants, or an enumerated allow-list, check every pair for mutual satisfiability and every member for referential validity — an id naming nothing is a defect. A set whose members were each reviewed alone has never been reviewed. (`bgpdd-plan` Phase 2.5 enforces this at gate time; here it is an authoring obligation.) ([deep dive](references/research-deep-dive.md#sets-as-sets))
    - **Cited authoritative values must agree with the external source of record.** Self-consistency is not only internal: any value, enum, or named type the design cites as authoritative must be traced to — and agree with — its defining source, not merely with the other statements in this document. A cited enum, type, or constant that does not exist in the source file you place it in is a defect of the same class as an internal contradiction. A value drawn from a single downstream or usage observation (one caller, a frontend usage) is provisional: file it as an Open Question or a Divergence & Supersession Register row, never state it as a normative named backend entity.
 7. **Brief-Conformance Diff**: Walk the brief's FIXED sections (tech stack, domain model/entity fields, named business rules) item-by-item, plus every Must-Have FR/NFR: each is either present in the design (cite the section) or has a Divergence & Supersession Register row. Absent from both = defect — fix before handoff. Output: a short conformance table appended to `detailed-design.md` (never to `design/design-review.md` — that file is the Orchestrator's Phase 2.5 output and has a single writer).
-8. **Terminate**: Once the design is complete, generate your final handoff response and terminate.
+8. **Run the design gate (mechanical — run it, don't self-certify)**: run
+   `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --design .docs/{project-name}/design/detailed-design.md`
+   and read its JSON. The design is not complete while it exits non-zero. In particular, a `supersession-annotation` lint failure means a Divergence & Supersession Register row names an FR/NFR that `requirements.md` does not yet annotate in place — write the annotation (`~~...~~ — superseded by D-x, see design register`; your write carve-out exists for exactly this), or correct the row's subject, and re-run until it passes. Never hand off over a failing gate: the Orchestrator runs this same gate at Phase 2.5, and a failure there costs a full delegation round instead of a self-fix. This step is the mechanical enforcement of step 6's supersession rule — the register row and the in-place annotation are one obligation, checked, not promised.
+9. **Terminate**: Once the design is complete and the gate passes, generate your final handoff response and terminate.
 
 ## Deep Dive
 

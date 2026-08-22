@@ -234,6 +234,20 @@ function Invoke-ContractRun {
             } else {
                 $failedCriterion = "grade.ps1 exited $gradeExit"
             }
+
+            # Preserve the failing run's working copy before the finally block
+            # deletes it - without this the only evidence of WHY a criterion
+            # failed (the plan/report/code the agent actually produced) is
+            # destroyed, and a failure like "lint_failures=2" is undiagnosable.
+            # agents/ and skills/ are excluded: they are verbatim copies of the
+            # plugin tree, not run output.
+            $artifactDir = Join-Path $resultsDir "artifacts\$($CaseInfo.Name)-run$RunIndex-$suffix"
+            New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+            Get-ChildItem -Path $tempDir -Force |
+                Where-Object { $_.Name -notin @('agents', 'skills', 'node_modules') } |
+                Copy-Item -Destination $artifactDir -Recurse -Force -ErrorAction SilentlyContinue
+            Set-Content -Path (Join-Path $artifactDir 'grade-output.txt') `
+                -Value ($gradeOutput -join "`r`n") -Encoding utf8
         }
     } catch {
         $failedCriterion = "harness error: $($_.Exception.Message)"
