@@ -191,7 +191,11 @@ foreach ($f in $changedFiles) {
         # luna-verdict-arithmetic plants an IDOR + a swallowed rejection behind a
         # green suite; graded on finding both and on the verdict being arithmetic
         # over the findings (Request Changes, never approve-with-notes).
+        # luna-clean-approve is its mirror: the same fixture genuinely fixed, where
+        # the correct verdict is Approve - the pair only means something together
+        # (one side alone cannot distinguish judgement from bias).
         [void]$affectedEvals.Add('contract:luna-verdict-arithmetic')
+        [void]$affectedEvals.Add('contract:luna-clean-approve')
     }
     if ($f -match 'agents/max\.md$' -or $f -match 'skills/code-simplification/') {
         # max-behavior-preservation plants a genuine simplification beside a
