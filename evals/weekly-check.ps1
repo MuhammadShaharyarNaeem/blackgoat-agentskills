@@ -197,6 +197,12 @@ foreach ($f in $changedFiles) {
         [void]$affectedEvals.Add('contract:luna-verdict-arithmetic')
         [void]$affectedEvals.Add('contract:luna-clean-approve')
     }
+    if ($f -match 'agents/cipher\.md$' -or $f -match 'skills/security-and-hardening/' -or $f -match 'skills/pipeline-tools/scripts/check_agent_report\.py$') {
+        # cipher-security-report plants a hardcoded sk_live signing secret and a
+        # wildcard CORS grant behind a clean-looking service; graded on evidenced
+        # check lines, both findings, and the verdict being arithmetic (Fail).
+        [void]$affectedEvals.Add('contract:cipher-security-report')
+    }
     if ($f -match 'agents/max\.md$' -or $f -match 'skills/code-simplification/') {
         # max-behavior-preservation plants a genuine simplification beside a
         # load-bearing 'redundancy'; graded on a runtime value probe, not a grep.
