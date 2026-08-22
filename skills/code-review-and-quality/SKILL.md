@@ -48,9 +48,11 @@ This is the operational spine. Follow it as written.
      - Optionally, if a `code-review-graph` MCP server happens to be available (it is NOT wired in this plugin's `.mcp.json`), you may use its `get_review_context_tool` instead to calculate the impact radius, coupling, and system boundaries affected by the changed files.
 2. Answer: What is this change trying to accomplish? What spec or task does it implement? What is the expected behavior change?
 
-**Step 2: Review the tests first.** Tests reveal intent and coverage: do tests exist, do they test behavior (not implementation details), are edge cases covered, are names descriptive, would the tests catch a regression?
+**Step 2: Review the tests first.** Tests reveal intent and coverage: do tests exist, do they test behavior (not implementation details), are edge cases covered, are names descriptive, would the tests catch a regression? **A green suite is a claim about what the tests exercise, never about what they omit.** Finish this step by writing down what the suite does *not* cover — those untested paths are your Step 3 reading list, and a verifier's sign-off that rests on the suite inherits exactly its blind spots.
 
-**Step 3: Review the implementation.** Walk every changed file through the five axes above.
+**Step 3: Review the implementation.** Walk every changed file through the five axes above. Two interrogations are mandatory **per changed file**, answered in the report's Files-reviewed log — they target the defect classes a green suite is structurally blind to, the ones that *look like* working checks:
+- **Identity provenance.** For every authorization, tenancy, or ownership comparison: name where each compared value originates. If the trusted side of the comparison originates in the request (body, query, header, path) rather than the authenticated session/token context, that is a **Critical** finding — the check passing its tests *is* the attack working, because any caller can type a different string.
+- **Failure-path visibility.** For every awaited or otherwise fallible call whose side effect a requirement depends on: name what happens when it fails. An empty `catch`, a swallowed rejection, or a success status returned regardless of the outcome is **Important** at minimum — a required side effect that can silently not happen, which no green test ever witnesses.
 
 **Step 4: Categorize findings.** Label every comment with its severity so the author knows what's required vs optional:
 
@@ -85,6 +87,12 @@ The `## Review:` heading must carry the milestone's leading identifier verbatim 
 
 ### Context
 - [ ] I understand what this change does and why
+
+### Files reviewed
+<!-- One line per changed file - a file missing here has not been reviewed.
+     identity: where every authz/tenancy comparison's trusted side originates (or n/a)
+     failure paths: what happens when each fallible call fails (or n/a) -->
+- `<path>` — identity: <source>; failure paths: <disposition>; findings: <ids or none>
 
 ### Correctness
 - [ ] Change matches spec/task requirements
