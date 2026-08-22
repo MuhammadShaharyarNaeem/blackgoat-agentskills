@@ -208,14 +208,16 @@ foreach ($f in $changedFiles) {
         # load-bearing 'redundancy'; graded on a runtime value probe, not a grep.
         [void]$affectedEvals.Add('contract:max-behavior-preservation')
     }
+    if ($f -match 'agents/nova\.md$' -or $f -match 'skills/ui-design-patterns/' -or $f -match 'skills/vue3-spa-patterns/') {
+        # nova-ui-contract plants a frozen client layer and a four-state panel task
+        # in an environment where rendering is impossible; graded on layered
+        # imports, pinned state test-ids, the frozen boundary, evidence honesty
+        # (cited artifact paths must exist or NOT VERIFIED), and the unit/E2E line.
+        [void]$affectedEvals.Add('contract:nova-ui-contract')
+    }
     if ($f -match 'agents/nova\.md$' -or $f -match 'agents/mason\.md$' -or $f -match 'agents/luna\.md$') {
-        # None of the three builders/reviewers has a dedicated contract eval: no
-        # suite here invokes them, because grading produced CODE deterministically
-        # is a different problem from grading a produced DOCUMENT's shape, which is
-        # all this suite's graders do. Their frontmatter `description` does drive
-        # delegation routing, so a change at least re-checks that via trigger.
-        # This is a stopgap, not coverage: read a green trigger run as "routing still
-        # works", never as "the builder/reviewer still behaves".
+        # Frontmatter `description` drives delegation routing, so a persona change
+        # re-checks routing via trigger alongside the dedicated contract cases.
         [void]$affectedEvals.Add('trigger')
     }
     if ($f -match 'skills/bgpdd-learn/') {
