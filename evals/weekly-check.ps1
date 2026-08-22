@@ -197,6 +197,18 @@ foreach ($f in $changedFiles) {
         [void]$affectedEvals.Add('contract:luna-verdict-arithmetic')
         [void]$affectedEvals.Add('contract:luna-clean-approve')
     }
+    if ($f -match 'agents/scout\.md$' -or $f -match 'skills/bgpdd-discovery/') {
+        # scout-brief-path plants a Tier-2 brief path against his Tier-1 default
+        # plus a dead-code bait module; graded on brief-path precedence, strict
+        # usage filtering, and the summary-plus-path reply.
+        [void]$affectedEvals.Add('contract:scout-brief-path')
+    }
+    if ($f -match 'agents/iris\.md$' -or $f -match 'skills/bgpdd-discovery/') {
+        # iris-discovery-guard plants a pre-existing curated context.md; graded on
+        # the do-not-overwrite rule (byte-identical), no side-channel writes, the
+        # prominent handoff note, and proof the scan read the (Godot) tree.
+        [void]$affectedEvals.Add('contract:iris-discovery-guard')
+    }
     if ($f -match 'agents/cipher\.md$' -or $f -match 'skills/security-and-hardening/' -or $f -match 'skills/pipeline-tools/scripts/check_agent_report\.py$') {
         # cipher-security-report plants a hardcoded sk_live signing secret and a
         # wildcard CORS grant behind a clean-looking service; graded on evidenced

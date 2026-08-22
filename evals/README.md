@@ -115,6 +115,32 @@ cheap-path artifact:
   sitting beside one genuine 3+-occurrence duplication. Obligation: graded by a runtime
   value probe that confirms behavior is actually preserved, not a grep for deleted lines.
 
+## The five cases added 2026-08-22 (baseline-hardening round)
+
+Authored while hardening the pre-distillation baseline, each hand-proven against a good
+artifact and at least two cheap-path artifacts:
+
+- **`luna-clean-approve`** — the trap case's mirror: the same orders fixture genuinely
+  fixed (7/7 tests), where the correct verdict is `Approve`. Catches reflexive
+  suspicion, severity inflation, and Approve-token drift. Only the pair means anything.
+- **`cipher-security-report`** — a clean-looking notes service hiding a hardcoded
+  `sk_live` signing secret and wildcard CORS on authenticated routes. Graded by
+  deferring to `check_agent_report.py` for structure/evidence, plus concept-set
+  detection of both planted findings and the arithmetic `Fail` verdict.
+- **`nova-ui-contract`** — first builder-tier case: a Vue 3 fixture with a frozen API
+  client layer and no `node_modules` (so rendering is impossible). Graded on layered
+  imports, the plan-pinned state test-ids, the frozen boundary (byte compare),
+  evidence honesty (`<artifact>` paths must exist or `NOT VERIFIED`), and the
+  unit-vs-E2E line.
+- **`scout-brief-path`** — a Tier-2 brief path against Scout's Tier-1 default, plus a
+  richly-commented dead module as bait. Graded on brief-path precedence, strict usage
+  filtering (an honest exclusion note passes; a documented phantom surface fails), and
+  the summary-plus-path reply.
+- **`iris-discovery-guard`** — a pre-existing curated `context.md` against a routine
+  discovery brief, over a deliberately distinctive Godot fixture. Graded on the
+  do-not-overwrite rule (byte-identical), no side-channel `.docs/` writes, the
+  prominent handoff note, and proof the scan actually read the tree.
+
 ## Adding a new contract case
 
 1. Create `contract/<case-name>/fixture/` with real, hand-written input files — not
