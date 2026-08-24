@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const { sessionFor, ORDERS, AUDIT } = require('../src/store.js');
+// sessionFor is exercised directly by the prototype-chain test below.
 const { lookupOrder } = require('../src/read-api.js');
 const { createOrder } = require('../src/write-api.js');
 
@@ -56,4 +57,15 @@ test('a create whose audit cannot be written returns 500 and persists nothing', 
   assert.strictEqual(out.status, 500);
   assert.strictEqual(Object.keys(ORDERS).length, ordersBefore);
   assert.strictEqual(AUDIT.length, auditBefore);
+});
+
+test('a prototype-chain token resolves to no session, not an inherited member', () => {
+  for (const key of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+    assert.strictEqual(sessionFor(key), null);
+  }
+});
+
+test('a prototype-chain order id resolves to no order (404), not a truthy non-order', () => {
+  const out = lookupOrder(acme, { orderId: '__proto__' });
+  assert.strictEqual(out.status, 404);
 });

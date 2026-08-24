@@ -16,11 +16,14 @@ const AUDIT = [];
 let nextId = 3;
 
 function sessionFor(token) {
-  return SESSIONS[token] || null;
+  // Own-property-only lookup: a prototype-chain key ('__proto__', 'constructor',
+  // 'toString') must resolve to null, not to an inherited Object member.
+  return Object.prototype.hasOwnProperty.call(SESSIONS, token) ? SESSIONS[token] : null;
 }
 
 function orderById(id) {
-  return ORDERS[String(id)] || null;
+  const key = String(id);
+  return Object.prototype.hasOwnProperty.call(ORDERS, key) ? ORDERS[key] : null;
 }
 
 function putOrder(order) {

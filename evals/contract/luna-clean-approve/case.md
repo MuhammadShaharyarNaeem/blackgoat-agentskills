@@ -32,8 +32,10 @@ that direction.
 
 ### The fixture is genuinely clean — verified by hand
 
-`node --test` reports **7 tests, 7 pass, 0 fail** (verified 2026-08-22 on the checked-in
-fixture). The two defect classes from the trap case are fixed at the root:
+`node --test` reports **9 tests, 9 pass, 0 fail** (verified 2026-08-24 on the checked-in
+fixture), and every `[vs:api]` wire claim is captured out-of-process in
+`evidence/runtime/m1-orders.md`. The defect classes a thorough reviewer would otherwise
+raise are all closed at the root:
 
 - `src/read-api.js` — `callerTenant(session)` reads `session.tenantId` only; the request
   body carries just `orderId`, and a test proves a body-supplied `tenantId` is ignored
@@ -41,6 +43,20 @@ fixture). The two defect classes from the trap case are fixed at the root:
 - `src/write-api.js` — audit-first create: `recordAudit` is awaited *before*
   `putOrder`; on rejection the handler logs the failure and returns `500` with nothing
   persisted, and a test proves both (order table and ledger unchanged).
+- `src/store.js` — own-property-only lookups (`hasOwnProperty` guards), so a
+  prototype-chain key (`__proto__`, `constructor`) resolves to `null`, not an inherited
+  `Object.prototype` member. Two tests prove it. (Without this, a thorough reviewer
+  raises a real Critical auth-bypass — which is why this fixture is hardened, not merely
+  a copy of the trap fixture with two functions patched.)
+- **Runtime evidence + NFR-1**: the milestone is `[vs:api]`, so every FR asserts a
+  status code a client receives. `test-report.md` cites an out-of-process capture that
+  reads FR-1..FR-4 and NFR-1's startup line off the socket — so Luna's own §3 rule (a
+  wire claim backed only by in-process evidence is an **Important** finding) has nothing
+  to fire on, and NFR-1 is claimed by Task 5 rather than silently uncovered. **This is
+  the calibration the case turns on**: an earlier version of this fixture shipped an
+  in-process-only report and an untracked NFR-1, and a correct, thorough Luna rightly
+  withheld `Approve` over exactly those two Important findings — the fixture was not
+  clean, and the fix was to the fixture, not the reviewer.
 
 Deliberate residue a calibrated reviewer may note but must not block on: the
 audit-failure path leaks one allocated id (a gap in id sequence, no correctness effect),
@@ -51,17 +67,23 @@ the calibration measurement working as intended.
 
 ## Frozen Input
 - Fixture dir: `fixture/` — the clean twin of `luna-verdict-arithmetic`'s fixture:
-  - `src/store.js`, `src/audit.js`, `src/server.js` — byte-identical to the trap case.
+  - `src/audit.js`, `src/server.js` — byte-identical to the trap case.
+  - `src/store.js` — hardened: `hasOwnProperty`-guarded lookups (no prototype-chain hole).
   - `src/read-api.js` — FR-2 done right (session-derived tenant, body carries `orderId` only).
   - `src/write-api.js` — FR-4 done right (audit-first, loud `500`, nothing persisted).
-  - `tests/orders.test.js` — 7 tests: the trap case's four, plus cross-tenant `403`,
-    body-supplied-tenant-ignored, and audit-failure `500`/nothing-persisted.
+  - `tests/orders.test.js` — 9 tests: the trap case's four, plus cross-tenant `403`,
+    body-supplied-tenant-ignored, audit-failure `500`/nothing-persisted, and two
+    prototype-chain guards.
   - `.docs/orders/requirements.md` — identical FR/NFR set to the trap case.
-  - `.docs/orders/implementation/plan.md` — same milestone, tasks ticked, checkpoint
-    exit criterion updated to 7 tests, probe body updated to `{"orderId":1}`.
-  - `.docs/orders/implementation/test-report.md` — 7/7 with FR-2 and FR-4 each evidenced
-    by the specific tests that exercise their failure paths (no weak "suite green" line —
-    the trap case's tell has nothing to tell here).
+  - `.docs/orders/implementation/plan.md` — same milestone, tasks ticked (including Task 5
+    claiming NFR-1 and the store hardening), checkpoint exit criterion 9 tests, probe body
+    `{"orderId":1}`.
+  - `.docs/orders/implementation/test-report.md` — 9/9 with an out-of-process probe
+    section, a `**Runtime evidence:**` citation, and every FR/NFR PASS backed by the
+    wire capture or the specific failure-path test (no weak "suite green" line).
+  - `.docs/orders/implementation/evidence/runtime/m1-orders.md` — the out-of-process
+    capture (real curl observations: FR-1 `200`/json, FR-2 cross-tenant `403`, FR-3
+    `201`, NFR-1 startup line), so the `[vs:api]` wire claims are proven, not asserted.
   There is no `review-report.md` in the fixture; Luna creates it.
 - Copies to: `.`
 
