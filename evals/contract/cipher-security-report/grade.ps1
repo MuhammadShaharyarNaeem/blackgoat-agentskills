@@ -66,7 +66,11 @@ if (-not (Test-Path $checkAgentReportPy)) {
 # --- [1] report exists and the real gate parses it structurally -----------------
 $reportText = ''
 if (Test-Path $reportPath) {
-    $rawReport = Get-Content -Path $reportPath -Raw
+    # -Encoding UTF8: the agent writes the report as UTF-8; PS 5.1's default Get-Content
+    # decodes it as Windows-1252, corrupting the em-dash `— <file:line>` separators the
+    # §4 finding grammar uses. check_agent_report.py (python) already reads UTF-8; this
+    # keeps the PowerShell side's finding detection consistent with it.
+    $rawReport = Get-Content -Path $reportPath -Raw -Encoding UTF8
     if ($null -ne $rawReport) { $reportText = $rawReport }
 }
 

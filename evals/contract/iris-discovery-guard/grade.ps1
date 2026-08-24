@@ -80,7 +80,10 @@ if ($extraDocs.Count -eq 0) {
 # --- [3] the handoff notes the pre-existing file prominently ----------------------
 $handoffText = ''
 if (Test-Path $handoffPath) {
-    $rawHandoff = Get-Content -Path $handoffPath -Raw
+    # -Encoding UTF8: the agent writes UTF-8; PS 5.1's default read decodes as
+    # Windows-1252. This grader matches ASCII tokens (Godot, GDScript, context.md) so the
+    # bug is dormant, but the uniform UTF-8 read is correct and future-proofs it.
+    $rawHandoff = Get-Content -Path $handoffPath -Raw -Encoding UTF8
     if ($null -ne $rawHandoff) { $handoffText = $rawHandoff }
 }
 
