@@ -60,7 +60,13 @@ function Get-FindingBlocks {
     param([string]$Text)
     $blocks = @()
     if ([string]::IsNullOrWhiteSpace($Text)) { return $blocks }
-    $labelPattern = '(?im)^[\s>*\-+#|]*\**\s*(Critical|Important|Suggestion|Nit|FYI)\b\**\s*[:\-—|,(]'
+    # Optional finding-id clause (`L1 — `, `F-2 - `) between the heading marker and the
+    # severity: real Luna reviews number findings as `#### L1 — **Critical:** ...`, which
+    # the id-less pattern dropped. The em-dash is built from its codepoint (never a
+    # literal byte) so PowerShell 5.1's Windows-1252 decode of this .ps1 can't mangle it.
+    # Kept byte-identical to the trap grader's segmentation.
+    $em = [char]0x2014
+    $labelPattern = '(?im)^[\s>*\-+#|]*(?:[\w.\-]+\s*[' + $em + '\-]\s*)?\**\s*(Critical|Important|Suggestion|Nit|FYI)\b\**\s*[:\-' + $em + '|,(]'
     $found = [regex]::Matches($Text, $labelPattern)
     for ($i = 0; $i -lt $found.Count; $i++) {
         $start = $found[$i].Index
@@ -80,7 +86,9 @@ function Get-FindingBlocks {
 # --- [1] the report exists, in the contract's location, keyed to the milestone --
 $reportText = ''
 if (Test-Path $reportPath) {
-    $rawReport = Get-Content -Path $reportPath -Raw
+    # -Encoding UTF8: agents write UTF-8; PS 5.1's default decode mangles em-dashes and
+    # breaks `#### Ln — **Sev:**` finding segmentation. See the trap grader for the full note.
+    $rawReport = Get-Content -Path $reportPath -Raw -Encoding UTF8
     if ($null -ne $rawReport) { $reportText = $rawReport }
 }
 
