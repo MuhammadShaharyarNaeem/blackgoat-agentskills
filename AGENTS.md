@@ -48,4 +48,3 @@ Use these directly. Do NOT reach for Playwright / chrome-devtools to work around
 ## MCP & shell
 
 - MCP servers are configured in `mcp.json` (Claude Code uses `.mcp.json` at the plugin root — same content family). For browser/web testing prefer `playwright` or `chrome-devtools-mcp`.
-- Prefix shell commands with `rtk` to conserve tokens (e.g. `rtk git status`).

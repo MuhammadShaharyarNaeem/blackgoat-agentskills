@@ -22,6 +22,8 @@ Never guess. Reproduce first, then trace systematically. Fix the root cause, not
 5. **TEST**: Write a targeted test or add a log to confirm/deny the hypothesis.
 6. **FIX**: Make the smallest possible change that fixes the root cause.
 7. **VERIFY**: Confirm the fix resolves the original failure AND doesn't break other tests.
+   - **VERIFY runs at the tier the failure was reported at.** Re-run *the exact check that failed* — the named failing test if the report was a unit/integration failure, the declared runtime probe if it was an observed-runtime failure, a fresh render of the critiqued state if it was a rendered-output finding. A green suite at a lower tier does not discharge a failure observed at a higher one (`{PLUGIN_ROOT}/runtime-evidence/SKILL.md`, *Core Principle*). This is the step's *which*, deliberately added because "confirm the fix resolves the original failure" is silent on it and the cheapest available check is always the lowest one.
+   - **When you were handed the failure by someone else** (a rejection round, a review finding), report this re-run and its observed output back to whoever handed it to you. If you could not re-run it, say `NOT VERIFIED — <what blocked you>` rather than asserting the fix from the diff. The reporting *shape* belongs to your persona's handoff contract, not to this skill.
 
 ### Rules
 
