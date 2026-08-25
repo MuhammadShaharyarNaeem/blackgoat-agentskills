@@ -55,7 +55,8 @@ already exists, the responsible agent must flag it so you can ask the user wheth
     ├── {api}.md                   #   Per-API feature-fragment maps, one per API (Scout)
     └── QA/
         ├── code-workflow.md       #   Mermaid sequence diagrams & execution paths (Echo)
-        └── manual-testing.md      #   Reverse-engineered manual test cases (Echo)
+        ├── manual-testing.md      #   Reverse-engineered manual test cases (Echo)
+        └── runtime-environment.md #   How to actually stand this feature up locally (Orchestrator + user, Phase 4b)
 ```
 
 ---
@@ -101,6 +102,17 @@ already exists, the responsible agent must flag it so you can ask the user wheth
      b. `.docs/summary/{feature}/QA/code-workflow.md` — Mermaid sequence diagrams and step-by-step execution paths across the services.
      c. `.docs/summary/{feature}/QA/manual-testing.md` — reverse-engineered manual test cases, using the `code-workflow.md` she just produced, per her persona.
   4. Read Echo's returned handoff before proceeding to Phase 5.
+
+### Phase 4b: Runtime Environment Recipe (Orchestrator + user, main session)
+- **Delegated Agent**: None — interactive, main session. Echo produced the material in Phase 4; this step turns it into a recipe with the user, and a delegated agent cannot pause to ask which device to test against.
+- **Purpose**: record **how this feature is actually stood up locally**, once, durably — so no future build, verify, or bugfix run has to re-derive it at runtime. This is the brownfield entry point for the environment manifest; greenfield projects get theirs at `/bgpdd-plan` Phase 3.6, and a project with neither falls through to `/bgpdd-build` Phase 0.
+- **Format authority**: the **Environment Manifest** section of `{PLUGIN_ROOT}/runtime-evidence/SKILL.md` — its blocks, unchanged. Write to `.docs/summary/{feature}/QA/runtime-environment.md`.
+- **Workflow**:
+  1. **Draft from what discovery already found.** Read `.docs/summary/{feature}/overview.md` and `QA/code-workflow.md`: they name the services the feature spans and the order its calls flow in. Read `.docs/summary/context.md` for the repo set and per-repo local paths. From these, propose the bring-up sequence, the service table, and the repointing map — as a **proposal**, never as settled fact.
+  2. **Ask the user for what no artifact can tell you**, one question at a time: the steps that are not "start a service" (build which project, copy which output where, install or register which agent, run which one-off function, connect which service to which), the target device or machine names as they appear in the product's own list, the test login's username and where its password comes from (**never the password itself**), and any local port that differs from the default.
+  3. **Scope each step.** Fill the `Needed for` column so a later run can select a subset: an icon fix should bring up the web app alone, not the whole estate. Ask the user to sanity-check the smallest realistic scope — "if someone changed only the UI here, what would they need running?" — because the full-estate answer is the one people give by default and the one that makes the recipe too expensive to follow.
+  4. **Record the capability inventory** the feature's surfaces require, each with the cheapest action that proves it exists. Do **not** preflight here — discovery is a mapping pipeline, and the estate a future run needs may not be installed on this machine today. The halt on a missing capability belongs to `/bgpdd-plan` Phase 3.6 and `/bgpdd-build` Phase 0, which know what is about to be built.
+  5. The user confirms the file before you proceed. If `runtime-environment.md` already exists from a prior discovery run, flag it and ask whether to refresh or keep it — the same rule §3 applies to every Tier-1 file.
 
 ### Phase 5: Session Learning Offer (Orchestrator)
 - **Delegated Agent**: None — the Orchestrator performs this phase directly.

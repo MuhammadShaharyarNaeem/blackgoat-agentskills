@@ -110,6 +110,7 @@ Only `PASS`/`FAIL` as the status word, latest mention wins, so a retest appends 
 - **Status precedence on one line is `FAIL > BLOCKED > PASS`**, extending the pre-existing both-PASS-and-FAIL-counts-as-FAIL rule. Across lines, latest mention wins, so a `BLOCKED` appended after a stale `PASS` downgrades the ID and a later genuine `PASS` clears it.
 - **`NOT RUN` is deliberately NOT a token here** — a divergence (convention #8) from `check_agent_report.py`'s four-token grammar: in the coverage ledger, omission already means "not run", and a status-less mention already warns and stays uncovered. A `NOT RUN` line therefore behaves exactly like any other status-less mention.
 - **Authoring hazard**: token matching is case-insensitive prose matching, the same posture as `PASS`/`FAIL`. So `- FR-1: PASS — the BLOCKED-state banner renders` downgrades to BLOCKED. The family's bias is deliberate (a false BLOCKED routes work; a false PASS ships a gap) but avoid the words in evidence prose.
+- **Authoring hazard — a status line is a cumulative claim about the requirement, not a per-round log entry.** Because latest mention wins across lines, appending a status token for a requirement you did **not** exercise this round overwrites the evidenced verdict of the round that did; there is no round scoping in the ledger. So: report only requirements this round actually touched; write per-round narration ("not attempted this round", "out of scope for this stage") as prose with **no status token in the token position**; and never repair a downgraded id by writing a `PASS` you did not measure — re-run the check, or leave the honest `BLOCKED` standing and say which round measured what.
 
 **`runtime-criterion` (plan mode).** Mechanizes `planning-and-task-breakdown`'s rule that a compile, typecheck, bundle, or source-search command is not a runtime exit criterion — at **plan time, before any code exists**. It reads each `Checkpoint` block's machine-parseable `RUNTIME PROBE:` line and reports one entry per defect, with `task` = the owning milestone's full heading text and every `detail` naming the checkpoint (one milestone may own several).
 
@@ -615,6 +616,8 @@ TAIL (last 15 lines):
 - Passthrough of the child process's own exit code on a normal completion.
 - **124** — the child was killed for exceeding `--timeout` (best-effort process-tree kill: `taskkill /F /T` on Windows, `SIGKILL` to the process group on POSIX).
 - **2** — structural/usage failure: missing `--log`, no command given after `--`, the log file's directory couldn't be created, the log file couldn't be written, or the command itself couldn't be launched (not found / not permitted).
+
+**Windows caveat:** `run_quiet.py` launches the child without a shell, so Python cannot exec a `.cmd`/`.bat` shim. `npx`, `npm`, and `node_modules/.bin/playwright` are shims on Windows — invoke `npx.cmd`/`npm.cmd`, or bypass the shim entirely (`node node_modules/@playwright/test/cli.js`).
 
 ### Built-in error profile (condensed)
 

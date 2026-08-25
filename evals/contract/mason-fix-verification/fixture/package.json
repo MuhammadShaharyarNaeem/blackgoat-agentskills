@@ -1,0 +1,9 @@
+{
+  "name": "orders-fix-round",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node src/orders.js",
+    "test": "node --test"
+  }
+}

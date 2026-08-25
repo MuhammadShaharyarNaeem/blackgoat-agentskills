@@ -113,3 +113,51 @@ Two things this example is chosen to make concrete. First, the `Environment` blo
 ### UI surface
 
 The capture cites the screenshot or accessibility-tree read rather than embedding it, and the transport is the browser skill named in the transport table. Where a requirement spans surfaces — an indicator in the UI that reflects a database row that reflects a device state — each store named by the requirement gets its own read-back. Three assertions, not one assertion and two inferences.
+
+## 6. Why environment facts are caller-supplied
+
+The manifest exists because of an asymmetry in what a wrong answer costs. An agent that cannot find a start command has two moves: escalate, or infer. Inferring is nearly free at the moment of the decision and nearly always produces something plausible — `localhost:5000` for a .NET service, `:3000` for a Node one, the port in the `docker-compose.yml` that may or may not be the one this dev runs. The inferred value then flows into a capture header, where it is indistinguishable from a supplied one. Nobody downstream can tell which fields were known and which were guessed, so a reviewer's only signal that a capture probed the wrong system is that the body looks odd — and on a repointing mistake the body usually looks fine, because shared dev is a working system returning working answers.
+
+The same asymmetry runs one level up, at the capability. An agent that discovers at capture time that it has no browser is standing at the worst possible moment to make an honest call: the code is written, the round is half-spent, and the only action that closes the task is a lower-tier substitution the Tier Ladder forbids. Moving that discovery to the start of the run converts the most expensive decision in the pipeline into a question asked before anyone has invested anything.
+
+This is why the manifest is a **caller** artifact rather than a discovered one. Research into what the repo declares — compose files, launch profiles, `appsettings.*.json`, CI workflows — is legitimate and useful, but it produces candidates, not values. A human confirms which candidate is real, because only a human knows which of the three ports in the repo is the one their machine actually runs.
+
+## 7. Worked example — a multi-service manifest
+
+```markdown
+# Environment Manifest — orders-mapping
+
+## Services
+| Service | Start command | Local base URL | Readiness check | Calls |
+|---|---|---|---|---|
+| orders-api | `dotnet run --project src/Orders.Api` | http://localhost:5101 | `GET /health` → 200 | inventory-api |
+| inventory-api | `dotnet run --project src/Inventory.Api` | http://localhost:5102 | `GET /health` → 200 | — |
+| web | `npm run dev -- --port 5173` | http://localhost:5173 | page title renders | orders-api |
+| postgres | `docker compose up -d db` | localhost:55432 | `pg_isready` → exit 0 | — |
+
+## Repointing map
+| Config key | File / env var | Owning service | Ships as | Must be locally |
+|---|---|---|---|---|
+| `Inventory:BaseUrl` | `src/Orders.Api/appsettings.Development.json` | orders-api | https://inventory.dev.internal | http://localhost:5102 |
+| `VITE_API_BASE` | `.env.local` | web | https://orders.dev.internal | http://localhost:5101 |
+| `ConnectionStrings:Db` | user-secrets | orders-api | dev cluster | localhost:55432 |
+
+## Forbidden hosts
+`*.dev.internal`, `*.staging.example.com`
+
+## Capabilities required
+| Capability | Needed for | Confirmed by |
+|---|---|---|
+| Out-of-process HTTP client | `[vs:api]`, `[vs:web+api]` | one real request to a health endpoint |
+| Browser automation | `[vs:ui]`, `[vs:web+api]` | one navigation + snapshot |
+| psql client | `manual` steps asserting rows | one `SELECT 1` |
+| Python 3 | every mechanical gate | `python --version` |
+
+## Secrets
+| Secret | Source |
+|---|---|
+| DB password | `dotnet user-secrets`, key `ConnectionStrings:Db` |
+| Test user JWT | minted by `scripts/dev-token.ps1` |
+```
+
+Two properties make this manifest load-bearing rather than documentation. The **repointing map's "Ships as" column** is what lets a reviewer see that a capture reading `inventory.dev.internal` was probing the wrong estate — without it, the forbidden-hosts list is a rule with no stated baseline. And the **capability table's "Confirmed by" column** is what turns the preflight into an observation instead of an assertion: each row names the cheapest action that proves the capability exists, so "confirmed" means someone ran something.
