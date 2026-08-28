@@ -100,12 +100,26 @@ if ($found.Count -ge 2) {
 }
 
 # --- [4] strict usage filtering: the dead module is not documented ---------------
-# Narrowing per case.md: fail on the dead FUNCTION name anywhere, or on a heading
-# that names the dead module - an honest one-line exclusion note (which names the
-# filename in prose, not the function, and not in a heading) passes.
-$headingWithLegacy = [regex]::Match($researchText, '(?im)^#{1,6}\s.*(legacy|export)')
-if ($researchText -match '(?i)exportLedger') {
-    Add-Failure 4 'the research documents exportLedger - src/legacy-export.js is required by nothing in any execution path, and Strict Usage Filtering says verify a reference is actually used before adding it to the report'
+# Fail on a heading that names the dead module, or on any line naming the dead
+# function OUTSIDE an exclusion context. The original narrowing ("exclusion notes
+# name the filename, not the function") was empirically wrong: a rigorous Scout
+# names exportLedger precisely to document his verification ("a repo-wide search for
+# exportLedger returns only the file's own definition") - observed in all five
+# 2026-08-29 runs, each an exemplary exclusion false-failed. Exclusion cues on the
+# same line legitimize the token; a bare mention documenting it as API surface fails.
+$exclusionCuePattern = '(?i)(exclud\w*|dead[-\s]code|deprecat\w*|omitt?\w*|not\s+`?(?:used|referenced|required|documented|part)|no\s+`?(?:require|route|test|consumer|caller|reference)|unused|unreferenced|usage\s+filter\w*|only\s+the\s+file''?s?\s+own|returned\s+no)'
+$badLedgerLines = New-Object System.Collections.Generic.List[string]
+foreach ($line in ($researchText -split "`r?`n")) {
+    if ($line -notmatch '(?i)exportLedger') { continue }
+    if ($line -match $exclusionCuePattern) { continue }
+    [void]$badLedgerLines.Add($line.Trim())
+}
+# Headings naming the DEAD module specifically - not the bare word "export", which
+# legitimately appears in headings documenting the live module's export surface
+# ("### Module export", observed false-failing four exemplary runs 2026-08-29).
+$headingWithLegacy = [regex]::Match($researchText, '(?im)^#{1,6}\s.*(legacy[-\s]?export|exportLedger|\blegacy\b)')
+if ($badLedgerLines.Count -gt 0) {
+    Add-Failure 4 "the research documents exportLedger outside any exclusion context: $(($badLedgerLines | Select-Object -First 2) -join ' ;; ') - src/legacy-export.js is required by nothing in any execution path, and Strict Usage Filtering says verify a reference is actually used before adding it to the report"
 } elseif ($headingWithLegacy.Success) {
     Add-Failure 4 "a heading documents the dead module: '$($headingWithLegacy.Value.Trim())' - dead code does not get a section, at most a one-line exclusion note"
 } else {

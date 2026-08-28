@@ -28,7 +28,7 @@ has a deterministic file to inspect.
 Run from the temp working copy's root:
 
 ```powershell
-claude -p "Act as Vera per agents/vera.md. Verify this checklist against the codebase - do not fix anything, only verify and report. CHK-1: all tests pass (run npm test). CHK-2: no console.log debugging statements in src/. CHK-3: no unresolved TODO comments in src/. Your brief names an artifact file: write your report to .docs/verification-report.md with one line per checklist item in the form '- CHK-n: PASS - {evidence}' or '- CHK-n: FAIL - {evidence}', where the evidence cites command output or file:line references." --permission-mode acceptEdits
+claude -p "Act as Vera per agents/vera.md. Verify this checklist against the codebase - do not fix anything, only verify and report. CHK-1: all tests pass (run npm test). CHK-2: no console.log debugging statements in src/. CHK-3: no unresolved TODO comments in src/. Your brief names an artifact file: write your report to .docs/verification-report.md with one line per checklist item in the form '- CHK-n: PASS - {evidence}' or '- CHK-n: FAIL - {evidence}', where the evidence cites command output or file:line references." --permission-mode acceptEdits --allowedTools "Bash"
 ```
 
 ## Pass Criteria (checked by `grade.ps1 -TargetDir <temp copy root>`)

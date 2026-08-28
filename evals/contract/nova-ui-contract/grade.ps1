@@ -172,9 +172,15 @@ if ($handoffBlocks.Count -eq 0) {
     $artifactMatch = [regex]::Match($lastHandoff, '(?is)<artifact>(.*?)</artifact>')
     $notVerified = ($lastHandoff -match '(?i)NOT\s+VERIFIED')
 
+    # Path candidates are only scanned when the handoff does NOT carry the honest
+    # NOT VERIFIED token: an honest report explains itself in prose, and that prose
+    # legitimately contains slashes (npm/npx, evidence/build/) that are not citations.
+    # Observed 2026-08-29: all five runs reported NOT VERIFIED honestly and this scan
+    # called each explanation a fabricated path. Fabrication is claiming a screenshot
+    # exists - which requires NOT claiming NOT VERIFIED.
     $bogusEvidence = New-Object System.Collections.Generic.List[string]
     $citedCount = 0
-    if ($artifactMatch.Success) {
+    if ($artifactMatch.Success -and -not $notVerified) {
         $candidates = $artifactMatch.Groups[1].Value -split '[,;\r\n]' | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '[\\/]' }
         foreach ($cand in $candidates) {
             $citedCount++

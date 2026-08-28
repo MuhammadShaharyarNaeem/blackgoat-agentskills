@@ -66,11 +66,14 @@ reply-to-Orchestrator half of his §3 contract is a stdout artifact.
    (whole-token, case-insensitive). Guards against a file at the right path with
    invented content.
 4. **Strict usage filtering held**: the research file does not *document* the dead
-   module — no `exportLedger` token anywhere, and no heading line containing `legacy`
-   or `export`. Deliberate narrowing, documented here: a prose line *excluding* the file
-   ("src/legacy-export.js is dead code and omitted") names the filename, not the
-   function, and headings are where documented-as-API lives — so an honest exclusion
-   note passes while a documented phantom surface fails.
+   module — no heading line containing `legacy` or `export`, and no line naming
+   `exportLedger` outside an exclusion context (excluded / dead code / deprecated /
+   no require / unreferenced / usage filtering, on the same line). The original,
+   stricter narrowing (any `exportLedger` token fails) was empirically wrong: a
+   rigorous exclusion note names the function precisely to document the verification
+   ("a repo-wide search for `exportLedger` returns only the file's own definition") —
+   observed in five consecutive exemplary runs, 2026-08-29. A bare mention presenting
+   the function as API surface still fails.
 5. **The reply carries the path**: `handoff.txt` is non-empty and cites
    `inventory-api.md` (the §3 summary-plus-path contract; also the run sanity check for
    the pipe).
