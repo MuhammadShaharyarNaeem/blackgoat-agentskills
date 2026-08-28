@@ -193,6 +193,7 @@ Before starting implementation, confirm:
 - [ ] Every state-changing step declares `[inverse of N]` or an explicit `[no inverse: <reason>]`; install paths cover uninstall **and** reinstall
 - [ ] Every step names every store its assertion reads back; every `manual` step is one where automation is genuinely impossible, not merely inconvenient
 - [ ] Every High-impact risk from research or design traces to an acceptance or checkpoint criterion that would **detect** it — a Risks-table entry alone is unmitigated
+- [ ] **The plan-time gate has been RUN, not predicted**: `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements <path>/requirements.md --plan <path>/plan.md` exits `0` against the finished plan. The plan is not complete while it exits non-zero. The lint classes it enforces are the mechanical halves of rules above — in particular, a `literal-count` failure means an acceptance criterion transcribed an inventory number ("the table has 5 entries") instead of asserting set-equality against its source; rewrite the criterion to name the source table and re-run. Never hand off over a failing gate: the Orchestrator runs this exact gate next, and a failure there costs a full delegation round instead of a self-fix. (This converts checklist compliance into a checked artifact per the same rule as `blackgoat-research` step 8 — a run gate, not a re-read checklist.)
 - [ ] The plan has been surfaced for human review — via your `<handoff>` to the Orchestrator when delegated, or directly to the user in the main session
 
 ### Escalate When
