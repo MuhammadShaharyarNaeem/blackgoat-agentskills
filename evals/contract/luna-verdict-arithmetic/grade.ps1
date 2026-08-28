@@ -274,6 +274,9 @@ foreach ($b in $blocks) {
         foreach ($m in [regex]::Matches($line, $pathCandidatePattern)) {
             $candidate = $m.Groups[1].Value
             if ($candidate -match '^\.{1,2}[\\/]') { continue }
+            # An elided path ('.../openapi.json') is prose shorthand, not a citation -
+            # kept byte-identical to the clean-approve grader's scan.
+            if ($candidate -match '\.{3}') { continue }
             if ($candidate -match '(?i)^node_modules[\\/]') { continue }
             if (-not (Test-CitedPathExists -Candidate $candidate)) {
                 if (-not $bogus.Contains($candidate)) { [void]$bogus.Add($candidate) }

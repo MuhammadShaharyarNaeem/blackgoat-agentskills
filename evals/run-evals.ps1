@@ -205,8 +205,13 @@ function Invoke-ContractRun {
         # criterion fails for a wiring reason: the agent codes fine but never sees
         # its contract. The copy also isolates the run from the live repo, so an
         # agent-under-test can never mutate real plugin files.
+        # references/ is included because personas point at it ({PLUGIN_ROOT}/../references/
+        # security-checklist.md and friends); without it an agent-under-test citing its own
+        # contract's checklist names a file that does not exist in the working copy - which
+        # both starves the agent of the checklist and false-fails anti-hallucination path
+        # checks in graders (observed: luna-clean-approve 2026-08-28 run 5).
         $pluginRoot = Split-Path -Parent $EvalsRoot
-        foreach ($pluginDir in @('agents', 'skills')) {
+        foreach ($pluginDir in @('agents', 'skills', 'references')) {
             $src = Join-Path $pluginRoot $pluginDir
             $dst = Join-Path $tempDir $pluginDir
             New-Item -ItemType Directory -Force -Path $dst | Out-Null
@@ -244,7 +249,7 @@ function Invoke-ContractRun {
             $artifactDir = Join-Path $resultsDir "artifacts\$($CaseInfo.Name)-run$RunIndex-$suffix"
             New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
             Get-ChildItem -Path $tempDir -Force |
-                Where-Object { $_.Name -notin @('agents', 'skills', 'node_modules') } |
+                Where-Object { $_.Name -notin @('agents', 'skills', 'references', 'node_modules') } |
                 Copy-Item -Destination $artifactDir -Recurse -Force -ErrorAction SilentlyContinue
             Set-Content -Path (Join-Path $artifactDir 'grade-output.txt') `
                 -Value ($gradeOutput -join "`r`n") -Encoding utf8

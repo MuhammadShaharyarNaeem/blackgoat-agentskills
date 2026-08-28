@@ -197,6 +197,9 @@ foreach ($b in $blocks) {
         foreach ($m in [regex]::Matches($line, $pathCandidatePattern)) {
             $candidate = $m.Groups[1].Value
             if ($candidate -match '^\.{1,2}[\\/]') { continue }
+            # An elided path ('.../openapi.json', 'src/.../x.js') is prose shorthand,
+            # not a citation - observed false-failing a correct review 2026-08-28.
+            if ($candidate -match '\.{3}') { continue }
             if ($candidate -match '(?i)^node_modules[\\/]') { continue }
             if (-not (Test-CitedPathExists -Candidate $candidate)) {
                 if (-not $bogus.Contains($candidate)) { [void]$bogus.Add($candidate) }
