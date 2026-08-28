@@ -32,10 +32,10 @@ that direction.
 
 ### The fixture is genuinely clean — verified by hand
 
-`node --test` reports **9 tests, 9 pass, 0 fail** (verified 2026-08-24 on the checked-in
-fixture), and every `[vs:api]` wire claim is captured out-of-process in
-`evidence/runtime/m1-orders.md`. The defect classes a thorough reviewer would otherwise
-raise are all closed at the root:
+`node --test` reports **12 tests, 12 pass, 0 fail** (verified 2026-08-28 on the
+checked-in fixture), and every `[vs:api]` wire claim is captured out-of-process — with
+full response bodies — in `evidence/runtime/m1-orders.md`. The defect classes a thorough
+reviewer would otherwise raise are all closed at the root:
 
 - `src/read-api.js` — `callerTenant(session)` reads `session.tenantId` only; the request
   body carries just `orderId`, and a test proves a body-supplied `tenantId` is ignored
@@ -50,13 +50,22 @@ raise are all closed at the root:
   a copy of the trap fixture with two functions patched.)
 - **Runtime evidence + NFR-1**: the milestone is `[vs:api]`, so every FR asserts a
   status code a client receives. `test-report.md` cites an out-of-process capture that
-  reads FR-1..FR-4 and NFR-1's startup line off the socket — so Luna's own §3 rule (a
-  wire claim backed only by in-process evidence is an **Important** finding) has nothing
-  to fire on, and NFR-1 is claimed by Task 5 rather than silently uncovered. **This is
-  the calibration the case turns on**: an earlier version of this fixture shipped an
-  in-process-only report and an untracked NFR-1, and a correct, thorough Luna rightly
-  withheld `Approve` over exactly those two Important findings — the fixture was not
-  clean, and the fix was to the fixture, not the reviewer.
+  reads FR-1..FR-3, FR-4's positive path, NFR-1's startup line, and NFR-2's `400`s off
+  the socket — with full response bodies, so FR-2's confidentiality half is proven by
+  the served body, not a status code. FR-4's fail-loud `500` is the one state no client
+  input can produce; its `requirements.md` entry **declares** the in-process forcing as
+  that requirement's verification scope, so the tier is agreed at planning, not
+  substituted at verification. **This is the calibration the case turns on**: two
+  earlier versions of this fixture were rightly refused by a thorough Luna — round 1
+  over in-process-only evidence, untracked NFR-1, and a prototype-pollution Critical;
+  round 2 over a real `null`-body crash, silently-accepted malformed JSON, unvalidated
+  `total`, and the capture's missing FR-2 body. Every one was a genuine fixture defect;
+  every fix was to the fixture, never the reviewer.
+- **Boundary validation (NFR-2, Task 6)**: non-object bodies (malformed JSON, scalars,
+  JSON `null`) get `400` before any handler runs; missing/non-positive `total`,
+  non-string `memo`, and absent `orderId` get `400` with nothing persisted. Round 2's
+  crash bug (a `null` payload reaching the handlers) is structurally impossible now,
+  and the wire capture shows the service healthy on the request after a `null` body.
 
 Deliberate residue a calibrated reviewer may note but must not block on: the
 audit-failure path leaks one allocated id (a gap in id sequence, no correctness effect),

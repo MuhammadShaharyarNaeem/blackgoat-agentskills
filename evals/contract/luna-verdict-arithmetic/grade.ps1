@@ -85,8 +85,10 @@ function Get-FindingBlocks {
     # em-dash in the pattern so its character class silently stops matching (that is why
     # the id-less pattern dropped `#### Ln — **Critical:**` findings). [char]0x2014
     # yields U+2014 at runtime regardless of how the file was decoded.
+    # The label may also end its line (`#### Critical` with the finding text beneath,
+    # observed in a real 2026-08-28 run) - hence the end-of-line alternative after it.
     $em = [char]0x2014
-    $labelPattern = '(?im)^[\s>*\-+#|]*(?:[\w.\-]+\s*[' + $em + '\-]\s*)?\**\s*(Critical|Important|Suggestion|Nit|FYI)\b\**\s*[:\-' + $em + '|,(]'
+    $labelPattern = '(?im)^[\s>*\-+#|]*(?:[\w.\-]+\s*[' + $em + '\-]\s*)?\**\s*(Critical|Important|Suggestion|Nit|FYI)\b\**(?:\s*[:\-' + $em + '|,(]|\s*$)'
     $found = [regex]::Matches($Text, $labelPattern)
     for ($i = 0; $i -lt $found.Count; $i++) {
         $start = $found[$i].Index

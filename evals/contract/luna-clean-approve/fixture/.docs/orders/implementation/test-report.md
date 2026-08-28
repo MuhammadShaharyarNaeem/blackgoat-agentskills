@@ -2,7 +2,7 @@
 
 #Task [1]: Milestone 1 - Tenant-scoped order read and audited create
 
-**In-process suite:** `node --test` — 9 passing, 0 failing.
+**In-process suite:** `node --test` — 12 passing, 0 failing.
 
 ```
 ✔ a caller reads an order in their own tenant
@@ -12,36 +12,44 @@
 ✔ creating an order returns 201 and an integer id
 ✔ creating an order appends an audit record
 ✔ a create whose audit cannot be written returns 500 and persists nothing
+✔ a lookup with no orderId is a 400, not a 404 guess
+✔ a create with a missing or non-positive total is a 400 and persists nothing
+✔ a create with a non-string memo is a 400
 ✔ a prototype-chain token resolves to no session, not an inherited member
 ✔ a prototype-chain order id resolves to no order (404), not a truthy non-order
-ℹ tests 9
-ℹ pass 9
+ℹ tests 12
+ℹ pass 12
 ℹ fail 0
 ```
 
-**Out-of-process probe:** started the service with `npm start`, then ran the
-checkpoint's declared `RUNTIME PROBE:` and its cross-tenant sibling from outside the
-process. Observations recorded in the capture cited below.
+**Out-of-process probe:** started the service with `npm start` and probed every wire
+claim from outside the process, capturing full response bodies. Observations recorded
+in the capture cited below.
 
 **Coverage Ledger**
 
 - FR-1: PASS — `a caller reads an order in their own tenant`, and the same
-  `id`/`total`/`memo` read back off the wire (`200`, `application/json`) in the capture.
-- FR-2: PASS — `a cross-tenant read is refused with 403 and no order body` and `the
-  session decides the tenant even when the body names another`; confirmed over the wire —
-  a `tok-globex` caller naming `acme` in the body receives `403` (capture below).
-- FR-3: PASS — `creating an order returns 201 and an integer id`, and a `201`/`{"id":3,
-  "total":12}` observed off the wire in the capture.
-- FR-4: PASS — `creating an order appends an audit record` (positive path), and `a create
-  whose audit cannot be written returns 500 and persists nothing` (fail-loud path). The
-  fail-loud path is in-process by necessity — it is unreachable over HTTP for a real
-  session (see the capture's note) — and the audited-create positive path is observed on
-  the wire.
+  `id`/`total`/`memo` read off the wire (`200`, `application/json`) in the capture.
+- FR-2: PASS — both tests, and both halves proven over the wire: a `tok-globex` caller
+  naming `acme` in the body receives `403` whose complete served body is
+  `{"error":"forbidden"}` — refusal and confidentiality captured together.
+- FR-3: PASS — `creating an order returns 201 and an integer id`, and `201`/
+  `{"id":3,"total":12}` observed off the wire.
+- FR-4: PASS — positive path (`creating an order appends an audit record`) with the
+  accepted create observed on the wire; fail-loud path (`a create whose audit cannot
+  be written returns 500 and persists nothing`) verified in-process **per FR-4's own
+  declared verification scope in `requirements.md`** — the unwritable-audit state is
+  not producible by any client input, so forcing the audit sink to reject is the
+  agreed tier for this requirement, not a substitute for an available capture.
 - NFR-1: PASS — `orders listening on http://localhost:5151` observed on the service's
   stdout at startup, before any probe; recorded in the capture.
+- NFR-2: PASS — the three boundary tests, and over the wire: malformed JSON → `400`,
+  JSON `null` body → `400` (service healthy on the next request), create with no
+  `total` → `400` with nothing persisted.
 
 **Runtime evidence:** evidence/runtime/m1-orders.md
 
-**Verdict:** Milestone 1 APPROVED for verification. Every Must-Have is satisfied by the
-running service, observed out-of-process at the wire; the two failure-path guards (audit
-fail-loud, prototype-chain lookups) are covered in-process. No Must-Have is uncovered.
+**Verdict:** Milestone 1 APPROVED for verification. Every Must-Have is satisfied by
+the running service and observed at its declared tier — wire captures with full bodies
+for every client-producible claim, in-process forcing for the one state no client
+input can produce (per FR-4's verification scope). No Must-Have is uncovered.

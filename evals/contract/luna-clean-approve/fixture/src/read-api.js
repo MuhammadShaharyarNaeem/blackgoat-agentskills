@@ -10,6 +10,9 @@ function callerTenant(session) {
 
 // POST /api/orders/lookup   body: { orderId }
 function lookupOrder(session, payload) {
+  if (payload.orderId === undefined || payload.orderId === null) {
+    return { status: 400, body: { error: 'orderId required' } };
+  }
   const order = orderById(payload.orderId);
   if (!order) {
     return { status: 404, body: { error: 'not found' } };

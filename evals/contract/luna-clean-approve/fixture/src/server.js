@@ -13,15 +13,28 @@ function send(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+// Resolves the parsed body, or null when the body is not a JSON object: malformed
+// JSON, a JSON scalar, and JSON `null` are all rejected rather than silently
+// treated as an empty payload - the caller must be told their request was bad,
+// and a `null` payload must never reach a handler.
 function readBody(req) {
   return new Promise(function (resolve) {
     let raw = '';
     req.on('data', function (chunk) { raw += chunk; });
     req.on('end', function () {
-      try {
-        resolve(JSON.parse(raw || '{}'));
-      } catch (err) {
+      if (raw === '') {
         resolve({});
+        return;
+      }
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          resolve(parsed);
+        } else {
+          resolve(null);
+        }
+      } catch (err) {
+        resolve(null);
       }
     });
   });
@@ -36,6 +49,10 @@ async function handle(req, res) {
   }
 
   const payload = await readBody(req);
+  if (payload === null) {
+    send(res, 400, { error: 'request body must be a JSON object' });
+    return;
+  }
 
   if (req.method === 'POST' && req.url === '/api/orders/lookup') {
     const out = lookupOrder(session, payload);

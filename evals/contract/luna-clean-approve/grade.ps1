@@ -65,8 +65,10 @@ function Get-FindingBlocks {
     # the id-less pattern dropped. The em-dash is built from its codepoint (never a
     # literal byte) so PowerShell 5.1's Windows-1252 decode of this .ps1 can't mangle it.
     # Kept byte-identical to the trap grader's segmentation.
+    # The label may also end its line (`#### Critical` with the finding text beneath,
+    # observed in a real 2026-08-28 run) - hence the end-of-line alternative after it.
     $em = [char]0x2014
-    $labelPattern = '(?im)^[\s>*\-+#|]*(?:[\w.\-]+\s*[' + $em + '\-]\s*)?\**\s*(Critical|Important|Suggestion|Nit|FYI)\b\**\s*[:\-' + $em + '|,(]'
+    $labelPattern = '(?im)^[\s>*\-+#|]*(?:[\w.\-]+\s*[' + $em + '\-]\s*)?\**\s*(Critical|Important|Suggestion|Nit|FYI)\b\**(?:\s*[:\-' + $em + '|,(]|\s*$)'
     $found = [regex]::Matches($Text, $labelPattern)
     for ($i = 0; $i -lt $found.Count; $i++) {
         $start = $found[$i].Index

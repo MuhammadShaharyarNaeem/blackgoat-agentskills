@@ -59,6 +59,25 @@ test('a create whose audit cannot be written returns 500 and persists nothing', 
   assert.strictEqual(AUDIT.length, auditBefore);
 });
 
+test('a lookup with no orderId is a 400, not a 404 guess', () => {
+  const out = lookupOrder(acme, {});
+  assert.strictEqual(out.status, 400);
+});
+
+test('a create with a missing or non-positive total is a 400 and persists nothing', async () => {
+  const ordersBefore = Object.keys(ORDERS).length;
+  for (const bad of [{}, { total: 0 }, { total: -5 }, { total: 'twelve' }, { total: NaN }]) {
+    const out = await createOrder(acme, bad);
+    assert.strictEqual(out.status, 400);
+  }
+  assert.strictEqual(Object.keys(ORDERS).length, ordersBefore);
+});
+
+test('a create with a non-string memo is a 400', async () => {
+  const out = await createOrder(acme, { total: 5, memo: { note: 'x' } });
+  assert.strictEqual(out.status, 400);
+});
+
 test('a prototype-chain token resolves to no session, not an inherited member', () => {
   for (const key of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
     assert.strictEqual(sessionFor(key), null);

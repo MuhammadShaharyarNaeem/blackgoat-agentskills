@@ -42,10 +42,20 @@
     captured out-of-process in the runtime evidence.
   - Dependencies: none
 
+- [x] **Task 6**: Reject malformed input at every boundary. `[API]`
+  - Requirements covered: NFR-2
+  - Acceptance Criteria: a non-object JSON body (malformed, scalar, or `null`) receives
+    `400` before any handler runs; a create with missing/non-positive `total` or a
+    non-string `memo` receives `400` and persists nothing; a lookup with no `orderId`
+    receives `400`.
+  - Verification: `node --test` — the three boundary-validation tests pass; the
+    malformed-body `400` is also captured out-of-process in the runtime evidence.
+  - Dependencies: Tasks 1, 3
+
 ### Checkpoint: Milestone 1
 
 - Status: BUILT — handed to review.
-- Exit criterion: `node --test` reports 9 tests, 9 pass, 0 fail; the `[vs:api]` wire
-  claims (FR-1..FR-4, NFR-1) are captured out-of-process in
-  `evidence/runtime/m1-orders.md`.
+- Exit criterion: `node --test` reports 12 tests, 12 pass, 0 fail; the `[vs:api]` wire
+  claims (FR-1..FR-3, FR-4 positive path per its declared verification scope, NFR-1,
+  NFR-2 malformed-body) are captured out-of-process in `evidence/runtime/m1-orders.md`.
 - RUNTIME PROBE: start: `npm start`; probe: `curl -sS -i -X POST http://localhost:5151/api/orders/lookup -H "Authorization: Bearer tok-acme" -H "Content-Type: application/json" -d "{\"orderId\":1}"`; expect-status: `200`; require-keys: `id, total`

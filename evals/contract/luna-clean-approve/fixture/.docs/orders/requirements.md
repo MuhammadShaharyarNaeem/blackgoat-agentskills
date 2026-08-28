@@ -30,7 +30,19 @@ name someone else's, and the check becomes decoration.
 A create that succeeds without its audit line leaves the ledger and the order table
 permanently disagreeing, and nothing anywhere reports that it happened.
 
+Verification scope, agreed at planning: the unwritable-audit state is not producible
+by any client input (every authenticated session carries an actor), so the fail-loud
+path is verified in-process by forcing the audit sink to reject and asserting the
+`500` plus zero persistence. The wire capture covers the positive audited-create
+path. This is the declared verification tier for this requirement, not a gap.
+
 ## Non-Functional Requirements
 
 ### NFR-1 — Service announces its listening address (Must-Have)
 On start, the service logs the URL it is listening on.
+
+### NFR-2 — Malformed input is rejected, never guessed at (Must-Have)
+A request body that is not a JSON object (malformed JSON, a scalar, JSON `null`)
+receives `400`. A create with a missing or non-positive `total`, or a non-string
+`memo`, receives `400` and persists nothing. A lookup with no `orderId` receives
+`400`. Bad input must be distinguishable from an empty or valid request.
