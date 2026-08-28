@@ -43,9 +43,10 @@ in the capture cited below.
   agreed tier for this requirement, not a substitute for an available capture.
 - NFR-1: PASS — `orders listening on http://localhost:5151` observed on the service's
   stdout at startup, before any probe; recorded in the capture.
-- NFR-2: PASS — the three boundary tests, and over the wire: malformed JSON → `400`,
-  JSON `null` body → `400` (service healthy on the next request), create with no
-  `total` → `400` with nothing persisted.
+- NFR-2: PASS — the three boundary tests, and over the wire all three enumerated
+  non-object forms: malformed JSON → `400`, JSON `null` body → `400` (service healthy
+  on the next request), JSON scalar body → `400`; plus create with no `total` → `400`
+  with nothing persisted.
 
 **Runtime evidence:** evidence/runtime/m1-orders.md
 

@@ -28,10 +28,11 @@ confidentiality claims are proven by the body that was actually served.
   fail-loud `500` path is verified in-process per FR-4's declared verification
   scope in `requirements.md` (the unwritable-audit state is not producible by any
   client input).
-- **NFR-2** — malformed body → `400`; JSON `null` body → `400`; create with no
-  `total` → `400`; each with its refusal body in the transcript, and the service
-  answered subsequent requests normally (the `null` probe is followed by three
-  more successful exchanges).
+- **NFR-2, all three enumerated forms** — malformed body → `400`; JSON `null`
+  body → `400`; JSON scalar body (`42`) → `400`; create with no `total` → `400`;
+  each with its refusal body in the transcript, and the service answered
+  subsequent requests normally (the `null` probe is followed by further
+  successful exchanges).
 - **Unauthenticated** — no `Authorization` header → `401 {"error":"unauthenticated"}`.
 
 ## Captured output
@@ -75,6 +76,12 @@ Content-Type: application/json
 {"error":"request body must be a JSON object"}
 
 $ curl -sS -i -X POST http://localhost:5151/api/orders -H "Authorization: Bearer tok-acme" -d "null"
+HTTP/1.1 400 Bad Request
+Content-Type: application/json
+
+{"error":"request body must be a JSON object"}
+
+$ curl -sS -i -X POST http://localhost:5151/api/orders -H "Authorization: Bearer tok-acme" -d "42"   (JSON scalar body)
 HTTP/1.1 400 Bad Request
 Content-Type: application/json
 
