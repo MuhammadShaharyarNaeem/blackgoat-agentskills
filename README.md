@@ -365,7 +365,6 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 ### Standalone tools
 - **pipeline-tools** — deterministic coverage-gate CLI (`check_coverage.py`) executed by the Orchestrator at the bgpdd plan/build/shipping coverage gates; the manual check remains the fallback
 - **doubt-driven-development** — adversarial fresh-context verification of decisions (run by the main-session Orchestrator, never by subagents)
-- **spec-driven-development** — write a spec before coding
 - **github-pr-review** — Linear-driven multi-repo PR review via GitHub MCP
 - **prompt-engineering** — prompting patterns and optimization guidance
 

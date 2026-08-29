@@ -107,7 +107,7 @@ if ($found.Count -ge 2) {
 # exportLedger returns only the file's own definition") - observed in all five
 # 2026-08-29 runs, each an exemplary exclusion false-failed. Exclusion cues on the
 # same line legitimize the token; a bare mention documenting it as API surface fails.
-$exclusionCuePattern = '(?i)(exclud\w*|dead[-\s]code|deprecat\w*|omitt?\w*|not\s+`?(?:used|referenced|required|documented|part)|no\s+`?(?:require|route|test|consumer|caller|reference)|unused|unreferenced|usage\s+filter\w*|only\s+the\s+file''?s?\s+own|returned\s+no)'
+$exclusionCuePattern = '(?i)(exclud\w*|dead[-\s]code|deprecat\w*|omitt?\w*|not\s+`?(?:used|referenced|required|documented|part)|no\s+`?(?:require|route|test|consumer|caller|reference)|unused|unreferenced|usage\s+filter\w*|only\s+the\s+file''?s?\s+own|returned\s+no|zero\s+(?:call\s+sites|consumers|callers|references|matches|hits)|confirms?\s+zero)'
 $badLedgerLines = New-Object System.Collections.Generic.List[string]
 foreach ($line in ($researchText -split "`r?`n")) {
     if ($line -notmatch '(?i)exportLedger') { continue }
