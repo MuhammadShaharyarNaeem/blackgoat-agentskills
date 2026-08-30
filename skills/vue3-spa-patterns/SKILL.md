@@ -19,8 +19,8 @@ This is the operational spine. Follow it as written.
 
 ### Component Abstraction & Shared Packages
 
-- **Multi-Frontend Shared Component Package Rule**: In projects with multiple frontends (e.g. monorepos or multi-app workspaces), primitive UI controls (Buttons, Inputs, Dropdowns/Selects, Autocompletes, Date/Time Pickers) MUST be implemented in a shared UI component package or folder (e.g. `packages/ui` or `packages/shared-components`) to guarantee 100% visual, behavioral, and accessibility consistency across all frontends.
-- **Component Abstraction & Custom UI Controls**: Direct usage of un-wrapped raw native HTML input elements or un-wrapped third-party UI controls across application features is prohibited. All primitive controls MUST be wrapped/abstracted inside generic shared components within the shared component library.
+- **Multi-Frontend Shared Component Package Rule**: In multi-frontend projects, primitive UI controls (Buttons, Inputs, Dropdowns/Selects, Autocompletes, Date/Time Pickers) MUST live in a shared UI component package (e.g. `packages/ui`) — for 100% visual, behavioral, and accessibility consistency across frontends.
+- **Component Abstraction & Custom UI Controls**: Raw native HTML inputs or unwrapped third-party UI controls are prohibited in application features — all primitives MUST be wrapped inside the shared component library.
 
 ### State Boundary (Architect's state-mutation boundary)
 
@@ -33,7 +33,7 @@ This is the operational spine. Follow it as written.
 
 - Extract shared logic into composables (`useXxx`) applying the Rule of Three: extract on the third occurrence, not speculatively on the first.
 - A composable owns its own state and returns a narrow, typed surface. It never reaches into component internals.
-- **Decide a composable's scope explicitly, and place its effects accordingly.** State and effects that belong to *each caller* are created inside the composable body; state and effects that must exist **once per application** (a single watcher on global/persisted state, one media-query listener, one storage sync) are created at **module scope**, outside the exported function, and the function only returns handles to them. A singleton effect registered inside the body silently multiplies with every call site — the leak has no error, no warning, and no failing test; it only shows up as duplicated side effects under load.
+- **Decide a composable's scope explicitly.** Per-caller state/effects live inside the composable body; app-wide singletons (one watcher on global/persisted state, one media-query listener, one storage sync) live at **module scope**, outside the exported function — the function returns handles only. A singleton registered inside the body multiplies silently per call site: no error, no failing test (rationale: [references/vue3-spa-patterns-rationale.md](references/vue3-spa-patterns-rationale.md)).
 
 ### HTTP Layer
 
@@ -44,7 +44,7 @@ This is the operational spine. Follow it as written.
 ### Testability
 
 - Every interactive DOM element (buttons, inputs, links, selects, toggles) carries a `data-test` ID so Playwright E2E selectors survive styling and layout changes. This is mandatory, not optional polish.
-- Every routed view/page carries a stable `data-test` ID on its **root element**, naming the page (not its content). Interactive-element IDs prove a control exists; the page-root ID is what lets an E2E assertion prove *which page actually rendered* — without it, a navigation test cannot distinguish the target page from a 404 or a fallback route, and will pass on both.
+- Every routed view/page carries a stable `data-test` ID on its **root element**, naming the page (not its content) — without it, an E2E navigation assertion can't distinguish the target page from a 404 or fallback route (rationale: [references/vue3-spa-patterns-rationale.md](references/vue3-spa-patterns-rationale.md)).
 
 ### Routing & Performance
 
@@ -55,7 +55,7 @@ This is the operational spine. Follow it as written.
 
 ### Data Flow & Computation
 
-These rules apply to every line you author AND any existing line you modify — greenfield or brownfield. Code written under them never needs the retrofit pass.
+Applies to every line you author or modify, greenfield or brownfield — code written under these rules never needs the Refactor Mode retrofit pass.
 
 - **Query once per dataset per scope**: never repeat the same store/entity query (Pinia getter chains, Vuex-ORM `Entity.query()`/`.all()`/`.where()`) or the same transform in loops, computed, or watchers — take one snapshot and derive from it.
 - **Indexes over scans**: a `.find()`/`.filter()` inside a loop is a design smell at authoring time — build a computed `Map` index (`byId: ComputedRef<Map<Id, Entity>>`, `grouped: ComputedRef<Map<Key, Entity[]>>`) and use `map.get(id)`. Indexes stay reactive to store changes; no manual caches without invalidation.
@@ -105,3 +105,4 @@ Read on demand — not needed to execute the contract above:
 
 - [Vue 3 playbook](references/vue3-playbook.md) — GOOD/BAD code patterns: store action vs direct mutation, composable extraction, the full Axios interceptor setup with refresh-token queueing, `data-test` usage, lazy routes, and the computed-vs-watch anti-pattern.
 - [Vue 3 refactor playbook](references/vue3-refactor-playbook.md) — the sequential zero-regression refactor pass: per-phase rules (loops, query indexes, watcher dedupe, reactivity removal, listener/timer cleanup, DOM refs, null checks), safety constraints, and the required Skipped/phase-checklist report format.
+- [Vue 3 rationale](references/vue3-spa-patterns-rationale.md) — why composable singleton effects must live at module scope, and why the page-root `data-test` ID is a distinct requirement from interactive-element IDs.

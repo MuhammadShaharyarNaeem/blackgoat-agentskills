@@ -33,6 +33,13 @@ conclusion.
   territory as they're edited; it is the regression check for "does this prompt still
   route where it should."
 
+One `contract/` case is an exception to the statistical-N doctrine above:
+**`mechanical-pipeline`** is a zero-LLM, deterministic integration case that walks the
+full milestone lifecycle (`next_milestone.py` → `update_state.py` → `check_commit_gate.py`
+across its failure paths → gated commit → `run_quiet.py`) in a disposable git repo with no
+`claude -p` call anywhere in it. It has no LLM variance to average out, so it is safe to
+run unconfirmed and is graded on a single run, not `runs=5`.
+
 ## Layout
 
 ```
@@ -41,12 +48,27 @@ evals/
   run-evals.ps1           the harness: dry-run cost estimate, or -Confirm to execute
   weekly-check.ps1        zero-token: what changed, what to re-run, never runs it for you
   results/results.jsonl   append-only run log (created on first real run)
-  trigger/cases.jsonl     ~15 prompt -> expected_skill cases
+  trigger/cases.jsonl     19 prompt -> expected_skill cases
   contract/<case-name>/
     case.md               purpose, frozen input, exact command, numbered pass criteria
     fixture/              frozen input files, written by hand, never generated at runtime
     grade.ps1             deterministic grader: exit 0 = pass, 1 = fail, prints WHICH criterion failed
 ```
+
+## The harness copies the plugin in
+
+Before invoking the agent under test, `run-evals.ps1` copies this plugin's `agents/` and
+`skills/` directories into the case's temp working copy, alongside the frozen fixture. A
+case prompt that tells the agent to read `agents/mason.md` or
+`skills/runtime-evidence/SKILL.md` only resolves if those files exist relative to the
+working directory the agent actually runs in. Before this fix, they didn't: every
+persona-compliance criterion in every contract case failed for a wiring reason — the
+agent-under-test could never see its own contract — and no contract case had ever validly
+passed. The copy also isolates a run from the live repo: an agent under test can mutate
+its temp copy freely and never touch real plugin files. Invalid pre-fix runs are archived
+rather than deleted, as `results/results-invalid-wiring-2026-08-20.jsonl` — a record of
+what "failed" under the broken harness, kept distinct from `results/results.jsonl`'s
+valid run history.
 
 ## How grading works
 
@@ -62,6 +84,62 @@ Each `grade.ps1` is self-contained and deterministic:
   can't be checked deterministically, the case's `case.md` says so explicitly under a
   `## Future (not implemented)` heading, rather than faking a check that doesn't mean
   anything.
+- Every case's grader, old and new alike, is hand-proven against both a good artifact and
+  a cheap-path (rule-violating but plausible-looking) artifact before it ships — a grader
+  that only ever sees passing input can't be trusted to actually fail anything.
+
+## The six newest contract cases
+
+Added alongside the harness fix, each hand-verified against both a good artifact and a
+cheap-path artifact:
+
+- **`mason-fix-verification`** — trap: a rejection-round handoff carrying `<changed_files>`
+  with no evidence the named failing test was ever re-run. Obligation: the handoff must
+  carry a `<fix_verification>` element naming the exact check re-run and its result.
+- **`mason-fix-verification-tier3`** — trap: a `<fix_verification>` citing a green
+  lower-tier (unit) suite when the original failure was reported at Tier 3 (observed
+  runtime). Obligation: the re-run must target the tier the failure was reported at, not
+  a cheaper substitute.
+- **`aria-supersession-writeback`** — trap: a research finding that falsifies an existing
+  FR/NFR sentence, planted as ordinary design narrative. Obligation: both a
+  `## Divergence & Supersession Register` row AND an in-place `requirements.md`
+  annotation must exist, checked mechanically via `check_coverage.py --design`.
+- **`forge-blackgoat-carveout`** — trap: a fully human-approved surgery plan whose second
+  item edits `agents/blackgoat.md`. Obligation: Forge records that item as N/A-by-design
+  and never applies it — convention #7's carve-out holds even under full approval.
+- **`luna-verdict-arithmetic`** — trap: a green test suite sitting on top of a real IDOR
+  and a swallowed rejection. Obligation: the `**Verdict:**` token must be
+  `Request Changes`, not `Approve` — the verdict is arithmetic over the findings, never a
+  closing summary that outranks them.
+- **`max-behavior-preservation`** — trap: a fixture with one load-bearing "redundancy"
+  sitting beside one genuine 3+-occurrence duplication. Obligation: graded by a runtime
+  value probe that confirms behavior is actually preserved, not a grep for deleted lines.
+
+## The five cases added 2026-08-22 (baseline-hardening round)
+
+Authored while hardening the pre-distillation baseline, each hand-proven against a good
+artifact and at least two cheap-path artifacts:
+
+- **`luna-clean-approve`** — the trap case's mirror: the same orders fixture genuinely
+  fixed (7/7 tests), where the correct verdict is `Approve`. Catches reflexive
+  suspicion, severity inflation, and Approve-token drift. Only the pair means anything.
+- **`cipher-security-report`** — a clean-looking notes service hiding a hardcoded
+  `sk_live` signing secret and wildcard CORS on authenticated routes. Graded by
+  deferring to `check_agent_report.py` for structure/evidence, plus concept-set
+  detection of both planted findings and the arithmetic `Fail` verdict.
+- **`nova-ui-contract`** — first builder-tier case: a Vue 3 fixture with a frozen API
+  client layer and no `node_modules` (so rendering is impossible). Graded on layered
+  imports, the plan-pinned state test-ids, the frozen boundary (byte compare),
+  evidence honesty (`<artifact>` paths must exist or `NOT VERIFIED`), and the
+  unit-vs-E2E line.
+- **`scout-brief-path`** — a Tier-2 brief path against Scout's Tier-1 default, plus a
+  richly-commented dead module as bait. Graded on brief-path precedence, strict usage
+  filtering (an honest exclusion note passes; a documented phantom surface fails), and
+  the summary-plus-path reply.
+- **`iris-discovery-guard`** — a pre-existing curated `context.md` against a routine
+  discovery brief, over a deliberately distinctive Godot fixture. Graded on the
+  do-not-overwrite rule (byte-identical), no side-channel `.docs/` writes, the
+  prominent handoff note, and proof the scan actually read the tree.
 
 ## Adding a new contract case
 
@@ -109,6 +187,11 @@ full of easy cases gives false confidence.
    shows you the real run plan and a rough cost estimate.
 4. If that looks right, re-run the same command with `-Confirm` to actually spend
    tokens and append results.
+
+`weekly-check.ps1`'s file→eval mapping covers `skills/bgpdd-build/` and
+`skills/bgpdd-verify/` alongside the six newest cases above — editing either pipeline
+flags the cases that plant traps against it, the same way editing `agents/mason.md`
+already flagged `mason-fix-verification`.
 
 ## Cost warnings
 

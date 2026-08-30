@@ -7,7 +7,7 @@ description: Simplifies code for clarity. Use when refactoring code for clarity 
 
 > Inspired by the [Claude Code Simplifier plugin](https://github.com/anthropics/claude-plugins-official/blob/main/plugins/code-simplifier/agents/code-simplifier.md). Adapted here as a model-agnostic, process-driven skill for any AI coding agent.
 
-Simplify code by reducing complexity while preserving exact behavior. The goal is not fewer lines — it's code that is easier to read, understand, modify, and debug. Every simplification must pass a simple test: **"Would a new team member understand this faster than the original?"**
+Reduce complexity while preserving exact behavior — not fewer lines, but code easier to read, understand, modify, and debug. Test: would a new team member understand this faster than the original?
 
 ## Worker Execution Contract
 
@@ -15,15 +15,15 @@ This is the operational spine. Follow it as written.
 
 ### The Five Principles
 
-1. **Preserve behavior exactly.** Change how the code expresses itself, never what it does. Ask before every change: Does this produce the same output for every input? Does this maintain the same error behavior? Does this preserve the same side effects and ordering? Do all existing tests still pass without modification? If unsure, don't make the change.
-2. **Follow project conventions.** Match the codebase (CLAUDE.md, neighboring code) for imports, declaration style, naming, error handling, and type annotation depth. Simplification that breaks project consistency is not simplification — it's churn.
-3. **Prefer clarity over cleverness.** Explicit code beats compact code when the compact version requires a mental pause to parse.
-4. **Maintain balance.** Avoid the over-simplification traps: inlining too aggressively (removing a helper that gave a concept a name); combining unrelated logic into one complex function; removing abstractions that exist for extensibility or testability; optimizing for line count instead of comprehension.
-5. **Scope to what changed.** Default to simplifying recently modified code; no drive-by refactors of unrelated code unless explicitly asked.
+1. **Preserve behavior exactly.** Same output, same error behavior, same side effects and ordering, for every input. All existing tests pass unmodified. Unsure → don't change it.
+2. **Follow project conventions.** Match the codebase (CLAUDE.md, neighboring code): imports, declarations, naming, error handling, type-annotation depth. Breaking consistency is churn, not simplification.
+3. **Prefer clarity over cleverness.** Explicit beats compact when the compact version needs a mental pause to parse.
+4. **Maintain balance.** NEVER: inline too aggressively (removing a helper that named a concept); merge unrelated logic into one function; remove abstractions built for extensibility or testability; optimize for line count over comprehension.
+5. **Scope to what changed.** Simplify recently modified code only — no drive-by refactors of unrelated code unless explicitly asked.
 
 ### Chesterton's Fence
 
-Understand why code exists — check git blame — before removing or changing it. If you can't answer why it was written this way, don't simplify it; read more context first.
+Check git blame before removing or changing code. Can't answer why it exists → don't simplify it; read more context first.
 
 ### Simplification Signals
 
@@ -61,9 +61,9 @@ Scan for these patterns — each one is a concrete signal, not a vague smell:
 
 ### Rules
 
-- Make **one simplification at a time**; run the test suite after each change. Tests pass → commit (or continue); tests fail → revert and reconsider.
-- Submit refactoring changes separately from feature or bug fix changes — a PR that refactors and adds a feature is two PRs.
-- **The Rule of 500:** if a refactoring would touch more than 500 lines, invest in automation (codemods, sed scripts, AST transforms) rather than making the changes by hand.
+- One simplification at a time; run the test suite after each. Pass → continue/commit. Fail → revert and reconsider.
+- Refactoring changes ship separately from feature or bug-fix changes — never combine in one PR.
+- **The Rule of 500:** a refactor touching more than 500 lines uses automation (codemods, sed scripts, AST transforms), never hand-editing.
 
 ### Verification Checklist
 
@@ -81,9 +81,11 @@ After completing a simplification pass:
 
 ### Escalate When
 
-- A simplification only passes by modifying tests → revert it and report to the Orchestrator (manager); behavior likely changed.
-- You can't answer why the code exists (Chesterton's Fence) even after reading context → ask the Orchestrator (manager) before touching it.
-- The needed refactor exceeds the current task's scope or the Rule of 500 → report to the Orchestrator (manager) instead of expanding scope.
+| WHEN | DO |
+|---|---|
+| A simplification only passes by modifying tests | Revert it; report to the Orchestrator (manager) — behavior likely changed |
+| Can't answer why the code exists (Chesterton's Fence) even after reading context | Ask the Orchestrator (manager) before touching it |
+| The needed refactor exceeds the task's scope or the Rule of 500 | Report to the Orchestrator (manager) instead of expanding scope |
 
 ## Deep Dive
 

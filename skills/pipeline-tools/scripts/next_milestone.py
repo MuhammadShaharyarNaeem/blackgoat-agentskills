@@ -91,9 +91,10 @@ def parse_milestones(text):
     """Split plan.md into milestone blocks on '## Milestone <n>' / '### Milestone <n>' headings.
 
     A block runs from its heading to the FIRST of: the next milestone
-    heading (level 2 or 3), the next level-2 heading whose text does not
-    start with "Task" (this is what ends the task list at a trailing
-    section like "## Risks and Mitigations" or "## Open Questions"), or
+    heading (level 2 or 3), the next level-2 heading whose text starts with
+    neither "Task" nor "Checkpoint" (this is what ends the task list at a
+    trailing section like "## Risks and Mitigations" or "## Open Questions"
+    while keeping a checkpoint block inside its milestone), or
     EOF. Any other heading in between — "## Task N:" headings, "### Checkpoint:"
     blocks, non-numbered "Milestone ..." prose — stays inside the block.
     """
