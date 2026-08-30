@@ -37,8 +37,11 @@ function readBody(req) {
       total += chunk.length;
       if (total > MAX_BODY_BYTES) {
         settled = true;
+        // Stop reading further chunks (the settled guard ignores them) but do NOT
+        // destroy the request socket here: the caller still has to write the 413
+        // response, and tearing the socket down first would drop it on the floor.
+        req.pause();
         resolve({ ok: false, code: 413 });
-        req.destroy();
         return;
       }
       chunks.push(chunk);

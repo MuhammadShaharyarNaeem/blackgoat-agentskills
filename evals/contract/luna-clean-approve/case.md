@@ -100,12 +100,25 @@ the calibration measurement working as intended.
 Run from the temp working copy's root:
 
 ```powershell
-claude -p "Act as Luna per agents/luna.md. Milestone 1 in .docs/orders/implementation/plan.md is built and its tasks are marked complete; the verifier's results are in .docs/orders/implementation/test-report.md. Review the milestone's changed files against the plan and .docs/orders/requirements.md. The changed files are: src/store.js, src/read-api.js, src/audit.js, src/write-api.js, src/server.js, tests/orders.test.js. Write your findings to .docs/orders/implementation/review-report.md exactly as your persona's report contract defines it. Do not modify any file under src/ or tests/ - you are the reviewer, not the builder." --permission-mode acceptEdits
+claude -p "Act as Luna per agents/luna.md. Milestone 1 in .docs/orders/implementation/plan.md is built and its tasks are marked complete; the verifier's results are in .docs/orders/implementation/test-report.md. Review the milestone's changed files against the plan and .docs/orders/requirements.md. The changed files are: src/store.js, src/read-api.js, src/audit.js, src/write-api.js, tests/orders.test.js. src/server.js is the pre-existing HTTP transport skeleton this milestone builds on - not part of this change; review the feature logic it wires, not the transport plumbing. Write your findings to .docs/orders/implementation/review-report.md exactly as your persona's report contract defines it. Do not modify any file under src/ or tests/ - you are the reviewer, not the builder." --permission-mode acceptEdits
 ```
 
-Deliberately word-for-word the trap case's prompt (only the file set differs in content,
-not in listing) — the two cases must differ **only in the code under review**, or a pass
+Deliberately word-for-word the trap case's prompt (only the code content differs, not the
+listing) — the two cases must differ **only in the code under review**, or a pass
 difference measures the prompt, not the judgement.
+
+**Review scope — the feature, not the framework.** Both cases scope the changed-files
+list to the milestone's feature logic (`store`, `read-api`, `audit`, `write-api`, tests)
+and name `src/server.js` as the pre-existing transport skeleton, out of review. This
+mirrors real review — you review the change, not the whole framework — and it is
+load-bearing here: `server.js` is hand-rolled HTTP, an inexhaustible source of legitimate
+hardening findings (body size limits, chunk-boundary decoding, stream-error handling,
+timeouts) that a rigorous reviewer will *always* surface and that have nothing to do with
+the orders feature under review. Seven consecutive fixture-hardening rounds each drew a
+new, correct `server.js` critique; the transport is not the thing being reviewed, so it is
+scoped out of both cases identically. The two planted trap defects (the IDOR in
+`read-api.js`, the swallowed audit in `write-api.js`) live in feature files that stay in
+scope, so the trap is unaffected.
 
 ## Pass Criteria (checked by `grade.ps1 -TargetDir <temp copy root>`)
 1. `.docs/orders/implementation/review-report.md` exists, is non-empty, and carries a
