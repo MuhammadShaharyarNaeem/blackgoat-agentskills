@@ -4,7 +4,7 @@
 
 A Claude Code plugin that packages an **agent squad** and a **Prompt-Driven Development (PDD)** workflow into reusable skills and personas. An Orchestrator delegates self-contained tasks to specialized subagents, each of which runs in isolation and returns a structured `<handoff>`. Instead of one agent trying to hold an entire project in context, work is split across a squad of narrow specialists coordinated through slash-command SOPs — with requirement traceability enforced from the first honing question to the final pre-launch gate.
 
-- **Plugin:** `blackgoat-agentskills` v1.2.0 — see [CHANGELOG.md](CHANGELOG.md)
+- **Plugin:** `blackgoat-agentskills` v2.0.0 — see [CHANGELOG.md](CHANGELOG.md)
 - **Author:** shaharyar.naeem (shaharyar.naeem@gorelo.io)
 
 ![blackgoat-agentskills: claude plugin validate passing, the plugin manifest, and the 15-agent squad inventory](assets/preview.svg)
@@ -360,7 +360,6 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **agent-audit** — audits personas/dependencies against 14 structural heuristics
 - **agent-orchestration-improve-agent** — log parsing → procedural-memory generation (Forge's core methodology)
 - **bgpdd-learn** — `/bgpdd-learn`, the on-demand session-learning triage (Orchestrator + Forge)
-- **skill-creator** — scaffolds new CLI skills to Anthropic best practices
 
 ### Standalone tools
 - **pipeline-tools** — deterministic coverage-gate CLI (`check_coverage.py`) executed by the Orchestrator at the bgpdd plan/build/shipping coverage gates; the manual check remains the fallback
