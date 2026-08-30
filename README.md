@@ -15,7 +15,7 @@ A Claude Code plugin that packages an **agent squad** and a **Prompt-Driven Deve
 
 The plugin is designed with a deliberate adoption gradient. Each step gives you value on its own; none requires the previous one.
 
-**Step 1 — Fix one bug with `/bg-bugfix`.** One command, one bug, zero squad overhead. It walks a strict 5-phase sequence: root-cause analysis (no code edits allowed until the cause is stated), a failing test that *proves* the bug (TDD), the surgical fix, a blast-radius check on every consumer of what you touched, and finally an offer to route any systemic lesson through `/bgpdd-learn`. If you currently debug with ad-hoc prompts, this is the smallest possible taste of what disciplined gates feel like.
+**Step 1 — Fix one bug with `/bgpdd-bugfix`.** One command, one bug, the smallest squad that can prove it. It walks a strict 5-phase sequence: you trace the root cause yourself in the main session (no code edits allowed until the cause is stated), then Mason (or Nova for UI-side bugs) writes the failing test that *proves* the bug and lands the surgical fix under TDD, Quinn independently re-runs the suite to verify it, Luna reviews the diff and its blast radius on every consumer of what you touched, and finally you get an offer to route any systemic lesson through `/bgpdd-learn`. If you currently debug with ad-hoc prompts, this is the smallest possible taste of the disciplined, gated workflow — now with the smallest squad that can carry it.
 
 **Step 2 — Delegate one task to one agent.** Every squad member can be invoked ad hoc, at any project state: "have Luna review this diff", "have Cipher audit the auth routes", "have Quinn write tests for this module". The agent runs in isolation, does exactly its job, and returns a handoff. No pipeline required.
 
@@ -335,7 +335,7 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **bgpdd-lite** — mid-weight planning for well-specified work (Orchestrator mini-requirements + Alex; hands off to bgpdd-build)
 - **bgpdd-build** — execution (Mason or Nova, routed by the milestone's [API]/[UI] domain tag; Quinn, Luna, Dep)
 - **bgpdd-shipping** — verification & Launch Squad (Vera, Cipher, Dep, Forge)
-- **bg-bugfix** — lean RCA → TDD → fix → blast-radius bugfix loop (no squad overhead)
+- **bgpdd-bugfix** — lean orchestrated bugfix loop: RCA (main session) → TDD fix → independent verification → blast-radius review (Mason or Nova, Quinn, Luna)
 
 ### Methodology skills (execution contracts loaded by agents via their dependency tables)
 - **blackgoat-idea-honing** — interactive requirements refinement (Rex / main session)
@@ -395,7 +395,7 @@ The plugin's `.mcp.json` wires up four MCP servers used by the testing, review, 
 
 ## Usage Examples
 
-- `/bg-bugfix` — fix a single bug end-to-end: root-cause analysis, a failing test that proves it, the surgical fix, and a blast-radius check. No squad, no pipeline.
+- `/bgpdd-bugfix` — fix a single bug end-to-end: root-cause analysis in the main session, then Mason or Nova's TDD fix, Quinn's independent verification, and Luna's blast-radius review. The smallest squad, not no squad.
 - "have Luna review this diff" — delegate one task to one specialist ad hoc; Luna runs in isolation and returns a `<handoff>` with her findings.
 - "have Quinn write tests for this module" — same ad-hoc delegation pattern, aimed at test coverage instead of review.
 - `/bgpdd-lite` — the mid-weight lane for well-specified work: write mini-requirements with the Orchestrator, Alex plans, the coverage gate checks traceability, then hand off to build.
