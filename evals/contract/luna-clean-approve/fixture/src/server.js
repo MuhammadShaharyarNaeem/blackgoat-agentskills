@@ -54,19 +54,25 @@ async function handle(req, res) {
     return;
   }
 
-  if (req.method === 'POST' && req.url === '/api/orders/lookup') {
-    const out = lookupOrder(session, payload);
-    send(res, out.status, out.body);
-    return;
-  }
+  try {
+    if (req.method === 'POST' && req.url === '/api/orders/lookup') {
+      const out = lookupOrder(session, payload);
+      send(res, out.status, out.body);
+      return;
+    }
 
-  if (req.method === 'POST' && req.url === '/api/orders') {
-    const out = await createOrder(session, payload);
-    send(res, out.status, out.body);
-    return;
-  }
+    if (req.method === 'POST' && req.url === '/api/orders') {
+      const out = await createOrder(session, payload);
+      send(res, out.status, out.body);
+      return;
+    }
 
-  send(res, 404, { error: 'no route' });
+    send(res, 404, { error: 'no route' });
+  } catch (err) {
+    // Error boundary: no single request may crash the process for every tenant.
+    console.error('unhandled error serving request', req.method, req.url, err.message);
+    send(res, 500, { error: 'internal error' });
+  }
 }
 
 if (require.main === module) {

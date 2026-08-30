@@ -44,5 +44,11 @@ On start, the service logs the URL it is listening on.
 ### NFR-2 — Malformed input is rejected, never guessed at (Must-Have)
 A request body that is not a JSON object (malformed JSON, a scalar, JSON `null`)
 receives `400`. A create with a missing or non-positive `total`, or a non-string
-`memo`, receives `400` and persists nothing. A lookup with no `orderId` receives
-`400`. Bad input must be distinguishable from an empty or valid request.
+`memo`, receives `400` and persists nothing. A lookup with no `orderId`, or an
+`orderId` that is not a string or finite number, receives `400`. Bad input must be
+distinguishable from an empty or valid request.
+
+### NFR-3 — No single request may crash the service (Must-Have)
+Any unexpected error while serving a request is contained: the handler returns `500`
+and the process stays up to serve the next request. A malformed value from one caller
+must never deny service to every other caller.

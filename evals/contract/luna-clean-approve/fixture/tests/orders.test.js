@@ -64,6 +64,13 @@ test('a lookup with no orderId is a 400, not a 404 guess', () => {
   assert.strictEqual(out.status, 400);
 });
 
+test('a lookup whose orderId is a non-primitive is a 400, not a crash', () => {
+  for (const bad of [{ toString: 'x' }, { a: 1 }, [1, 2], true]) {
+    const out = lookupOrder(acme, { orderId: bad });
+    assert.strictEqual(out.status, 400);
+  }
+});
+
 test('a create with a missing or non-positive total is a 400 and persists nothing', async () => {
   const ordersBefore = Object.keys(ORDERS).length;
   for (const bad of [{}, { total: 0 }, { total: -5 }, { total: 'twelve' }, { total: NaN }]) {

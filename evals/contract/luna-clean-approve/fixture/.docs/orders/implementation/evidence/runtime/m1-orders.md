@@ -1,7 +1,7 @@
 # Runtime capture — orders read/create, over the wire
 
 - Milestone: Milestone 1 - Tenant-scoped order read and audited create
-- Requirement IDs: FR-1, FR-2, FR-3, FR-4 (positive path), NFR-1, NFR-2
+- Requirement IDs: FR-1, FR-2, FR-3, FR-4 (positive path), NFR-1, NFR-2, NFR-3
 - Surface: api
 - Transport: curl over TCP to a locally started `node src/server.js` process
 - Base URL: http://localhost:5151
@@ -33,6 +33,9 @@ confidentiality claims are proven by the body that was actually served.
   each with its refusal body in the transcript, and the service answered
   subsequent requests normally (the `null` probe is followed by further
   successful exchanges).
+- **NFR-3** — a non-primitive `orderId` (`{"toString":"x"}`), which throws in
+  `String()` downstream, returns `400` (not a crash), and the service answers the very
+  next request `200` — the handler error boundary held.
 - **Unauthenticated** — no `Authorization` header → `401 {"error":"unauthenticated"}`.
 
 ## Captured output
@@ -86,6 +89,18 @@ HTTP/1.1 400 Bad Request
 Content-Type: application/json
 
 {"error":"request body must be a JSON object"}
+
+$ curl -sS -i -X POST http://localhost:5151/api/orders/lookup -H "Authorization: Bearer tok-acme" -d "{\"orderId\":{\"toString\":\"x\"}}"   (non-primitive orderId)
+HTTP/1.1 400 Bad Request
+Content-Type: application/json
+
+{"error":"orderId must be a string or number"}
+
+$ curl -sS -i -X POST http://localhost:5151/api/orders/lookup -H "Authorization: Bearer tok-acme" -d "{\"orderId\":1}"   (service still healthy after the above)
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{"id":1,"total":9,"memo":"acme quarterly restock"}
 
 $ curl -sS -i -X POST http://localhost:5151/api/orders -H "Authorization: Bearer tok-acme" -d "{\"memo\":\"x\"}"
 HTTP/1.1 400 Bad Request

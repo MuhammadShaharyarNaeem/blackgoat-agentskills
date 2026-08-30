@@ -46,11 +46,20 @@
   - Requirements covered: NFR-2
   - Acceptance Criteria: a non-object JSON body (malformed, scalar, or `null`) receives
     `400` before any handler runs; a create with missing/non-positive `total` or a
-    non-string `memo` receives `400` and persists nothing; a lookup with no `orderId`
-    receives `400`.
-  - Verification: `node --test` — the three boundary-validation tests pass; the
-    malformed-body `400` is also captured out-of-process in the runtime evidence.
+    non-string `memo` receives `400` and persists nothing; a lookup with no `orderId`,
+    or an `orderId` that is not a string or finite number, receives `400`.
+  - Verification: `node --test` — the boundary-validation tests pass; the malformed-body
+    and non-primitive-`orderId` `400`s are captured out-of-process in the runtime evidence.
   - Dependencies: Tasks 1, 3
+
+- [x] **Task 7**: Wrap request handling in an error boundary. `[API]`
+  - Requirements covered: NFR-3
+  - Acceptance Criteria: any throw during routing/handling is caught and returned as
+    `500`; the process stays up and serves the next request. A non-primitive `orderId`
+    (which would throw in `String()`) does not take the service down.
+  - Verification: `node --test` — the non-primitive-`orderId` test returns `400` not a
+    crash; the runtime capture shows the service answering normally after that request.
+  - Dependencies: none
 
 ### Checkpoint: Milestone 1
 
