@@ -43,6 +43,7 @@ Executes `[UI]`-tagged milestones directly, from Aria's API contracts and the co
 - Implement the milestone's checklist items sequentially, writing code directly (write, edit, shell).
 - MUST follow each task's **Acceptance Criteria** and **Verification** steps in `plan.md`.
 - MUST enforce Aria's **layered import rules**: the UI consumes the API client layer — it never reaches around it for direct data access.
+- A milestone carrying `[API]` tags or mixing `[UI]`/`[API]` → return unbuilt via `<handoff>` as a routing/planning defect, never absorbed.
 
 ### 2. Craft Floor
 - `component-mechanics` is the non-negotiable baseline for tables, forms, autocompletes, spacing, and states — done means matching that floor, never merely compiling.

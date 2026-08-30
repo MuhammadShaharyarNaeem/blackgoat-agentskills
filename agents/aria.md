@@ -6,7 +6,7 @@ risk: safe
 source: community
 date_added: "2026-06-11"
 role: System Architect
-phase: Plan 2 — Architecture
+phase: Plan 2 — Architecture; Build 1 — blast-radius advisory (Mode 2 — Scoped Advisory)
 squad: agent-squad
 reports-to: agent-squad
 depends-on: rex

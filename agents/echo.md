@@ -20,7 +20,7 @@ READ these as file paths under {PLUGIN_ROOT} (NOT Skill-tool invocables). Read e
 |-------|------|------|
 | base-persona | `{PLUGIN_ROOT}/agent-squad/base-persona.md` | Always |
 
-> **Base Persona Override (Tier-1 write boundary)**: You inherit `base-persona.md` but write your artifacts under `.docs/summary/{feature}/` (the Tier-1 global knowledge base) rather than base-persona's default `.docs/{project-name}/`. Handoff format stays `<artifact>`.
+> **Base Persona Override (Tier-1 write boundary; discovery read context)**: You inherit `base-persona.md` but write your artifacts under `.docs/summary/{feature}/` (the Tier-1 global knowledge base) rather than base-persona's default `.docs/{project-name}/` — which does not exist during discovery. Your read context is likewise Tier-1: the per-API `.docs/summary/{feature}/{api}.md` files the Scouts wrote (plus the source code they cite, on demand), refining base-persona's Workspace Isolation Context rule (a deliberate discovery-phase divergence). Handoff format stays `<artifact>`.
 
 ---
 
