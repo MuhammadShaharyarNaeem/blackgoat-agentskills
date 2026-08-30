@@ -14,14 +14,22 @@
 ✔ a create whose audit cannot be written returns 500 and persists nothing
 ✔ a lookup with no orderId is a 400, not a 404 guess
 ✔ a lookup whose orderId is a non-primitive is a 400, not a crash
+✔ the handler error boundary returns 500 on a request stream error, not a crash
 ✔ a create with a missing or non-positive total is a 400 and persists nothing
 ✔ a create with a non-string memo is a 400
 ✔ a prototype-chain token resolves to no session, not an inherited member
 ✔ a prototype-chain order id resolves to no order (404), not a truthy non-order
-ℹ tests 13
-ℹ pass 13
+ℹ tests 14
+ℹ pass 14
 ℹ fail 0
 ```
+
+`readBody` hardening (defense-in-depth for NFR-3, no observable-behavior change on
+the happy path): the body is accumulated as Buffers and decoded once with
+`Buffer.concat(...).toString('utf8')` (a multi-byte character split across chunk
+boundaries is never corrupted); accumulation is bounded at 64 KiB and returns `413`
+past the limit; a stream error or client abort rejects into the handler's error
+boundary as `500` rather than hanging the request.
 
 **Out-of-process probe:** started the service with `npm start` and probed every wire
 claim from outside the process, capturing full response bodies. Observations recorded
@@ -47,10 +55,12 @@ in the capture cited below.
 - NFR-2: PASS — the boundary tests, and over the wire: all three enumerated non-object
   forms (malformed JSON, JSON `null`, JSON scalar) → `400`; a non-primitive `orderId`
   → `400`; create with no `total` → `400` with nothing persisted.
-- NFR-3: PASS — `a lookup whose orderId is a non-primitive is a 400, not a crash`, and
-  over the wire the non-primitive `orderId` that formerly threw returns `400` and the
-  service answers the next request `200` (capture below) — the handler error boundary
-  contains any unexpected throw as `500` rather than a process crash.
+- NFR-3: PASS — the error boundary is proven by `the handler error boundary returns
+  500 on a request stream error, not a crash`, which drives `handle()` with a request
+  whose body stream errors and asserts the catch converts it to `500`. Over the wire,
+  the non-primitive `orderId` returns `400` (its input validation) and the service
+  answers the next request `200` (capture below), showing service survival end-to-end.
+  `readBody` is additionally bounded (64 KiB → `413`) and handles stream error/abort.
 
 **Runtime evidence:** evidence/runtime/m1-orders.md
 

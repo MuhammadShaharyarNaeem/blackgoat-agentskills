@@ -52,13 +52,16 @@
     and non-primitive-`orderId` `400`s are captured out-of-process in the runtime evidence.
   - Dependencies: Tasks 1, 3
 
-- [x] **Task 7**: Wrap request handling in an error boundary. `[API]`
+- [x] **Task 7**: Wrap request handling in an error boundary and harden body reading. `[API]`
   - Requirements covered: NFR-3
-  - Acceptance Criteria: any throw during routing/handling is caught and returned as
-    `500`; the process stays up and serves the next request. A non-primitive `orderId`
-    (which would throw in `String()`) does not take the service down.
-  - Verification: `node --test` — the non-primitive-`orderId` test returns `400` not a
-    crash; the runtime capture shows the service answering normally after that request.
+  - Acceptance Criteria: any throw during body-reading, routing, or handling is caught
+    and returned as `500`; the process stays up and serves the next request. `readBody`
+    is size-bounded (64 KiB → `413`), decodes multi-byte input correctly
+    (`Buffer.concat` then one `toString('utf8')`), and rejects a stream error/abort into
+    the boundary rather than hanging.
+  - Verification: `node --test` — the error-boundary test drives `handle()` with a
+    stream error and asserts `500`; the runtime capture shows the service answering
+    normally after a malformed request.
   - Dependencies: none
 
 ### Checkpoint: Milestone 1

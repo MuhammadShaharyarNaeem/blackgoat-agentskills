@@ -3,10 +3,13 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
+const { EventEmitter } = require('node:events');
+
 const { sessionFor, ORDERS, AUDIT } = require('../src/store.js');
 // sessionFor is exercised directly by the prototype-chain test below.
 const { lookupOrder } = require('../src/read-api.js');
 const { createOrder } = require('../src/write-api.js');
+const { handle } = require('../src/server.js');
 
 const acme = sessionFor('tok-acme');
 const globex = sessionFor('tok-globex');
@@ -69,6 +72,24 @@ test('a lookup whose orderId is a non-primitive is a 400, not a crash', () => {
     const out = lookupOrder(acme, { orderId: bad });
     assert.strictEqual(out.status, 400);
   }
+});
+
+test('the handler error boundary returns 500 on a request stream error, not a crash', async () => {
+  // Drive handle() with a request whose body stream errors: the readBody promise
+  // rejects, and the catch must convert it to 500 rather than an unhandled rejection.
+  const req = new EventEmitter();
+  req.method = 'POST';
+  req.url = '/api/orders/lookup';
+  req.headers = { authorization: 'Bearer tok-acme' };
+  let status = null;
+  const res = {
+    writeHead(code) { status = code; },
+    end() {}
+  };
+  const done = handle(req, res);
+  req.emit('error', new Error('socket blew up'));
+  await done;
+  assert.strictEqual(status, 500);
 });
 
 test('a create with a missing or non-positive total is a 400 and persists nothing', async () => {

@@ -51,4 +51,6 @@ distinguishable from an empty or valid request.
 ### NFR-3 — No single request may crash the service (Must-Have)
 Any unexpected error while serving a request is contained: the handler returns `500`
 and the process stays up to serve the next request. A malformed value from one caller
-must never deny service to every other caller.
+must never deny service to every other caller. Request-body reading is bounded (an
+oversized body is refused with `413`, not accumulated without limit) and a stream
+error or client abort is contained rather than left to hang or crash.

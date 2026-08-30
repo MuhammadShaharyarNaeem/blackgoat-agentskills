@@ -33,9 +33,11 @@ confidentiality claims are proven by the body that was actually served.
   each with its refusal body in the transcript, and the service answered
   subsequent requests normally (the `null` probe is followed by further
   successful exchanges).
-- **NFR-3** — a non-primitive `orderId` (`{"toString":"x"}`), which throws in
-  `String()` downstream, returns `400` (not a crash), and the service answers the very
-  next request `200` — the handler error boundary held.
+- **NFR-3** — a non-primitive `orderId` (`{"toString":"x"}`) returns `400` (input
+  validation) and the service answers the very next request `200`, showing survival
+  end-to-end. The error boundary itself — the catch that turns an unexpected throw
+  into `500` — is proven in-process by the `handle()` stream-error test, since no
+  client input can force the boundary once every input is validated ahead of it.
 - **Unauthenticated** — no `Authorization` header → `401 {"error":"unauthenticated"}`.
 
 ## Captured output
