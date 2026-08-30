@@ -2,6 +2,8 @@
 
 ## Task 1: Export generation service
 
+**Tags:** [API]
+
 **Requirements covered:** FR-1
 
 **Boundary contracts:** provides: export.artifact
@@ -9,6 +11,8 @@
 Builds the export file from a saved report and stores it in object storage.
 
 ## Task 2: Signed download link delivery (supersedes scheduled email per D-3)
+
+**Tags:** [API]
 
 **Requirements covered:** FR-2, NFR-1
 

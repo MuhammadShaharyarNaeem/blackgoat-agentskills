@@ -62,8 +62,12 @@ Write-Output '[2] PASSED: test-report.md exists'
 
 $reportContent = Get-Content -Path $testReportPath -Raw
 
-# [3] at least one #Task [N]: header
-if ($reportContent -match '(?m)^#Task\s*\[?\d+\]?\s*:') {
+# [3] at least one #Task [N]: header. The literal `#Task` token may be wrapped in a
+# markdown heading (`## #Task [1]:`, `# #Task 2:`) - Quinn's contract says the header
+# is human-readable only (the coverage gate parses ledger lines, not headers), so
+# demanding the token at column 0 measured formatting no machine consumer requires
+# (observed false-failing two token-carrying reports, 2026-08-28 round 3).
+if ($reportContent -match '(?m)^#{0,6}\s*#Task\s*\[?\d+\]?\s*:') {
     Write-Output '[3] PASSED: at least one #Task [N]: header present'
 } else {
     $failures.Add('3: no #Task [N]: header found')

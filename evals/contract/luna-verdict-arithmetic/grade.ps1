@@ -69,12 +69,26 @@ function Format-Excerpt {
 # noise a finding can be wrapped in (list bullet, blockquote, heading hashes, table
 # pipe, bold stars) - and runs to the next such label or to end of text. Segmenting
 # this way avoids requiring one particular finding layout: `**Critical:** ...`,
-# `#### Critical - ...`, and `| Critical | src/x.js | ... |` all parse.
+# `#### Critical - ...`, `| Critical | src/x.js | ... |`, and (via the optional
+# finding-id clause) `#### L1 — **Critical:** ...` / `#### L2 — Important: ...` all
+# parse. That last layout - a numbered finding id between the heading marker and the
+# severity - is the one real Luna reviews actually use, and the id-less pattern
+# silently dropped every such finding (observed 2026-08-22: a 24k-char report with
+# three `#### Ln — **Critical:**` findings parsed as ONE block, scoring a perfect
+# review 0/5).
 function Get-FindingBlocks {
     param([string]$Text)
     $blocks = @()
     if ([string]::IsNullOrWhiteSpace($Text)) { return $blocks }
-    $labelPattern = '(?im)^[\s>*\-+#|]*\**\s*(Critical|Important|Suggestion|Nit|FYI)\b\**\s*[:\-—|,(]'
+    # The em-dash is built from its codepoint, never written as a literal byte in this
+    # source: PowerShell 5.1 loads a UTF-8 .ps1 as Windows-1252, which mangles a literal
+    # em-dash in the pattern so its character class silently stops matching (that is why
+    # the id-less pattern dropped `#### Ln — **Critical:**` findings). [char]0x2014
+    # yields U+2014 at runtime regardless of how the file was decoded.
+    # The label may also end its line (`#### Critical` with the finding text beneath,
+    # observed in a real 2026-08-28 run) - hence the end-of-line alternative after it.
+    $em = [char]0x2014
+    $labelPattern = '(?im)^[\s>*\-+#|]*(?:[\w.\-]+\s*[' + $em + '\-]\s*)?\**\s*(Critical|Important|Suggestion|Nit|FYI)\b\**(?:\s*[:\-' + $em + '|,(]|\s*$)'
     $found = [regex]::Matches($Text, $labelPattern)
     for ($i = 0; $i -lt $found.Count; $i++) {
         $start = $found[$i].Index
@@ -104,7 +118,11 @@ function Test-Blocking {
 # --- [1] the report exists, in the contract's location, keyed to the milestone --
 $reportText = ''
 if (Test-Path $reportPath) {
-    $rawReport = Get-Content -Path $reportPath -Raw
+    # -Encoding UTF8 is load-bearing: agents write the report as UTF-8, and PS 5.1's
+    # default Get-Content decodes it as Windows-1252, corrupting every em-dash (U+2014)
+    # into "â€"". That silently broke finding segmentation for the `#### Ln — **Sev:**`
+    # layout real reviews use - the corrupted separator no longer matches the pattern.
+    $rawReport = Get-Content -Path $reportPath -Raw -Encoding UTF8
     if ($null -ne $rawReport) { $reportText = $rawReport }
 }
 
@@ -256,6 +274,9 @@ foreach ($b in $blocks) {
         foreach ($m in [regex]::Matches($line, $pathCandidatePattern)) {
             $candidate = $m.Groups[1].Value
             if ($candidate -match '^\.{1,2}[\\/]') { continue }
+            # An elided path ('.../openapi.json') is prose shorthand, not a citation -
+            # kept byte-identical to the clean-approve grader's scan.
+            if ($candidate -match '\.{3}') { continue }
             if ($candidate -match '(?i)^node_modules[\\/]') { continue }
             if (-not (Test-CitedPathExists -Candidate $candidate)) {
                 if (-not $bogus.Contains($candidate)) { [void]$bogus.Add($candidate) }

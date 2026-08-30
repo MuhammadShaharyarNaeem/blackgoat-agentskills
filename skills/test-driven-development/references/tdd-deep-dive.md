@@ -320,6 +320,22 @@ Bug found? Write failing test reproducing it. Follow TDD cycle. Test proves fix 
 
 Never fix bugs without a test.
 
+## Rule Rationale
+
+Extended rationale for the named rules in `SKILL.md`. The normative statements live there; this is the *why*.
+
+### Negative-Half Proof
+
+Until a gate has been observed failing on a deliberate violation, a hollow assertion and a real one are **indistinguishable** — both are green, and the green half is the half that proves nothing. `--passWithNoTests`, a scanner configured with no rules enabled, and an assertion that merely checks a wrapper exists all pass this way, permanently and silently. The captured failure output, recorded alongside the passing run, is the only artifact that separates a working gate from a decorative one.
+
+### Closed-Set Assertions
+
+A set that can grow without failing a test *will* grow, and the growth is invisible precisely because the test still passes. The assertion's job is to force a human decision on every future addition: an exact-cardinality-and-membership check turns a silent expansion of an allowlist, route table, or export surface into a red test someone must consciously update.
+
+### Composition Root
+
+A unit test that constructs the component by hand passes identically whether or not the application can ever reach it, so it cannot falsify the most common integration defect: the thing was built, and nothing points at it. Only a test arriving through the real entry point — route table, DI container, module export, plugin/handler registry — proves the wiring exists.
+
 ## Subagent Orchestration
 If you are tasked with building a large feature implementation plan that contains multiple testing and building tasks, delegate to a single builder agent, working the task list in dependency-graph order. Do not build them yourself.
 

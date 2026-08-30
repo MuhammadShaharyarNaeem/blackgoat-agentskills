@@ -1,0 +1,12 @@
+[gd_scene load_steps=3 format=3 uid="uid://c1lanternmain"]
+
+[ext_resource type="Script" path="res://scripts/player.gd" id="1_player"]
+[ext_resource type="Script" path="res://scripts/lantern.gd" id="2_lantern"]
+
+[node name="Main" type="Node2D"]
+
+[node name="Player" type="CharacterBody2D" parent="."]
+script = ExtResource("1_player")
+
+[node name="Lantern" type="PointLight2D" parent="Player"]
+script = ExtResource("2_lantern")

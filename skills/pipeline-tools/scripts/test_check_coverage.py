@@ -803,6 +803,75 @@ class TestFrCitationLint(unittest.TestCase):
         self.assertEqual([f["task"] for f in failures], ["FR-1", "FR-10"])
 
 
+class TestDomainTagLint(unittest.TestCase):
+    def _lint(self, plan_text):
+        return cc.lint_domain_tags(plan_text)
+
+    def test_tagged_homogeneous_plan_passes(self):
+        failures = self._lint(
+            "### Milestone 1 — Orders API [API] [vs:api]\n"
+            "## Task 1: List endpoint\n\n"
+            "**Tags:** [API]\n\n"
+            "### Milestone 2 — Orders UI [UI] [vs:web+api]\n"
+            "## Task 2: Orders table\n\n"
+            "**Tags:** [UI] [SEC]\n"
+        )
+        self.assertEqual(failures, [])
+
+    def test_missing_tags_line_fails(self):
+        failures = self._lint("## Task 1: List endpoint\n\n- some body\n")
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]["check"], "domain-tag")
+        self.assertEqual(failures[0]["task"], "1")
+        self.assertIn("no **Tags:** line", failures[0]["detail"])
+
+    def test_tags_line_without_domain_fails(self):
+        failures = self._lint("## Task 1: Hardening\n\n**Tags:** [SEC]\n")
+        self.assertEqual(len(failures), 1)
+        self.assertIn("no domain tag", failures[0]["detail"])
+
+    def test_tags_line_with_both_domains_fails(self):
+        failures = self._lint("## Task 1: Full slice\n\n**Tags:** [UI] [API]\n")
+        self.assertEqual(len(failures), 1)
+        self.assertIn("both [UI] and [API]", failures[0]["detail"])
+
+    def test_mixed_domain_milestone_fails(self):
+        failures = self._lint(
+            "### Milestone 1 — Orders [API] [vs:api]\n"
+            "## Task 1: List endpoint\n\n"
+            "**Tags:** [API]\n\n"
+            "## Task 2: Orders table\n\n"
+            "**Tags:** [UI]\n"
+        )
+        self.assertEqual(len(failures), 1)
+        self.assertIn("mixed-domain milestone", failures[0]["detail"])
+        self.assertIn("Task 2", failures[0]["detail"])
+
+    def test_untagged_milestone_heading_fails_once(self):
+        failures = self._lint(
+            "### Milestone 1 — Orders [vs:api]\n"
+            "## Task 1: List endpoint\n\n"
+            "**Tags:** [API]\n"
+        )
+        self.assertEqual(len(failures), 1)
+        self.assertIn("milestone heading must carry exactly one domain tag",
+                      failures[0]["detail"])
+
+    def test_plan_without_milestones_skips_homogeneity_half(self):
+        failures = self._lint(
+            "## Task 1: List endpoint\n\n**Tags:** [API]\n\n"
+            "## Task 2: Orders table\n\n**Tags:** [UI]\n"
+        )
+        self.assertEqual(failures, [])
+
+    def test_lowercase_vs_tag_never_reads_as_domain(self):
+        failures = self._lint(
+            "## Task 1: Probe-only task\n\n**Tags:** [vs:api]\n"
+        )
+        self.assertEqual(len(failures), 1)
+        self.assertIn("no domain tag", failures[0]["detail"])
+
+
 class TestLintsArePlanModeOnly(unittest.TestCase):
     def test_test_mode_report_has_empty_lint_failures(self):
         report = cc.build_report(
@@ -963,6 +1032,23 @@ class TestCliLintPathsFixture(unittest.TestCase):
         self.assertIn("../Travel-Goat-v5/src/import/rollback.ts", details)
         # Sanctioned repo-relative identifiers are untouched.
         self.assertNotIn("src/import/itinerary-parser.ts", details)
+
+
+class TestCliLintDomainTagsFixture(unittest.TestCase):
+    def test_overlay_only_tags_line_fails_the_gate(self):
+        code, out, _err = run_cli(
+            "--requirements", str(FIXTURES / "lint-domain-tags" / "requirements.md"),
+            "--plan", str(FIXTURES / "lint-domain-tags" / "plan.md"),
+        )
+        data = json.loads(out)
+        self.assertEqual(code, 1)
+        self.assertEqual(data["result"], "FAIL")
+        self.assertEqual(data["uncovered"], [])
+        failures = data["lint_failures"]
+        self.assertEqual({f["check"] for f in failures}, {"domain-tag"})
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]["task"], "1")
+        self.assertIn("no domain tag", failures[0]["detail"])
 
 
 class TestCliLintRuntimeCriterionFixture(unittest.TestCase):

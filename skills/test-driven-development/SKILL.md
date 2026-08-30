@@ -8,11 +8,7 @@ date_added: "2026-02-27"
 
 # Test-Driven Development (TDD)
 
-Write the test first. Watch it fail. Write minimal code to pass. If you didn't watch the test fail, you don't know if it tests the right thing.
-
 ## Worker Execution Contract
-
-This is the operational spine. Follow it as written.
 
 ### The Iron Law
 
@@ -20,38 +16,34 @@ This is the operational spine. Follow it as written.
 NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST
 ```
 
-Write a FAILING test FIRST. Then write the minimum code to make it pass. Then refactor. **Never skip RED.**
-
-Wrote code before the test? Delete it. Start over. No exceptions — don't keep it as "reference", don't "adapt" it, don't look at it. Delete means delete. Implement fresh from tests.
+**Never skip RED** (RED-before-implementation). Wrote code before the test? DELETE it — not kept as "reference", not adapted, not looked at. Delete means delete; implement fresh from tests.
 
 ### Workflow
 
-1. **RED**: Write one failing test for the next behavior. Verify it fails for the expected reason (feature missing, not a typo or error).
-2. **GREEN**: Write the minimum code to pass that test — no more. Verify it passes and all other tests stay green with pristine output.
+1. **RED**: Write one failing test for the next behavior. Verify it fails for the expected reason (feature missing — not a typo or error).
+2. **GREEN**: Write the minimum code to pass — no speculative features, options, or abstractions (YAGNI). Verify it passes; run the full suite and confirm all green, output pristine.
 3. **REFACTOR**: Clean up without changing behavior. Tests stay green.
 4. Repeat for the next behavior.
 
 ### Rules
 
-- **No dummy assertions or stub tests**: Never write dummy assertions like `expect(true).toBe(true)` or skip mounting child components in testing environments; tests must rigorously mount, exercise, and assert the full state, style variations, and behavior of the target component or function.
-- **Negative-half proof — no gate or test is trusted until it has been observed FAILING on a deliberate violation.** This is RED applied to everything that renders a verdict, including the checks that are not themselves TDD output: a lint or contract-check script, an accessibility scan, a state-matrix assertion, a CI job. Introduce the violation the gate exists to catch, run it, capture the non-zero exit or failure output, then revert. Record that capture alongside the passing run. Until you have done this, a hollow assertion and a real one are **indistinguishable** — both are green, and the green half is the half that proves nothing. `--passWithNoTests`, a scanner configured with no rules enabled, and an assertion that merely checks a wrapper exists all pass this way, permanently and silently.
 - One logical assertion / one behavior per test.
-- Test names describe behavior: `"should reject empty email"` not `"test validateInput"`. If the name needs "and", split the test.
-- Use AAA structure: Arrange → Act → Assert.
+- Test names describe behavior: `"should reject empty email"`, not `"test validateInput"`. Name needs "and" → split the test.
+- AAA structure: Arrange → Act → Assert.
 - Parameterize tests for multiple input variants rather than duplicating.
-- Never test implementation details (private methods, internal state).
-- Prefer real code. Mock ONLY true external boundaries you don't own — network APIs, databases, the filesystem, clock/randomness. Never mock your own code under test.
-- Run the full test suite after each GREEN step.
-- Write minimal code to pass — no speculative features, options, or abstractions (YAGNI).
-- Stack execution contracts (e.g. dotnet-backend-patterns) take precedence over the boundary list above where they conflict — e.g. on .NET, integration tests never mock the database.
-- A hard invariant or Must-Have NFR that must hold permanently (a stable wire/serialization format, a byte-for-byte compatibility contract, a public-API surface) MUST be covered by a PERMANENT automated regression test committed to the suite. A throwaway/temporary harness you delete after checking does NOT satisfy it — and this requirement overrides any plan or checklist step that says "manual check", "temporary check", or "verify once". Throwaway harnesses may supplement, never replace, the committed test.
-- **Mock Fidelity Rule** (supersedes the narrower "Network Client Mocking Rule"): a mock is derived from the authoritative contract, never authored from the consumer's expectations. Two things must hold, and the second is the one that bites:
-  - **Shape**: the mocked return must match the **post-middleware/post-interceptor** structure the application actually receives at runtime, not the raw HTTP envelope.
-  - **Field identity**: field names, casing, nullability, and nesting come from the contract artifact — the API spec, schema, or frozen interface definition. A mock whose field names you cannot trace back to that artifact is not a test of the code; it is a test of the mock, and it will pass for exactly as long as production is broken. This is how a consumer invents a parallel vocabulary (`pricing.retailTotal` for `retailTotal`, `departureTime` for `departureUtc`) and gets green tests over code that cannot work: the mock and the consumer agree with each other and neither agrees with the server. Weak typing at the boundary (`any`, untyped destructuring) removes the last mechanism that would have caught it, so a contract boundary must be typed from the contract too.
-  - **Fixture identity**: the rule covers **seeded state**, not only mocked responses. Any fixture that pre-populates application state for a test — auth storage-state, cookies, cached entities, feature flags — must derive its storage mechanism *and* its exact keys from the application's own accessor code, never from the test framework's default idiom. Test tooling ships an opinionated default (dump everything to `localStorage`); if the application reads from somewhere else, the fixture writes into a location nothing reads and the test proves nothing about the authenticated path.
-  - Where no contract artifact exists, capture one real response first and derive the mock from that. "I read the calling code and matched it" is the failure mode, not the method.
-- **Closed-set assertions pin exact cardinality and membership**: when a test asserts anything about a set that is meant to be closed — an exemption or allowlist, a route table, enum members, registered handlers or providers, a public export surface — assert its **exact length and its exact members** (`=== n` plus the membership check), never `<=`, `>=`, or "contains". A set that can grow without failing a test *will* grow, and the growth is invisible precisely because the test still passes. The assertion's job is to force a human decision on every future addition.
-- **A feature is not done until a test reaches it through its real composition root.** New units must be registered where the application actually resolves them — route table, DI container, module export, plugin/handler registry — and the test that authorizes the feature must arrive through that entry point, not by importing the unit directly. A unit test that constructs the component by hand passes identically whether or not the application can ever reach it, so it cannot falsify the most common integration defect: the thing was built, and nothing points at it.
+- NEVER test implementation details (private methods, internal state).
+- NEVER write dummy assertions (`expect(true).toBe(true)`) or stub tests: tests must rigorously mount, exercise, and assert the full state, style variations, and behavior of the target component or function.
+- Prefer real code. Mock ONLY true external boundaries you don't own — network APIs, databases, the filesystem, clock/randomness. NEVER mock your own code under test.
+- Stack execution contracts (e.g. `dotnet-backend-patterns`) take precedence over the boundary list above where they conflict — e.g. on .NET, integration tests never mock the database.
+- **Negative-half proof — no gate or test is trusted until it has been observed FAILING on a deliberate violation.** This is RED applied to everything that renders a verdict, including checks that are not TDD output: a lint or contract-check script, an accessibility scan, a state-matrix assertion, a CI job. Introduce the violation the gate exists to catch, run it, capture the non-zero exit or failure output, revert, and record that capture alongside the passing run. Until then, a hollow assertion and a real one are indistinguishable — both are green. (Failure modes and rationale: [deep dive](references/tdd-deep-dive.md).)
+- **Permanent regression test for permanent invariants**: a hard invariant or Must-Have NFR that must hold permanently (a stable wire/serialization format, byte-for-byte compatibility, a public-API surface) MUST be covered by a PERMANENT automated regression test committed to the suite. A throwaway harness may supplement, never replace it — this overrides any plan or checklist step that says "manual check", "temporary check", or "verify once".
+- **Mock Fidelity Rule** (supersedes the narrower "Network Client Mocking Rule"): a mock is derived from the authoritative contract, never authored from the consumer's expectations.
+  - **Shape**: the mocked return matches the **post-middleware/post-interceptor** structure the application actually receives at runtime, not the raw HTTP envelope.
+  - **Field identity**: field names, casing, nullability, and nesting come from the contract artifact — the API spec, schema, or frozen interface definition; every mocked field must trace back to it. Type the contract boundary from the contract too — no `any`, no untyped destructuring.
+  - **Fixture identity**: the rule covers **seeded state**, not only mocked responses. Any fixture pre-populating application state (auth storage-state, cookies, cached entities, feature flags) derives its storage mechanism *and* its exact keys from the application's own accessor code, never from the test framework's default idiom.
+  - No contract artifact? Capture one real response first and derive the mock from that. "I read the calling code and matched it" is the failure mode, not the method. (Why field identity bites: [testing anti-patterns](references/testing-anti-patterns.md).)
+- **Closed-set assertions pin exact cardinality and membership**: asserting anything about a set meant to be closed — an exemption or allowlist, a route table, enum members, registered handlers or providers, a public export surface — assert its **exact length and exact members** (`=== n` plus the membership check), NEVER `<=`, `>=`, or "contains".
+- **A feature is not done until a test reaches it through its real composition root** (the composition-root rule). Register new units where the application actually resolves them — route table, DI container, module export, plugin/handler registry — and the test that authorizes the feature must arrive through that entry point, not by importing the unit directly.
 
 ### Verification Checklist
 
@@ -71,7 +63,7 @@ Can't check all boxes? You skipped TDD. Start over.
 
 ### Escalate When
 
-- Test requires infrastructure the repo does not have (e.g. a codebase with zero test harness) → do NOT silently skip verification and do NOT unilaterally drop TDD. The manager sets the verification standard for such repos in the briefing before work starts; absent test infra it degrades to build-success plus public-API-surface invariance (no unintended signature/contract changes), not "no verification". If the briefing gave no standard, escalate for one before writing code.
+- Repo has no test infrastructure → do NOT silently skip verification and do NOT unilaterally drop TDD. The manager sets the verification standard in the briefing; absent test infra it degrades to build-success plus public-API-surface invariance (no unintended signature/contract changes), never "no verification". No standard in the briefing → escalate for one before writing code.
 - 3 consecutive RED-RED cycles (can't reach GREEN) → halt and report to manager.
 - Unclear requirement makes it impossible to define expected behavior → ask manager.
 
@@ -79,5 +71,5 @@ Can't check all boxes? You skipped TDD. Start over.
 
 Read these on demand — not needed to execute the contract above:
 
-- [TDD deep dive](references/tdd-deep-dive.md) — worked RED/GREEN examples, the Red-Green-Refactor diagram, "Why Order Matters", the Common Rationalizations table, red flags, a bug-fix walkthrough, and when-stuck guidance.
-- [Testing anti-patterns](references/testing-anti-patterns.md) — read when adding mocks or test utilities: testing mock behavior, test-only methods in production, incomplete mocks, and mocking without understanding dependencies.
+- [TDD deep dive](references/tdd-deep-dive.md) — worked RED/GREEN examples, the Red-Green-Refactor diagram, "Why Order Matters", the Common Rationalizations table, red flags, a bug-fix walkthrough, when-stuck guidance, and rule rationale (negative-half proof, closed-set assertions, composition root).
+- [Testing anti-patterns](references/testing-anti-patterns.md) — read when adding mocks or test utilities: testing mock behavior, test-only methods in production, incomplete mocks, mocking without understanding dependencies, and mock-fidelity rationale.

@@ -71,6 +71,14 @@ EMPTY_VALUES = {"none", "n/a", "na", "nothing", "-", "tbd"}
 # space) is the other observed prose-introduction shape.
 SENTENCE_BREAK_RE = re.compile(r"\.\s|\s—\s")
 
+# --- domain-tag lint vocabulary --------------------------------------------
+# Contract authority: planning-and-task-breakdown/SKILL.md — every task's
+# `**Tags:**` line carries exactly one domain tag, and a milestone heading
+# carries its domain tag beside `[vs:<surface>]`. Uppercase by contract: the
+# lowercase `[vs:...]` grammar exists specifically so the two never collide.
+TAGS_FIELD_RE = re.compile(r"\*\*Tags:\*\*", re.IGNORECASE)
+DOMAIN_TAG_RE = re.compile(r"\[(UI|API)\]")
+
 # --- runtime-criterion lint vocabulary ------------------------------------
 # Milestone block extents MUST stay consistent with next_milestone.py's
 # parse_milestones(): level-2 OR level-3 `Milestone <n>` headings open a block;
@@ -702,6 +710,117 @@ def lint_runtime_criterion(text):
     return failures
 
 
+def _tags_field_text(block):
+    """The `**Tags:**` field text, or None if the field is absent.
+
+    Same extent rule as _boundary_contract_text: the marker line plus any
+    continuation lines up to the first blank line, next `**Field:**` line, or
+    next heading.
+    """
+    collected = []
+    capturing = False
+    for line in block.split("\n"):
+        if not capturing:
+            if TAGS_FIELD_RE.search(line):
+                capturing = True
+                collected.append(line)
+            continue
+        if not line.strip() or heading_level(line) is not None or FIELD_START_RE.match(line):
+            break
+        collected.append(line)
+
+    return "\n".join(collected) if capturing else None
+
+
+def lint_domain_tags(text):
+    """Every task declares exactly one domain tag; every milestone is
+    domain-homogeneous under a domain-tagged heading.
+
+    Contract authority: planning-and-task-breakdown/SKILL.md. Installed per
+    CLAUDE.md convention #9 after the alex-domain-tags eval showed the prose
+    rule violated in 10 of 10 runs across two wordings — untagged tasks are
+    unroutable (next_milestone.py's [UI]/[API] routing) and a mixed milestone
+    is rejected as MIXED at build time, so both defects must die at plan time.
+    Scope limit (mirrors lint_runtime_criterion): a plan with no milestone
+    headings skips the homogeneity half — the per-task rule applies always.
+    """
+    lines = text.split("\n")
+    failures = []
+
+    domain_by_task = {}
+    for task_number, block in split_task_blocks(text):
+        field_text = _tags_field_text(block)
+        if field_text is None:
+            failures.append(
+                _failure(
+                    "domain-tag",
+                    task_number,
+                    "no **Tags:** line: every task declares exactly one domain "
+                    "tag ([UI] or [API])",
+                )
+            )
+            continue
+        domains = set(DOMAIN_TAG_RE.findall(field_text))
+        if len(domains) == 1:
+            domain_by_task[task_number] = next(iter(domains))
+        elif not domains:
+            failures.append(
+                _failure(
+                    "domain-tag",
+                    task_number,
+                    "**Tags:** line carries no domain tag: exactly one of "
+                    "[UI]/[API] is required (overlays [SEC]/[EXT]/[BLOCKED] "
+                    "combine freely with either)",
+                )
+            )
+        else:
+            failures.append(
+                _failure(
+                    "domain-tag",
+                    task_number,
+                    "**Tags:** line carries both [UI] and [API]: a task has "
+                    "exactly one domain — split the task",
+                )
+            )
+
+    task_number_by_line = {}
+    for index, line in enumerate(lines):
+        match = TASK_HEADING_RE.match(line)
+        if match:
+            task_number_by_line[index] = match.group(1)
+
+    for title, heading_line, start, end in split_milestone_blocks(lines):
+        heading_domains = set(DOMAIN_TAG_RE.findall(heading_line))
+        if len(heading_domains) != 1:
+            failures.append(
+                _failure(
+                    "domain-tag",
+                    title,
+                    "milestone heading must carry exactly one domain tag "
+                    "([UI] or [API]) beside its [vs:<surface>] tag",
+                )
+            )
+            continue
+        milestone_domain = next(iter(heading_domains))
+        for index in range(start, end):
+            task_number = task_number_by_line.get(index)
+            if task_number is None:
+                continue
+            task_domain = domain_by_task.get(task_number)
+            if task_domain is not None and task_domain != milestone_domain:
+                failures.append(
+                    _failure(
+                        "domain-tag",
+                        title,
+                        f"mixed-domain milestone: Task {task_number} is "
+                        f"[{task_domain}] inside a [{milestone_domain}] "
+                        f"milestone — milestones are domain-homogeneous "
+                        f"(next_milestone.py rejects MIXED at build time)",
+                    )
+                )
+    return failures
+
+
 def run_plan_lints(text):
     """Run every plan-mode lint over a plan.md body."""
     blocks = split_task_blocks(text)
@@ -710,6 +829,7 @@ def run_plan_lints(text):
         + lint_boundary_contracts(blocks)
         + lint_path_hygiene(blocks)
         + lint_runtime_criterion(text)
+        + lint_domain_tags(text)
     )
 
 

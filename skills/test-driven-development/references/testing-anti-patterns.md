@@ -248,6 +248,14 @@ TDD cycle:
 4. THEN claim complete
 ```
 
+## Mock Fidelity: Why Field Identity Bites
+
+Rationale for the Mock Fidelity Rule in `SKILL.md` (the normative statement lives there).
+
+A mock whose field names you cannot trace back to the contract artifact is not a test of the code; it is a test of the mock, and it will pass for exactly as long as production is broken. This is how a consumer invents a parallel vocabulary (`pricing.retailTotal` for `retailTotal`, `departureTime` for `departureUtc`) and gets green tests over code that cannot work: the mock and the consumer agree with each other and neither agrees with the server. Weak typing at the boundary (`any`, untyped destructuring) removes the last mechanism that would have caught it.
+
+The fixture-identity half bites the same way from the other side: test tooling ships an opinionated default (dump everything to `localStorage`); if the application reads from somewhere else, the fixture writes into a location nothing reads and the test proves nothing about the authenticated path.
+
 ## When Mocks Become Too Complex
 
 **Warning signs:**

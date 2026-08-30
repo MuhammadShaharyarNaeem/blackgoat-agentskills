@@ -191,21 +191,45 @@ foreach ($f in $changedFiles) {
         # luna-verdict-arithmetic plants an IDOR + a swallowed rejection behind a
         # green suite; graded on finding both and on the verdict being arithmetic
         # over the findings (Request Changes, never approve-with-notes).
+        # luna-clean-approve is its mirror: the same fixture genuinely fixed, where
+        # the correct verdict is Approve - the pair only means something together
+        # (one side alone cannot distinguish judgement from bias).
         [void]$affectedEvals.Add('contract:luna-verdict-arithmetic')
+        [void]$affectedEvals.Add('contract:luna-clean-approve')
+    }
+    if ($f -match 'agents/scout\.md$' -or $f -match 'skills/bgpdd-discovery/') {
+        # scout-brief-path plants a Tier-2 brief path against his Tier-1 default
+        # plus a dead-code bait module; graded on brief-path precedence, strict
+        # usage filtering, and the summary-plus-path reply.
+        [void]$affectedEvals.Add('contract:scout-brief-path')
+    }
+    if ($f -match 'agents/iris\.md$' -or $f -match 'skills/bgpdd-discovery/') {
+        # iris-discovery-guard plants a pre-existing curated context.md; graded on
+        # the do-not-overwrite rule (byte-identical), no side-channel writes, the
+        # prominent handoff note, and proof the scan read the (Godot) tree.
+        [void]$affectedEvals.Add('contract:iris-discovery-guard')
+    }
+    if ($f -match 'agents/cipher\.md$' -or $f -match 'skills/security-and-hardening/' -or $f -match 'skills/pipeline-tools/scripts/check_agent_report\.py$') {
+        # cipher-security-report plants a hardcoded sk_live signing secret and a
+        # wildcard CORS grant behind a clean-looking service; graded on evidenced
+        # check lines, both findings, and the verdict being arithmetic (Fail).
+        [void]$affectedEvals.Add('contract:cipher-security-report')
     }
     if ($f -match 'agents/max\.md$' -or $f -match 'skills/code-simplification/') {
         # max-behavior-preservation plants a genuine simplification beside a
         # load-bearing 'redundancy'; graded on a runtime value probe, not a grep.
         [void]$affectedEvals.Add('contract:max-behavior-preservation')
     }
+    if ($f -match 'agents/nova\.md$' -or $f -match 'skills/ui-design-patterns/' -or $f -match 'skills/vue3-spa-patterns/') {
+        # nova-ui-contract plants a frozen client layer and a four-state panel task
+        # in an environment where rendering is impossible; graded on layered
+        # imports, pinned state test-ids, the frozen boundary, evidence honesty
+        # (cited artifact paths must exist or NOT VERIFIED), and the unit/E2E line.
+        [void]$affectedEvals.Add('contract:nova-ui-contract')
+    }
     if ($f -match 'agents/nova\.md$' -or $f -match 'agents/mason\.md$' -or $f -match 'agents/luna\.md$') {
-        # None of the three builders/reviewers has a dedicated contract eval: no
-        # suite here invokes them, because grading produced CODE deterministically
-        # is a different problem from grading a produced DOCUMENT's shape, which is
-        # all this suite's graders do. Their frontmatter `description` does drive
-        # delegation routing, so a change at least re-checks that via trigger.
-        # This is a stopgap, not coverage: read a green trigger run as "routing still
-        # works", never as "the builder/reviewer still behaves".
+        # Frontmatter `description` drives delegation routing, so a persona change
+        # re-checks routing via trigger alongside the dedicated contract cases.
         [void]$affectedEvals.Add('trigger')
     }
     if ($f -match 'skills/bgpdd-learn/') {

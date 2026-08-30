@@ -31,7 +31,7 @@ gap those two criteria close.
 Run from the temp working copy's root:
 
 ```powershell
-claude -p "Act as Quinn per agents/quinn.md. Read .docs/password-reset/requirements.md and .docs/password-reset/plan.md. Write unit tests into tests/ against the existing src/passwordReset.js (do not modify src/), run them, and append your results to .docs/password-reset/test-report.md using the strict #Task [N]: header and Coverage Ledger format from agents/quinn.md section 6 (one line per exercised requirement ID, e.g. '- FR-1: PASS - {test name}')." --permission-mode acceptEdits
+claude -p "Act as Quinn per agents/quinn.md. Read .docs/password-reset/requirements.md and .docs/password-reset/plan.md. Write unit tests into tests/ against the existing src/passwordReset.js (do not modify src/), run them, and append your results to .docs/password-reset/test-report.md using the strict #Task [N]: header and Coverage Ledger format from agents/quinn.md section 6 (one line per exercised requirement ID, e.g. '- FR-1: PASS - {test name}')." --permission-mode acceptEdits --allowedTools "Bash"
 ```
 
 ## Pass Criteria (checked by `grade.ps1 -TargetDir <temp copy root>`)
