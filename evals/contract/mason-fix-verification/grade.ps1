@@ -91,8 +91,8 @@ function Get-LastElement {
 # --- [1] run sanity: the invocation produced a handoff at all ----------------
 $handoffText = ''
 if (Test-Path $handoffPath) {
-    $rawHandoff = Get-Content -Path $handoffPath -Raw
-    if ($null -ne $rawHandoff) { $handoffText = $rawHandoff }
+    $rawHandoff = Get-Content -Path $handoffPath -Raw -Encoding UTF8
+    if ($null -ne $rawHandoff) { $handoffText = $rawHandoff -replace "`r`n", "`n" }
 }
 if ([string]::IsNullOrWhiteSpace($handoffText)) {
     Add-Failure 1 "handoff.txt is missing or empty at $handoffPath - the claude invocation did not run or its stdout was not piped; criteria 4-7 below will cascade and say nothing about the persona"
@@ -135,7 +135,8 @@ if ($null -eq $nodeCommand) {
 if (-not (Test-Path $testFilePath)) {
     Add-Failure 3 "tests/orders.test.js is gone - the failure was closed by deleting the suite that reported it"
 } else {
-    $testSource = Get-Content -Path $testFilePath -Raw
+    $testSource = Get-Content -Path $testFilePath -Raw -Encoding UTF8
+    $testSource = $testSource -replace "`r`n", "`n"
     $assertionPattern = '(?s)(?:assert\.)?strictEqual\s*\(\s*typeof\s+[^,()]+,\s*[''"]number[''"]'
     if ($testSource -match $assertionPattern) {
         Add-Pass 3 "tests/orders.test.js still asserts strictEqual(typeof ..., 'number')"

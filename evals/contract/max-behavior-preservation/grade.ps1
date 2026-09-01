@@ -119,7 +119,7 @@ function Measure-SourceLines {
     $total = 0
     Get-ChildItem -Path $SrcDir -Recurse -File -Filter '*.js' -ErrorAction SilentlyContinue |
         ForEach-Object {
-            $total += @(Get-Content -Path $_.FullName).Count
+            $total += @(Get-Content -Path $_.FullName -Encoding UTF8).Count
         }
     return $total
 }
@@ -130,8 +130,9 @@ function Measure-MarkerOccurrences {
     $count = 0
     Get-ChildItem -Path $SrcDir -Recurse -File -Filter '*.js' -ErrorAction SilentlyContinue |
         ForEach-Object {
-            $text = Get-Content -Path $_.FullName -Raw
+            $text = Get-Content -Path $_.FullName -Raw -Encoding UTF8
             if ($null -ne $text) {
+                $text = $text -replace "`r`n", "`n"
                 $count += [regex]::Matches($text, [regex]::Escape($Marker)).Count
             }
         }
@@ -141,8 +142,8 @@ function Measure-MarkerOccurrences {
 # --- [1] run sanity + the Builder override's reporting contract ----------------
 $handoffText = ''
 if (Test-Path $handoffPath) {
-    $rawHandoff = Get-Content -Path $handoffPath -Raw
-    if ($null -ne $rawHandoff) { $handoffText = $rawHandoff }
+    $rawHandoff = Get-Content -Path $handoffPath -Raw -Encoding UTF8
+    if ($null -ne $rawHandoff) { $handoffText = $rawHandoff -replace "`r`n", "`n" }
 }
 $changedFiles = Get-LastElement -Text $handoffText -Name 'changed_files'
 if ([string]::IsNullOrWhiteSpace($handoffText)) {
@@ -160,7 +161,8 @@ $fixtureTestCount = 0
 $fixtureTestsDir = Join-Path $fixtureRoot 'tests'
 if (Test-Path $fixtureTestsDir) {
     Get-ChildItem -Path $fixtureTestsDir -Recurse -File -Filter '*.js' | ForEach-Object {
-        $t = Get-Content -Path $_.FullName -Raw
+        $t = Get-Content -Path $_.FullName -Raw -Encoding UTF8
+        $t = $t -replace "`r`n", "`n"
         $fixtureTestCount += [regex]::Matches($t, "(?m)^\s*test\s*\(").Count
     }
 }
@@ -333,7 +335,8 @@ if (-not (Test-Path $targetPkg)) {
     if ($fixtureHash -eq $targetHash) {
         Add-Pass 6 'package.json is byte-identical to the fixture - no dependency was added'
     } else {
-        $pkgText = Get-Content -Path $targetPkg -Raw
+        $pkgText = Get-Content -Path $targetPkg -Raw -Encoding UTF8
+        $pkgText = $pkgText -replace "`r`n", "`n"
         Add-Failure 6 "package.json was modified: $(Format-Excerpt -Text $pkgText -Max 240)"
     }
 }

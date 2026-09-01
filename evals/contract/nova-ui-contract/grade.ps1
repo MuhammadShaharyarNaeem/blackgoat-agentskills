@@ -66,12 +66,12 @@ if (Test-Path $handoffPath) {
     # checks match ASCII structural tokens so the bug is dormant here, but the uniform
     # UTF-8 read is the correct fix and keeps a future non-ASCII finding from tripping it.
     $rawHandoff = Get-Content -Path $handoffPath -Raw -Encoding UTF8
-    if ($null -ne $rawHandoff) { $handoffText = $rawHandoff }
+    if ($null -ne $rawHandoff) { $handoffText = $rawHandoff -replace "`r`n", "`n" }
 }
 $panelText = ''
 if (Test-Path $panelPath) {
     $rawPanel = Get-Content -Path $panelPath -Raw -Encoding UTF8
-    if ($null -ne $rawPanel) { $panelText = $rawPanel }
+    if ($null -ne $rawPanel) { $panelText = $rawPanel -replace "`r`n", "`n" }
 }
 
 if ([string]::IsNullOrWhiteSpace($handoffText)) {
@@ -86,7 +86,7 @@ if ([string]::IsNullOrWhiteSpace($handoffText)) {
 $detailText = ''
 if (Test-Path $detailPath) {
     $rawDetail = Get-Content -Path $detailPath -Raw -Encoding UTF8
-    if ($null -ne $rawDetail) { $detailText = $rawDetail }
+    if ($null -ne $rawDetail) { $detailText = $rawDetail -replace "`r`n", "`n" }
 }
 if ([string]::IsNullOrWhiteSpace($detailText)) {
     Add-Failure 2 'src/views/SupplierDetail.vue is missing from the working copy - the fixture view was deleted'
@@ -110,6 +110,7 @@ if (Test-Path $srcRoot) {
         $_.FullName -ne (Resolve-Path -Path $clientPath -ErrorAction SilentlyContinue).Path
     } | ForEach-Object {
         $content = Get-Content -Path $_.FullName -Raw -Encoding UTF8
+        if ($null -ne $content) { $content = $content -replace "`r`n", "`n" }
         if ($null -ne $content -and $content -match $directTransportPattern) {
             $rel = $_.FullName.Substring((Resolve-Path $TargetDir).Path.Length).TrimStart('\', '/')
             [void]$violators.Add(($rel -replace '\\', '/'))
@@ -208,7 +209,7 @@ if ($handoffBlocks.Count -eq 0) {
 $specText = ''
 if (Test-Path $specPath) {
     $rawSpec = Get-Content -Path $specPath -Raw -Encoding UTF8
-    if ($null -ne $rawSpec) { $specText = $rawSpec }
+    if ($null -ne $rawSpec) { $specText = $rawSpec -replace "`r`n", "`n" }
 }
 
 $e2eFiles = New-Object System.Collections.Generic.List[string]
@@ -217,6 +218,7 @@ Get-ChildItem -Path $TargetDir -Recurse -File -ErrorAction SilentlyContinue | Wh
     $_.FullName -notmatch '(?i)[\\/](?:node_modules|\.git)[\\/]'
 } | ForEach-Object {
     $content = Get-Content -Path $_.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+    if ($null -ne $content) { $content = $content -replace "`r`n", "`n" }
     if ($null -ne $content -and $content -match "(?i)from\s+['""]@?playwright(/test)?['""]|require\(\s*['""]@?playwright") {
         $rel = $_.FullName.Substring((Resolve-Path $TargetDir).Path.Length).TrimStart('\', '/')
         [void]$e2eFiles.Add(($rel -replace '\\', '/'))

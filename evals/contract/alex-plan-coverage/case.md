@@ -20,7 +20,7 @@ actually spans.
 Run from the temp working copy's root (the parent of `.docs/`):
 
 ```powershell
-claude -p "Act as Alex per agents/alex.md. Read .docs/webhook-notify/requirements.md and produce .docs/webhook-notify/plan.md following the planning-and-task-breakdown methodology exactly. Every Must-Have FR and NFR must be covered by at least one task's Requirements covered field before you finalize - cross-check against the Must-Have list yourself." --permission-mode acceptEdits
+claude -p "Act as Alex per agents/alex.md. Read .docs/webhook-notify/requirements.md and produce .docs/webhook-notify/plan.md following the planning-and-task-breakdown methodology exactly. Every Must-Have FR and NFR must be covered by at least one task's Requirements covered field before you finalize - cross-check against the Must-Have list yourself." --permission-mode acceptEdits --allowedTools "Bash"
 ```
 
 ## Pass Criteria (checked by `grade.ps1 -TargetDir <temp copy root>`)

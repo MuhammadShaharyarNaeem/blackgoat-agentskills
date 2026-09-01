@@ -45,15 +45,101 @@ run unconfirmed and is graded on a single run, not `runs=5`.
 ```
 evals/
   README.md              this file
-  run-evals.ps1           the harness: dry-run cost estimate, or -Confirm to execute
+  run-evals.ps1           the harness: dry-run cost estimate, -Confirm to execute, -SelfTest
+                          for an offline check of the trigger judge
   weekly-check.ps1        zero-token: what changed, what to re-run, never runs it for you
   results/results.jsonl   append-only run log (created on first real run)
-  trigger/cases.jsonl     19 prompt -> expected_skill cases
+  results/transcripts/    one .txt per run: the full captured agent output (contract
+                          cases only), named <case>-run<N>-<suffix>.txt
+  results/artifacts/      the failing run's temp working copy, preserved for diagnosis
+                          (contract cases only, on failure only - see "The harness
+                          copies the plugin in" below)
+  trigger/cases.jsonl     20 prompt -> expected_skill cases
   contract/<case-name>/
     case.md               purpose, frozen input, exact command, numbered pass criteria
     fixture/              frozen input files, written by hand, never generated at runtime
     grade.ps1             deterministic grader: exit 0 = pass, 1 = fail, prints WHICH criterion failed
 ```
+
+## Result record shape (harness_version 2)
+
+Every line `run-evals.ps1` appends to `results/results.jsonl` is one flat, compact JSON
+**object** — not an array. Each object carries:
+
+- `timestamp`, `case`, `run_index`, `pass`, `failed_criterion`, `duration_s` — unchanged
+  from every prior version of the harness.
+- `judge` — **trigger records only**: `"tool_use"` if the judge found an actual Skill
+  invocation in the transcript and decided on that, or `"substring"` if it fell back to
+  textual matching. See "Trigger judging" below.
+- `plugin_sha` — `git rev-parse HEAD` in the plugin root at the moment the harness
+  started, or `null` if the plugin isn't a git repo or the lookup failed.
+- `plugin_dirty` — `true` if `git status --porcelain` reported anything at that moment,
+  else `false`. A `true` here means the run's outcome may not reproduce against a clean
+  checkout of `plugin_sha`.
+- `claude_version` — the trimmed output of `claude --version`, or `null` if it couldn't
+  be read.
+- `case_sha256` — SHA-256 of the exact input the run graded against: the `case.md` file
+  for a contract case, or the raw `cases.jsonl` line for a trigger case. Lets you tell
+  whether two runs recorded against the same case name actually graded the same frozen
+  input.
+- `harness_version` — the constant in `run-evals.ps1` (currently `"2"`), bumped whenever
+  this record shape or its field meanings change.
+
+**Pre-harness-2 lines are different and are not rewritten.** Every line appended before
+this fix is a bare JSON **array** whose *last* element is the actual record (the array's
+earlier elements are the agent's own transcript lines and the grader's console output,
+which used to leak into the pipeline instead of going to the console — see "The harness
+copies the plugin in" history for why). A reader parsing `results.jsonl` must handle
+both shapes: `if (line starts with '[') { record = JSON.parse(line)[-1] } else { record
+= JSON.parse(line) }`. None of `plugin_sha`/`plugin_dirty`/`claude_version`/
+`case_sha256`/`harness_version`/`judge` exist on a pre-harness-2 record — treat their
+absence as "unknown", not as `false`/`null` with meaning.
+
+Every run's full captured agent output is also written to `results/transcripts/
+<case>-run<N>-<suffix>.txt` (contract cases only; trigger runs are a single routing
+prompt in plan mode and their transcript is short enough to be worth keeping directly in
+`failed_criterion`/the judge `Detail`, not a separate file). This exists independently of
+pass/fail — unlike `results/artifacts/`, which is written only for a failing run — so a
+passing run's actual output is still inspectable afterward.
+
+## Trigger judging (harness_version 2)
+
+The old judge passed a trigger case if the expected skill name appeared **anywhere in
+the transcript as a substring** — a response saying "don't use bgpdd-lite here" counted
+as a pass for `bgpdd-lite`. The new judge, in `Invoke-TriggerJudge`:
+
+1. **Prefers a structured transcript.** `run-evals.ps1` invokes `claude -p ... --output-format
+   json` and looks for a `tool_use` block naming the `Skill` tool with an `input.skill`
+   field. If one exists, the judge decides on the **first** skill invoked, full stop — it
+   never falls back to substring matching once a tool_use record is found, even if that
+   skill isn't the acceptable one (a case can genuinely fail this way, and it should).
+2. **Falls back to substring matching only when no tool_use record exists** (e.g. an
+   older `claude` CLI that ignores `--output-format json`). In the fallback, a match is
+   rejected if a negation word — `not`, `don't`, `never`, `instead of`, `rather than`,
+   `avoid` — appears within the preceding 40 characters of the match.
+
+The result record's `judge` field says which path decided the outcome, so a run of
+mixed-judge results is distinguishable from a run where the CLI silently stopped
+emitting structured output.
+
+**`-SelfTest`**: `powershell -File run-evals.ps1 -SelfTest` runs four canned transcripts
+(a plain positive substring match, a negated substring match that must be rejected, a
+positive `tool_use` record, and a `tool_use` record naming an unacceptable skill) through
+`Invoke-TriggerJudge` directly — no `claude` invocation, no tokens spent, no
+`results.jsonl` write. Exits `0` if all four match their expected outcome, non-zero
+otherwise. Run it after touching the judge functions, and before trusting a live
+`-Confirm` trigger run's numbers.
+
+## Known stale results
+
+- **`nova-ui-contract`'s recorded 0/5** (the earliest five runs in `results.jsonl`)
+  **predates the grader fix in commit `57ab20b`** ("Fix the four red cases from the
+  remaining-cases sweep"). That commit's own diagnosis: all five preserved runs re-grade
+  `PASS` under the fixed grader — the 0/5 measured a false-positive in criterion [6]'s
+  artifact-path scan (it treated slashes inside ordinary "NOT VERIFIED" prose as
+  fabricated citations), not a real persona regression. Treat this case as needing a
+  fresh `-Confirm` run before its pass rate is read as red; do not cite the 0/5 as
+  current.
 
 ## The harness copies the plugin in
 

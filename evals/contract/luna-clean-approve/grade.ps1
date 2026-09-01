@@ -91,7 +91,7 @@ if (Test-Path $reportPath) {
     # -Encoding UTF8: agents write UTF-8; PS 5.1's default decode mangles em-dashes and
     # breaks `#### Ln — **Sev:**` finding segmentation. See the trap grader for the full note.
     $rawReport = Get-Content -Path $reportPath -Raw -Encoding UTF8
-    if ($null -ne $rawReport) { $reportText = $rawReport }
+    if ($null -ne $rawReport) { $reportText = $rawReport -replace "`r`n", "`n" }
 }
 
 $milestoneHeadingPattern = '(?im)^##\s*Review:.*(?<![a-z0-9])(?:milestone\s*1|m1)(?![a-z0-9])'

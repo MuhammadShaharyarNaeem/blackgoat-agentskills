@@ -71,7 +71,7 @@ if (Test-Path $reportPath) {
     # §4 finding grammar uses. check_agent_report.py (python) already reads UTF-8; this
     # keeps the PowerShell side's finding detection consistent with it.
     $rawReport = Get-Content -Path $reportPath -Raw -Encoding UTF8
-    if ($null -ne $rawReport) { $reportText = $rawReport }
+    if ($null -ne $rawReport) { $reportText = $rawReport -replace "`r`n", "`n" }
 }
 
 $gateReport = $null

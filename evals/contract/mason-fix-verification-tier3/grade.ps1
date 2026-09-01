@@ -60,8 +60,9 @@ $handoffText = ''
 if (-not (Test-Path $handoffPath)) {
     Add-Failure '1' "handoff.txt was not produced at $handoffPath"
 } else {
-    $handoffText = Get-Content -Path $handoffPath -Raw
+    $handoffText = Get-Content -Path $handoffPath -Raw -Encoding UTF8
     if ($null -eq $handoffText) { $handoffText = '' }
+    $handoffText = $handoffText -replace "`r`n", "`n"
     if ([string]::IsNullOrWhiteSpace($handoffText)) {
         Add-Failure '1' 'handoff.txt exists but is empty'
     } else {
@@ -134,7 +135,7 @@ if ($wireChecked) {
         Add-Failure '2' "src/ is missing at $srcDir and the service could not be started"
     } else {
         $offenders = @(Get-ChildItem -Path $srcDir -Recurse -File -Filter *.js -ErrorAction SilentlyContinue |
-            Where-Object { (Get-Content -Path $_.FullName -Raw) -match 'text/plain' })
+            Where-Object { ((Get-Content -Path $_.FullName -Raw -Encoding UTF8) -replace "`r`n", "`n") -match 'text/plain' })
         if ($offenders.Count -gt 0) {
             $names = ($offenders | ForEach-Object { $_.Name }) -join ', '
             Add-Failure '2' "service not startable here (static fallback); src/ still hardcodes text/plain in: $names"
@@ -242,7 +243,8 @@ if ([string]::IsNullOrWhiteSpace($citedCapture)) {
     if ($resolved.Count -eq 0) {
         Add-Failure '6' "the cited capture '$citedCapture' does not exist under any evidence/runtime/ or evidence/build/ directory in the working copy"
     } else {
-        $captureText = Get-Content -Path $resolved[0].FullName -Raw
+        $captureText = Get-Content -Path $resolved[0].FullName -Raw -Encoding UTF8
+        $captureText = $captureText -replace "`r`n", "`n"
         $requiredFields = @(
             [PSCustomObject]@{ Name = 'Milestone';     Pattern = '(?im)^\s*-\s*Milestone\s*:\s*\S' },
             [PSCustomObject]@{ Name = 'Transport';     Pattern = '(?im)^\s*-\s*Transport\s*:\s*\S' },

@@ -46,7 +46,8 @@ if (-not (Test-Path $reportPath)) {
 }
 Write-Output '[2] PASSED: verification-report.md exists'
 
-$reportContent = Get-Content -Path $reportPath -Raw
+$reportContent = Get-Content -Path $reportPath -Raw -Encoding UTF8
+$reportContent = $reportContent -replace "`r`n", "`n"
 
 # The fixture's ground truth: tests pass; console.log and TODO are planted defects.
 $expectedVerdicts = @{ 'CHK-1' = 'PASS'; 'CHK-2' = 'FAIL'; 'CHK-3' = 'FAIL' }
