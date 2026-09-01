@@ -30,7 +30,7 @@ The sections below carry ONLY this pipeline's refinements on top of that contrac
 
 - **Strict Delegation — this pipeline's agents**: Alex (Phase 2), and optionally Scout for bounded research. For non-interactive phases you MUST NOT roleplay the agent's work yourself.
   - **EXCEPTION — Phase 1 (Mini-Requirements)**: Requirements drafting in lite is interactive (with the user, in the main session). There is no delegated Rex — see Phase 1 below.
-- **Every mechanical gate in this pipeline requires a Python 3 interpreter** (`python` or `python3`). If it is unavailable at any gate, **HALT** and surface the missing interpreter to the user — never substitute manual judgment for a gate verdict, and never hand-edit a state file to simulate a pass. Individual gates below therefore do not restate this.
+- **Mechanical gates**: the missing-interpreter HALT and the never-simulate-a-pass rule are the Orchestrator Contract §1's; the gates below neither restate nor soften them.
 - **Upgraded Chain-of-Thought**: Before transitioning between phases, you MUST explicitly verify that the required artifact exists AND satisfies its content contract — existence and non-emptiness alone are not sufficient. Content contracts:
   - `requirements.md`: has at least one Must-Have requirement carrying an `FR` ID and a Given/When/Then acceptance criterion.
   - `plan.md`: every task cites the requirement ID(s) it satisfies (a "Requirements covered:" field), and every task carries a verification step.
@@ -43,7 +43,7 @@ The sections below carry ONLY this pipeline's refinements on top of that contrac
 
 **The error-recovery skeleton lives in the Orchestrator Contract (§2)** — halt-and-escalate triggers, the circuit breaker you pass to every agent, no-nested-delegation, incremental persistence, context checkpoints, and 2-round bounded autonomous rejection. Read it there; it is not restated here.
 
-This pipeline's only refinement: the artifacts subject to the 2-round bound are `requirements.md` and `plan.md`; checkpoint your own state to `.docs/{project-name}/orchestrator-state.json` via `update_state.py` (Phase 3) — never hand-edit.
+This pipeline's only refinement: the artifacts subject to the 2-round bound are `requirements.md` and `plan.md`; checkpoint your own state to `.docs/{project-name}/orchestrator-state.json` via `update_state.py` (initialized at Phase 1 step 5, updated at Phase 3) — never hand-edit.
 
 ---
 
@@ -61,22 +61,36 @@ This pipeline's only refinement: the artifacts subject to the 2-round bound are 
   - Localized defect → route to **`/bgpdd-bugfix`** instead.
   - A "yes" on question 1 (design decisions exist), OR 2+ "yes" across questions 3/5, OR the design is contested → **HALT** and route to **`/bgpdd-plan`** (and `/bgpdd-discovery` first if the work is brownfield and the feature is unmapped in `.docs/summary/`).
   - No design decisions to make (question 1 = no) AND the whole deliverable is small enough that one well-briefed build session can carry it from a single delegation prompt → **no pipeline at all**: one Builder delegation plus a verification checklist. This covers BOTH a mechanical sweep (e.g. a rename; verify build green + a repo-wide search for the old term returns zero hits) AND a zero-decision copy-adapt of an established in-repo pattern (e.g. cloning an existing spec/test against a new target; verify it runs / `--list`). Two discriminators decide it: (a) will a fresh session genuinely need durable FR/plan artifacts to build this, or does a good delegation prompt alone suffice? (b) are there 5+ independent acceptance criteria that multiple parties must agree on? If BOTH are "no", take the no-pipeline exit — even when the deliverable will be authored in a separate build session. Do NOT route into lite merely because a fresh build session follows; a good delegation prompt carries the context.
-  - Otherwise → confirm the `{project-name}` work slug with the user AND — for brownfield work — the Tier-1 durable `{feature}` id (from `.docs/summary/`); record `null` for greenfield/unmapped work, so Phase 3's state write has a defined `feature` value. Then proceed to Phase 1.
+  - Otherwise → confirm the `{project-name}` work slug with the user AND — for brownfield work — the Tier-1 durable `{feature}` id (from `.docs/summary/`); record `null` for greenfield/unmapped work, so the Phase 1 state write has a defined `feature` value. Then proceed to Phase 1.
+- **The five answers are written down, verbatim — convention #9.** This check is Orchestrator self-restraint at the exact moment you want to proceed, so it does not stay a thought: carry the five questions and your one-line answer to each into `requirements.md` as a `## Fit Check` block at the very top of the file, before its first requirement (Phase 1 step 1 authors the file; this block is its opening section). Written down, the routing decision is auditable by every downstream reader — Alex, `/bgpdd-build`, `/bgpdd-shipping` — and a wrong "no" on question 1 is visible instead of inferred. If the answers change during drafting, the Phase 1 step 3 re-run of this check rewrites the block.
 
 ### Phase 1: Mini-Requirements (Orchestrator + user, main session)
 - **Delegated Agent**: None — no delegated Rex, no honing transcript. You draft the spec WITH the user in-session.
 - **Format authority**: Rex's requirements template and ID rules in `{PLUGIN_ROOT}/../agents/rex.md` — stable `FR-n`/`NFR-n` IDs in one continuous sequence, MoSCoW tiers, and a Given/When/Then acceptance criterion on every Must-Have.
 - **Workflow**:
-  1. Draft `.docs/{project-name}/requirements.md` with the user using Rex's exact template. For known-contract work, transcribe the governing stack contract into FRs (e.g. Response Pattern FRs come straight from `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md`). When the governing contract is `dotnet-backend-patterns`, the mini-requirements MUST record the sanctioned API mode (Mode A — CQRS+MediatR, or Mode B — REPR) as an explicit constraint line — workers may not infer it.
+  1. Draft `.docs/{project-name}/requirements.md` with the user using Rex's exact template, opening the file with the Phase 0 `## Fit Check` block before the first requirement. For known-contract work, transcribe the governing stack contract into FRs (e.g. Response Pattern FRs come straight from `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md`). When the governing contract is `dotnet-backend-patterns`, the mini-requirements MUST record the sanctioned API mode (Mode A — CQRS+MediatR, or Mode B — REPR) as an explicit constraint line — workers may not infer it.
   2. **ESCALATION**: If the FR list exceeds ~10 Must-Haves, or ambiguity keeps surfacing as you draft, HALT and recommend `/bgpdd-plan` — the work has outgrown lite.
   3. **ESCALATION**: If the premise materially changes during drafting (e.g. infrastructure assumed to exist turns out not to), HALT and re-run the Phase 0 Fit Check before continuing — a scope-class change invalidates the original routing.
   4. The user confirms the file before you proceed to Phase 2.
+  5. **Initialize state the moment the user confirms — deliberately earlier than the Phase 3 write this replaces (convention #8).** State used to be written only at Phase 3, so an interruption anywhere between here and Alex's return left `requirements.md` and `plan.md` on disk with no state file at all: exactly the orphan plan `/bgpdd-build` §1 HALTs on. Write it now instead, with the artifacts that do not yet exist recorded as `null`:
+     ```bash
+     python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py \
+       --state .docs/{project-name}/orchestrator-state.json \
+       --init --project-name "{project-name}" \
+       --set-pipeline bgpdd-lite \
+       --set-feature <feature|null> \
+       --set-artifact requirements=.docs/{project-name}/requirements.md \
+       --set-artifact plan=null \
+       --set-artifact design=null \
+       --set-artifact acceptance_matrix=null
+     ```
+     Phase 3 then **updates** this file (cursor and the artifacts Alex produced); it does not re-init it.
 
 ### Phase 2: Planning (Alex)
 - **Delegated Agent**: **Alex** (Strategist)
 - **Workflow**:
   1. Delegate to the **Alex** agent. He reads his own methodology dependencies on-demand.
-  2. Pass him the path to `.docs/{project-name}/requirements.md` **and** the relevant stack-contract skill path(s) (e.g. `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md`) as the architecture reference — there is NO `detailed-design.md` in lite. Instruct Alex that the plan's Reference Documents section links `requirements.md` and the governing stack contract(s) instead of a blueprint, and that he must carry the recorded API mode constraint from `requirements.md` into the plan's Reference Documents.
+  2. Pass him the path to `.docs/{project-name}/requirements.md` **and** the relevant stack-contract skill path(s) (e.g. `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md`) as the architecture reference — there is NO `detailed-design.md` in lite. Instruct Alex that the plan's Reference Documents section links `requirements.md` and the governing stack contract(s) instead of a blueprint, and that he must carry the recorded API mode constraint from `requirements.md` into the plan's Reference Documents. Point him at the file's opening `## Fit Check` block as the record of why this work is in the lite lane — it is what tells him which decisions were declared already made.
   3. **CRITICAL PATHING**: Instruct Alex that he MUST save the checklist exactly to `.docs/{project-name}/implementation/plan.md` (NOT the root `.docs/{project-name}/` folder), using his planning methodology's format.
   3b. **NO acceptance matrix in lite** — state this explicitly in the brief: Alex MUST NOT author `.docs/{project-name}/acceptance-matrix.md`. A deliberate refinement (convention #8) of `planning-and-task-breakdown`'s **Acceptance Matrix Output** rule, which is written for full `/bgpdd-plan` epics: lite verifies through the Phase 2.5 FR/NFR coverage gate alone, and the matrix plus `check_acceptance_suite.py` belong to `/bgpdd-plan` Phase 3.5. Phase 3 records this as `acceptance_matrix=null`, so downstream pipelines skip their matrix gates rather than reading the absence as a planning defect. On **brownfield** lite work Alex's Baseline Reconciliation duty still stands: instruct him to write the table as a dedicated `## Baseline Reconciliation` section in `plan.md` instead of at the top of the (absent) matrix — same format, owned by `planning-and-task-breakdown`, same lite divergence.
   4. Read Alex's returned handoff.
@@ -91,7 +105,7 @@ This pipeline's only refinement: the artifacts subject to the 2-round bound are 
 - **Delegated Agent**: None — the Orchestrator performs this check directly.
 - **Workflow**:
   1. Execute the coverage tool via a shell action, using the runtime's available Python 3 interpreter (`python` or `python3`):
-     `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --plan .docs/{project-name}/implementation/plan.md`
+     `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --plan .docs/{project-name}/implementation/plan.md --ledger .docs/{project-name}/implementation/gates.jsonl`
      The full CLI contract (JSON shape, exit codes, parsing rules) lives in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
   2. Read the JSON object from stdout. Exit code 0 = every Must-Have `FR`/`NFR` is covered and no lint failed — report any `warnings` and `uncovered_should` entries to the user as non-blocking notes, then proceed to Phase 3. Exit code 1 = at least one of the **two gating arrays** is non-empty: `uncovered` (Must-Have coverage gaps) and/or `lint_failures` (lint violations) — a clean-coverage plan with a lint failure still exits 1. Exit code 2 = an artifact failed its structural contract (e.g. no task blocks, no Must-Have IDs) — treat this as a defect in the artifact, not the tool.
   3. On exit 1 or 2, re-delegate to **Alex** (a fresh delegation) quoting the exact `uncovered` IDs **and** the `lint_failures` entries, plus `warnings` (or the `error` message) — subject to the 2-round auto-fix bound in Global Error Recovery (§2). If unresolved after 2 rounds, halt and surface to the user. After each fix, re-run step 1 to verify.
@@ -101,18 +115,14 @@ This pipeline's only refinement: the artifacts subject to the 2-round bound are 
 - **Delegated Agent**: None — the Orchestrator performs this phase directly. No delegation, no halt.
 - **Workflow**:
   1. **Game Tape checkpoint**: While your session context is still alive, append a `## bgpdd-lite — [date]` section to `.docs/{project-name}/implementation/game-tape.md` (create the file if it does not exist). At most 10 bullets, covering: user corrections made, agent failures/retries, re-delegation rounds and why, circuit-breaker trips, gates that were rubber-stamped vs. genuinely exercised, and this session's id/transcript path if the runtime exposes it.
-  2. **State Persistence**: Write orchestrator state via `update_state.py` — never hand-edit JSON. Schema authority is `update_state.py` (schema version string `"1"`).
+  2. **State Persistence**: Update the state file Phase 1 step 5 initialized — via `update_state.py`, never by hand-editing JSON, and **without `--init`** (this is an update of the artifacts Alex produced, not a fresh file). Schema authority is `update_state.py` (schema version string `"1"`).
      ```bash
      python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py \
        --state .docs/{project-name}/orchestrator-state.json \
-       --init --project-name "{project-name}" \
-       --set-pipeline bgpdd-lite \
-       --set-feature <feature|null> \
-       --set-artifact requirements=.docs/{project-name}/requirements.md \
        --set-artifact design=<governing-stack-contract-skill-path|null> \
-       --set-artifact plan=.docs/{project-name}/implementation/plan.md \
-       --set-artifact acceptance_matrix=null
+       --set-artifact plan=.docs/{project-name}/implementation/plan.md
      ```
+     `pipeline`, `project_name`, `feature`, `requirements` and `acceptance_matrix=null` were set at Phase 1 step 5 and are not rewritten here.
      **`artifacts.design` polymorphism (schema compatibility):** for full `/bgpdd-plan`, `design` is the path to `detailed-design.md`. For lite, it is the governing stack-contract skill path (e.g. `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md`), or JSON `null` when none applies — pass the **literal string** `null` (`--set-artifact design=null`) and `update_state.py` stores JSON `null`, exactly as `--set-cursor`/`--set-feature` do. Downstream `/bgpdd-build` MUST inject a non-null `artifacts.design` into builder/Alex briefs as the architecture reference; when `null`, builders use `requirements` + `plan` only. Resulting shape (documentation only):
 ```json
 {
