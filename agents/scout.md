@@ -4,7 +4,7 @@ name: scout
 description: "Disposable research worker spawned by the Orchestrator. Deep dives into specific APIs or repos."
 risk: safe
 role: Research Scout
-phase: Cross-pipeline — Research Worker (primary: bgpdd-discovery)
+phase: "Cross-pipeline — Research Worker (primary: bgpdd-discovery)"
 squad: agent-squad
 reports-to: agent-squad
 ---

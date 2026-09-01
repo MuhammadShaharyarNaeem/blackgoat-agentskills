@@ -1,0 +1,64 @@
+name: Plugin Checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pipeline-tools:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Coverage-gate unit tests
+        run: python skills/pipeline-tools/scripts/test_check_coverage.py
+
+      - name: check_coverage.py --self-test
+        run: python skills/pipeline-tools/scripts/check_coverage.py --self-test
+
+      - name: check_commit_gate.py --self-test
+        run: python skills/pipeline-tools/scripts/check_commit_gate.py --self-test
+
+      - name: check_agent_report.py --self-test
+        run: python skills/pipeline-tools/scripts/check_agent_report.py --self-test
+
+      - name: check_runtime_evidence.py --self-test
+        run: python skills/pipeline-tools/scripts/check_runtime_evidence.py --self-test
+
+      - name: check_acceptance_suite.py --self-test
+        run: python skills/pipeline-tools/scripts/check_acceptance_suite.py --self-test
+
+      - name: check_ship_decision.py --self-test
+        run: python skills/pipeline-tools/scripts/check_ship_decision.py --self-test
+
+      - name: check_blockers.py --self-test
+        run: python skills/pipeline-tools/scripts/check_blockers.py --self-test
+
+      - name: next_milestone.py --self-test
+        run: python skills/pipeline-tools/scripts/next_milestone.py --self-test
+
+      - name: update_state.py --self-test
+        run: python skills/pipeline-tools/scripts/update_state.py --self-test
+
+      - name: run_quiet.py --self-test
+        run: python skills/pipeline-tools/scripts/run_quiet.py --self-test
+
+      - name: check_dependency_tables.py --self-test
+        run: python skills/pipeline-tools/scripts/check_dependency_tables.py --self-test
+
+      - name: check_frontmatter.py --self-test
+        run: python skills/pipeline-tools/scripts/check_frontmatter.py --self-test
+
+      - name: Methodology Dependencies tables resolve
+        run: python skills/pipeline-tools/scripts/check_dependency_tables.py skills
+
+      - name: Agent and skill frontmatter is valid
+        run: python skills/pipeline-tools/scripts/check_frontmatter.py .

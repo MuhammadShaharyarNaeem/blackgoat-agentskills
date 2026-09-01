@@ -7,6 +7,8 @@ A Claude Code plugin that packages an **agent squad** and a **Prompt-Driven Deve
 - **Plugin:** `blackgoat-agentskills` v2.0.0 — see [CHANGELOG.md](CHANGELOG.md)
 - **Author:** shaharyar.naeem (shaharyar.naeem@gorelo.io)
 
+> Note: this repo's `AGENTS.md` is the Google Antigravity runtime contract, not the generic cross-tool "AGENTS.md" coding-agent convention — see [docs/cursor-setup.md](docs/cursor-setup.md).
+
 ![blackgoat-agentskills: claude plugin validate passing, the plugin manifest, and the 15-agent squad inventory](assets/preview.svg)
 
 ---
@@ -22,6 +24,20 @@ The plugin is designed with a deliberate adoption gradient. Each step gives you 
 **Step 3 — Run `/bgpdd-lite` for well-specified work.** The mid-weight lane: no honing Q&A, no Aria — you write mini-requirements with the Orchestrator (Rex's template, stable FR/NFR IDs), Alex plans, the coverage gate checks traceability, and the state file hands off to `/bgpdd-build`. A five-question fit check up front routes anything contested or cross-boundary to the full pipeline instead.
 
 **Step 4 — Run the full PDD pipeline** when a feature is big enough to warrant discovery, planning, staged building, and a gated launch. That's the rest of this README.
+
+### What to Run When
+
+| Situation | Command | Runs where |
+|---|---|---|
+| New feature, brownfield codebase | `/bgpdd-discovery` then `/bgpdd-plan` | Spawns agents (Iris/Scout/Echo, then Rex/Aria/Alex) |
+| Well-specified small feature (known pattern/contract) | `/bgpdd-lite` | Main session (mini-requirements) + spawns Alex |
+| Execute an existing plan | `/bgpdd-build [auto]` | Spawns agents (Mason/Nova, Quinn, Luna, Dep, Cipher) |
+| Ship a green epic | `/bgpdd-shipping` | Spawns agents (Vera, Cipher, Dep, Forge) |
+| Fix a bug | `/bgpdd-bugfix` | Main session (RCA) + spawns agents (Mason/Nova, Quinn, Luna) |
+| Verify an already-discovered feature still works | `/bgpdd-verify {feature}` | Main session (matrix) + spawns Quinn |
+| Capture lessons from a session | `/bgpdd-learn` | Main session + spawns Forge |
+| Audit the plugin itself | `agent-audit` skill | Main session |
+| Ad-hoc delegation to one specialist | `agent-squad` (e.g. "have Luna review this diff") | Spawns the named agent |
 
 ---
 
@@ -176,8 +192,13 @@ flowchart TD
         D1["Launch Squad: Vera, then Cipher and Dep in parallel"]
         D1 --> D2["Gates, docs, PR, launch readiness report"] --> D3["Forge: single end-of-epic run"]
     end
+    subgraph SV["Standalone: /bgpdd-verify (any time after discovery, repeatable)"]
+        V1["Fit check: entry ticket is Echo's QA baseline"] --> V2["Derive + lint acceptance-matrix.md"] --> V3["Quinn: automate as permanent Playwright specs, execute against running app"]
+        V3 --> V4["Mechanical gates + verdict"] -.-> V5["Product defects → fresh /bgpdd-bugfix session"]
+    end
     S1 -- "Tier 1 knowledge base" --> S2
     S1 -. "Tier 1 knowledge base (optional)" .-> S2L
+    S1 -. "Tier 1 knowledge base" .-> SV
     S2 -- "state file + plan" --> S3
     S2L -- "state file + plan" --> S3
     S3 -- "state file + green epic" --> S4
@@ -190,6 +211,7 @@ Phase by phase:
 - **`/bgpdd-lite` (Plan, lite)** — agents: Alex (+ Orchestrator mini-requirements). Produces `requirements.md`, `implementation/plan.md`, and `orchestrator-state.json` → hands off to `/bgpdd-build`. No honing, no Aria; the governing stack contract stands in for the blueprint, and the same coverage gate still applies.
 - **`/bgpdd-build` (Phase 2)** — the milestone loop, detailed below.
 - **`/bgpdd-shipping` (Phase 3)** — the Launch Squad, gates, PR, and the epic's single Forge run, detailed below.
+- **`/bgpdd-verify` (standalone, not part of the four-phase chain)** — usable any time after `/bgpdd-discovery` has documented a feature. Derives a lint-gated `acceptance-matrix.md` from Echo's QA baseline, has Quinn automate it as permanent Playwright specs and execute them against the running application, and gates the results through the same mechanical checks the build pipeline uses — without running plan or build. It never fixes what it measures: product defects it finds route to a fresh `/bgpdd-bugfix` session, and its re-verify shortcut makes repeat regression runs cheap.
 
 ### The state file
 
@@ -336,6 +358,7 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **bgpdd-build** — execution (Mason or Nova, routed by the milestone's [API]/[UI] domain tag; Quinn, Luna, Dep)
 - **bgpdd-shipping** — verification & Launch Squad (Vera, Cipher, Dep, Forge)
 - **bgpdd-bugfix** — lean orchestrated bugfix loop: RCA (main session) → TDD fix → independent verification → blast-radius review (Mason or Nova, Quinn, Luna)
+- **bgpdd-verify** — standalone regression-verification lane for an already-discovered feature: derives a lint-gated acceptance matrix from Echo's QA baseline, Quinn automates and executes it as permanent Playwright specs against the running application, gated on runtime evidence; product defects it finds route to `/bgpdd-bugfix`
 
 ### Methodology skills (execution contracts loaded by agents via their dependency tables)
 - **blackgoat-idea-honing** — interactive requirements refinement (Rex / main session)
@@ -357,7 +380,7 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **godot-gdscript-patterns** — Godot 4 GDScript patterns (conditional, several agents)
 
 ### Meta skills (operate on the plugin itself)
-- **agent-audit** — audits personas/dependencies against 14 structural heuristics
+- **agent-audit** — audits personas/dependencies against 18 structural heuristics
 - **agent-orchestration-improve-agent** — log parsing → procedural-memory generation (Forge's core methodology)
 - **bgpdd-learn** — `/bgpdd-learn`, the on-demand session-learning triage (Orchestrator + Forge)
 
