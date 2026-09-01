@@ -235,7 +235,7 @@ Phase by phase:
 }
 ```
 
-`feature` is the durable Tier 1 id (`null` for greenfield). `pipeline` records the last writer. `branch` and `milestone_cursor` are owned by build: the working branch established at hydration, and the next pending milestone. Shipping's Step 0 refuses to run if `pipeline` isn't `"bgpdd-build"` (or `"bgpdd-shipping"` from a prior checkpointed shipping session), if milestones remain open, if build Phase 5's prep `ship-decision.md` is missing or isn't a `GO` (Step 0.4 — relaxed to a shape-only check when resuming a prior shipping session, so a legitimate `NO-GO` refresh can't lock the pipeline out of the stage that resolves it), or if the `blockers` ledger has standing entries (Step 0.5), and its Step 6 deletes the file once the lifecycle completes — `game-tape.md` alone survives as the epic's durable record.
+`feature` is the durable Tier 1 id (`null` for greenfield). `pipeline` records the last writer. `branch` and `milestone_cursor` are owned by build: the working branch established at hydration, and the next pending milestone. Shipping's Step 0 refuses to run if `pipeline` isn't `"bgpdd-build"` (or `"bgpdd-shipping"` from a prior checkpointed shipping session), if milestones remain open, if build Phase 5's prep `ship-decision.md` is missing or isn't a `GO` (Step 0.4 — relaxed to a shape-only check when resuming a prior shipping session, so a legitimate `NO-GO` refresh can't lock the pipeline out of the stage that resolves it), or if the `blockers` ledger has standing entries (Step 0.5), and its Step 6.6 deletes the file once the lifecycle completes — `game-tape.md` alone survives as the epic's durable record.
 
 ---
 
@@ -313,13 +313,18 @@ flowchart TD
     S4["Step 4 - Compile CHANGELOG + README updates"]
     S45["Step 4.5 - Push working branch, open the PR<br/>(summary, FR/NFR coverage, link to ship-decision.md)"]
     S5["Step 5 - Launch Readiness Report + manual deploy commands"]
-    S6["Step 6 - Cleanup: delete orchestrator-state.json<br/>(game-tape.md survives)"]
+    S64["Step 6.4 - Refresh the legacy QA baseline"]
     S65["Step 6.5 - Final Game Tape checkpoint"]
+    S66["Step 6.6 - Cleanup: delete orchestrator-state.json<br/>(game-tape.md and gates.jsonl survive)"]
+    S7G{"Game tape carries a build or plan section?"}
     S7["Step 7 - Forge: single end-of-epic improvement run"]
+    S7SKIP["Skip Forge - say so out loud"]
     S0 --> S1 --> ST1 --> ST2 --> S3
     S3 -- "failure" --> FIX --> S3
     FIX -- "still failing after 2 rounds" --> HALT
-    S3 -- "green" --> S35 --> S4 --> S45 --> S5 --> S6 --> S65 --> S7
+    S3 -- "green" --> S35 --> S4 --> S45 --> S5 --> S64 --> S65 --> S66 --> S7G
+    S7G -- "yes" --> S7
+    S7G -- "no" --> S7SKIP
 ```
 
 Why two stages instead of three parallel agents? Vera runs full builds and test suites that take file, build-output, and port locks; running scanners or infra verification concurrently against the same checkout causes lock collisions and flaky failures (especially on Windows). So Vera runs alone first, then Cipher and Dep launch in a single parallel batch. Dep compiles the Emergency Rollback Plan and his GO/NO-GO verdict into `ship-decision.md`. Any red area may be routed back through `/bgpdd-build` for a fix — at most **2 fix-and-reverify rounds per area** before the pipeline halts and hands you the evidence. If the `github-pr-review` skill is available, Step 4.5 also offers an automated multi-repo PR review pass.
@@ -335,7 +340,9 @@ flowchart TD
     P1["bgpdd-plan Phase 4:<br/>Game Tape checkpoint"] --> GT["implementation/game-tape.md<br/>accumulates: corrections, retries,<br/>circuit-breaker trips, rubber-stamped gates,<br/>session transcript paths"]
     P2["bgpdd-build Phase 6:<br/>Game Tape checkpoint"] --> GT
     P3["bgpdd-shipping Step 6.5:<br/>Game Tape checkpoint"] --> GT
-    GT --> F["Forge - ONE end-of-epic run (Step 7):<br/>game tape first, then reports, then<br/>filtered transcript greps - never full reads.<br/>Hunts cross-phase patterns."]
+    GT --> FG{"Step 7 entry gate:<br/>tape holds a build or plan section?"}
+    FG -- "no" --> FSKIP["Forge skipped - stated out loud"]
+    FG -- "yes" --> F["Forge - ONE end-of-epic run (Step 7):<br/>game tape first, then reports, then<br/>filtered transcript greps - never full reads.<br/>Hunts cross-phase patterns."]
     F --> PR["agent-improvements.md proposals"]
     PR --> HA["HALT - explicit human approval required"]
     HA --> AP["Fresh Forge applies approved changes<br/>to SKILL.md / persona files"]
@@ -375,6 +382,7 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **playwright-skill** / **browser-testing-with-devtools** — real-browser E2E and DevTools testing (Nova, Quinn)
 - **cloud-deploy-patterns** — provider-agnostic deploy baseline + AWS/Azure checklists (Dep, Cipher; conditional)
 - **dotnet-backend-patterns** — .NET solution segregation, CQRS/REPR, EF Core rules (conditional, several agents)
+- **database-migration-patterns** — expand/contract schema evolution, forward-only migrations, two-step deploy, a reviewed idempotent SQL diff, and an explicit waiver for destructive changes (Mason, Aria, Dep, Luna; conditional on a schema change)
 - **vue3-spa-patterns** — Vue 3 Composition API, Pinia, Axios interceptor contract (conditional, several agents)
 - **ui-design-patterns** — committed visual direction, typography/spacing/color/motion discipline, anti-generic-AI rules, and Luna's design-critique review axis (Aria, Nova, Luna; conditional on user-facing UI)
 - **godot-gdscript-patterns** — Godot 4 GDScript patterns (conditional, several agents)
@@ -385,7 +393,7 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **bgpdd-learn** — `/bgpdd-learn`, the on-demand session-learning triage (Orchestrator + Forge)
 
 ### Standalone tools
-- **pipeline-tools** — deterministic coverage-gate CLI (`check_coverage.py`) executed by the Orchestrator at the bgpdd plan/build/shipping coverage gates; the manual check remains the fallback
+- **pipeline-tools** — the deterministic gate CLI family (coverage, commit gate, agent report, runtime evidence, acceptance suite, ship decision, blockers, milestone read/write, state writes, quiet runs, and the two static lints) executed by the Orchestrator at every bgpdd gate; there is no manual open-and-read substitute
 - **doubt-driven-development** — adversarial fresh-context verification of decisions (run by the main-session Orchestrator, never by subagents)
 - **github-pr-review** — Linear-driven multi-repo PR review via GitHub MCP
 - **prompt-engineering** — prompting patterns and optimization guidance

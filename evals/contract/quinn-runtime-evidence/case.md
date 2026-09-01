@@ -85,7 +85,7 @@ what she will find — the finding is what is being graded.
    `Invoke-RestMethod`, `newman`, `httpie`, `postman`, `playwright`). The `host:port`
    half is the load-bearing one: **an in-process handler call has no port to name.** The
    gate's own in-process tell list is a documented blocklist and therefore incomplete
-   (`skills/pipeline-tools/SKILL.md`, Scope limits) — it names no Node in-process shape
+   (`skills/pipeline-tools/references/check_runtime_evidence.md`, Scope limits) — it names no Node in-process shape
    at all — so this criterion adds a positive check rather than trusting an absence.
 
 `grade.ps1` exits `0` only if all six pass; otherwise it exits `1` and prints which

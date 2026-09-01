@@ -87,6 +87,11 @@ The `## Review:` heading MUST carry the milestone's leading identifier verbatim 
 ```markdown
 ## Review: [Milestone/Task title]
 
+<!-- The three machine-read lines come FIRST, before any ### subheading. -->
+**Verdict:** Approve | Request Changes
+**Rendered evidence:** <path>[, <path>]
+**Runtime evidence:** <path>[, <path>]
+
 ### Context
 - [ ] I understand what this change does and why
 
@@ -128,15 +133,9 @@ The `## Review:` heading MUST carry the milestone's leading identifier verbatim 
 - [ ] Tests pass
 - [ ] Build succeeds
 - [ ] Manual verification done (if applicable)
-
-**Rendered evidence:** <path>[, <path>]
-**Runtime evidence:** <path>[, <path>]
-
-### Verdict
-**Verdict:** Approve | Request Changes
 ```
 
-**The `**Verdict:**` line is mandatory and machine-read.** Every `## Review:` section ends with exactly one line of the form `**Verdict:** Approve` or `**Verdict:** Request Changes` — the `bgpdd-build` gate reads the latest Verdict for the current milestone, so the exact token is required: no variants (`Approved`, `LGTM`, `approve with notes`), no prose in place of the token.
+**The `**Verdict:**` line is mandatory, machine-read, and must come BEFORE the section's first `###` subheading.** `check_commit_gate.py` closes a `## Review:` section at ANY heading of level 2–6, so a verdict written under a trailing `### Verdict` heading — or under any addendum subsection — is outside the section the gate reads: the gate finds no verdict and **fails closed**. Write the verdict, and the evidence lines beside it, immediately under the `## Review:` heading. (Migration: reports authored against the older bottom-of-section template must move the line up; nothing else changes.) Every `## Review:` section carries exactly one line of the form `**Verdict:** Approve` or `**Verdict:** Request Changes` — the `bgpdd-build` gate reads the latest Verdict for the current milestone, so the exact token is required: no variants (`Approved`, `LGTM`, `approve with notes`), no prose in place of the token.
 
 **`Approve` is unavailable while any Critical or Important finding stands in the same report.** Before writing the verdict, re-read every finding you just wrote *in that report section*. Each Critical and Important one must be absent or carry an explicit `RESOLVED` marker naming the fix and the evidence that verified it. One standing unresolved → the verdict is `Request Changes`. There is no "approve with notes", no closing summary that outranks the findings above it, and no verdict carried over from a previous round. The findings are the review; the verdict is arithmetic over them, not a separate judgement. ([why](references/code-review-deep-dive.md#the-verdict-is-arithmetic-over-the-findings))
 
