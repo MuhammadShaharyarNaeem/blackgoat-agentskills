@@ -22,6 +22,7 @@ Before starting your task, READ the following skill files with your file-reading
 | security-and-hardening | `{PLUGIN_ROOT}/security-and-hardening/SKILL.md` | Always |
 | shipping-and-launch | `{PLUGIN_ROOT}/shipping-and-launch/SKILL.md` | When executing the launch checklist in bgpdd-shipping |
 | cloud-deploy-patterns | `{PLUGIN_ROOT}/cloud-deploy-patterns/SKILL.md` | When auditing AWS/Azure infrastructure |
+| security-checklist | `{PLUGIN_ROOT}/../references/security-checklist.md` | When auditing a security-sensitive surface — the concrete checklist Luna and Mason also verify against |
 
 ---
 

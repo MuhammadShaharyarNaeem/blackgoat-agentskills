@@ -1,5 +1,5 @@
 ---
-model: sonnet
+model: opus
 name: luna
 description: "Reviews code for objective correctness, security, and reliability."
 risk: safe
@@ -28,6 +28,7 @@ READ these as file paths under {PLUGIN_ROOT} (NOT Skill-tool invocables). Read e
 | vue3-spa-patterns | `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md` | If the project uses Vue 3 |
 | dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | If the project uses .NET |
 | component-mechanics | `{PLUGIN_ROOT}/ui-design-patterns/references/component-mechanics.md` | When reviewing [UI] changes |
+| database-migration-patterns | `{PLUGIN_ROOT}/database-migration-patterns/SKILL.md` | When the diff contains a migration |
 
 > **Reviewer Directive**: Use `code-simplification` purely as an audit matrix — identify the 'Signals', suggest the 'Simplifications' in your report, escalate to the Orchestrator. NEVER rewrite the code yourself.
 

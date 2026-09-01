@@ -71,7 +71,7 @@ The tier ladder, the out-of-process probe, the capture artifact and the `**Runti
 #### Infrastructure
 
 - [ ] Environment variables set in production
-- [ ] Database migrations applied (or ready to apply)
+- [ ] Database migrations applied (or ready to apply) — execution contract: `{PLUGIN_ROOT}/database-migration-patterns/SKILL.md`
 - [ ] DNS and SSL configured
 - [ ] CDN configured for static assets
 - [ ] Logging and error reporting configured
@@ -192,7 +192,9 @@ Every deployment needs a rollback plan before it happens:
 3. Communicate: notify team of rollback
 
 ### Database Considerations
-- Migration [X] has a rollback: `npx prisma migrate rollback`
+- Migration [X] rolls back via a tested forward migration:
+  `dotnet ef migrations script --idempotent --from <target> --to <previous>`, reviewed and rehearsed on non-prod
+  (never a down-migration in production — `{PLUGIN_ROOT}/database-migration-patterns/SKILL.md`)
 - Data inserted by new feature: [preserved / cleaned up]
 
 ### Time to Rollback
