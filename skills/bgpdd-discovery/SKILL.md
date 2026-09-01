@@ -22,7 +22,7 @@ Skill and agent paths in this document use `{PLUGIN_ROOT}` as a placeholder for 
 
 > ### MANDATORY FIRST READ — the Orchestrator Contract
 >
-> **Before Phase 1, you MUST read `{PLUGIN_ROOT}/agent-squad/orchestrator-contract.md` in full.** Do not improvise those rules from memory. If the file does not resolve, STOP and report the broken path.
+> **Before Phase 0, you MUST read `{PLUGIN_ROOT}/agent-squad/orchestrator-contract.md` in full.** Do not improvise those rules from memory. If the file does not resolve, STOP and report the broken path.
 
 The sections below carry ONLY this pipeline's refinements on top of that contract.
 
@@ -31,13 +31,16 @@ The sections below carry ONLY this pipeline's refinements on top of that contrac
   - **Incremental persistence matters acutely here**: discovery agents are research-heavy and accumulate many tool calls before they have anything to say, so a deferred first write costs the entire run. Emphasize the contract's rule in every discovery brief.
 - **Upgraded Chain-of-Thought**: Before transitioning between phases, you MUST explicitly verify that the required artifact exists.
   - *Format*: "Thinking: Phase X requires Y. Checking `.docs/summary/...`... File exists. Proceeding."
+  - **Phase 4b → 5 is covered too, with a content contract.** `runtime-environment.md` is the one artifact here a *later* pipeline depends on to start anything, so existence alone is not enough: the file must also **name at least one service start command and at least one readiness check**. A recipe with neither is a heading, and `/bgpdd-build` Phase 0 discovers that months later with no one left to ask. If the user deliberately declined to produce it (Phase 4b step 5), record that skip **explicitly in your closing handoff, as user-approved** — an unrecorded skip is indistinguishable from an omission.
 - **Global Context Scope (Architectural Rule)**: The discovery agents (Iris, Scout, Echo) perform **project-scope** repository analysis. Their artifacts MUST be written under `.docs/summary/` (e.g., `.docs/summary/context.md`). Never let them output to a per-enhancement feature directory (`.docs/{project-name}/`) — that is Tier-2, owned by `bgpdd-plan`.
+- **Tier-1 provenance stamp — the contract this pipeline offers downstream.** Tier-1 is durable and read months later by pipelines that have no way to tell a current map from a stale one. So every Tier-1 root artifact carries, in its own header, the **repository HEAD commit sha it was derived from and the date** — Iris stamps `.docs/summary/context.md` (one sha per repo on a multi-repo Target Scope, keyed by repo name), Echo stamps `.docs/summary/{feature}/overview.md`. The stamp is read from the repo at write time, never recalled.
+  - **The contract**: a downstream pipeline that reads Tier-1 compares the stamped sha against the repo's current HEAD and **warns the user on drift** — naming the artifact, its stamped sha, and current HEAD — so the reader decides whether to trust the map or re-run discovery. Drift is a warning, never a halt: an old map is usually still mostly right, and a hard failure would only teach people to skip Tier-1 entirely. Stating the rule is this pipeline's job because it produces the stamp; the consuming pipelines own their own end of it.
 
 ## 2. Global Error Recovery
 
 **The error-recovery skeleton lives in the Orchestrator Contract (§2)** — halt-and-escalate triggers, the circuit breaker you pass to every agent, no-nested-delegation, incremental persistence, context checkpoints, and 2-round bounded autonomous rejection. Read it there; it is not restated here.
 
-This pipeline's only refinement: it has no `orchestrator-state.json`, so checkpoint your own state to a scratch file if your context grows large.
+This pipeline's only refinement: it has no `orchestrator-state.json`. If your context grows large, checkpoint to `.docs/summary/{feature}/discovery-state.json` — fields `{schema, feature, phase, updated}`, nothing more. It is **discovery-private**: no downstream pipeline reads it, and none may be written to depend on it. It exists so a fresh session can tell which phase this run reached, not to carry state forward. (Before Phase 2 establishes `{feature}`, checkpoint to `.docs/summary/discovery-state.json` instead.)
 
 ---
 
@@ -63,14 +66,22 @@ already exists, the responsible agent must flag it so you can ask the user wheth
 
 ## 4. Detailed Pipeline Phases
 
+### Phase 0: Fit Check (Orchestrator + user, main session)
+- **Delegated Agent**: None — two questions, in the main session, before anything is delegated.
+- **Why**: this pipeline **reverse-engineers an existing system**. It is brownfield-only by construction: Iris scans a stack that exists, Scouts map fragments that exist, Echo derives a baseline from behavior that exists. Pointed at an empty or greenfield repo, every agent returns a thin, confident, wrong artifact — and because those artifacts are Tier-1, they are durable, and the next three pipelines trust them.
+- **Workflow**:
+  1. Ask whether this repo already implements the feature under study, or is about to. **At most two questions** — if the answer is unclear, the cheapest disambiguator is to list the repo root and the primary source directory yourself.
+  2. **Greenfield or empty → HALT and route to `/bgpdd-plan`.** Say plainly that there is nothing to discover yet, and that `/bgpdd-plan` already handles greenfield without this pipeline: its Pre-Flight Check skips straight to Phase 1 for a new project rather than demanding a `.docs/summary/` knowledge base, and its Phase 3.6 authors the environment manifest on the greenfield route — the same manifest Phase 4b below would have produced. Nothing is lost by skipping discovery; something is lost by running it.
+  3. **Brownfield → proceed to Phase 1.** A repo that is partly built (an existing system gaining a new feature) is brownfield: discover what is there, and let `/bgpdd-plan` handle the new part.
+
 ### Phase 1: Project Context Discovery (Iris)
 - **Delegated Agent**: **Iris** (Observer)
-- **Trigger**: Execute this phase first.
+- **Trigger**: Execute after Phase 0 clears the fit check. This is the first delegated phase.
 - **Workflow**:
   1. **Target Scope (Orchestrator, before delegating)**: This pipeline may target a single repo or a set of microservice repos, since a single feature can span multiple services. Establish and record, up front: (a) the target repository or repositories, (b) the working branch, and (c) for multi-repo, the local path to each repo. Ask the user if this isn't already clear from context — do not guess.
   2. Delegate to the **Iris** agent, passing her the established Target Scope.
   3. Instruct Iris to scan the repository/repositories and determine the global tech stack and overall project context (e.g., 2D Godot game vs Next.js Web App).
-  4. Instruct Iris to record the Target Scope (repo set + per-repo local paths) alongside her tech-stack findings in `.docs/summary/context.md`. She must write this file herself with her file-writing tools — the Orchestrator MUST NOT create it on her behalf. If the file already exists, she must note this in her handoff so you can ask the user whether to update it.
+  4. Instruct Iris to record the Target Scope (repo set + per-repo local paths) alongside her tech-stack findings in `.docs/summary/context.md`, and to open that file with the **provenance stamp** from §1: the date and each in-scope repo's current HEAD commit sha, read from the repo itself at write time. She must write this file herself with her file-writing tools — the Orchestrator MUST NOT create it on her behalf. If the file already exists, she must note this in her handoff so you can ask the user whether to update it.
   5. Read Iris's returned handoff before proceeding.
 
 ### Phase 2: Feature Auto-Scouting (Orchestrator → Scouts)
@@ -98,7 +109,7 @@ already exists, the responsible agent must flag it so you can ask the user wheth
   1. Delegate to the **Echo** agent, telling her the `{feature}`.
   2. Instruct Echo to read ALL per-API `.docs/summary/{feature}/{api}.md` files written by the Scouts in Phase 2.
   3. Instruct Echo to synthesize, in this order, within the same pass:
-     a. `.docs/summary/{feature}/overview.md` — the cross-API consolidation: which API owns what, cross-service call flow, integration seams, links to each `{api}.md`.
+     a. `.docs/summary/{feature}/overview.md` — the cross-API consolidation: which API owns what, cross-service call flow, integration seams, links to each `{api}.md`. It opens with the **provenance stamp** from §1 — the date and the HEAD commit sha of each repo the feature spans, read at write time, not copied from `context.md` (Iris may have run against an earlier commit).
      b. `.docs/summary/{feature}/QA/code-workflow.md` — Mermaid sequence diagrams and step-by-step execution paths across the services.
      c. `.docs/summary/{feature}/QA/manual-testing.md` — reverse-engineered manual test cases, using the `code-workflow.md` she just produced, per her persona.
   4. Read Echo's returned handoff before proceeding to Phase 5.

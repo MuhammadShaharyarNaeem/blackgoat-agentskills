@@ -42,6 +42,8 @@ State the hard filtered-read rule in the delegation: Forge NEVER full-reads a tr
 
 Forge does NOT write any proposal file. He returns the improvement plan inside his `<handoff>` — per lesson: the generalized rule, its destination file, and a one-line rationale for that layer. You read the plan from the handoff.
 
+**One lesson, one destination, listed separately.** Reject a plan that groups several lessons under one destination line or leaves a lesson's destination implicit, and send it back for the pairing — this is what makes a later revert one file per lesson instead of an unpickable batch. A lesson that genuinely needs two files is two entries, not one.
+
 ### Step 4: HALT & APPROVE
 
 Relay the plan from Forge's handoff to the user and halt. Never apply without explicit approval.
@@ -49,6 +51,10 @@ Relay the plan from Forge's handoff to the user and halt. Never apply without ex
 ### Step 5: APPLY
 
 On approval, resume the same Forge instance if the runtime supports warm continuation; otherwise delegate a **fresh** Forge with the approved plan only (align with `bgpdd-shipping` Step 7's fresh-on-apply when non-resumable). Paste only the approved lessons (rule + destination per lesson); Forge applies them per his Vector A/B edit scoping. Do NOT re-send the full evidence brief to a fresh Forge — the approved plan is the briefing.
+
+**Before applying**, optionally bracket the change with evals exactly as `bgpdd-shipping` Step 7 step 4 does: run `evals/weekly-check.ps1` (zero-token), relay the `run-evals.ps1` command it prints, and run the "before" leg only if the user asks for it.
+
+**After applying**, run the same post-apply guard `bgpdd-shipping` Step 7 step 6 specifies — `git diff --name-only`, HALT on any changed path that is `agents/blackgoat.md`, lies outside the plugin directory, or touches a frontmatter block, and leave the revert decision to the user. The rationale lives there; it is not restated here. It applies unchanged on this route: the apply is the same Forge doing the same edits, and a mid-epic run has *less* review around it than an end-of-epic one, not more.
 
 ### Escalate When
 
