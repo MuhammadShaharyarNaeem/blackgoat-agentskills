@@ -2,13 +2,13 @@
 
 #Task [1]:
 
-- FR-1: PASS — auth flow verified (test_login_success)
-- NFR-1: PASS — login endpoint responded in 180ms (test_login_performance)
+- FR-1: PASS — `pytest tests/auth` — exit 0 — tests/auth/test_login.py::test_login_success
+- NFR-1: PASS — `pytest tests/auth` — exit 0 — tests/auth/test_login.py::test_login_performance (180ms)
 
 #Task [2]:
 
-- FR-2: FAIL — logout did not clear the session cookie (test_logout_clears_session)
+- FR-2: FAIL — logout did not clear the session cookie (tests/auth/test_logout.py::test_logout_clears_session)
 
 Retest after fix:
 
-- FR-2: PASS — logout clears the session cookie (test_logout_clears_session)
+- FR-2: PASS — `pytest tests/auth` — exit 0 — tests/auth/test_logout.py::test_logout_clears_session

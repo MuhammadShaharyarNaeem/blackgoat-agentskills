@@ -108,7 +108,10 @@ class TestWontHaveExclusion(unittest.TestCase):
 
 class TestLatestWins(unittest.TestCase):
     def test_last_status_bearing_mention_determines_status(self):
-        text = "- FR-1: FAIL — first run\n- FR-1: PASS — retest\n"
+        # The PASS now carries an exit code: an unevidenced PASS is
+        # UNEVIDENCED rather than PASS (see TestPassEvidence below).
+        text = ("- FR-1: FAIL — first run\n"
+                "- FR-1: PASS — `npm test` exit 0 — retest\n")
         status_by_id, warnings = cc.parse_test_report(text)
         self.assertEqual(status_by_id["FR-1"], "PASS")
         self.assertEqual(warnings, [])
@@ -151,7 +154,8 @@ class TestBlockedStatusToken(unittest.TestCase):
         self.assertEqual(status_by_id["FR-1"], "BLOCKED")
 
     def test_later_pass_can_still_clear_a_blocked(self):
-        text = "- FR-1: BLOCKED — no harness\n- FR-1: PASS — harness built, retested\n"
+        text = ("- FR-1: BLOCKED — no harness\n"
+                "- FR-1: PASS — harness built, `npm test` exit 0, retested\n")
         status_by_id, _warnings = cc.parse_test_report(text)
         self.assertEqual(status_by_id["FR-1"], "PASS")
 
@@ -212,6 +216,156 @@ class TestBlockedStatusToken(unittest.TestCase):
                 str(FIXTURES / name / "test-report.md"),
             )
             self.assertEqual(report["blocked"], [], name)
+
+
+class TestPassEvidence(unittest.TestCase):
+    """A PASS must cite something a reader could go and check.
+
+    The gate was deterministic about the STATUS token and completely trusting
+    about the EVIDENCE beside it, so `- FR-1: PASS — I did not run anything`
+    counted as coverage. Accepted forms mirror agents/quinn.md §6: an exit
+    code, a `file::test-name` reference, or an evidence/runtime/ capture.
+    """
+
+    def test_prose_only_pass_is_unevidenced_and_uncovered(self):
+        text = "- FR-1: PASS — I did not run anything\n"
+        status_by_id, warnings = cc.parse_test_report(text)
+        self.assertEqual(status_by_id["FR-1"], "UNEVIDENCED")
+        self.assertTrue(any("no checkable evidence" in w for w in warnings))
+
+    def test_exit_code_evidence_is_accepted(self):
+        status_by_id, warnings = cc.parse_test_report(
+            "- FR-1: PASS — `npm test` — exit 0 — 42 passed\n")
+        self.assertEqual(status_by_id["FR-1"], "PASS")
+        self.assertEqual(warnings, [])
+
+    def test_file_test_name_reference_is_accepted(self):
+        status_by_id, _ = cc.parse_test_report(
+            "- FR-1: PASS — tests/reset.test.js::token expires after TTL\n")
+        self.assertEqual(status_by_id["FR-1"], "PASS")
+
+    def test_runtime_capture_citation_is_accepted(self):
+        for line in ("- FR-1: PASS — evidence/runtime/m3-auth.md\n",
+                     "- FR-1: PASS — **Runtime evidence:** m3-auth.md\n"):
+            status_by_id, _ = cc.parse_test_report(line)
+            self.assertEqual(status_by_id["FR-1"], "PASS", line)
+
+    def test_evidence_before_the_status_token_does_not_count(self):
+        """`exit 0` must be the PASS's evidence, not an earlier line fragment."""
+        self.assertFalse(cc.pass_is_evidenced(
+            "- FR-1: exit 0 was yesterday's run; today it is PASS"))
+
+    def test_unevidenced_must_have_lands_in_uncovered_and_unevidenced(self):
+        report = cc.build_report(
+            "test",
+            str(FIXTURES / "happy" / "requirements.md"),
+            str(FIXTURES / "unevidenced" / "test-report.md"),
+        )
+        self.assertEqual(report["result"], "FAIL")
+        self.assertIn("FR-1", report["uncovered"])
+        self.assertIn("FR-1", report["unevidenced"])
+        self.assertNotIn("FR-1", report["covered"])
+
+    def test_unevidenced_key_present_and_empty_outside_test_mode(self):
+        for mode, name, target in (
+                ("plan", "happy", "plan.md"),
+                ("design", "design-annotated", "detailed-design.md")):
+            report = cc.build_report(mode,
+                                     str(FIXTURES / name / "requirements.md"),
+                                     str(FIXTURES / name / target))
+            self.assertEqual(report["unevidenced"], [], mode)
+
+    def test_bare_prose_without_a_list_marker_never_counts(self):
+        """`FR-1 and FR-2 both pass the smoke test` covered two Must-Haves."""
+        text = "FR-1 and FR-2 both pass the smoke test — exit 0\n"
+        status_by_id, warnings = cc.parse_test_report(text)
+        self.assertEqual(status_by_id, {})
+        self.assertEqual(len(warnings), 2)
+        self.assertTrue(all("without a status token" in w for w in warnings))
+
+    def test_numbered_list_item_is_still_a_ledger_line(self):
+        status_by_id, _ = cc.parse_test_report(
+            "1. FR-1: PASS — `npm test` exit 0\n")
+        self.assertEqual(status_by_id["FR-1"], "PASS")
+
+
+class TestFenceStripping(unittest.TestCase):
+    """A status token inside a fence is a transcript, not a claim."""
+
+    def test_fenced_pass_does_not_overwrite_a_real_fail(self):
+        report = cc.build_report(
+            "test",
+            str(FIXTURES / "happy" / "requirements.md"),
+            str(FIXTURES / "fenced" / "test-report.md"),
+        )
+        self.assertEqual(report["result"], "FAIL")
+        self.assertIn("FR-2", report["uncovered"])
+
+    def test_strip_fenced_blocks_preserves_line_count(self):
+        text = "a\n```\nb\nc\n```\nd\n"
+        stripped = cc.strip_fenced_blocks(text)
+        self.assertEqual(len(stripped.split("\n")), len(text.split("\n")))
+        self.assertNotIn("b", stripped)
+
+    def test_tilde_fences_are_stripped_too(self):
+        self.assertNotIn("hidden", cc.strip_fenced_blocks("~~~\nhidden\n~~~\n"))
+
+    def test_plan_mode_is_not_fence_stripped(self):
+        """Plan probes legitimately live in fenced blocks — strip nothing."""
+        report = cc.build_report(
+            "plan",
+            str(FIXTURES / "lint-runtime-criterion" / "requirements.md"),
+            str(FIXTURES / "lint-runtime-criterion" / "plan.md"),
+        )
+        self.assertEqual(
+            len([f for f in report["lint_failures"]
+                 if f["check"] == "runtime-criterion"]), 2)
+
+
+class TestBomTolerance(unittest.TestCase):
+    def test_bom_prefixed_test_report_parses(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "test-report.md"
+            path.write_bytes(
+                b"\xef\xbb\xbf"
+                + "- FR-1: PASS — `npm test` exit 0 — tests/a.js::b\n".encode(
+                    "utf-8"))
+            report = cc.build_report(
+                "test", str(FIXTURES / "happy" / "requirements.md"), str(path))
+            self.assertIn("FR-1", report["covered"])
+
+
+class TestLedger(unittest.TestCase):
+    def test_ledger_records_every_exit_path(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "logs" / "gates.jsonl"
+            code, _out, _err = run_cli(
+                "--requirements", str(FIXTURES / "happy" / "requirements.md"),
+                "--test-report", str(FIXTURES / "happy" / "test-report.md"),
+                "--ledger", str(ledger))
+            self.assertEqual(code, 0)
+            code, _out, _err = run_cli(
+                "--requirements", str(FIXTURES / "uncovered" / "requirements.md"),
+                "--test-report", str(FIXTURES / "uncovered" / "test-report.md"),
+                "--ledger", str(ledger))
+            self.assertEqual(code, 1)
+            code, _out, _err = run_cli("--ledger", str(ledger))
+            self.assertEqual(code, 2)
+            records = [json.loads(l) for l in
+                       ledger.read_text(encoding="utf-8").splitlines() if l.strip()]
+            self.assertEqual([r["verdict"] for r in records],
+                             ["PASS", "FAIL", "ERROR"])
+            self.assertTrue(all(r["gate"] == "check_coverage.py"
+                                for r in records))
+            self.assertIsNone(records[0]["milestone"])
+            self.assertEqual(
+                records[0]["inputs"][
+                    str(FIXTURES / "happy" / "test-report.md")],
+                cc.sha256_file(FIXTURES / "happy" / "test-report.md"))
 
 
 class TestSupersessionAnnotation(unittest.TestCase):

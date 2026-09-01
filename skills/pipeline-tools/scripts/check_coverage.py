@@ -15,9 +15,11 @@ exit codes, parsing rules).
 """
 import argparse
 import bisect
+import hashlib
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -47,6 +49,24 @@ PASS_TOKEN_RE = re.compile(r"\b(?:PASSED|PASS)\b|✅", re.IGNORECASE)
 # would add a second spelling for a state the gate already reports.
 BLOCKED_TOKEN_RE = re.compile(r"\bBLOCKED\b", re.IGNORECASE)
 STRUCK_ID_RE = re.compile(r"~~[^~]*?\*\*((?:FR|NFR)-\d+)\*\*[^~]*?~~", re.IGNORECASE)
+
+# --- test-mode ledger-line grammar ----------------------------------------
+# A Coverage Ledger entry is a LIST ITEM (`- FR-3: PASS — evidence`). Bare
+# prose that merely happens to contain an id and the word "pass" is not a
+# claim anyone wrote as a status, and it used to count as coverage: the
+# sentence "FR-1 and FR-2 both pass the smoke test" silently covered two
+# Must-Haves. A non-list line is now a status-LESS mention (warned, uncovered).
+LEDGER_ITEM_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s")
+FENCE_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
+# What a PASS must cite. This is the grammar Quinn already emits (agents/
+# quinn.md §6): the executed command with its exit code, a `file::test-name`
+# reference, or a runtime-evidence capture. Everything else — "verified",
+# "looks good", "I did not run anything" — is prose, and a PASS resting on
+# prose is `unevidenced` and counts as NOT covered.
+EVIDENCE_EXIT_RE = re.compile(r"\bexit(?:\s+code)?\s+-?\d+\b", re.IGNORECASE)
+EVIDENCE_RUNTIME_RE = re.compile(
+    r"\*\*Runtime\s+evidence:\*\*|evidence[\\/]runtime[\\/]", re.IGNORECASE)
+EVIDENCE_TEST_REF_RE = re.compile(r"\S+::\S+")
 
 # --- plan-mode lint vocabulary -------------------------------------------
 # Inventory nouns only: a count of artifacts that exists in a source table.
@@ -1014,6 +1034,53 @@ def lint_supersession_annotations(requirements_text, rows, known_ids):
 # ---------------------------------------------------------------------------
 
 
+def strip_fenced_blocks(text):
+    """Blank out every ```/~~~ fenced region, preserving the line count.
+
+    A `- FR-1: PASS — exit 0` inside a fence is a pasted transcript or a
+    format example, not this round's claim — and since latest mention wins, a
+    fenced example could overwrite a genuine FAIL. Applied in TEST MODE ONLY:
+    plan-mode probes and design-mode register rows legitimately live inside
+    fenced blocks, so stripping there would delete the lints' own inputs.
+
+    Duplicated per file: this script family has no shared module by convention.
+    """
+    out, fence = [], None
+    for line in text.split("\n"):
+        m = FENCE_RE.match(line)
+        if fence is None:
+            if m:
+                fence = m.group(1)
+                out.append("")
+                continue
+            out.append(line)
+        else:
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
+                fence = None
+            out.append("")
+    return "\n".join(out)
+
+
+def pass_is_evidenced(line):
+    """True when a PASS line cites something a reader could go and check.
+
+    The gate is deterministic about the STATUS token and was completely
+    trusting about the EVIDENCE beside it, so `- FR-1: PASS — I did not run
+    anything` counted as coverage. Three accepted forms, matching what
+    agents/quinn.md §6 already requires: an exit code, a runtime-evidence
+    capture citation, or a `file::test-name` reference.
+
+    SCOPE LIMIT: this checks the SHAPE of the citation, never its truth. A
+    fabricated `exit 0` still passes here — check_runtime_evidence.py and the
+    ledger are what make a citation costly to fake.
+    """
+    m = PASS_TOKEN_RE.search(line)
+    rest = line[m.end():] if m else line
+    return bool(EVIDENCE_EXIT_RE.search(rest)
+                or EVIDENCE_RUNTIME_RE.search(rest)
+                or EVIDENCE_TEST_REF_RE.search(rest))
+
+
 def parse_test_report(text):
     """Parse a test-report.md body into (status_by_id, warnings).
 
@@ -1025,6 +1092,14 @@ def parse_test_report(text):
     This extends the original "both PASS and FAIL on one line counts as FAIL"
     rule with the same conservative logic — the worst status on the line wins,
     and only PASS ever counts as covered.
+
+    Two further conditions, both fail-safe:
+
+    - a status is read only from a LIST ITEM (the ledger's own grammar);
+      prose that merely contains an id and the word "pass" is a status-less
+      mention, warned about and uncovered.
+    - a PASS whose evidence text cites nothing checkable is recorded as
+      `UNEVIDENCED`, which — like BLOCKED — is status-bearing and NOT covered.
     """
     warnings = []
     status_by_id = {}
@@ -1037,6 +1112,10 @@ def parse_test_report(text):
             continue
 
         mentioned_ids |= ids_in_line
+        if not LEDGER_ITEM_RE.match(line):
+            # Prose, not a ledger line. Falls through to the status-less
+            # mention warning below.
+            continue
         has_fail = bool(FAIL_TOKEN_RE.search(line))
         has_blocked = bool(BLOCKED_TOKEN_RE.search(line))
         has_pass = bool(PASS_TOKEN_RE.search(line))
@@ -1044,12 +1123,20 @@ def parse_test_report(text):
         if has_fail or has_blocked or has_pass:
             # Worst status on the line wins: FAIL > BLOCKED > PASS.
             status = "FAIL" if has_fail else "BLOCKED" if has_blocked else "PASS"
+            if status == "PASS" and not pass_is_evidenced(line):
+                status = "UNEVIDENCED"
             for req_id in ids_in_line:
                 status_by_id[req_id] = status
                 status_bearing_ids.add(req_id)
 
     for req_id in sorted(mentioned_ids - status_bearing_ids, key=sort_key):
         warnings.append(f"{req_id} is only ever mentioned without a status token")
+    for req_id in sorted((i for i, s in status_by_id.items()
+                          if s == "UNEVIDENCED"), key=sort_key):
+        warnings.append(
+            f"{req_id}: latest PASS cites no checkable evidence — required is "
+            "an exit code ('exit 0'), a 'file::test-name' reference, or an "
+            "evidence/runtime/ capture citation; counted as NOT covered")
 
     return status_by_id, warnings
 
@@ -1070,6 +1157,7 @@ def _base_report(mode, requirements_path, target_path):
         "uncovered": [],
         "uncovered_should": [],
         "blocked": [],
+        "unevidenced": [],
         "warnings": [],
         "lint_failures": [],
         "result": "ERROR",
@@ -1126,8 +1214,17 @@ def build_report(mode, requirements_path, target_path):
                 target_warnings.append(f"unknown requirement ID {unknown_id} cited in plan")
             report["lint_failures"] = run_plan_lints(target_text)
         else:
-            status_by_id, target_warnings = parse_test_report(target_text)
+            status_by_id, target_warnings = parse_test_report(
+                strip_fenced_blocks(target_text))
             covered_ids = {i for i, status in status_by_id.items() if status == "PASS"}
+            # Reported the same way as `blocked`: unfiltered, so an id the
+            # requirements never declared still surfaces. An UNEVIDENCED
+            # Must-Have lands in `uncovered` and fails the gate.
+            report["unevidenced"] = sorted(
+                (i for i, status in status_by_id.items()
+                 if status == "UNEVIDENCED"),
+                key=sort_key,
+            )
             # BLOCKED is reported verbatim — unfiltered by tier or known-ness,
             # so an ID the requirements never declared still surfaces here
             # rather than vanishing. Only PASS ever lands in `covered`, so a
@@ -1188,6 +1285,47 @@ def _print_usage_error(args, message):
     print(json.dumps(report))
 
 
+def sha256_file(path):
+    """Hex sha256 of a file's bytes, or None when it cannot be read."""
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code):
+    """Append ONE JSON line recording this run. Best-effort by design.
+
+    A ledger that cannot be written must never change this gate's verdict —
+    the ledger is an audit trail for LATER gates (check_commit_gate.py's
+    --require-ledger-gates), not a term in this one.
+    """
+    if not ledger_path:
+        return
+    record = {
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "gate": Path(__file__).name,
+        "argv": list(argv),
+        "milestone": milestone,
+        "inputs": {str(p): sha256_file(p) for p in inputs if p},
+        "verdict": verdict,
+        "exit": exit_code,
+    }
+    try:
+        p = Path(ledger_path)
+        if str(p.parent):
+            p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+    except OSError as exc:
+        print(f"Warning: could not append to ledger {ledger_path}: {exc}",
+              file=sys.stderr)
+
+
 def main(argv):
     parser = argparse.ArgumentParser(
         prog="check_coverage.py",
@@ -1197,22 +1335,33 @@ def main(argv):
     parser.add_argument("--plan")
     parser.add_argument("--test-report")
     parser.add_argument("--design")
+    parser.add_argument("--ledger",
+                        help="append one JSON record per run to this path")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
 
     if args.self_test:
         return run_self_test()
 
+    _mode, _target = _selected_mode(args)
+
+    def finish(code, verdict):
+        """One exit point: EVERY return path records a ledger line."""
+        append_ledger(args.ledger, argv, None,
+                      [p for p in (args.requirements, _target) if p],
+                      verdict, code)
+        return code
+
     given = [t for t in (args.plan, args.test_report, args.design) if t is not None]
     if len(given) != 1:
         _print_usage_error(
             args, "exactly one of --plan, --test-report or --design is required"
         )
-        return 2
+        return finish(2, "ERROR")
 
     if args.requirements is None:
         _print_usage_error(args, "--requirements is required")
-        return 2
+        return finish(2, "ERROR")
 
     mode, target = _selected_mode(args)
 
@@ -1220,10 +1369,10 @@ def main(argv):
     print(json.dumps(report))
 
     if report["result"] == "ERROR":
-        return 2
+        return finish(2, "ERROR")
     if report["result"] == "FAIL":
-        return 1
-    return 0
+        return finish(1, "FAIL")
+    return finish(0, "PASS")
 
 
 if __name__ == "__main__":

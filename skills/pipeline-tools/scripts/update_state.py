@@ -14,12 +14,14 @@ Usage:
         [--set-feature <feature|null>] [--set-branch <name>] \
         [--set-artifact <name>=<path>] \
         [--add-blocker "<text>"] \
-        [--resolve-blocker "<substring>" --evidence "<text>"]
+        [--resolve-blocker "<substring>" --evidence "<text>"] \
+        [--ledger <path>]
     python update_state.py --self-test
 
 Pure standard library. See ../SKILL.md for the full contract.
 """
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -36,6 +38,54 @@ class GateError(Exception):
 
 def now_iso():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def sha256_file(path):
+    """Hex sha256 of a file's bytes, or None when it cannot be read."""
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code,
+                  extra=None):
+    """Append ONE JSON line recording this run. Best-effort by design.
+
+    The state file's hash is taken AFTER the write, so the record describes
+    the state a later gate will actually read.
+
+    `--resolve-blocker` additionally records the action and the evidence
+    string, which is the load-bearing part: the CLI cannot judge whether
+    "trust me" is real evidence, but with a ledger the claim is durable,
+    attributable and reviewable rather than gone the moment the array shrinks.
+    """
+    if not ledger_path:
+        return
+    record = {
+        "ts": now_iso(),
+        "gate": Path(__file__).name,
+        "argv": list(argv),
+        "milestone": milestone,
+        "inputs": {str(p): sha256_file(p) for p in inputs if p},
+        "verdict": verdict,
+        "exit": exit_code,
+    }
+    if extra:
+        record.update(extra)
+    try:
+        p = Path(ledger_path)
+        if str(p.parent):
+            p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+    except OSError as exc:
+        print(f"Warning: could not append to ledger {ledger_path}: {exc}",
+              file=sys.stderr)
 
 
 def build_skeleton(project_name):
@@ -98,7 +148,9 @@ def load_state(path, init, project_name):
     """
     warnings = []
     if path.exists():
-        text = path.read_text(encoding="utf-8")
+        # utf-8-sig: a BOM-prefixed state file is valid to an editor but
+        # json.loads chokes on the mark.
+        text = path.read_text(encoding="utf-8-sig")
         try:
             state = json.loads(text)
         except json.JSONDecodeError as exc:
@@ -213,6 +265,8 @@ def build_parser():
     parser.add_argument("--add-blocker", action="append", default=[])
     parser.add_argument("--resolve-blocker")
     parser.add_argument("--evidence")
+    parser.add_argument("--ledger",
+                        help="append one JSON record per run to this path")
     parser.add_argument("--self-test", action="store_true")
     return parser
 
@@ -224,20 +278,34 @@ def main(argv):
     if args.self_test:
         return run_self_test()
 
+    def finish(code, verdict):
+        """One exit point: EVERY return path records a ledger line."""
+        extra = None
+        if args.resolve_blocker is not None:
+            extra = {"action": "resolve-blocker",
+                     "evidence": args.evidence}
+        # The cursor names the milestone this run is about, when it names one;
+        # the literal "null" clears it and is recorded as JSON null.
+        milestone = (None if args.set_cursor in (None, "null")
+                     else args.set_cursor)
+        append_ledger(args.ledger, argv, milestone,
+                      [args.state] if args.state else [], verdict, code, extra)
+        return code
+
     if not args.state:
         print(json.dumps({"error": "--state is required"}))
-        return 2
+        return finish(2, "ERROR")
 
     try:
         state, warnings = apply_updates(args)
     except GateError as exc:
         print(json.dumps({"error": str(exc)}))
-        return 2
+        return finish(2, "ERROR")
 
     for w in warnings:
         print(f"Warning: {w}", file=sys.stderr)
     print(json.dumps(state, indent=2))
-    return 0
+    return finish(0, "PASS")
 
 
 # ---------------------------------------------------------------------------
@@ -376,6 +444,63 @@ def run_self_test():
                 evidence="n/a"))
             self.assertTrue(any("nothing removed" in w for w in warnings))
             self.assertEqual(state["blockers"], ["unrelated blocker"])
+
+        def test_bom_prefixed_state_still_loads(self):
+            """utf-8 (not -sig) made json.loads choke on the byte-order mark."""
+            self.state_path.write_bytes(b"\xef\xbb\xbf" + json.dumps({
+                "schema": "1", "project_name": "demo", "feature": None,
+                "pipeline": "", "branch": None, "milestone_cursor": None,
+                "artifacts": {}, "blockers": [],
+            }).encode("utf-8"))
+            state, _ = apply_updates(ns(self.state_path,
+                                        set_pipeline="bgpdd-build"))
+            self.assertEqual(state["pipeline"], "bgpdd-build")
+
+        # ---- the shared gate ledger ----
+
+        def _ledger_records(self, path):
+            return [json.loads(l) for l in
+                    Path(path).read_text(encoding="utf-8").splitlines() if l.strip()]
+
+        def test_ledger_records_success_and_usage_error(self):
+            import contextlib
+            import io
+
+            ledger = self.dir / "logs" / "gates.jsonl"
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = main(["--state", str(self.state_path), "--init",
+                           "--project-name", "demo", "--set-cursor", "M2 — Auth",
+                           "--ledger", str(ledger)])
+            self.assertEqual(rc, 0)
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = main(["--ledger", str(ledger)])
+            self.assertEqual(rc, 2)
+            records = self._ledger_records(ledger)
+            self.assertEqual([r["verdict"] for r in records], ["PASS", "ERROR"])
+            self.assertEqual(records[0]["gate"], "update_state.py")
+            self.assertEqual(records[0]["milestone"], "M2 — Auth")
+            self.assertEqual(records[0]["inputs"][str(self.state_path)],
+                             sha256_file(self.state_path))
+            self.assertNotIn("action", records[0])
+
+        def test_ledger_records_the_resolve_blocker_evidence(self):
+            """The evidence string is unjudgeable — so it must be durable."""
+            import contextlib
+            import io
+
+            ledger = self.dir / "gates.jsonl"
+            apply_updates(ns(self.state_path, init=True, project_name="demo",
+                             add_blocker=["M3: placeholder route open"]))
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = main(["--state", str(self.state_path),
+                           "--resolve-blocker", "placeholder route",
+                           "--evidence", "trust me",
+                           "--ledger", str(ledger)])
+            self.assertEqual(rc, 0)
+            rec = self._ledger_records(ledger)[-1]
+            self.assertEqual(rec["action"], "resolve-blocker")
+            self.assertEqual(rec["evidence"], "trust me")
+            self.assertEqual(rec["verdict"], "PASS")
 
         def test_invalid_json_file_raises(self):
             self.state_path.write_text("{not valid json")
