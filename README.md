@@ -388,7 +388,7 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **godot-gdscript-patterns** — Godot 4 GDScript patterns (conditional, several agents)
 
 ### Meta skills (operate on the plugin itself)
-- **agent-audit** — audits personas/dependencies against 18 structural heuristics
+- **agent-audit** — audits personas/dependencies against 21 structural heuristics, starting with a mechanical preflight (frontmatter parse, dependency paths, runtime registration, self-tests, ledger grep)
 - **agent-orchestration-improve-agent** — log parsing → procedural-memory generation (Forge's core methodology)
 - **bgpdd-learn** — `/bgpdd-learn`, the on-demand session-learning triage (Orchestrator + Forge)
 
