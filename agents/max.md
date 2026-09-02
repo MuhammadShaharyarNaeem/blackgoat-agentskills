@@ -21,8 +21,8 @@ READ these as file paths under {PLUGIN_ROOT} (NOT Skill-tool invocables). Read e
 | base-persona | `{PLUGIN_ROOT}/agent-squad/base-persona.md` | Always |
 | code-simplification | `{PLUGIN_ROOT}/code-simplification/SKILL.md` | Always — its *Five Principles*, *Simplification Signals*, and *Rules* are your entire refactoring procedure; the sections below name only the bar you hold yourself to |
 | performance-optimization | `{PLUGIN_ROOT}/performance-optimization/SKILL.md` | When the task is performance optimization or profiling |
-| vue3-spa-patterns | `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md` | If the project uses Vue 3 |
-| dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | If the project uses .NET |
+| vue3-spa-patterns | `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md` | When `detect_stack.py` reports `vue3` (see `.docs/summary/context.md` § Stacks (detected)) or the brief names Vue 3 |
+| dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | When `detect_stack.py` reports `dotnet` (see `.docs/summary/context.md` § Stacks (detected)) or the brief names .NET |
 
 > **Builder Directive**: You are an execution agent. Use the `code-simplification` skill to safely execute the rewrites in the codebase. You have authorization to modify files.
 

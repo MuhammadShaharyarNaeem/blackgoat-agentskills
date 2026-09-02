@@ -1,6 +1,6 @@
 ---
 name: pipeline-tools
-description: "Deterministic stdlib-Python CLI family for the PDD pipeline gates. check_coverage.py gates Must-Have FR/NFR coverage in plan, test and design modes; check_commit_gate.py runs the bgpdd-build milestone commit gate and can commit; check_agent_report.py gates Cipher and Vera durable reports; check_runtime_evidence.py gates observed-runtime captures (transport, provenance sidecar, client allowlist, freshness, keys); check_acceptance_suite.py gates the acceptance matrix and its results; check_ship_decision.py gates Dep GO/NO-GO; check_blockers.py gates an empty blockers array; next_milestone.py derives the next pending milestone; mark_milestone.py writes the completion marker; update_state.py is the sanctioned writer for orchestrator-state.json; run_quiet.py runs builds and tests and writes capture artifacts; check_dependency_tables.py and check_frontmatter.py lint agent dependency tables and frontmatter. Squad-internal: run by the Orchestrator at the bgpdd gates, never delegated."
+description: "Deterministic stdlib-Python CLIs for the PDD pipeline gates. check_coverage.py gates Must-Have FR/NFR coverage (plan, test, design modes); check_commit_gate.py runs the bgpdd-build commit gate and can commit; check_agent_report.py gates Cipher and Vera durable reports; check_runtime_evidence.py gates runtime captures (transport, sidecar, freshness); check_acceptance_suite.py gates the acceptance matrix and results; check_ship_decision.py gates Dep GO/NO-GO, the rollback rehearsal and the rollout baseline; check_blockers.py gates the blockers ledger, milestone-scoped; next_milestone.py and mark_milestone.py read/write milestone completion; update_state.py is the sanctioned orchestrator-state.json writer; run_quiet.py writes build/test logs and captures; record_run.py and summarize_run.py append/roll up run telemetry; detect_stack.py reports evidence-backed technology stacks; check_dependency_tables.py and check_frontmatter.py are the static lints. Squad-internal: run by the Orchestrator, never delegated."
 ---
 
 # pipeline-tools
@@ -23,7 +23,7 @@ Every gate in this family accepts `--ledger <path>` and appends **exactly one JS
 
 `inputs` carries every file path argument the script read. `verdict` maps exit 0/1/2 to PASS/FAIL/ERROR. Writing the ledger is **best-effort**: a ledger that cannot be written never changes the gate's own verdict — it is an audit trail for LATER gates, not a term in this one. `update_state.py --resolve-blocker` additionally records `"action": "resolve-blocker"` and `"evidence": "<text>"`. The CLI still cannot judge whether "trust me" is real evidence; the ledger makes the claim durable and attributable instead of gone the moment the array shrinks.
 
-Carrying `--ledger`: `check_commit_gate.py`, `check_agent_report.py`, `check_acceptance_suite.py`, `check_ship_decision.py`, `check_coverage.py`, `check_blockers.py`, `check_runtime_evidence.py`, `update_state.py`, `mark_milestone.py`. `next_milestone.py` READS the ledger but never writes it. The pipelines pass `--ledger .docs/{project-name}/implementation/gates.jsonl` on every gate invocation (Orchestrator Contract §4).
+Carrying `--ledger`: `check_commit_gate.py`, `check_agent_report.py`, `check_acceptance_suite.py`, `check_ship_decision.py`, `check_coverage.py`, `check_blockers.py`, `check_runtime_evidence.py`, `update_state.py`, `mark_milestone.py`. `next_milestone.py` and `summarize_run.py` READ the ledger but never write it. `record_run.py` carries no `--ledger` flag at all — it is not a gate; it writes the other durable record, the run log, described below. The pipelines pass `--ledger .docs/{project-name}/implementation/gates.jsonl` on every gate invocation (Orchestrator Contract §4).
 
 ## Fenced blocks and encoding
 
@@ -67,9 +67,10 @@ python check_commit_gate.py --self-test
 
 - **Flags** — `--repo` defaults to `.`. Every runtime-evidence assertion flag forwards to `check_runtime_evidence.py`; any of them passed *without* `--require-runtime-evidence` is exit 2, never a silent no-op. `--ledger` and `--allow-missing-sidecar` forward when the child script declares them. `--require-ledger-gates` requires `--ledger` (else exit 2) and demands that each named gate's latest ledger entry for this milestone record `PASS` **and** still hash the same inputs.
 - **Section boundaries** — ANY heading of level 2–6 closes a `## Review:` section. **Migration**: a `**Verdict:**` line must appear BEFORE any subheading inside its review section, or the section reads as no-verdict and fails closed.
-- **JSON keys** — `milestone`, `review_report`, `state_file`, `review_found`, `verdict`, `ambiguous_review_section`, `stale`, `blocking`, `unscoped_blockers`, `rendered_evidence`, `rendered_evidence_ok`, `undeclared_changes`, `tree_verified`, `runtime_evidence`, `runtime_evidence_ok`, `ledger`, `require_ledger_gates`, `ledger_gate_problems`, `ledger_gates_ok`, `warnings`, `committed`, `result`, `error`. **Problem codes**: `ledger_gate_problems` entries carry `ledger_missing`, `ledger_failed` or `ledger_stale`.
+- **JSON keys** — `milestone`, `review_report`, `state_file`, `review_found`, `verdict`, `ambiguous_review_section`, `stale`, `blocking`, `unscoped_blockers`, `other_milestone_blockers`, `ignored_unscoped_ids`, `rendered_evidence`, `rendered_evidence_ok`, `undeclared_changes`, `tree_verified`, `runtime_evidence`, `runtime_evidence_ok`, `ledger`, `require_ledger_gates`, `ledger_gate_problems`, `ledger_gates_ok`, `warnings`, `committed`, `result`, `error`. **Problem codes**: `ledger_gate_problems` entries carry `ledger_missing`, `ledger_failed` or `ledger_stale`.
+- **Blockers precondition** — same normalization and exact-equality scoping as `check_blockers.py` (helper duplicated). Scoped-to-this-milestone (`blocking`) or unscoped (`unscoped_blockers`) block; `--ignore-unscoped` skips unscoped and names them in `ignored_unscoped_ids`; `other_milestone_blockers` never block; `Info` never blocks (fixed floor, deliberately not caller-tunable at the last checkpoint).
 - **Exit codes** — **0** gate passed (and committed, with `--commit`); **1** gate failed (`verdict` not `Approve`, `ambiguous_review_section`, `stale`, non-empty `blocking`, unignored `unscoped_blockers`, `rendered_evidence_ok: false`, `runtime_evidence_ok: false`, `ledger_gates_ok: false`, or `tree_verified: false`); **2** usage error, a `--changed-files` path that does not exist (`changed_file_missing`), unreadable artifact, invalid state JSON, git failure, or a structural failure from the delegated runtime gate.
-- **Self-test** — **57** cases. Depth (delegation rationale, parsing rules, the ledger-gate essay): `references/check_commit_gate.md`.
+- **Self-test** — **62** cases. Depth (delegation rationale, parsing rules, the ledger-gate essay): `references/check_commit_gate.md`.
 
 ## check_agent_report.py
 
@@ -130,27 +131,34 @@ python check_acceptance_suite.py --self-test
 
 ## check_ship_decision.py
 
-Makes Dep's `ship-decision.md` GO/NO-GO machine-verifiable: it requires an unambiguous labeled `GO` or `NO-GO` (Ship Decision / Verdict / Recommendation line), a Rollback heading, and a post-deploy checklist section. Used at `bgpdd-build` Phase 5 step 6 (shape-only — a prep NO-GO is a legitimate result), `bgpdd-shipping` Step 0.4, and Step 3 (`--require-go`).
+Makes Dep's `ship-decision.md` GO/NO-GO machine-verifiable: an unambiguous labeled `GO` or `NO-GO`, a Rollback heading, a post-deploy checklist section. Two opt-in flags convert the two assertions a heading match never proved: `--require-rehearsal` (the rollback was performed, not planned) and `--require-baseline` (the threshold table has numbers to grade against). Used shape-only at `bgpdd-build` Phase 5 step 6 and `bgpdd-shipping` Step 0.4 (a prep decision legitimately predates a rehearsal and a baseline), and with `--require-go --require-rehearsal --require-baseline` at `bgpdd-shipping` Step 3.
 
 ```bash
-python check_ship_decision.py --report <path> [--require-go] [--ledger <path>]
+python check_ship_decision.py --report <path> [--require-go] [--require-rehearsal] [--require-baseline] [--repo <dir>] [--max-rehearsal-age-days <N>] [--ledger <path>]
 python check_ship_decision.py --self-test
 ```
 
-- **Exit codes** — `--require-go` fails (exit 1) when the latest verdict is `NO-GO` rather than `GO`. **0** structurally valid decision (and `GO`, under `--require-go`); **1** gate failed (NO-GO under `--require-go`, or incomplete/ambiguous decision content); **2** usage error, missing/empty/unreadable report, or structural non-conformance.
-- **Self-test** — **13** cases. Depth (verdict grammar, last-section-wins, the eval-grader divergence): `references/check_ship_decision.md`.
+- **Flags** — `--require-go` fails on `NO-GO`. `--require-rehearsal` demands one grammar-conforming `Time to Rollback:` line whose cited capture resolves under `evidence/rollback/`, is non-empty, has `## Captured output`, and has a `run_quiet` `.meta.json` sidecar with matching `capture_sha256` and `exit_code` 0. `--require-baseline` demands a `## Baseline`/`### Baseline` section with ≥3 `- <metric>: <value>` lines each citing an existing path under `evidence/baseline/`. `--repo` defaults to `.`. `--max-rehearsal-age-days` defaults to 30.
+- **Rehearsal grammar** — `Time to Rollback: <N><unit> — rehearsed <YYYY-MM-DD> on <env> — evidence: <path>`; leading `#`/`>`/`-`/`*` tolerated; separators em dash, en dash or hyphen; unit ∈ `s|sec|secs|second|seconds|m|min|mins|minute|minutes` (normalized to `time_s`); the last matching line file-wide wins; fences stripped. Producer: `shipping-and-launch` → Rollback Rehearsal.
+- **JSON keys** — `report_file`, `pass`, `verdict`, `require_go`, `has_rollback`, `has_checklist`, `checkbox_count`, `require_rehearsal`, `rehearsal` (`{present, time_s, rehearsed_on, env, evidence, sidecar_ok, age_days}`), `require_baseline`, `baseline` (`{present, metrics[{name,value,evidence,resolved}], evidenced_count}`), `max_rehearsal_age_days`, `problems` (`{code: [detail]}`), `failures`, `error`.
+- **Problem codes** — `rehearsal_missing`, `rehearsal_unevidenced`, `rehearsal_stale`, `rehearsal_failed_exit`, `baseline_missing`, `baseline_unevidenced`.
+- **Exit codes** — **0** structurally valid (and `GO` / rehearsed / baselined under the flags); **1** a gate failed; **2** usage error, missing/unreadable report, or structural non-conformance.
+- **Self-test** — **47** cases. Depth (verdict grammar, last-section-wins, the rehearsal and baseline essays, fixtures): `references/check_ship_decision.md`.
 
 ## check_blockers.py
 
-Makes the blockers-ledger gate machine-run: it reads `orchestrator-state.json` and exits non-zero when any standing blocker remains. Used at `bgpdd-shipping` Step 0.5.
+Makes the blockers-ledger gate machine-run: it reads `orchestrator-state.json`, normalizes every entry (legacy freeform string or structured object) to one shape, and exits non-zero when a blocker still stands. Used at `bgpdd-shipping` Step 0.5.
 
 ```bash
-python check_blockers.py --state <path> [--ledger <path>]
+python check_blockers.py --state <path> [--milestone "<title>"] [--severity-floor Critical|Important|Info] [--ledger <path>]
 python check_blockers.py --self-test
 ```
 
-- **Exit codes** — **0** `blockers` is empty; **1** one or more standing blockers (JSON stdout lists them); **2** usage/structural failure (missing state, invalid JSON, missing `blockers` field).
-- **Self-test** — **6** cases. Depth: `references/check_blockers.md`.
+- **Blocker schema** — `{id, text, milestone, capability, severity, source, added, evidence}`. A legacy string normalizes to `{id: null, text, milestone: null, capability: null, severity: "Critical", source: null, added: null, evidence: null}` — unscoped and Critical, the fail-safe reading. Normalization never mutates the stored entry.
+- **Flags** — `--milestone`: an entry blocks iff its `milestone` equals the title exactly (case/whitespace-insensitive) OR is `null` (unscoped still blocks — a **deliberate refinement** of the old "gate on all" rule, convention #8: exact equality on a structured field replaces a substring guess). Entries scoped elsewhere land in `other_milestone_blockers` and never block. `--severity-floor` defaults to `Important` (blocks Critical+Important, ignores Info). Without `--milestone`, legacy behavior is unchanged.
+- **JSON keys** — `state_file`, `milestone`, `severity_floor`, `pass`, `blocker_count`, `blockers`, `blocking`, `other_milestone_blockers`, `pipeline`, `error`.
+- **Exit codes** — **0** `blocking` is empty; **1** non-empty; **2** usage/structural failure.
+- **Self-test** — **16** cases. Depth: `references/check_blockers.md`.
 
 ## next_milestone.py
 
@@ -192,8 +200,9 @@ python update_state.py --state <path> \
     [--set-cursor <title|null>] [--set-pipeline <name>] \
     [--set-feature <feature|null>] [--set-branch <name>] \
     [--set-artifact <name>=<path>] \
-    [--add-blocker "<text>"] \
-    [--resolve-blocker "<substring>" --evidence "<text>"] [--ledger <path>]
+    [--add-blocker "<text>" [--blocker-milestone <title>] [--blocker-capability <name>] \
+        [--blocker-severity Critical|Important|Info] [--blocker-source <name>] [--blocker-evidence <text>]] \
+    [--resolve-blocker "<id-or-text-or-substring>" --evidence "<text>"] [--ledger <path>]
 python update_state.py --self-test
 ```
 
@@ -201,10 +210,10 @@ python update_state.py --self-test
 - **`--init --project-name <name>`**: creates the skeleton (`schema` `"1"`, `project_name`, `feature: null`, `pipeline: ""`, `branch: null`, `milestone_cursor: null`, `artifacts: {}`, `blockers: []`) if the file does not exist; a **no-op with a warning** if it does, while other actions in the same call still apply.
 - **`--set-cursor` / `--set-pipeline` / `--set-branch` / `--set-feature`**: set those fields verbatim. The **literal string `null`** sets the JSON field to `null`.
 - **`--set-artifact <name>=<path>`** (repeatable): merges into `artifacts`; the literal value `null` stores JSON `null`. A spec with no `=` is a usage error.
-- **`--add-blocker "<text>"`** (repeatable): appends verbatim, preserving existing entries.
-- **`--resolve-blocker "<substring>" --evidence "<text>"`**: removes every matching entry (case-insensitive). **`--evidence` is required and must be non-empty** — omitting it is a usage error, not a silent no-op. A substring matching nothing warns and changes nothing. Every removal also appends a line to `blockers-resolved.log` beside the state file. Pipelines pass `--ledger` on this action.
-- **Exit codes** — **0** the action(s) applied and the file was written; **2** usage/structural failure (missing `--state`, no action, `--init` without `--project-name`, `--resolve-blocker` without non-empty `--evidence`, a bad `--set-artifact` spec, a state file that is not a JSON object, or a missing state file without `--init`).
-- **Self-test** — **20** cases. Depth (atomicity, the blocker-ledger rule this mechanizes): `references/update_state.md`.
+- **`--add-blocker "<text>"`** (repeatable): appends a structured entry (schema in `check_blockers.py` above) with auto id `B-<n>`, one past the highest currently present — a documented limitation: a resolved top id can be reused. The `--blocker-*` companions apply to **every** `--add-blocker` in the invocation; any of them given without `--add-blocker` is a usage error. Legacy entries are never rewritten.
+- **`--resolve-blocker "<target>" --evidence "<text>"`**: matches an exact id, then exact text (removing all entries sharing it), then a unique substring (ambiguous → exit 2 with `candidates`). **`--evidence` is required and must be non-empty** — omitting it is a usage error, not a silent no-op. A target matching nothing warns and changes nothing. Every removal appends `<ts>\t<id>\t<full entry>\t<evidence>` to `blockers-resolved.log` beside the state file, and the ledger record gains `resolved_ids` and `resolved_entries`. Pipelines pass `--ledger` on this action.
+- **Exit codes** — **0** the action(s) applied and the file was written; **2** usage/structural failure (missing `--state`, no action, `--init` without `--project-name`, `--resolve-blocker` without non-empty `--evidence`, an ambiguous resolve target, a `--blocker-*` companion without `--add-blocker`, a bad `--set-artifact` spec, a state file that is not a JSON object, or a missing state file without `--init`).
+- **Self-test** — **29** cases. Depth (atomicity, the blocker-ledger rule this mechanizes, the schema migration): `references/update_state.md`.
 
 ## run_quiet.py
 
@@ -221,6 +230,39 @@ python run_quiet.py --self-test
 - **The sidecar** — `--capture <path>` also writes `<path>.meta.json` recording `argv`, `cwd`, `host`, `pid`, `started`/`finished` (ISO-8601 UTC), `exit_code` (124 on timeout), `body_sha256` (over the captured text as embedded), `capture_sha256` (over the finished capture FILE's bytes), `tool: "run_quiet.py"` and `schema: 1`. Its path is printed on the `sidecar:` line of the stdout summary. `check_runtime_evidence.py` requires it.
 - **Exit codes** — passthrough of the child's own exit code; **124** the child was killed for exceeding `--timeout` (best-effort process-tree kill); **2** structural/usage failure (no `--log`/`--capture`, no command after `--`, a log or capture path that cannot be created or written, an owned `--capture-field`, or a command that could not be launched). **Windows caveat**: the child is launched without a shell, so Python cannot exec a `.cmd`/`.bat` shim — invoke `npx.cmd`/`npm.cmd`, or bypass the shim (`node node_modules/@playwright/test/cli.js`).
 - **Self-test** — **20** cases. Depth (sidecar rationale and the `.gitattributes` caveat, report shape, error profile, the no-information-lost guarantee): `references/run_quiet.md`.
+
+## record_run.py
+
+Appends one run-telemetry record per delegation completion and per state persistence to `.docs/{project-name}/implementation/run-log.jsonl`. The gate ledger records which gates fired; this records what the run cost — agent, model, duration, tokens, rounds. Orchestrator Contract §4 owns the obligation; this section owns the CLI.
+
+```bash
+python record_run.py --log <path> --pipeline <name> --phase <name> --event <delegation|gate|phase|note> \
+    [--unit "<title>"] [--agent <name>] [--model <tier>] [--duration-s <float>] \
+    [--tokens-in <int>] [--tokens-out <int>] [--tokens-total <int>] [--rounds <int>] \
+    [--status <STATUS>] [--note "<text>"] [--from-json <file>]
+python record_run.py --self-test
+```
+
+- **Flags** — `--log`, `--pipeline`, `--phase`, `--event` required. `--status` ∈ `COMPLETE|PARTIAL|BLOCKED|PASS|FAIL|ERROR`. `--from-json <file>` maps a runtime completion payload; explicit flags override the payload.
+- **Record** — `{"ts", "pipeline", "phase", "unit", "agent", "model", "event", "duration_s", "tokens_in", "tokens_out", "tokens_total", "rounds", "status", "note"}`.
+- **Unknown is `null`, never `0`** (Evidence Integrity). An explicit `0` is preserved. `tokens_total` is derived only when both halves are known.
+- **Exit codes** — **0** appended; **2** usage error, a bad/unreadable `--from-json`, or an unwritable log. There is no exit 1. Unlike the best-effort ledger, a failed write is exit 2 — the record IS the artifact.
+- **Self-test** — **15** cases. Depth (`--from-json` mapping table, the deliberately unmapped fields): `references/record_run.md`.
+
+## summarize_run.py
+
+The reader half of `record_run.py` and the mechanical form of the fired-versus-rubber-stamped metric. `--markdown` emits a paste-ready game-tape block.
+
+```bash
+python summarize_run.py --run-log <path> [--ledger <path>] [--unit "<title>"] [--markdown]
+python summarize_run.py --self-test
+```
+
+- **Flags** — `--run-log` required. `--ledger` adds the gates section (omitted or unreadable → `null` + a warning, exit unchanged). `--unit` scopes records and ledger entries to one milestone/bug slug; null-milestone ledger entries fall out of a unit view by design.
+- **JSON keys** — `run_log`, `ledger`, `unit_filter`, `records`, `malformed_lines`, `pipelines`, `units`, `agents`, `gates`, `warnings`, `error`. Each bucket carries `records`, `delegations`, `duration_s_total`, `duration_known_count`, `duration_unknown_count`, `tokens_total`, `tokens_unknown_count`, `rounds_max`, `rounds_recorded` (plus `duration_mean_s` for agents). `gates = {per_gate: {<name>: {runs, pass, fail, error, units}}, fired, rubber_stamped, inconclusive}`.
+- **Classification** — `fired` = recorded a FAIL at least once; `rubber_stamped` = every verdict PASS; `inconclusive` = an ERROR but no FAIL. `rubber_stamped` is a **description, not a verdict** — input to the Incident Test, not its answer.
+- **Exit codes** — **0** on any summary (an empty log and an absent ledger included); **2** missing `--run-log` or a file that cannot be opened. A malformed line is counted in `malformed_lines`, not fatal.
+- **Self-test** — **14** cases. Depth (aggregation semantics, the third bucket's rationale, markdown shape): `references/summarize_run.md`.
 
 ## check_dependency_tables.py
 
@@ -248,3 +290,18 @@ python check_frontmatter.py --self-test
 - **JSON keys** — `result`, `files_checked`, `errors`, `warnings`; each `errors`/`warnings` entry is `{file, line, problem}`.
 - **Exit codes** — **0** `result: PASS` (warnings do not gate); **1** at least one error; **2** usage error (missing or non-directory `root`), or a root carrying neither `agents/` nor `skills/`.
 - **Self-test** — **9** cases. Depth: `references/check_frontmatter.md`.
+
+## detect_stack.py
+
+Walks a repository tree and reports evidence-backed technology stacks — `dotnet`, `vue3` (vue2 excluded even when other weak evidence is present), `react`, `angular`, `node`, `python`, `godot`, `powershell`, `docker`, `aws`, `azure`, `github-actions`, `playwright`, and the db stacks (`postgres`/`sqlserver`/`mysql`/`sqlite`) — so a stack-specific methodology skill's dependency-table row has a mechanical floor instead of resting solely on Iris's prose. It never guesses: a stack appears only with at least one relative evidence path (capped at 5).
+
+```bash
+python detect_stack.py --repo <dir> [--json|--markdown] [--max-depth N]
+python detect_stack.py --self-test
+```
+
+- **Flags** — `--repo` required outside `--self-test`; `--json`/`--markdown` are mutually exclusive and default to JSON. `--max-depth` defaults to 6; `node_modules`, `bin`, `obj`, `.git`, `dist`, `.venv`, `__pycache__` are always skipped.
+- **JSON keys** — `result`, `repo`, `stacks` (`{name, confidence: "high"|"medium", evidence}`), `skills` (dotnet→`dotnet-backend-patterns`, vue3→`vue3-spa-patterns`, godot→`godot-gdscript-patterns`, powershell→`powershell-script-patterns`, aws|azure→`cloud-deploy-patterns`, playwright→`playwright-skill`, any db→`database-migration-patterns`), `warnings`, `error`.
+- **`--markdown`** prints a `## Stacks (detected)` block for `.docs/summary/context.md` (`bgpdd-discovery` Phase 1).
+- **Exit codes** — **0** on a readable repo (an empty repo returns `stacks: []` plus a warning); **2** a missing or unreadable `--repo`.
+- **Self-test** — **18** cases. Depth (vue3-vs-vue2 suppression, the confidence rule, db/cloud detection surfaces): `references/detect_stack.md`.

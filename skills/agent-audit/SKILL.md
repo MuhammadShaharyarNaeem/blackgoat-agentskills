@@ -37,7 +37,10 @@ Once you understand the audit metrics, execute the audit following these steps:
    - `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_dependency_tables.py {PLUGIN_ROOT}`.
    - **Registration diff**: compare the set of `skills/*/SKILL.md` and `agents/*.md` on disk against the set the runtime reports as loaded (in a runtime that lists loaded skills and spawnable agent types at session start, that listing; otherwise the runtime's equivalent registry). A file on disk that the runtime does not list — or lists with an empty description — is a Blocker: the plugin believes it shipped something the user cannot invoke.
    - Every `pipeline-tools` script's `--self-test`, plus `test_check_coverage.py`. A failing self-test is a Blocker; a script with no self-test is a Warning under Metric 19.
-   - `grep -rn "check_[a-z_]*\.py\|next_milestone\.py\|update_state\.py --resolve-blocker" skills/bgpdd-*/SKILL.md | grep -v -- --ledger` — feeds Metric 20; any hit is a FAIL there.
+   - The **ledger grep**, in two parts — feeds Metric 20; any hit in either is a FAIL there:
+     `grep -rn "scripts/\(check_[a-z_]*\|next_milestone\|mark_milestone\)\.py" skills/bgpdd-*/SKILL.md | grep -v -- --ledger`
+     `grep -rn "update_state\.py.*--resolve-blocker" skills/bgpdd-*/SKILL.md | grep -v -- --ledger`
+     **Match `scripts/<name>.py`, not the bare name.** A looser pattern (`"check_[a-z_]*\.py\|…"`) matches every *prose* mention of a gate — and the pipelines discuss their gates in prose constantly — so it returns hits on a fully compliant tree and the rule "any hit is a FAIL" fires on everything, which is indistinguishable from firing on nothing. It also has to exempt `update_state.py`'s non-`--resolve-blocker` invocations (`--init`, `--set-*`, `--add-blocker`), which make no claim outliving the file they write and carry no ledger flag by contract. `record_run.py`, `summarize_run.py` and `detect_stack.py` are not gates and are exempt: the first writes the run log, the second reads both durable records, the third reports stacks.
    - The eval record summary for Metric 21: per case, latest-window pass rate, run count, and the harness version/provenance fields present.
    A preflight command that cannot be run (no interpreter, no runtime listing) is reported as BLOCKED with the reason — never skipped silently, and never replaced by a read.
 
