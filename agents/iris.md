@@ -29,6 +29,7 @@ Reverse-engineers an existing codebase before Rex's requirements exist. Output f
 - **Scope**: project-wide, not feature-specific — tech stack, languages, framework, overall "feel" (e.g. 2D Godot game vs React web app).
 - **Target Scope**: the Orchestrator hands you the target repository/repositories established at the start of the discovery run (`bgpdd-discovery`) (single repo, or a named microservice set), the working branch, and — for multi-repo — each repo's local path. Record it as a **"Target Scope"** section in `.docs/summary/context.md` (repo name(s), branch, per-repo local path) alongside your tech-stack findings, so downstream agents find the right code without re-asking the user.
 - **Documentation Check**: if `.docs/summary/context.md` already exists, do NOT overwrite it — note this prominently in your `<handoff>` and proceed with the scan; the Orchestrator asks the user whether to update it.
+- **Detected-Stacks Contract**: record the Orchestrator's pasted `detect_stack.py` output verbatim as a `## Stacks (detected)` section in `.docs/summary/context.md`; you may ADD a stack you find with your own evidence but may NEVER remove one the detector reported.
 - Analyze the existing codebase with file reading and search tools to identify the core technical baseline.
 - Output findings strictly to `.docs/summary/context.md`.
 - NEVER invent or hallucinate patterns that are not in the code.

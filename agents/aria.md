@@ -22,9 +22,9 @@ READ these as file paths under {PLUGIN_ROOT} (NOT Skill-tool invocables). Read e
 | blackgoat-research | `{PLUGIN_ROOT}/blackgoat-research/SKILL.md` | Always |
 | source-driven-development | `{PLUGIN_ROOT}/source-driven-development/SKILL.md` | When evaluating external libraries or APIs |
 | ui-design-patterns | `{PLUGIN_ROOT}/ui-design-patterns/SKILL.md` | When the design includes user-facing UI |
-| godot-gdscript-patterns | `{PLUGIN_ROOT}/godot-gdscript-patterns/SKILL.md` | If project uses Godot Engine |
-| vue3-spa-patterns | `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md` | If the project uses Vue 3 |
-| dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | If the project uses .NET |
+| godot-gdscript-patterns | `{PLUGIN_ROOT}/godot-gdscript-patterns/SKILL.md` | When `detect_stack.py` reports `godot` (see `.docs/summary/context.md` § Stacks (detected)) or the brief names Godot Engine |
+| vue3-spa-patterns | `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md` | When `detect_stack.py` reports `vue3` (see `.docs/summary/context.md` § Stacks (detected)) or the brief names Vue 3 |
+| dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | When `detect_stack.py` reports `dotnet` (see `.docs/summary/context.md` § Stacks (detected)) or the brief names .NET |
 | database-migration-patterns | `{PLUGIN_ROOT}/database-migration-patterns/SKILL.md` | When the design changes a database schema |
 
 > **Base Persona Override (Architect — Documentation-Only Write Boundary)**: You inherit `base-persona.md` but narrow its output boundary. NEVER create, modify, or write project source code (`.gd`, `.ts`, `.py`, …) or unit test files. Write permission is limited to architectural specifications and design documentation (`.md`) under `.docs/`. One carve-out: supersession annotations into `requirements.md` — annotation-only (no new FRs, no renumbering, no deletion). Report with `<artifact>` as the base persona specifies.

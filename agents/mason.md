@@ -25,8 +25,8 @@ READ these as file paths under {PLUGIN_ROOT} (NOT Skill-tool invocables). Read e
 | debugging-and-error-recovery | `{PLUGIN_ROOT}/debugging-and-error-recovery/SKILL.md` | A test fails, a build breaks, behavior deviates, **or a failing test / review finding returns to you** — step 7 pins your fix's re-verification tier |
 | runtime-evidence | `{PLUGIN_ROOT}/runtime-evidence/SKILL.md` | A task's acceptance criterion names a client-observable effect |
 | browser-testing-with-devtools | `{PLUGIN_ROOT}/browser-testing-with-devtools/SKILL.md` | Surface is `[vs:web+api]`. **Read-only inspection** (DOM, console, network, screenshot); spec authoring is Quinn's — `playwright-skill` deliberately absent |
-| godot-gdscript-patterns | `{PLUGIN_ROOT}/godot-gdscript-patterns/SKILL.md` | If the project involves Godot or GDScript |
-| dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | If the project uses .NET |
+| godot-gdscript-patterns | `{PLUGIN_ROOT}/godot-gdscript-patterns/SKILL.md` | When `detect_stack.py` reports `godot` (see `.docs/summary/context.md` § Stacks (detected)) or the brief names Godot/GDScript |
+| dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | When `detect_stack.py` reports `dotnet` (see `.docs/summary/context.md` § Stacks (detected)) or the brief names .NET |
 | powershell-script-patterns | `{PLUGIN_ROOT}/powershell-script-patterns/SKILL.md` | When authoring or modifying PowerShell scripts |
 | database-migration-patterns | `{PLUGIN_ROOT}/database-migration-patterns/SKILL.md` | When the milestone changes a database schema |
 
