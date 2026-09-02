@@ -15,7 +15,7 @@ Simply ask the orchestrator agent to run the audit:
 > "Validate the squad."
 > "Check this agent's SKILL.md file for interface collisions."
 
-The agent will read the relevant personas, check them against the 18 heuristics, and produce a "Brutally Honest Audit Report" detailing the exact structural flaws, followed by a surgical implementation plan to fix them.
+The agent will read the relevant personas, check them against the 21 heuristics (after the mechanical preflight), and produce a "Brutally Honest Audit Report" detailing the exact structural flaws, followed by a surgical implementation plan to fix them.
 
 ## The 18 Heuristics
 1. **Interface Alignment:** Does Agent B's expected input perfectly match Agent A's actual output?
