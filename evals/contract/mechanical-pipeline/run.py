@@ -361,8 +361,14 @@ def run_lifecycle(repo):
                "" if ok else json.dumps(data))
 
     # --- Step 4: blocker added, review flips to Approve, blocker still gates
-    blocker_text = f"{MILESTONE2_TITLE}: validation finding open"
-    proc = run_py(UPDATE_STATE, ["--state", state_path, "--add-blocker", blocker_text])
+    # Scoped via --blocker-milestone so it lands in check_commit_gate's
+    # `blocking` (structured milestone-field match), not `unscoped_blockers`
+    # -- the blockers-ledger schema moved scoping from a substring guess
+    # against freeform text to an explicit field (see update_state.py /
+    # check_commit_gate.py blocker-schema work).
+    blocker_text = "validation finding open"
+    proc = run_py(UPDATE_STATE, ["--state", state_path, "--add-blocker", blocker_text,
+                                  "--blocker-milestone", MILESTONE2_TITLE])
     add_blocker_ok = proc.returncode == 0
 
     with review_path.open("a", encoding="utf-8") as f:

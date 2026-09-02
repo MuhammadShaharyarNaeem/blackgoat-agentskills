@@ -6,7 +6,8 @@ bgpdd-shipping Step 0.5 (and any other pipeline that must refuse to
 proceed over standing ledger entries). Pure standard library.
 
 Usage:
-    python check_blockers.py --state <path> [--ledger <path>]
+    python check_blockers.py --state <path> [--milestone "<title>"] \
+        [--severity-floor Critical|Important|Info] [--ledger <path>]
     python check_blockers.py --self-test
 """
 import argparse
@@ -18,9 +19,66 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
+SEVERITIES = ("Critical", "Important", "Info")
+SEVERITY_RANK = {"Critical": 3, "Important": 2, "Info": 1}
+# Default floor: block on Critical and Important, ignore Info. Chosen so a
+# state file with only legacy string entries (normalized to Critical) or
+# pre-existing structured Critical/Important entries gates exactly as before
+# --severity-floor existed -- Info is a new severity value nothing emitted
+# prior to this change, so the default cannot silently unblock old data.
+DEFAULT_SEVERITY_FLOOR = "Important"
+
 
 class GateError(Exception):
     """Structural/usage failure — maps to exit 2."""
+
+
+def normalize_blocker(entry):
+    """A blocker array entry, structured-or-legacy, as one canonical shape.
+
+    Duplicated from update_state.py by family convention (stdlib-only,
+    one file each, no shared module). A legacy freeform string reads as
+    unscoped (milestone null) and Critical -- the fail-safe reading.
+    """
+    if isinstance(entry, str):
+        return {"id": None, "text": entry, "milestone": None,
+                "capability": None, "severity": "Critical",
+                "source": None, "added": None, "evidence": None}
+    if isinstance(entry, dict):
+        severity = entry.get("severity") or "Critical"
+        if severity not in SEVERITIES:
+            severity = "Critical"
+        return {
+            "id": entry.get("id"),
+            "text": entry.get("text", ""),
+            "milestone": entry.get("milestone"),
+            "capability": entry.get("capability"),
+            "severity": severity,
+            "source": entry.get("source"),
+            "added": entry.get("added"),
+            "evidence": entry.get("evidence"),
+        }
+    return {"id": None, "text": json.dumps(entry), "milestone": None,
+            "capability": None, "severity": "Critical",
+            "source": None, "added": None, "evidence": None}
+
+
+def milestone_equal(a, b):
+    """Exact, case/whitespace-insensitive equality on the structured
+    `milestone` field.
+
+    Deliberately NOT the word-boundary substring match check_commit_gate.py
+    uses to find a review-section heading matching a milestone title (per
+    CLAUDE.md convention #8, a labeled divergence, tighter on purpose): that
+    match exists because a review heading is free prose with no structured
+    field to compare against. A blocker's `milestone` is a value someone
+    wrote deliberately (via --blocker-milestone) to name one milestone, so
+    exact equality is correct and closes exactly the ambiguity this schema
+    was built to remove -- "not obviously this milestone's" is no longer
+    indistinguishable from "not this milestone's" once scoping is a field,
+    not a guess against freeform text.
+    """
+    return a.strip().casefold() == b.strip().casefold()
 
 
 def sha256_file(path):
@@ -79,13 +137,32 @@ def read_state(path):
     return state, blockers
 
 
-def build_report(state_path):
-    state, blockers = read_state(state_path)
+def build_report(state_path, milestone=None, severity_floor=DEFAULT_SEVERITY_FLOOR):
+    state, raw_blockers = read_state(state_path)
+    normalized = [normalize_blocker(b) for b in raw_blockers]
+    floor_rank = SEVERITY_RANK[severity_floor]
+
+    counted = [n for n in normalized if SEVERITY_RANK[n["severity"]] >= floor_rank]
+    other_milestone = []
+    if milestone is not None:
+        blocking = [n for n in counted
+                    if n["milestone"] is None or milestone_equal(n["milestone"], milestone)]
+        other_milestone = [n for n in counted
+                           if n["milestone"] is not None and not milestone_equal(n["milestone"], milestone)]
+    else:
+        # No milestone context to scope against -- every counted entry blocks,
+        # matching the pre-existing "any entry blocks" behavior exactly.
+        blocking = counted
+
     return {
         "state_file": state_path,
-        "pass": len(blockers) == 0,
-        "blocker_count": len(blockers),
-        "blockers": blockers,
+        "milestone": milestone,
+        "severity_floor": severity_floor,
+        "pass": len(blocking) == 0,
+        "blocker_count": len(blocking),
+        "blockers": normalized,
+        "blocking": blocking,
+        "other_milestone_blockers": other_milestone,
         "pipeline": state.get("pipeline"),
         "error": None,
     }
@@ -94,6 +171,15 @@ def build_report(state_path):
 def main(argv):
     parser = argparse.ArgumentParser(prog="check_blockers.py")
     parser.add_argument("--state")
+    parser.add_argument("--milestone",
+                        help="scope: an entry blocks only if its milestone "
+                             "matches this title exactly, or is null "
+                             "(unscoped entries still block -- fail-safe)")
+    parser.add_argument("--severity-floor", choices=list(SEVERITIES),
+                        default=DEFAULT_SEVERITY_FLOOR,
+                        help=f"minimum severity that blocks (default "
+                             f"{DEFAULT_SEVERITY_FLOOR}: Critical and "
+                             "Important block, Info is ignored)")
     parser.add_argument("--ledger",
                         help="append one JSON record per run to this path")
     parser.add_argument("--self-test", action="store_true")
@@ -104,7 +190,7 @@ def main(argv):
 
     def finish(code, verdict):
         """One exit point: EVERY return path records a ledger line."""
-        append_ledger(args.ledger, argv, None,
+        append_ledger(args.ledger, argv, args.milestone,
                       [args.state] if args.state else [], verdict, code)
         return code
 
@@ -113,7 +199,7 @@ def main(argv):
         return finish(2, "ERROR")
 
     try:
-        report = build_report(args.state)
+        report = build_report(args.state, args.milestone, args.severity_floor)
     except GateError as exc:
         print(json.dumps({"pass": False, "error": str(exc)}))
         return finish(2, "ERROR")
@@ -162,6 +248,88 @@ def run_self_test():
             self.state.write_bytes(
                 b"\xef\xbb\xbf" + json.dumps({"blockers": []}).encode("utf-8"))
             self.assertTrue(build_report(str(self.state))["pass"])
+
+        def test_reports_normalized_objects(self):
+            self._write({"schema": "1", "blockers": [
+                "legacy freeform",
+                {"id": "B-1", "text": "structured", "milestone": "M3",
+                 "severity": "Important"},
+            ]})
+            report = build_report(str(self.state))
+            self.assertEqual(report["blockers"][0],
+                             {"id": None, "text": "legacy freeform", "milestone": None,
+                              "capability": None, "severity": "Critical",
+                              "source": None, "added": None, "evidence": None})
+            self.assertEqual(report["blockers"][1]["id"], "B-1")
+            self.assertEqual(report["blockers"][1]["severity"], "Important")
+
+        def test_milestone_scoping_same_milestone_blocks(self):
+            self._write({"schema": "1", "blockers": [
+                {"id": "B-1", "text": "x", "milestone": "M3 — Auth"}]})
+            report = build_report(str(self.state), milestone="M3 — Auth")
+            self.assertFalse(report["pass"])
+            self.assertEqual(len(report["blocking"]), 1)
+            self.assertEqual(report["other_milestone_blockers"], [])
+
+        def test_milestone_scoping_is_case_and_whitespace_insensitive(self):
+            self._write({"schema": "1", "blockers": [
+                {"id": "B-1", "text": "x", "milestone": " m3 — auth "}]})
+            report = build_report(str(self.state), milestone="M3 — Auth")
+            self.assertFalse(report["pass"])
+
+        def test_milestone_scoping_null_milestone_still_blocks(self):
+            """Fail-safe refinement of the old 'gate on all' rule (CLAUDE.md
+            convention #8): an entry with no recorded milestone still blocks
+            any milestone's gate run."""
+            self._write({"schema": "1", "blockers": [
+                {"id": "B-1", "text": "x", "milestone": None}]})
+            report = build_report(str(self.state), milestone="M3 — Auth")
+            self.assertFalse(report["pass"])
+            self.assertEqual(len(report["blocking"]), 1)
+
+        def test_milestone_scoping_different_milestone_does_not_block(self):
+            self._write({"schema": "1", "blockers": [
+                {"id": "B-1", "text": "x", "milestone": "M10 — Other"}]})
+            report = build_report(str(self.state), milestone="M3 — Auth")
+            self.assertTrue(report["pass"])
+            self.assertEqual(report["blocking"], [])
+            self.assertEqual(len(report["other_milestone_blockers"]), 1)
+            self.assertEqual(report["other_milestone_blockers"][0]["id"], "B-1")
+
+        def test_severity_floor_default_ignores_info(self):
+            self._write({"schema": "1", "blockers": [
+                {"id": "B-1", "text": "cosmetic", "severity": "Info"}]})
+            report = build_report(str(self.state))
+            self.assertTrue(report["pass"])
+            self.assertEqual(report["blocker_count"], 0)
+
+        def test_severity_floor_default_still_blocks_important(self):
+            self._write({"schema": "1", "blockers": [
+                {"id": "B-1", "text": "x", "severity": "Important"}]})
+            report = build_report(str(self.state))
+            self.assertFalse(report["pass"])
+
+        def test_severity_floor_critical_ignores_important(self):
+            self._write({"schema": "1", "blockers": [
+                {"id": "B-1", "text": "x", "severity": "Important"}]})
+            report = build_report(str(self.state), severity_floor="Critical")
+            self.assertTrue(report["pass"])
+
+        def test_severity_floor_info_blocks_everything(self):
+            self._write({"schema": "1", "blockers": [
+                {"id": "B-1", "text": "x", "severity": "Info"}]})
+            report = build_report(str(self.state), severity_floor="Info")
+            self.assertFalse(report["pass"])
+
+        def test_without_milestone_any_entry_blocks_unchanged(self):
+            """Legacy-data backward compatibility: with no --milestone, a
+            structured entry scoped to some OTHER milestone still blocks --
+            there is no milestone context to exempt it against."""
+            self._write({"schema": "1", "blockers": [
+                {"id": "B-1", "text": "x", "milestone": "M10 — Other"}]})
+            report = build_report(str(self.state))
+            self.assertFalse(report["pass"])
+            self.assertEqual(report["other_milestone_blockers"], [])
 
         def test_ledger_records_every_exit_path(self):
             ledger = self.dir / "logs" / "gates.jsonl"
