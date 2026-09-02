@@ -37,7 +37,8 @@ Scan for these patterns — each one is a concrete signal, not a vague smell:
 | Long functions (50+ lines) | Multiple responsibilities | Split into focused functions with descriptive names |
 | Nested ternaries | Requires mental stack to parse | Replace with if/else chains, switch, or lookup objects |
 | Boolean parameter flags | `doThing(true, false, true)` | Replace with options objects or separate functions |
-| Repeated conditionals | Same `if` check in multiple places | Extract to a well-named predicate function |
+| Repeated conditionals | Same `if` check in multiple places | Extract to a well-named predicate function, or a lookup table where the branches are data |
+| Long parameter lists (5+ params) | Call sites are positional guesswork | Group the related parameters into a structured object |
 
 **Naming and readability:**
 
@@ -48,20 +49,27 @@ Scan for these patterns — each one is a concrete signal, not a vague smell:
 | Misleading names | Function named `get` that also mutates state | Rename to reflect actual behavior |
 | Comments explaining "what" | `// increment counter` above `count++` | Delete the comment — the code is clear enough |
 | Comments explaining "why" | `// Retry because the API is flaky under load` | Keep these — they carry intent the code can't express |
+| Imperative loop doing a map/filter/reduce | Intent buried in accumulator bookkeeping | Replace with the declarative equivalent — **only** where clarity genuinely improves; a `reduce` nobody can read is not a simplification |
 
 **Redundancy:**
 
 | Pattern | Signal | Simplification |
 |---------|--------|----------------|
 | Duplicated logic | Same 5+ lines in multiple places | Extract to a shared function |
-| Dead code | Unreachable branches, unused variables, commented-out blocks | Remove (after confirming it's truly dead) |
+| Dead code | Unreachable branches, unused variables, unused imports, whole unreferenced files, commented-out blocks | Remove — after confirming nothing references it |
+| Settled feature flags | Flag guarding a feature confirmed shipped or killed | Remove the flag and collapse the branch that can no longer be taken |
+| Leftover debug logging | Trace/`console` calls on a production path | Remove |
+| Resolved TODOs | `TODO` with no issue-tracker reference | Remove; keep only TODOs that carry a tracker reference |
+| Magic constants | Same literal appearing in multiple places | Move to a named constant in the module's config |
 | Unnecessary abstractions | Wrapper that adds no value | Inline the wrapper, call the underlying function directly |
 | Over-engineered patterns | Factory-for-a-factory, strategy-with-one-strategy | Replace with the simple direct approach |
 | Redundant type assertions | Casting to a type that's already inferred | Remove the assertion |
 
 ### Rules
 
+- Establish a green baseline **before** you touch anything: run the suite first. A suite that was already red cannot prove your refactor preserved behavior.
 - One simplification at a time; run the test suite after each. Pass → continue/commit. Fail → revert and reconsider.
+- One *kind* of change per pass and per report — never mix performance work, abstraction extraction, and cleanup in a single pass.
 - Refactoring changes ship separately from feature or bug-fix changes — never combine in one PR.
 - **The Rule of 500:** a refactor touching more than 500 lines uses automation (codemods, sed scripts, AST transforms), never hand-editing.
 
