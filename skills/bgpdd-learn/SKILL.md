@@ -26,7 +26,14 @@ This skill runs in the main session, never inside a delegated subagent.
 
 ### Step 1: EVIDENCE (main session)
 
-Scan the live conversation for user corrections, agent failures and retries, circuit-breaker trips, and the skills/agents in play. Read the durable artifacts: `.docs/{project-name}/implementation/game-tape.md` (the accumulated per-phase evidence checkpoints, if present), `review-report.md`, `test-report.md`, handoffs relayed in-conversation, and recent `git log`. Compress into an evidence brief of at most 15 bullets: what happened, which skill/agent/rule was involved, what the user had to correct.
+Scan the live conversation for user corrections, agent failures and retries, circuit-breaker trips, and the skills/agents in play. Then read the durable evidence **in this order — mechanical first, narrative second**:
+
+1. **The run-log summary and the gate ledger.** `python {PLUGIN_ROOT}/pipeline-tools/scripts/summarize_run.py --run-log .docs/{project-name}/implementation/run-log.jsonl --ledger .docs/{project-name}/implementation/gates.jsonl` — what the run cost, per agent and per unit, and which gates fired versus only ever passed. These two files were written by tools at the moment each thing happened; everything below was written by someone recalling it.
+2. **`.docs/{project-name}/implementation/game-tape.md`** — the accumulated per-phase checkpoints, if present.
+3. **The durable reports** — `review-report.md`, `test-report.md`, `security-report.md`, handoffs relayed in-conversation, and recent `git log`.
+4. **Filtered transcript greps**, last and only for what the first three left open (never a full read — see Step 2).
+
+Compress into an evidence brief of at most 15 bullets: what happened, which skill/agent/rule was involved, what the user had to correct. Carry the run-log summary's fired-versus-rubber-stamped counts into the brief verbatim — Forge needs them to satisfy the Incident Test on any gate proposal.
 
 **Record confirmations, not only failures.** A decision or rule that a later phase confirmed worked cleanly is evidence too — it identifies which rules are earning their keep and must be protected from future pruning or "simplification". Include at least the confirmations you have evidence for: designs that built and tested first time, gates that caught a real defect, rules whose presence visibly prevented a class of error. An evidence brief composed only of failures teaches the next optimization pass to delete the rules that were quietly working, and gives Forge no way to distinguish a load-bearing rule from dead weight.
 
