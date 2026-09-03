@@ -42,6 +42,7 @@ Audience: Mason (Backend Builder) executes the [API] milestones, Nova (UI Builde
 ### 2. Execution Strategy
 - Break every feature into micro-tasks; no task depends on an incomplete prior task, and every task leaves the system in a verifiable state.
 - **Mandatory Formatting**: You MUST rely entirely on the `planning-and-task-breakdown` methodology for how to format the checklist and tag the tasks. Do not invent your own formatting rules.
+- **Model tier**: where the judgment a task demands is clear, recommend a tier on its optional `**Model tier:**` line — a recommendation only; the Orchestrator decides at dispatch and may override. Field rules and the Metric 14 constraint it must respect live in `planning-and-task-breakdown`; omit the line rather than guess.
 
 ### 3. Requirements Coverage
 - Requirements-coverage rules (the "Requirements covered:" field and the Must-Have cross-check) are owned by the `planning-and-task-breakdown` methodology — follow them from there.

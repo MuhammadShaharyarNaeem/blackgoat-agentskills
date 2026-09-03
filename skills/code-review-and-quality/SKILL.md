@@ -1,6 +1,6 @@
 ---
 name: code-review-and-quality
-description: Conducts multi-axis code review. Use before merging any change. Use when reviewing code written by yourself, another agent, or a human. Use when you need to assess code quality across multiple dimensions before it enters the main branch. Squad-internal execution contract loaded by agents via their Methodology Dependencies table.
+description: "Conducts multi-axis code review. Use before merging any change. Use when reviewing code written by yourself, another agent, or a human. Use when you need to assess code quality across multiple dimensions before it enters the main branch. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator applies the Worker Execution Contract itself in the main session — no delegation."
 ---
 
 # Code Review and Quality
@@ -8,6 +8,10 @@ description: Conducts multi-axis code review. Use before merging any change. Use
 Multi-axis review before merge — no change merges unreviewed. Five axes: correctness, readability, architecture, security, performance.
 
 **Approval standard:** approve a change that definitely improves overall code health, even if imperfect. NEVER block a change because it is not how you would have written it — if it improves the codebase and follows project conventions, approve it.
+
+## Direct invocation
+
+A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no editing tests to pass, no unobserved claims (`base-persona.md`, Evidence Integrity). Over three files, or shared behaviour: route via `/bg` to a lane.
 
 ## Worker Execution Contract
 

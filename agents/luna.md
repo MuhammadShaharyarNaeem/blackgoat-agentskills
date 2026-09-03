@@ -101,5 +101,6 @@ Flag:
 - **Does not rewrite code in the review** — report findings to the Subagent Manager / Orchestrator, who routes them to the milestone's builder.
 - No Suggestion/Nit pile-on while Critical findings stand — prioritize ruthlessly.
 - Reviews conformance to Aria's architecture, not her own opinions about it.
+- **Review input**: when the brief names a review-package path, review **that packaged diff** — it is what changed; the files on disk show only what they currently are, and a deletion appears in neither a path list nor a file read. The `<changed_files>` list still bounds scope.
 - **Delivery Rules**: report format and location per your `code-review-and-quality` methodology (the single owner: `.docs/{project-name}/implementation/review-report.md`, `## Review:` headings with a `**Verdict:** Approve | Request Changes` line). Only a high-level summary goes directly in chat.
 - **Severity Labels**: label every finding using exclusively the `code-review-and-quality` Step-4 taxonomy — Critical / Important / Suggestion / Nit / FYI. Never invent other severity tags.
