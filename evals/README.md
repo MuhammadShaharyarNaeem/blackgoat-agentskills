@@ -28,10 +28,11 @@ conclusion.
   silent and compound downstream; quality failures are usually visible to a human
   reviewing the output anyway.
 - **`trigger/`** — a `cases.jsonl` of realistic user prompts paired with which skill
-  *should* fire, plus acceptable alternatives for genuinely ambiguous prompts. This
-  suite exists because skill descriptions can drift into overlapping or misleading
-  territory as they're edited; it is the regression check for "does this prompt still
-  route where it should."
+  *should* fire, plus acceptable alternatives for genuinely ambiguous prompts, run
+  against a frozen app fixture in `trigger/fixture/`. This suite exists because skill
+  descriptions can drift into overlapping or misleading territory as they're edited; it
+  is the regression check for "does this prompt still route where it should." It judges
+  an actual `Skill` tool invocation — see "Trigger judging" below.
 
 One `contract/` case is an exception to the statistical-N doctrine above:
 **`mechanical-pipeline`** is a zero-LLM, deterministic integration case that walks the
@@ -49,28 +50,43 @@ evals/
                           for an offline check of the trigger judge
   weekly-check.ps1        zero-token: what changed, what to re-run, never runs it for you
   results/results.jsonl   append-only run log (created on first real run)
-  results/transcripts/    one .txt per run: the full captured agent output (contract
-                          cases only), named <case>-run<N>-<suffix>.txt
+  results/transcripts/    every run's evidence, pass or fail:
+                            <case>-run<N>-<suffix>/          contract: stdout.txt, plus
+                                                             handoff.txt and .docs/ when
+                                                             the run produced them
+                            <case>-run<N>-<suffix>.jsonl     trigger: the raw stream-json
+                                                             transcript the judge read
+                                                             (+ -stderr.txt if non-empty)
   results/artifacts/      the failing run's temp working copy, preserved for diagnosis
                           (contract cases only, on failure only - see "The harness
                           copies the plugin in" below)
   trigger/cases.jsonl     20 prompt -> expected_skill cases
+  trigger/fixture/        the frozen app the 20 prompts route about; copied to the temp
+                          working directory of every trigger run
   contract/<case-name>/
     case.md               purpose, frozen input, exact command, numbered pass criteria
     fixture/              frozen input files, written by hand, never generated at runtime
     grade.ps1             deterministic grader: exit 0 = pass, 1 = fail, prints WHICH criterion failed
 ```
 
-## Result record shape (harness_version 2)
+## Result record shape (harness_version 3)
 
 Every line `run-evals.ps1` appends to `results/results.jsonl` is one flat, compact JSON
 **object** — not an array. Each object carries:
 
 - `timestamp`, `case`, `run_index`, `pass`, `failed_criterion`, `duration_s` — unchanged
   from every prior version of the harness.
-- `judge` — **trigger records only**: `"tool_use"` if the judge found an actual Skill
-  invocation in the transcript and decided on that, or `"substring"` if it fell back to
-  textual matching. See "Trigger judging" below.
+- `outcome` — **trigger records only**: `"ROUTED_OK"`, `"ROUTED_WRONG"`, `"NO_ROUTE"`, or
+  `"HARNESS_ERROR"`. `pass` is `true` for `ROUTED_OK` and nothing else.
+- `first_skill` — **trigger records only**: the skill named by the FIRST `Skill` tool
+  invocation in the transcript, plugin namespace stripped, or `null` for `NO_ROUTE`.
+- `mentioned_only` — **trigger records only**: whether the final answer text named an
+  acceptable skill without a negation word in front of it. A **diagnostic**, never a
+  pass condition — see "Trigger judging" below.
+- `transcript` — path, relative to `evals/`, of this run's archived evidence: a
+  directory for a contract run, a `.jsonl` file for a trigger run.
+- `judge` — **trigger records only**: always `"tool_use"` at harness 3. The field is kept
+  so a harness-2 line (where it could read `"substring"`) stays distinguishable.
 - `plugin_sha` — `git rev-parse HEAD` in the plugin root at the moment the harness
   started, or `null` if the plugin isn't a git repo or the lookup failed.
 - `plugin_dirty` — `true` if `git status --porcelain` reported anything at that moment,
@@ -82,7 +98,7 @@ Every line `run-evals.ps1` appends to `results/results.jsonl` is one flat, compa
   for a contract case, or the raw `cases.jsonl` line for a trigger case. Lets you tell
   whether two runs recorded against the same case name actually graded the same frozen
   input.
-- `harness_version` — the constant in `run-evals.ps1` (currently `"2"`), bumped whenever
+- `harness_version` — the constant in `run-evals.ps1` (currently `"3"`), bumped whenever
   this record shape or its field meanings change.
 
 **Pre-harness-2 lines are different and are not rewritten.** Every line appended before
@@ -93,42 +109,190 @@ copies the plugin in" history for why). A reader parsing `results.jsonl` must ha
 both shapes: `if (line starts with '[') { record = JSON.parse(line)[-1] } else { record
 = JSON.parse(line) }`. None of `plugin_sha`/`plugin_dirty`/`claude_version`/
 `case_sha256`/`harness_version`/`judge` exist on a pre-harness-2 record — treat their
-absence as "unknown", not as `false`/`null` with meaning.
+absence as "unknown", not as `false`/`null` with meaning. `outcome`/`first_skill`/
+`mentioned_only`/`transcript` exist only from harness 3 onward.
 
-Every run's full captured agent output is also written to `results/transcripts/
-<case>-run<N>-<suffix>.txt` (contract cases only; trigger runs are a single routing
-prompt in plan mode and their transcript is short enough to be worth keeping directly in
-`failed_criterion`/the judge `Detail`, not a separate file). This exists independently of
-pass/fail — unlike `results/artifacts/`, which is written only for a failing run — so a
-passing run's actual output is still inspectable afterward.
+Every run's evidence is archived under `results/transcripts/`, independently of pass/fail
+— unlike `results/artifacts/`, which is written only for a failing run:
 
-## Trigger judging (harness_version 2)
+- **Contract runs** get a directory, `<case>-run<N>-<suffix>/`, holding `stdout.txt` plus
+  `handoff.txt` and the whole `.docs/` tree when the run produced them. The directory
+  (rather than the single `.txt` harness 2 wrote) closes a real gap: four cases —
+  `mason-fix-verification`, `mason-fix-verification-tier3`, `iris-discovery-guard`,
+  `forge-blackgoat-carveout` — pipe the agent's entire reply into `Out-File handoff.txt`
+  inside the temp working copy, so their stdout capture is empty *by construction* and
+  the only copy of the graded artifact was deleted with the temp directory on a PASS.
+  The copy happens before grading, so a grader that throws still leaves evidence behind.
+- **Trigger runs** get `<case>-run<N>-<suffix>.jsonl`: the raw stream-json transcript the
+  judge parsed, byte for byte, plus a sibling `-stderr.txt` if the CLI wrote anything to
+  stderr. A routing verdict is only auditable if the stream it was read from survives.
 
-The old judge passed a trigger case if the expected skill name appeared **anywhere in
-the transcript as a substring** — a response saying "don't use bgpdd-lite here" counted
-as a pass for `bgpdd-lite`. The new judge, in `Invoke-TriggerJudge`:
+## Trigger judging (harness_version 3)
 
-1. **Prefers a structured transcript.** `run-evals.ps1` invokes `claude -p ... --output-format
-   json` and looks for a `tool_use` block naming the `Skill` tool with an `input.skill`
-   field. If one exists, the judge decides on the **first** skill invoked, full stop — it
-   never falls back to substring matching once a tool_use record is found, even if that
-   skill isn't the acceptable one (a case can genuinely fail this way, and it should).
-2. **Falls back to substring matching only when no tool_use record exists** (e.g. an
-   older `claude` CLI that ignores `--output-format json`). In the fallback, a match is
-   rejected if a negation word — `not`, `don't`, `never`, `instead of`, `rather than`,
-   `avoid` — appears within the preceding 40 characters of the match.
+**A trigger run measures routing: did the model actually invoke the right skill.** Two
+earlier judges did not measure that, and their records are invalid — see "Known invalid
+results" below.
 
-The result record's `judge` field says which path decided the outcome, so a run of
-mixed-judge results is distinguishable from a run where the CLI silently stopped
-emitting structured output.
+**What a run does.** For each case, `run-evals.ps1`:
 
-**`-SelfTest`**: `powershell -File run-evals.ps1 -SelfTest` runs four canned transcripts
-(a plain positive substring match, a negated substring match that must be rejected, a
-positive `tool_use` record, and a `tool_use` record naming an unacceptable skill) through
-`Invoke-TriggerJudge` directly — no `claude` invocation, no tokens spent, no
-`results.jsonl` write. Exits `0` if all four match their expected outcome, non-zero
-otherwise. Run it after touching the judge functions, and before trusting a live
-`-Confirm` trigger run's numbers.
+1. Creates a temp directory and copies `trigger/fixture/` into it (see "The trigger
+   fixture"), then copies the plugin's `agents/`, `skills/` and `references/` in
+   alongside, exactly as a contract run does.
+2. Invokes `claude -p "<prompt>" --permission-mode plan --output-format stream-json
+   --verbose` with that temp directory as the working directory, and with **stdin
+   redirected from an empty file**. Without that redirect the CLI waits and writes
+   `Warning: no stdin data received in 3s...` to stderr ahead of the stream.
+3. Archives stdout verbatim to `results/transcripts/<case>-run<N>-<suffix>.jsonl` and
+   judges from it.
+
+**The three outcomes.** `Invoke-TriggerJudge` parses the stream line by line, finds the
+**first** `tool_use` block whose `name` is `Skill`, and reads its skill from
+`input.skill` (or `input.name`), stripping any plugin namespace so
+`blackgoat-agentskills:bgpdd-plan` compares as `bgpdd-plan`:
+
+| Outcome | Meaning | `pass` |
+|---|---|---|
+| `ROUTED_OK` | the first `Skill` invocation is the expected skill or an acceptable alternative | **true** |
+| `ROUTED_WRONG` | the first `Skill` invocation names something else (recorded in `first_skill`) | false |
+| `NO_ROUTE` | there is no `Skill` invocation anywhere in the transcript | false |
+
+The first invocation decides, full stop. A wrong first route followed by a correct second
+one is still `ROUTED_WRONG` — recovering after the fact is not the thing being measured.
+
+**Why `NO_ROUTE` is not a pass.** This is the whole point of harness 3. A model that
+discusses the right skill in prose, asks a clarifying question naming it, or writes "I'd
+run `/bgpdd-plan` for this" has *not* routed; the skill's instructions never loaded and
+nothing downstream of the routing decision ran. Counting that as a pass is what let the
+suite report healthy numbers while the tool_use path was dead code. For diagnosis only,
+the record carries `mentioned_only`: `true` means the final answer named an acceptable
+skill (with no negation word in the preceding 40 characters), so the failure is "reasoned
+right, didn't act" rather than "went somewhere else". It changes nothing about `pass`.
+
+The negation-aware substring matcher that used to be a pass path
+(`Test-PositiveSubstringMatch`) survives *only* as the thing that computes
+`mentioned_only`. It has no other caller and must not acquire one.
+
+**Slash commands.** The CLI's `system`/`init` event lists `Skill` in its `tools` array and
+carries no slash-command-style tool; the 2026-09-03 probe stream contained no such block
+either. Plugin skills are invoked through the `Skill` tool and nothing else here, so the
+judge looks for exactly that. Plugin skills *are* namespaced in the CLI's
+`slash_commands` list, which is why the judge normalizes the name before comparing.
+
+**`-SelfTest`**: `powershell -File run-evals.ps1 -SelfTest` runs six canned stream-json
+transcripts — shaped from the real probe — through `Invoke-TriggerJudge`: `ROUTED_OK`;
+`ROUTED_WRONG` in a transcript whose final answer positively mentions the acceptable skill
+(the harness-2 false pass); `NO_ROUTE` with `mentioned_only=true` (the probe verbatim in
+shape); `NO_ROUTE` where the only mention is negated, so `mentioned_only=false`; a
+plugin-namespaced skill name that must normalize; and two invocations where the first must
+decide. No `claude` invocation, no tokens spent, no `results.jsonl` write. Exits `0` if
+every case matches, non-zero otherwise. Run it after touching the judge functions, and
+before trusting a live `-Confirm` trigger run's numbers.
+
+## The trigger fixture
+
+`trigger/fixture/` is a small, frozen, app-shaped tree copied to the working directory of
+every trigger run. There is no `- Copies to:` line to parse as there is for a contract
+case: **the fixture root becomes the temp working directory root**, always.
+
+It exists because the 20 prompts have to have something to route *about*. Harness 2 ran
+them from the plugin repo root, where there is no application at all — the 2026-09-03
+probe of `trigger-1` ("add a whole new checkout flow…") shows the model globbing for
+source files, finding none, and asking *which repo?* instead of routing. Every prompt was
+being answered in a context where the honest answer is a question.
+
+The fixture is `dashboard-app`: a Vue 3 SPA (`src/`, with `package.json`, an Axios client,
+a dashboard search view and a reports view) over a .NET 8 API (`backend/`, with a
+`.csproj`, reporting/ops/billing controllers and a nightly reconciliation job), plus a
+`.docs/` tree carrying what specific prompts refer to:
+
+- `.docs/webhook-notify/` — `requirements.md`, `implementation/plan.md` (two milestones),
+  `implementation/ship-decision.md` (GO), and an `orchestrator-state.json` for a paused
+  epic. Feeds "take the plan.md sitting in .docs/webhook-notify and go build it" and both
+  ship-it prompts.
+- `.docs/summary/context.md` and `.docs/summary/login/QA/manual-testing.md` — the global
+  discovery context plus a locked-account QA baseline asserting `423` with a specific
+  error body, which is what the verify-only prompt asks to re-confirm.
+
+The source files carry the defects the bugfix prompts describe (an unguarded
+`DateTime.Parse` behind the reports export, a debounce-less search watcher, a swallowed
+exception in the reconciliation job, a `requestTimeoutMs` bumped out from under two
+tests). The billing controller is deliberately single-tenant: it makes "map the existing
+billing APIs" true and "a multi-tenant billing system, nothing like it exists" true at
+the same time.
+
+Keep every file small — the whole tree is copied per run. When editing it, re-read
+`trigger/cases.jsonl` and check each prompt still has what it refers to;
+`weekly-check.ps1` flags the `trigger` suite when anything under `trigger/fixture/`
+changes, for exactly this reason.
+
+`cases.jsonl` itself is unchanged by harness 3: same 20 prompts, same expected skills.
+Prompts that are ambiguous without project context are left ambiguous on purpose — the
+fixture *is* the context.
+
+## Known invalid results
+
+**Every trigger record written before `harness_version: "3"` measured mention, not
+routing. Do not read any of them as routing accuracy.** Two distinct generations are
+affected, and both are kept in `results.jsonl` rather than rewritten:
+
+- **The original substring judge** passed a case if the expected skill name appeared
+  anywhere in the transcript — including inside a sentence saying not to use it.
+- **The 2026-09-03 harness-2 records** look better but are not. Harness 2 invoked
+  `claude -p ... --output-format json`, which returns **one result object** (`is_error`,
+  `num_turns`, `usage`, `result`) with no message content blocks at all. Its `tool_use`
+  path could therefore never fire; every run silently fell through to the substring path,
+  and every `judge: "substring"` value in those records is the tell. Worse, the runs
+  executed from the plugin repo root, so the model had no application to route about and
+  in the probed case invoked no skill whatsoever — its clarifying prose named
+  `bgpdd-plan`, and that mention alone scored the run a PASS.
+
+A pre-3 trigger pass rate says something like "the model talked about a plausible skill",
+which is not a claim this suite is for. Re-run any trigger case under harness 3 before
+citing its number.
+
+### Open question: does `--permission-mode plan` suppress routing at all?
+
+The one harness-3 validation run (`trigger-1`, 2026-09-03, transcript
+`results/transcripts/trigger-1-run1-bc80e085.jsonl`) scored **`NO_ROUTE`** — with the
+fixture in place, with `Skill` present in the CLI's `tools` array, and with all 36 plugin
+skills listed in `slash_commands`. The model explored the fixture across 50 tool calls
+(31 `Read`, 14 `Bash`, 2 `Agent`, 1 `Grep`, 1 `ToolSearch`, 1 `Write`), never invoked
+`Skill`, and finished by writing a plan to `~/.claude/plans/` and asking which of three
+readings of "checkout" was meant. So it produced a plan — plan mode's *own* built-in
+workflow — instead of routing to `bgpdd-plan`.
+
+That is a genuine, unresolved result, and the harness is reporting it correctly. Two
+candidate causes, not yet distinguished:
+
+1. **Plan mode crowds out skill invocation.** The CLI's plan-mode system prompt pushes
+   straight to explore-then-write-a-plan, so the model never considers delegating the
+   planning to a skill. If so, `--permission-mode plan` is the wrong mode for measuring
+   routing, and the suite is measuring the mode rather than the skill descriptions.
+2. **The fixture is too thin.** The run's own diagnosis was that `dashboard-app` cannot
+   boot (no `Program.cs`, no router, no DB, no auth), and much of its output went to
+   saying so. A fixture that reads as a real app might leave the routing decision as the
+   only interesting move.
+
+Next experiments, in order, **none of them run yet** (each costs real tokens):
+
+- `--permission-mode default --allowedTools Skill` — isolates cause 1 by removing plan
+  mode while still preventing any write.
+- `--append-system-prompt "Route by invoking the matching skill"` — tests whether routing
+  happens at all when it is explicitly the task, which separates "won't route" from
+  "can't route".
+- Thicken the fixture (a `Program.cs`, a router, one Pinia store) — tests cause 2.
+
+Until one of those lands, do **not** read a `NO_ROUTE` sweep as "the skill descriptions
+are broken". The judge is sound (see `-SelfTest`); what the invocation conditions measure
+is still in question.
+
+**Cost note from that run:** one trigger run cost **$1.77** over 15 turns and 252s, not
+the few cents harness 2's estimate implied. A full trigger sweep at `runs=5` is roughly
+$175. The `$EstTokensPerTriggerRun` constant was raised from 3,000 to 175,000 to reflect
+the measurement. The harness pays for the entire session even though the verdict is
+decided at the *first* `Skill` invocation — capping turns (e.g. `--max-turns`) is an
+obvious cost lever, deliberately not taken yet because a cap could truncate a run before
+it routes and turn a slow `ROUTED_OK` into a false `NO_ROUTE`.
 
 ## Known stale results
 
@@ -144,7 +308,11 @@ otherwise. Run it after touching the judge functions, and before trusting a live
 ## The harness copies the plugin in
 
 Before invoking the agent under test, `run-evals.ps1` copies this plugin's `agents/` and
-`skills/` directories into the case's temp working copy, alongside the frozen fixture. A
+`skills/` directories into the case's temp working copy, alongside the frozen fixture —
+for **both** suites since harness 3, because trigger prompts about the squad itself ("go
+through Rex and Alex's persona files…") need those paths to resolve too. Note this does
+not determine which skills are *routable*: the `Skill` tool's catalogue comes from the
+installed plugin, not from the working directory. A
 case prompt that tells the agent to read `agents/mason.md` or
 `skills/runtime-evidence/SKILL.md` only resolves if those files exist relative to the
 working directory the agent actually runs in. Before this fix, they didn't: every
@@ -261,6 +429,12 @@ into the prompt. Prefer genuinely ambiguous prompts near real boundaries (e.g.
 `bgpdd-plan` vs `bgpdd-lite`, `learn` vs `agent-audit`) over easy ones; an eval suite
 full of easy cases gives false confidence.
 
+Then make the fixture support it. If the prompt refers to something — an existing
+endpoint, a failing job, a `.docs/` artifact — add the smallest file to
+`trigger/fixture/` that makes the reference true. A prompt with nothing behind it does
+not measure routing; it measures whether the model asks a clarifying question, and it
+will score `NO_ROUTE` forever.
+
 ## The weekly check + manual approval flow
 
 1. Run `weekly-check.ps1` any time — it costs zero tokens. It diffs `agents/` and
@@ -288,8 +462,10 @@ already flagged `mason-fix-verification`.
   constants at the top of that script). Once `results/results.jsonl` has real
   `duration_s` data across enough runs, replace the guesses with something derived from
   actual history.
-- `contract` cases cost more per run than `trigger` cases — a contract run invokes a
-  full persona against a fixture and writes real files; a trigger run is a single
-  routing-only prompt in `--permission-mode plan`.
+- `contract` cases still cost more per run than `trigger` cases, but the gap narrowed at
+  harness 3: a contract run invokes a full persona against a fixture and writes real
+  files, while a trigger run is a routing-only prompt in `--permission-mode plan` that
+  now reads a real app fixture before deciding. The per-trigger-run estimate went from
+  3,000 to 12,000 tokens to reflect that; it is still a guess.
 - Prefer `-Case <name>` to test one case while iterating on its `grade.ps1`, instead of
   re-running the whole suite.

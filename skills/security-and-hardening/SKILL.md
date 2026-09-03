@@ -43,7 +43,10 @@ If you can't name the trust boundaries for a feature, you're not ready to secure
 - **Hash passwords** with bcrypt/scrypt/argon2 (never store plaintext)
 - **Set security headers** (CSP, HSTS, X-Frame-Options, X-Content-Type-Options)
 - **Use httpOnly, secure, sameSite cookies** for sessions
-- **Run `npm audit`** (or equivalent) before every release
+- **Verify tokens, never merely decode them** — validate JWTs against a pinned signing algorithm with a key drawn from the secrets store; never `alg: none`, never a hardcoded key
+- **Enforce authorization server-side from server-held state** — never from a role, tenant, or permission claim the client supplied
+- **Rate-limit the abusable endpoints**, not just login: password reset, token issuance, and any high-cost or ingestion route
+- **Run `npm audit`** (or the ecosystem equivalent — `pip audit`, `cargo audit`, and `trivy` or equivalent for container images) before every release
 - **Mask PII in UI**: Never render sensitive Personally Identifiable Information (PII) in plain text in UI components; always apply a UI-level masking function or component before rendering.
 
 #### Ask First (Requires Human Approval)
@@ -58,7 +61,8 @@ If you can't name the trust boundaries for a feature, you're not ready to secure
 
 #### Never Do
 
-- **Never commit secrets** to version control (API keys, passwords, tokens)
+- **Never commit secrets** to version control (API keys, passwords, tokens, private certificates and signing keys)
+- **Never grant wildcard (`*`) CORS** on an authenticated route — restrict to an explicit list of trusted origins
 - **Never log sensitive data** (passwords, tokens, full credit card numbers)
 - **Never trust client-side validation** as a security boundary
 - **Never disable security headers** for convenience
@@ -92,13 +96,15 @@ Never commit secrets to version control; if a secret is ever committed, rotate i
 ### Authentication
 - [ ] Passwords hashed with bcrypt/scrypt/argon2 (salt rounds ≥ 12)
 - [ ] Session tokens are httpOnly, secure, sameSite
-- [ ] Login has rate limiting
+- [ ] JWTs verified with a pinned algorithm and a key from the secrets store (no `alg: none`, no hardcoded key)
+- [ ] Login, password reset, token issuance, and ingestion routes have rate limiting
 - [ ] Password reset tokens expire
 
 ### Authorization
 - [ ] Every endpoint checks user permissions
 - [ ] Users can only access their own resources
 - [ ] Admin actions require admin role verification
+- [ ] Roles/tenancy resolved server-side — no client-supplied role or tenant claim is trusted
 
 ### Input
 - [ ] All user input validated at the boundary
@@ -107,14 +113,15 @@ Never commit secrets to version control; if a secret is ever committed, rotate i
 - [ ] Server-side URL fetches are allowlisted (no SSRF to internal services)
 
 ### Data
-- [ ] No secrets in code or version control
+- [ ] No secrets, API keys, or private certificates in code or version control
 - [ ] Sensitive fields excluded from API responses
 - [ ] PII encrypted at rest (if applicable)
 
 ### Infrastructure
-- [ ] Security headers configured (CSP, HSTS, etc.)
-- [ ] CORS restricted to known origins
-- [ ] Dependencies audited for vulnerabilities
+- [ ] Security headers configured (CSP, HSTS, X-Frame-Options, X-Content-Type-Options)
+- [ ] CORS restricted to known origins — no wildcard (`*`) on any authenticated route
+- [ ] Dependencies audited for vulnerabilities (including transitive)
+- [ ] Containers run as a non-root user and base images are scanned (e.g. `trivy`)
 - [ ] Error messages don't expose internals
 
 ### Supply Chain

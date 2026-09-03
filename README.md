@@ -4,7 +4,7 @@
 
 A Claude Code plugin that packages an **agent squad** and a **Prompt-Driven Development (PDD)** workflow into reusable skills and personas. An Orchestrator delegates self-contained tasks to specialized subagents, each of which runs in isolation and returns a structured `<handoff>`. Instead of one agent trying to hold an entire project in context, work is split across a squad of narrow specialists coordinated through slash-command SOPs — with requirement traceability enforced from the first honing question to the final pre-launch gate.
 
-- **Plugin:** `blackgoat-agentskills` v2.0.0 — see [CHANGELOG.md](CHANGELOG.md)
+- **Plugin:** `blackgoat-agentskills` v2.1.0 — see [CHANGELOG.md](CHANGELOG.md)
 - **Author:** shaharyar.naeem (shaharyar.naeem@gorelo.io)
 
 > Note: this repo's `AGENTS.md` is the Google Antigravity runtime contract, not the generic cross-tool "AGENTS.md" coding-agent convention — see [docs/cursor-setup.md](docs/cursor-setup.md).
@@ -305,7 +305,7 @@ flowchart TD
     S0["Step 0 - Hydration gates:<br/>state pipeline is bgpdd-build, milestones done,<br/>plan.md all checked, test-report.md exists"]
     S1["Step 1 - Read shipping-and-launch skill;<br/>paste exact checklist text into each briefing"]
     ST1["Stage 1 - Vera alone:<br/>Code Quality, Performance, Accessibility"]
-    ST2["Stage 2 - Cipher and Dep in parallel:<br/>Security / Infra, Flags, Rollout, Monitoring"]
+    ST2["Stage 2 - Cipher and Dep in parallel:<br/>Security / Infra, Flags, Rollout, Monitoring,<br/>Baseline Capture + Rollback Rehearsal"]
     S3{"All three handoffs green?"}
     FIX["Route failure to Mason or Nova (by domain tag) via /bgpdd-build<br/>max 2 fix-and-reverify rounds per area"]
     HALT["HALT - surface area, both attempts, evidence"]
@@ -313,6 +313,9 @@ flowchart TD
     S4["Step 4 - Compile CHANGELOG + README updates"]
     S45["Step 4.5 - Push working branch, open the PR<br/>(summary, FR/NFR coverage, link to ship-decision.md)"]
     S5["Step 5 - Launch Readiness Report + manual deploy commands"]
+    S55["Step 5.5 - Post-Deploy Verification:<br/>fresh Dep runs the post-launch checklist<br/>against the deployed environment;<br/>gated by check_agent_report + check_runtime_evidence"]
+    S55F{"Post-deploy verdict?"}
+    S55R["Live defect - rollback decision from the recorded<br/>Time to Rollback and the threshold table; HALT for the user"]
     S64["Step 6.4 - Refresh the legacy QA baseline"]
     S65["Step 6.5 - Final Game Tape checkpoint"]
     S66["Step 6.6 - Cleanup: delete orchestrator-state.json<br/>(game-tape.md and gates.jsonl survive)"]
@@ -322,12 +325,15 @@ flowchart TD
     S0 --> S1 --> ST1 --> ST2 --> S3
     S3 -- "failure" --> FIX --> S3
     FIX -- "still failing after 2 rounds" --> HALT
-    S3 -- "green" --> S35 --> S4 --> S45 --> S5 --> S64 --> S65 --> S66 --> S7G
+    S3 -- "green" --> S35 --> S4 --> S45 --> S5 --> S55 --> S55F
+    S55F -- "pass, or NOT RUN (no deploy this session)" --> S64
+    S55F -- "fail" --> S55R
+    S64 --> S65 --> S66 --> S7G
     S7G -- "yes" --> S7
     S7G -- "no" --> S7SKIP
 ```
 
-Why two stages instead of three parallel agents? Vera runs full builds and test suites that take file, build-output, and port locks; running scanners or infra verification concurrently against the same checkout causes lock collisions and flaky failures (especially on Windows). So Vera runs alone first, then Cipher and Dep launch in a single parallel batch. Dep compiles the Emergency Rollback Plan and his GO/NO-GO verdict into `ship-decision.md`. Any red area may be routed back through `/bgpdd-build` for a fix — at most **2 fix-and-reverify rounds per area** before the pipeline halts and hands you the evidence. If the `github-pr-review` skill is available, Step 4.5 also offers an automated multi-repo PR review pass.
+Why two stages instead of three parallel agents? Vera runs full builds and test suites that take file, build-output, and port locks; running scanners or infra verification concurrently against the same checkout causes lock collisions and flaky failures (especially on Windows). So Vera runs alone first, then Cipher and Dep launch in a single parallel batch. Dep compiles the Emergency Rollback Plan and his GO/NO-GO verdict into `ship-decision.md` — and before that GO is accepted, he has to have *rehearsed* the rollback (a timed revert-plus-health-check captured with its provenance sidecar) and *captured* the rollout baseline the threshold table's deltas are read against. After the deploy lands, **Step 5.5** sends a fresh Dep to run the post-launch checklist against the deployed environment; a `Fail` there is a live production defect, so the pipeline takes the rollback decision from the recorded time and halts for you rather than opening a fix round. Any red area may be routed back through `/bgpdd-build` for a fix — at most **2 fix-and-reverify rounds per area** before the pipeline halts and hands you the evidence. If the `github-pr-review` skill is available, Step 4.5 also offers an automated multi-repo PR review pass.
 
 ---
 
@@ -388,12 +394,12 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **godot-gdscript-patterns** — Godot 4 GDScript patterns (conditional, several agents)
 
 ### Meta skills (operate on the plugin itself)
-- **agent-audit** — audits personas/dependencies against 21 structural heuristics, starting with a mechanical preflight (frontmatter parse, dependency paths, runtime registration, self-tests, ledger grep)
+- **agent-audit** — audits personas/dependencies against 21 structural heuristics, starting with a mechanical preflight (frontmatter parse, dependency paths, runtime registration, self-tests, ledger grep). A whole-plugin audit runs as a **fan-out**: one read-only review agent per lens (pipeline flow, personas, methodology skills, tooling/evals/docs, cross-reference sweep, gate red-team, eval diagnosis), then the Orchestrator synthesizes and independently re-verifies every Blocker before reporting it as CONFIRMED rather than PLAUSIBLE
 - **agent-orchestration-improve-agent** — log parsing → procedural-memory generation (Forge's core methodology)
 - **bgpdd-learn** — `/bgpdd-learn`, the on-demand session-learning triage (Orchestrator + Forge)
 
 ### Standalone tools
-- **pipeline-tools** — the deterministic gate CLI family (coverage, commit gate, agent report, runtime evidence, acceptance suite, ship decision, blockers, milestone read/write, state writes, quiet runs, and the two static lints) executed by the Orchestrator at every bgpdd gate; there is no manual open-and-read substitute
+- **pipeline-tools** — the deterministic gate CLI family (coverage, commit gate, agent report, runtime evidence, acceptance suite, ship decision — including the `--require-rehearsal` and `--require-baseline` flags that make a rollback rehearsal and a rollout baseline evidenced rather than asserted — milestone-scoped blockers, milestone read/write, state writes, quiet runs, and the two static lints) executed by the Orchestrator at every bgpdd gate; there is no manual open-and-read substitute. Alongside the gates: **`detect_stack.py`** gives "if the project uses X" a mechanical floor by reporting evidence-backed stacks and the skills they imply, and **`record_run.py` / `summarize_run.py`** are the run-telemetry pair — one JSON line per delegation, rolled up into the fired-versus-rubber-stamped block the game tape pastes instead of narrating
 - **doubt-driven-development** — adversarial fresh-context verification of decisions (run by the main-session Orchestrator, never by subagents)
 - **github-pr-review** — Linear-driven multi-repo PR review via GitHub MCP
 - **prompt-engineering** — prompting patterns and optimization guidance

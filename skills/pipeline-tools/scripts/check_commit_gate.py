@@ -52,10 +52,58 @@ IMAGE_MAGIC = {
     "jpeg": (b"\xff\xd8\xff",),
     "gif": (b"GIF87a", b"GIF89a"),
 }
+BLOCKER_SEVERITIES = ("Critical", "Important", "Info")
+BLOCKER_SEVERITY_RANK = {"Critical": 3, "Important": 2, "Info": 1}
+# Info-severity blockers never gate here. Not a --severity-floor flag (unlike
+# check_blockers.py) -- this gate has one fixed floor, not a caller-tunable
+# one, because the commit gate is the last mechanical checkpoint before a
+# milestone lands and letting a caller loosen it defeats the point.
+BLOCKER_FLOOR_RANK = BLOCKER_SEVERITY_RANK["Important"]
 
 
 class GateError(Exception):
     """Structural/usage failure — maps to exit 2."""
+
+
+def normalize_blocker(entry):
+    """A blocker array entry, structured-or-legacy, as one canonical shape.
+
+    Duplicated from update_state.py / check_blockers.py by family convention
+    (stdlib-only, one file each, no shared module). A legacy freeform string
+    reads as unscoped (milestone null) and Critical -- the fail-safe reading.
+    """
+    if isinstance(entry, str):
+        return {"id": None, "text": entry, "milestone": None,
+                "capability": None, "severity": "Critical",
+                "source": None, "added": None, "evidence": None}
+    if isinstance(entry, dict):
+        severity = entry.get("severity") or "Critical"
+        if severity not in BLOCKER_SEVERITIES:
+            severity = "Critical"
+        return {
+            "id": entry.get("id"),
+            "text": entry.get("text", ""),
+            "milestone": entry.get("milestone"),
+            "capability": entry.get("capability"),
+            "severity": severity,
+            "source": entry.get("source"),
+            "added": entry.get("added"),
+            "evidence": entry.get("evidence"),
+        }
+    return {"id": None, "text": json.dumps(entry), "milestone": None,
+            "capability": None, "severity": "Critical",
+            "source": None, "added": None, "evidence": None}
+
+
+def blocker_milestone_equal(a, b):
+    """Exact, case/whitespace-insensitive equality on the structured
+    `milestone` field -- see check_blockers.py's `milestone_equal` for why
+    this is exact equality rather than the word-boundary substring match
+    `milestone_token_patterns` uses against review-section headings below
+    (CLAUDE.md convention #8: a deliberate, labeled divergence -- a review
+    heading is free prose with nothing structured to compare against, while
+    a blocker's `milestone` field is a value someone wrote on purpose)."""
+    return a.strip().casefold() == b.strip().casefold()
 
 
 def read_text(path):
@@ -398,7 +446,20 @@ def check_staleness(review_report, changed_files):
 
 
 def check_blockers(state_path, milestone, ignore_unscoped):
-    """Split standing ledger entries into milestone-scoped and unscoped."""
+    """Split standing ledger entries into scoped / unscoped / other-milestone,
+    using the same normalization and exact-equality scoping as
+    check_blockers.py (the small helper is duplicated, not imported, per
+    family convention).
+
+    - scoped to THIS milestone (`milestone` field equals the gate's
+      `--milestone` exactly): always blocks.
+    - unscoped (`milestone` is null): blocks by default -- the fail-safe
+      refinement of the old "gate on all" rule (CLAUDE.md convention #8) --
+      unless `--ignore-unscoped` skips it.
+    - scoped to a DIFFERENT milestone: never blocks; reported separately so
+      it stays visible without gating a commit it was never about.
+    - Info severity: never blocks, regardless of scope.
+    """
     warnings = []
     try:
         state = json.loads(read_text(state_path))
@@ -409,16 +470,28 @@ def check_blockers(state_path, milestone, ignore_unscoped):
         raise GateError("state file has no 'blockers' field")
     if not isinstance(entries, list):
         raise GateError("'blockers' is not an array")
-    patterns = milestone_token_patterns(milestone)
-    scoped, unscoped = [], []
-    for entry in entries:
-        text = entry if isinstance(entry, str) else json.dumps(entry)
-        (scoped if _matches_milestone(patterns, text) else unscoped).append(text)
-    if unscoped and ignore_unscoped:
+
+    scoped, unscoped, other = [], [], []
+    for raw in entries:
+        n = normalize_blocker(raw)
+        if BLOCKER_SEVERITY_RANK[n["severity"]] < BLOCKER_FLOOR_RANK:
+            continue  # Info never blocks
+        m = n["milestone"]
+        if m is None:
+            unscoped.append(n)
+        elif blocker_milestone_equal(m, milestone):
+            scoped.append(n)
+        else:
+            other.append(n)
+
+    skipped_ids = []
+    if ignore_unscoped and unscoped:
+        skipped_ids = [n["id"] for n in unscoped]
         warnings.append(
             f"{len(unscoped)} unscoped blocker entr{'y' if len(unscoped)==1 else 'ies'} "
-            "ignored via --ignore-unscoped; verify none belongs to this milestone")
-    return scoped, unscoped, warnings
+            f"ignored via --ignore-unscoped (ids: {', '.join(repr(i) for i in skipped_ids)}); "
+            "verify none belongs to this milestone")
+    return scoped, unscoped, other, skipped_ids, warnings
 
 
 def run_git(args, repo):
@@ -648,6 +721,8 @@ def build_report(args):
         "stale": False,
         "blocking": [],
         "unscoped_blockers": [],
+        "other_milestone_blockers": [],
+        "ignored_unscoped_ids": [],
         "rendered_evidence": [],
         "rendered_evidence_ok": not args.require_rendered_evidence,
         "runtime_evidence": None,
@@ -684,10 +759,12 @@ def build_report(args):
             "a changed file is newer than the review report — the latest "
             "review predates the current diff and does not count")
 
-    scoped, unscoped, w = check_blockers(args.state, args.milestone,
-                                         args.ignore_unscoped)
+    scoped, unscoped, other, skipped_unscoped_ids, w = check_blockers(
+        args.state, args.milestone, args.ignore_unscoped)
     report["blocking"] = scoped
     report["unscoped_blockers"] = unscoped
+    report["other_milestone_blockers"] = other
+    report["ignored_unscoped_ids"] = skipped_unscoped_ids
     report["warnings"] += w
 
     section = find_matching_section(text, args.milestone)
@@ -1014,20 +1091,30 @@ def run_self_test():
             self.assertTrue(r["stale"])
 
         def test_scoped_blocker_fails(self):
+            # Scoped now means an explicit `milestone` field match -- the
+            # structured schema replaces the old substring guess against
+            # freeform text.
             self.review.write_text(REVIEW_OK)
             self._order(self.changed, self.review)
             self.state.write_text(json.dumps(
-                {"blockers": ["M3: placeholder route finding open"]}))
+                {"blockers": [{"id": "B-1", "text": "placeholder route finding open",
+                                "milestone": "M3"}]}))
             r = self._run()
             self.assertEqual(r["result"], "FAIL")
             self.assertEqual(len(r["blocking"]), 1)
+            self.assertEqual(r["blocking"][0]["id"], "B-1")
 
         def test_unscoped_blocker_fails_by_default(self):
+            # A legacy freeform string normalizes to milestone: null --
+            # unscoped, and unscoped still blocks by default (fail-safe).
             self.review.write_text(REVIEW_OK)
             self._order(self.changed, self.review)
             self.state.write_text(json.dumps(
                 {"blockers": ["proxy substitution in test env"]}))
-            self.assertEqual(self._run()["result"], "FAIL")
+            r = self._run()
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["blocking"], [])
+            self.assertEqual(len(r["unscoped_blockers"]), 1)
 
         def test_unscoped_blocker_ignorable(self):
             self.review.write_text(REVIEW_OK)
@@ -1037,6 +1124,71 @@ def run_self_test():
             r = self._run(["--ignore-unscoped"])
             self.assertEqual(r["result"], "PASS")
             self.assertEqual(len(r["unscoped_blockers"]), 1)
+
+        def test_ignore_unscoped_names_the_skipped_ids(self):
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            self.state.write_text(json.dumps(
+                {"blockers": [{"id": "B-7", "text": "proxy substitution",
+                                "milestone": None}]}))
+            r = self._run(["--ignore-unscoped"])
+            self.assertEqual(r["result"], "PASS")
+            self.assertEqual(r["ignored_unscoped_ids"], ["B-7"])
+
+        def test_other_milestone_scoped_blocker_does_not_gate_this_one(self):
+            # A blocker explicitly scoped to a DIFFERENT milestone must not
+            # gate this one at all -- no --ignore-unscoped override needed,
+            # since the scoping is now exact-match on the structured
+            # `milestone` field rather than a substring guess against
+            # freeform text. Replaces the old word-boundary
+            # "M10 does not gate M1" case, which tested the same guarantee
+            # against the pre-schema substring heuristic.
+            self.review.write_text(
+                "## Review: M1 — Setup\n\n**Verdict:** Approve\n")
+            self._order(self.changed, self.review)
+            self.state.write_text(json.dumps(
+                {"blockers": [{"id": "B-9", "text": "unrelated finding open",
+                                "milestone": "M10"}]}))
+            ns = self._ns(milestone="M1")
+            r = build_report(ns)
+            self.assertEqual(r["blocking"], [])
+            self.assertEqual(r["unscoped_blockers"], [])
+            self.assertEqual(len(r["other_milestone_blockers"]), 1)
+            self.assertEqual(r["other_milestone_blockers"][0]["id"], "B-9")
+            self.assertEqual(r["result"], "PASS")
+
+        def test_milestone_field_match_is_case_and_whitespace_insensitive(self):
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            self.state.write_text(json.dumps(
+                {"blockers": [{"id": "B-1", "text": "x", "milestone": " m3 "}]}))
+            r = self._run()
+            self.assertEqual(len(r["blocking"]), 1)
+
+        def test_info_severity_blocker_never_blocks(self):
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            self.state.write_text(json.dumps(
+                {"blockers": [{"id": "B-1", "text": "cosmetic nit",
+                                "milestone": "M3", "severity": "Info"}]}))
+            r = self._run()
+            self.assertEqual(r["result"], "PASS")
+            self.assertEqual(r["blocking"], [])
+
+        def test_mixed_legacy_and_structured_blockers(self):
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            self.state.write_text(json.dumps(
+                {"blockers": [
+                    "legacy freeform blocker",
+                    {"id": "B-1", "text": "scoped to this one", "milestone": "M3"},
+                    {"id": "B-2", "text": "scoped elsewhere", "milestone": "M9"},
+                ]}))
+            r = self._run()
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(len(r["blocking"]), 1)
+            self.assertEqual(len(r["unscoped_blockers"]), 1)
+            self.assertEqual(len(r["other_milestone_blockers"]), 1)
 
         def test_missing_review_section_fails(self):
             self.review.write_text("## Review: M7 — other milestone\n"
@@ -1073,12 +1225,14 @@ def run_self_test():
             self.assertTrue(r["review_found"])
             self.assertEqual(r["result"], "PASS")
 
-        def test_word_boundary_m10_scoped_blocker_does_not_gate_m1(self):
-            # An M10-scoped blocker must land in unscoped, not blocking, for
-            # an M1 gate run -- proving "m1" no longer substring-matches
-            # "m10". (It still gates by default via the unscoped policy;
-            # --ignore-unscoped is the documented override, which then
-            # passes -- demonstrating it was never truly M1-scoped.)
+        def test_legacy_string_blocker_is_unscoped_regardless_of_its_text(self):
+            # A legacy freeform string normalizes to milestone: null no
+            # matter what it says -- scoping is now the structured
+            # `milestone` field, never a guess against the text (that
+            # guess is what test_other_milestone_scoped_blocker_... above
+            # replaces). So this lands in unscoped, not blocking, and still
+            # gates M1 by default via the unscoped fail-safe;
+            # --ignore-unscoped remains the override.
             self.review.write_text(
                 "## Review: M1 — Setup\n\n**Verdict:** Approve\n")
             self._order(self.changed, self.review)

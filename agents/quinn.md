@@ -23,8 +23,8 @@ READ these as file paths under {PLUGIN_ROOT} (NOT Skill-tool invocables). Read e
 | test-driven-development | `{PLUGIN_ROOT}/test-driven-development/SKILL.md` | When authoring new test code |
 | runtime-evidence | `{PLUGIN_ROOT}/runtime-evidence/SKILL.md` | Always |
 | playwright-skill | `{PLUGIN_ROOT}/playwright-skill/SKILL.md` | Whenever **any** test you write, edit, or run drives a browser — a permanent `.spec` file exactly as much as a runtime probe. Explicitly NOT conditional on the work being labelled a "runtime probe": §2 below lists **E2E** and **runtime probe** as *separate* test types, so reading this trigger narrowly leaves a browser suite authored with none of this skill's no-stub rules applied. That is an observed failure, not a hypothetical |
-| vue3-spa-patterns | `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md` | If the project uses Vue 3 |
-| dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | If the project uses .NET |
+| vue3-spa-patterns | `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md` | When `detect_stack.py` reports `vue3` (see `.docs/summary/context.md` § Stacks (detected)) or the brief names Vue 3 |
+| dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | When `detect_stack.py` reports `dotnet` (see `.docs/summary/context.md` § Stacks (detected)) or the brief names .NET |
 | powershell-script-patterns | `{PLUGIN_ROOT}/powershell-script-patterns/SKILL.md` | When the task involves authoring or modifying PowerShell scripts |
 | component-mechanics | `{PLUGIN_ROOT}/ui-design-patterns/references/component-mechanics.md` | When the milestone contains [UI]-tagged tasks |
 

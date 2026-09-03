@@ -1,0 +1,14 @@
+{
+  "schema": "1",
+  "project_name": "webhook-notify",
+  "feature": "webhook-notify",
+  "pipeline": "bgpdd-plan",
+  "branch": "feat/webhook-notify",
+  "milestone_cursor": null,
+  "artifacts": {
+    "requirements": ".docs/webhook-notify/requirements.md",
+    "plan": ".docs/webhook-notify/implementation/plan.md"
+  },
+  "blockers": [],
+  "updated": "2026-08-29T09:12:00Z"
+}

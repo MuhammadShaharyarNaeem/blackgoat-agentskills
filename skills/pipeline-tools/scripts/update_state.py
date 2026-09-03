@@ -24,16 +24,25 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 SCHEMA_VERSION = "1"
+SEVERITIES = ("Critical", "Important", "Info")
+BLOCKER_ID_RE = re.compile(r"^B-(\d+)$")
 
 
 class GateError(Exception):
     """Structural/usage failure — maps to exit 2."""
+
+    def __init__(self, message, candidates=None):
+        super().__init__(message)
+        # Populated only for an ambiguous --resolve-blocker substring match,
+        # so the caller can print the candidate entries alongside the error.
+        self.candidates = candidates
 
 
 def now_iso():
@@ -122,6 +131,69 @@ def validate_actions(args):
             "once its fix is verified")
     if args.init and not args.project_name:
         raise GateError("--init requires --project-name")
+    blocker_companions_given = any([
+        args.blocker_milestone is not None,
+        args.blocker_capability is not None,
+        args.blocker_severity is not None,
+        args.blocker_source is not None,
+        args.blocker_evidence is not None,
+    ])
+    if blocker_companions_given and not args.add_blocker:
+        raise GateError(
+            "--blocker-milestone/--blocker-capability/--blocker-severity/"
+            "--blocker-source/--blocker-evidence require --add-blocker in "
+            "the same invocation")
+
+
+def normalize_blocker(entry):
+    """A blocker array entry, structured-or-legacy, as one canonical shape.
+
+    A legacy freeform string is read as `{id: null, text: <string>,
+    milestone: null, capability: null, severity: "Critical", source: null,
+    added: null, evidence: null}` -- unscoped and Critical, the fail-safe
+    reading. This function never mutates the stored entry; callers that
+    write back to `state["blockers"]` keep untouched entries in their
+    original raw form (string or dict).
+    """
+    if isinstance(entry, str):
+        return {"id": None, "text": entry, "milestone": None,
+                "capability": None, "severity": "Critical",
+                "source": None, "added": None, "evidence": None}
+    if isinstance(entry, dict):
+        severity = entry.get("severity") or "Critical"
+        if severity not in SEVERITIES:
+            severity = "Critical"
+        return {
+            "id": entry.get("id"),
+            "text": entry.get("text", ""),
+            "milestone": entry.get("milestone"),
+            "capability": entry.get("capability"),
+            "severity": severity,
+            "source": entry.get("source"),
+            "added": entry.get("added"),
+            "evidence": entry.get("evidence"),
+        }
+    # Defensive: an entry that is neither -- stringify rather than crash.
+    return {"id": None, "text": json.dumps(entry), "milestone": None,
+            "capability": None, "severity": "Critical",
+            "source": None, "added": None, "evidence": None}
+
+
+def next_blocker_id(blockers):
+    """The next `B-<n>` id: one past the highest structured id currently
+    present in the array. Legacy string entries (id null) don't count.
+
+    Scoped to entries currently in the array, not the file's full history --
+    resolving away the highest-numbered entry and then adding a new one can
+    reuse its number. Documented limitation, not prevented: see
+    references/update_state.md.
+    """
+    max_n = 0
+    for entry in blockers:
+        m = BLOCKER_ID_RE.match(normalize_blocker(entry)["id"] or "")
+        if m:
+            max_n = max(max_n, int(m.group(1)))
+    return max_n + 1
 
 
 def coerce_schema(state, warnings):
@@ -182,20 +254,56 @@ def parse_artifact_spec(spec):
     return name, (None if value == "null" else value)
 
 
-def resolve_blocker(state, substring, evidence, timestamp):
-    """Remove every blocker containing `substring` (case-insensitive).
+def resolve_blocker(state, target, evidence, timestamp):
+    """Resolve one or more blockers matching `target`, in priority order:
 
-    Returns log lines (ISO timestamp, removed entry, evidence) to append to
-    the sibling blockers-resolved.log, or a warning if nothing matched.
+    1. exact `id` match ("B-3")
+    2. exact `text` match (case-insensitive) -- removes every entry sharing
+       that exact text, the same "resolve all duplicates" behavior this
+       replaces
+    3. substring match (case-insensitive) against `text` -- must be UNIQUE,
+       or the call is refused (GateError, ambiguous) rather than silently
+       removing more than the caller meant to name
+
+    Returns (log_lines, warnings, removed_entries). `log_lines` are ISO
+    timestamp / id / full JSON entry / evidence, appended to the sibling
+    blockers-resolved.log. A target matching nothing warns and changes
+    nothing.
     """
-    needle = substring.lower()
     blockers = state.get("blockers", [])
-    matched = [b for b in blockers if needle in str(b).lower()]
-    if not matched:
-        return [], [f"--resolve-blocker matched no entries for {substring!r}; nothing removed"]
-    state["blockers"] = [b for b in blockers if needle not in str(b).lower()]
-    log_lines = [f"{timestamp}\t{entry}\t{evidence}" for entry in matched]
-    return log_lines, []
+    normalized = [normalize_blocker(b) for b in blockers]
+
+    id_idxs = [i for i, n in enumerate(normalized)
+               if n["id"] is not None and n["id"] == target]
+    if id_idxs:
+        idxs = id_idxs
+    else:
+        needle = target.strip().lower()
+        text_idxs = [i for i, n in enumerate(normalized)
+                     if n["text"].lower() == needle]
+        if text_idxs:
+            idxs = text_idxs
+        else:
+            sub_idxs = [i for i, n in enumerate(normalized)
+                        if needle in n["text"].lower()]
+            if not sub_idxs:
+                return [], [f"--resolve-blocker matched no entries for {target!r}; nothing removed"], []
+            if len(sub_idxs) > 1:
+                candidates = [normalized[i] for i in sub_idxs]
+                raise GateError(
+                    f"--resolve-blocker {target!r} matches {len(sub_idxs)} entries "
+                    "ambiguously; be more specific (an id, or the exact text) -- "
+                    f"candidates: {json.dumps(candidates)}",
+                    candidates=candidates)
+            idxs = sub_idxs
+
+    idxset = set(idxs)
+    removed = [normalized[i] for i in idxs]
+    state["blockers"] = [b for i, b in enumerate(blockers) if i not in idxset]
+    log_lines = [f"{timestamp}\t{entry['id'] or ''}\t"
+                 f"{json.dumps(entry, ensure_ascii=False)}\t{evidence}"
+                 for entry in removed]
+    return log_lines, [], removed
 
 
 def write_atomic(path, state):
@@ -216,6 +324,7 @@ def apply_updates(args):
     validate_actions(args)
     path = Path(args.state)
     state, warnings = load_state(path, args.init, args.project_name)
+    timestamp = now_iso()
 
     if args.set_cursor is not None:
         state["milestone_cursor"] = None if args.set_cursor == "null" else args.set_cursor
@@ -228,15 +337,33 @@ def apply_updates(args):
     for spec in args.set_artifact:
         name, value = parse_artifact_spec(spec)
         state.setdefault("artifacts", {})[name] = value
-    for text in args.add_blocker:
-        state.setdefault("blockers", []).append(text)
+    if args.add_blocker:
+        blockers = state.setdefault("blockers", [])
+        next_n = next_blocker_id(blockers)
+        severity = args.blocker_severity or "Critical"
+        for text in args.add_blocker:
+            blockers.append({
+                "id": f"B-{next_n}",
+                "text": text,
+                "milestone": args.blocker_milestone,
+                "capability": args.blocker_capability,
+                "severity": severity,
+                "source": args.blocker_source,
+                "added": timestamp,
+                "evidence": args.blocker_evidence,
+            })
+            next_n += 1
 
-    timestamp = now_iso()
     log_lines = []
+    removed_entries = []
     if args.resolve_blocker is not None:
-        log_lines, resolve_warnings = resolve_blocker(state, args.resolve_blocker,
-                                                       args.evidence, timestamp)
+        log_lines, resolve_warnings, removed_entries = resolve_blocker(
+            state, args.resolve_blocker, args.evidence, timestamp)
         warnings += resolve_warnings
+    # Stashed on the Namespace (not returned) so main()'s ledger closure can
+    # cite the resolved entries without widening this function's return
+    # shape -- every existing call site unpacks (state, warnings).
+    args.resolved_entries = removed_entries
 
     state["updated"] = timestamp
     write_atomic(path, state)
@@ -263,7 +390,23 @@ def build_parser():
     )
     parser.add_argument("--set-artifact", action="append", default=[])
     parser.add_argument("--add-blocker", action="append", default=[])
-    parser.add_argument("--resolve-blocker")
+    parser.add_argument("--blocker-milestone",
+                        help="applies to every --add-blocker in this invocation")
+    parser.add_argument("--blocker-capability",
+                        help='e.g. "browser", "docker", "device"; applies to '
+                             "every --add-blocker in this invocation")
+    parser.add_argument("--blocker-severity", choices=list(SEVERITIES),
+                        help="default Critical; applies to every --add-blocker "
+                             "in this invocation")
+    parser.add_argument("--blocker-source",
+                        help="agent or gate that raised it; applies to every "
+                             "--add-blocker in this invocation")
+    parser.add_argument("--blocker-evidence",
+                        help="applies to every --add-blocker in this invocation "
+                             "(distinct from --evidence, which is --resolve-blocker's)")
+    parser.add_argument("--resolve-blocker",
+                        help="an id (\"B-3\"), exact text, or a substring that "
+                             "must match exactly one entry's text")
     parser.add_argument("--evidence")
     parser.add_argument("--ledger",
                         help="append one JSON record per run to this path")
@@ -284,6 +427,10 @@ def main(argv):
         if args.resolve_blocker is not None:
             extra = {"action": "resolve-blocker",
                      "evidence": args.evidence}
+            resolved = getattr(args, "resolved_entries", None)
+            if resolved:
+                extra["resolved_ids"] = [e.get("id") for e in resolved]
+                extra["resolved_entries"] = resolved
         # The cursor names the milestone this run is about, when it names one;
         # the literal "null" clears it and is recorded as JSON null.
         milestone = (None if args.set_cursor in (None, "null")
@@ -299,7 +446,10 @@ def main(argv):
     try:
         state, warnings = apply_updates(args)
     except GateError as exc:
-        print(json.dumps({"error": str(exc)}))
+        payload = {"error": str(exc)}
+        if exc.candidates is not None:
+            payload["candidates"] = exc.candidates
+        print(json.dumps(payload))
         return finish(2, "ERROR")
 
     for w in warnings:
@@ -320,6 +470,9 @@ def run_self_test():
         base = dict(state=str(state_path), init=False, project_name=None,
                     set_cursor=None, set_pipeline=None, set_branch=None,
                     set_feature=None, set_artifact=[], add_blocker=[],
+                    blocker_milestone=None, blocker_capability=None,
+                    blocker_severity=None, blocker_source=None,
+                    blocker_evidence=None,
                     resolve_blocker=None, evidence=None)
         base.update(overrides)
         return argparse.Namespace(**base)
@@ -408,7 +561,65 @@ def run_self_test():
                              add_blocker=["first blocker"]))
             state, _ = apply_updates(ns(self.state_path,
                                        add_blocker=["second blocker"]))
-            self.assertEqual(state["blockers"], ["first blocker", "second blocker"])
+            self.assertEqual([b["text"] for b in state["blockers"]],
+                             ["first blocker", "second blocker"])
+
+        def test_add_blocker_creates_structured_entry_with_defaults(self):
+            """`--add-blocker` alone: auto id, Critical severity, null milestone."""
+            state, warnings = apply_updates(ns(self.state_path, init=True,
+                                              project_name="demo",
+                                              add_blocker=["route missing auth"]))
+            self.assertEqual(warnings, [])
+            entry = state["blockers"][0]
+            self.assertEqual(entry["id"], "B-1")
+            self.assertEqual(entry["text"], "route missing auth")
+            self.assertIsNone(entry["milestone"])
+            self.assertIsNone(entry["capability"])
+            self.assertEqual(entry["severity"], "Critical")
+            self.assertIsNone(entry["source"])
+            self.assertIn("added", entry)
+            self.assertIsNone(entry["evidence"])
+
+        def test_add_blocker_companions_apply_to_every_text_in_the_call(self):
+            state, _ = apply_updates(ns(
+                self.state_path, init=True, project_name="demo",
+                add_blocker=["no docker in CI", "no docker on staging"],
+                blocker_milestone="M4 — Deploy", blocker_capability="docker",
+                blocker_severity="Important", blocker_source="dep",
+                blocker_evidence="observed in CI log"))
+            for entry in state["blockers"]:
+                self.assertEqual(entry["milestone"], "M4 — Deploy")
+                self.assertEqual(entry["capability"], "docker")
+                self.assertEqual(entry["severity"], "Important")
+                self.assertEqual(entry["source"], "dep")
+                self.assertEqual(entry["evidence"], "observed in CI log")
+            self.assertEqual([e["id"] for e in state["blockers"]], ["B-1", "B-2"])
+
+        def test_blocker_companion_without_add_blocker_is_usage_error(self):
+            with self.assertRaises(GateError):
+                apply_updates(ns(self.state_path, init=True, project_name="demo",
+                                 blocker_milestone="M1"))
+
+        def test_add_blocker_id_increments_across_calls(self):
+            apply_updates(ns(self.state_path, init=True, project_name="demo",
+                             add_blocker=["a"]))
+            apply_updates(ns(self.state_path, add_blocker=["b", "c"]))
+            state, _ = apply_updates(ns(self.state_path, add_blocker=["d"]))
+            self.assertEqual([e["id"] for e in state["blockers"]],
+                             ["B-1", "B-2", "B-3", "B-4"])
+
+        def test_add_blocker_preserves_legacy_string_entries_untouched(self):
+            """Mixed array: a pre-existing legacy string is never rewritten."""
+            self.state_path.write_text(json.dumps({
+                "schema": "1", "project_name": "demo", "feature": None,
+                "pipeline": "", "branch": None, "milestone_cursor": None,
+                "artifacts": {}, "blockers": ["legacy freeform blocker"],
+            }), encoding="utf-8")
+            state, _ = apply_updates(ns(self.state_path,
+                                        add_blocker=["new structured one"]))
+            self.assertEqual(state["blockers"][0], "legacy freeform blocker")
+            self.assertIsInstance(state["blockers"][1], dict)
+            self.assertEqual(state["blockers"][1]["id"], "B-1")
 
         def test_resolve_blocker_with_evidence_removes_and_logs(self):
             apply_updates(ns(self.state_path, init=True, project_name="demo",
@@ -418,12 +629,14 @@ def run_self_test():
                 self.state_path, resolve_blocker="placeholder route",
                 evidence="verified via test-report.md M3 section"))
             self.assertEqual(warnings, [])
-            self.assertEqual(state["blockers"], ["unrelated blocker"])
+            self.assertEqual(len(state["blockers"]), 1)
+            self.assertEqual(state["blockers"][0]["text"], "unrelated blocker")
             log_path = self.dir / "blockers-resolved.log"
             self.assertTrue(log_path.exists())
             log_text = log_path.read_text(encoding="utf-8")
             self.assertIn("M3: placeholder route open", log_text)
             self.assertIn("verified via test-report.md M3 section", log_text)
+            self.assertIn("B-1", log_text)
 
         def test_resolve_blocker_without_evidence_fails_and_leaves_file(self):
             apply_updates(ns(self.state_path, init=True, project_name="demo",
@@ -443,7 +656,58 @@ def run_self_test():
                 self.state_path, resolve_blocker="no such substring",
                 evidence="n/a"))
             self.assertTrue(any("nothing removed" in w for w in warnings))
-            self.assertEqual(state["blockers"], ["unrelated blocker"])
+            self.assertEqual(len(state["blockers"]), 1)
+            self.assertEqual(state["blockers"][0]["text"], "unrelated blocker")
+
+        def test_resolve_blocker_by_exact_id(self):
+            apply_updates(ns(self.state_path, init=True, project_name="demo",
+                             add_blocker=["first", "second"]))
+            state, _ = apply_updates(ns(self.state_path, resolve_blocker="B-1",
+                                        evidence="fixed"))
+            self.assertEqual(len(state["blockers"]), 1)
+            self.assertEqual(state["blockers"][0]["id"], "B-2")
+
+        def test_resolve_blocker_by_exact_text(self):
+            """Exact text match wins over a broader substring reading, and
+            removes every entry sharing that exact text."""
+            apply_updates(ns(self.state_path, init=True, project_name="demo",
+                             add_blocker=["route open", "route open extended"]))
+            state, _ = apply_updates(ns(self.state_path, resolve_blocker="route open",
+                                        evidence="fixed"))
+            self.assertEqual(len(state["blockers"]), 1)
+            self.assertEqual(state["blockers"][0]["text"], "route open extended")
+
+        def test_resolve_blocker_ambiguous_substring_exits_2_with_candidates(self):
+            apply_updates(ns(self.state_path, init=True, project_name="demo",
+                             add_blocker=["auth route missing check",
+                                         "billing route missing check"]))
+            with self.assertRaises(GateError) as ctx:
+                apply_updates(ns(self.state_path, resolve_blocker="route missing",
+                                 evidence="fixed"))
+            self.assertEqual(len(ctx.exception.candidates), 2)
+            # Nothing removed on the refusal.
+            state = json.loads(self.state_path.read_text(encoding="utf-8"))
+            self.assertEqual(len(state["blockers"]), 2)
+
+        def test_ledger_resolve_blocker_records_id_and_full_entry(self):
+            import contextlib
+            import io
+
+            ledger = self.dir / "gates.jsonl"
+            apply_updates(ns(self.state_path, init=True, project_name="demo",
+                             add_blocker=["M3: placeholder route open"],
+                             blocker_milestone="M3"))
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = main(["--state", str(self.state_path),
+                           "--resolve-blocker", "B-1",
+                           "--evidence", "retested, passes",
+                           "--ledger", str(ledger)])
+            self.assertEqual(rc, 0)
+            rec = self._ledger_records(ledger)[-1]
+            self.assertEqual(rec["resolved_ids"], ["B-1"])
+            self.assertEqual(rec["resolved_entries"][0]["milestone"], "M3")
+            self.assertEqual(rec["resolved_entries"][0]["text"],
+                             "M3: placeholder route open")
 
         def test_bom_prefixed_state_still_loads(self):
             """utf-8 (not -sig) made json.loads choke on the byte-order mark."""

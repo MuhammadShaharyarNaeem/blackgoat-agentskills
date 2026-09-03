@@ -23,10 +23,10 @@ READ these as file paths under {PLUGIN_ROOT} (NOT Skill-tool invocables). Read e
 | code-simplification | `{PLUGIN_ROOT}/code-simplification/SKILL.md` | When reviewing for complexity issues |
 | runtime-evidence | `{PLUGIN_ROOT}/runtime-evidence/SKILL.md` | When the milestone's requirements assert client-, person-, or device-observable behavior |
 | ui-design-patterns | `{PLUGIN_ROOT}/ui-design-patterns/SKILL.md` | When reviewing user-facing UI changes |
-| godot-gdscript-patterns | `{PLUGIN_ROOT}/godot-gdscript-patterns/SKILL.md` | If the project involves Godot or GDScript |
+| godot-gdscript-patterns | `{PLUGIN_ROOT}/godot-gdscript-patterns/SKILL.md` | When `detect_stack.py` reports `godot` (see `.docs/summary/context.md` § Stacks (detected)) or the brief names Godot/GDScript |
 | performance-optimization | `{PLUGIN_ROOT}/performance-optimization/SKILL.md` | When reviewing performance-sensitive changes |
-| vue3-spa-patterns | `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md` | If the project uses Vue 3 |
-| dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | If the project uses .NET |
+| vue3-spa-patterns | `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md` | When `detect_stack.py` reports `vue3` (see `.docs/summary/context.md` § Stacks (detected)) or the brief names Vue 3 |
+| dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | When `detect_stack.py` reports `dotnet` (see `.docs/summary/context.md` § Stacks (detected)) or the brief names .NET |
 | component-mechanics | `{PLUGIN_ROOT}/ui-design-patterns/references/component-mechanics.md` | When reviewing [UI] changes |
 | database-migration-patterns | `{PLUGIN_ROOT}/database-migration-patterns/SKILL.md` | When the diff contains a migration |
 

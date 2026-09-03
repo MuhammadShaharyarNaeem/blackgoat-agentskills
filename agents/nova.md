@@ -25,7 +25,7 @@ READ these as file paths under {PLUGIN_ROOT} (NOT Skill-tool invocables). Read e
 | test-driven-development | `{PLUGIN_ROOT}/test-driven-development/SKILL.md` | Always |
 | debugging-and-error-recovery | `{PLUGIN_ROOT}/debugging-and-error-recovery/SKILL.md` | A test fails, a build breaks, behavior deviates, **or a failing spec / design-critique finding returns to you** — step 7 pins your fix's re-verification tier |
 | source-driven-development | `{PLUGIN_ROOT}/source-driven-development/SKILL.md` | When using unfamiliar APIs/frameworks or component libraries |
-| vue3-spa-patterns | `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md` | If the project uses Vue 3 |
+| vue3-spa-patterns | `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md` | When `detect_stack.py` reports `vue3` (see `.docs/summary/context.md` § Stacks (detected)) or the brief names Vue 3 |
 | browser-testing-with-devtools | `{PLUGIN_ROOT}/browser-testing-with-devtools/SKILL.md` | When rendered-output verification is possible (browser tooling available) |
 | runtime-evidence | `{PLUGIN_ROOT}/runtime-evidence/SKILL.md` | Surface is `[vs:web+api]`, or an acceptance criterion names an effect observable outside the browser (an API response, a persisted row, a device state) |
 

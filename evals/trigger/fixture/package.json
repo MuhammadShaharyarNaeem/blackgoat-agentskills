@@ -1,0 +1,14 @@
+{
+  "name": "dashboard-app",
+  "version": "1.4.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "vue": "^3.4.21",
+    "pinia": "^2.1.7",
+    "axios": "^1.6.8"
+  }
+}
