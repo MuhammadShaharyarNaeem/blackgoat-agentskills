@@ -69,7 +69,8 @@ if (-not (Test-Path $matrixPath)) {
 }
 Write-Output '[2] PASSED: acceptance-matrix.md exists'
 
-$matrixContent = Get-Content -Path $matrixPath -Raw
+$matrixContent = Get-Content -Path $matrixPath -Raw -Encoding UTF8
+$matrixContent = $matrixContent -replace "`r`n", "`n"
 
 # --- [3] the real gate can parse the matrix (exit 0 or 1, never 2) ------------
 $stubResultsPath = Join-Path $env:TEMP ("grade-acceptance-stub-" + [guid]::NewGuid().ToString('N').Substring(0, 8) + ".md")
@@ -215,7 +216,8 @@ if (-not (Test-Path $planPath)) {
     $failures.Add("8: plan.md was not produced at $planPath")
     Write-Output "[8] FAILED: plan.md was not produced at $planPath"
 } else {
-    $planContent = Get-Content -Path $planPath -Raw
+    $planContent = Get-Content -Path $planPath -Raw -Encoding UTF8
+    $planContent = $planContent -replace "`r`n", "`n"
     $milestoneHeadings = @([regex]::Matches($planContent, '(?m)^#{2,3}\s*Milestone\b\s+\d.*$') | ForEach-Object { $_.Value })
     $badHeadings = New-Object System.Collections.Generic.List[string]
     foreach ($h in $milestoneHeadings) {

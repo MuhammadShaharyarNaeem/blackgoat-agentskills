@@ -150,6 +150,18 @@ foreach ($f in $changedFiles) {
         # tier ladder, so a change to any of the three files can move the answer.
         [void]$affectedEvals.Add('contract:mason-fix-verification-tier3')
     }
+    if ($f -match 'skills/agent-squad/base-persona\.md$') {
+        # The <fix_verification> obligation is moving into base-persona.md (it was
+        # scattered per-agent before). mason-fix-verification and
+        # mason-fix-verification-tier3 both plant a rejection-round handoff missing
+        # (or citing the wrong tier for) that exact element, and nova-ui-contract's
+        # evidence-honesty criterion (a cited <artifact> path must exist or say
+        # NOT VERIFIED) is the same base-persona Evidence Integrity rule applied to a
+        # builder-tier fixture - all three move together with this file.
+        [void]$affectedEvals.Add('contract:mason-fix-verification')
+        [void]$affectedEvals.Add('contract:mason-fix-verification-tier3')
+        [void]$affectedEvals.Add('contract:nova-ui-contract')
+    }
     if ($f -match 'skills/bgpdd-build/') {
         # The build pipeline's contract surfaces: the fix-round <fix_verification>
         # precondition (Phase 2 step 3), the Runtime Evidence Gate, and Quinn's
@@ -163,9 +175,12 @@ foreach ($f in $changedFiles) {
     if ($f -match 'skills/bgpdd-verify/') {
         # The verify lane consumes the acceptance-matrix grammar (alex case) and
         # the runtime-evidence capture contract (quinn case); no case invokes the
-        # lane's Orchestrator itself.
+        # lane's Orchestrator itself. It also owns the routing description behind
+        # trigger's dedicated bgpdd-verify case (verify-an-existing-feature prompts),
+        # so a change here can move which skill that prompt should route to.
         [void]$affectedEvals.Add('contract:alex-acceptance-matrix')
         [void]$affectedEvals.Add('contract:quinn-runtime-evidence')
+        [void]$affectedEvals.Add('trigger')
     }
     if ($f -match 'agents/echo\.md$' -or $f -match 'agents/iris\.md$' -or $f -match 'agents/scout\.md$' -or $f -match 'skills/bgpdd-discovery/') {
         [void]$affectedEvals.Add('contract:echo-qa-discovery-shape')

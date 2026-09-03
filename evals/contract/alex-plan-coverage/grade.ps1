@@ -56,19 +56,21 @@ if (-not (Test-Path $planPath)) {
 }
 Write-Output '[2] PASSED: plan.md exists'
 
-$planContent = Get-Content -Path $planPath -Raw
+$planContent = Get-Content -Path $planPath -Raw -Encoding UTF8
+$planContent = $planContent -replace "`r`n", "`n"
 
 $output = & python $checkCoveragePy --requirements $requirementsPath --plan $planPath
 $exitCode = $LASTEXITCODE
 $report = $output | ConvertFrom-Json
 
 # [3] the coverage gate itself passes
+$uncoveredList = $report.uncovered -join ', '
+$lintFailuresList = $report.lint_failures -join ', '
 if ($exitCode -eq 0 -and $report.result -eq 'PASS' -and ($report.uncovered.Count -eq 0)) {
-    Write-Output '[3] PASSED: check_coverage.py exit 0 / result PASS / uncovered empty'
+    Write-Output "[3] PASSED: check_coverage.py exit 0 / result PASS / uncovered empty / lint_failures=$lintFailuresList"
 } else {
-    $uncoveredList = $report.uncovered -join ', '
-    $failures.Add("3: check_coverage.py did not pass (exit=$exitCode, result=$($report.result), uncovered=$uncoveredList)")
-    Write-Output "[3] FAILED: check_coverage.py did not pass (exit=$exitCode, result=$($report.result), uncovered=$uncoveredList)"
+    $failures.Add("3: check_coverage.py did not pass (exit=$exitCode, result=$($report.result), uncovered=$uncoveredList, lint_failures=$lintFailuresList)")
+    Write-Output "[3] FAILED: check_coverage.py did not pass (exit=$exitCode, result=$($report.result), uncovered=$uncoveredList, lint_failures=$lintFailuresList)"
 }
 
 # [4] no task missing its Requirements covered field

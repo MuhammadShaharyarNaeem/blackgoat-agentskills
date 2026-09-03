@@ -58,18 +58,25 @@ Pure standard library.
 
 Usage:
     python check_acceptance_suite.py --matrix <path> --results <path> \
-        [--repo <dir>] [--require-priority P0[,P1]] [--min-scenarios <N>]
+        [--repo <dir>] [--require-priority P0[,P1]] [--min-scenarios <N>] \
+        [--changed-files <p1> [<p2> ...]] [--ledger <path>]
     python check_acceptance_suite.py --lint-only --matrix <path> \
         [--requirements <path>] [--min-scenarios <N>]
     python check_acceptance_suite.py --self-test
 """
 import argparse
+import hashlib
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 SCENARIO_HEADING_RE = re.compile(r"^##\s+(.*)$")
+FENCE_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
+# The structural tell of a runtime capture, per runtime-evidence/SKILL.md.
+CAPTURED_OUTPUT_RE = re.compile(r"(?m)^#{1,6}\s*Captured\s+output\b",
+                                re.IGNORECASE)
 SCENARIO_ID_RE = re.compile(r"\b([A-Za-z]{1,6}-\d+)\b")
 PRIORITY_RE = re.compile(r"\bP([0-3])\b")
 PAREN_RE = re.compile(r"\(([^)]*)\)")
@@ -149,10 +156,97 @@ class GateError(Exception):
 # ---------------------------------------------------------------------------
 
 def read_text(path):
+    """Read a UTF-8 artifact, tolerating a byte-order mark."""
     p = Path(path)
     if not p.is_file():
         raise GateError(f"file not found or not readable: {path}")
-    return p.read_text(encoding="utf-8", errors="replace")
+    return p.read_text(encoding="utf-8-sig", errors="replace")
+
+
+def strip_fenced_blocks(text):
+    """Blank out every ```/~~~ fenced region, preserving the line count.
+
+    A `- AS-2.4: PASS — ...` inside a fenced example block is documentation of
+    the grammar, not a result — and since duplicate keys resolve latest-wins,
+    a pasted example could overwrite a real FAIL. The matrix is stripped for
+    the same reason: a fenced example table must not contribute scenarios.
+
+    Duplicated per file: this script family has no shared module by convention.
+    """
+    out, fence = [], None
+    for line in text.split("\n"):
+        m = FENCE_RE.match(line)
+        if fence is None:
+            if m:
+                fence = m.group(1)
+                out.append("")
+                continue
+            out.append(line)
+        else:
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
+                fence = None
+            out.append("")
+    return "\n".join(out)
+
+
+def sha256_file(path):
+    """Hex sha256 of a file's bytes, or None when it cannot be read."""
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code):
+    """Append ONE JSON line recording this run. Best-effort by design."""
+    if not ledger_path:
+        return
+    record = {
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "gate": Path(__file__).name,
+        "argv": list(argv),
+        "milestone": milestone,
+        "inputs": {str(p): sha256_file(p) for p in inputs if p},
+        "verdict": verdict,
+        "exit": exit_code,
+    }
+    try:
+        p = Path(ledger_path)
+        if str(p.parent):
+            p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+    except OSError as exc:
+        print(f"Warning: could not append to ledger {ledger_path}: {exc}",
+              file=sys.stderr)
+
+
+def capture_problem(path):
+    """None if the cited file is a usable capture, else why it is not.
+
+    A manual step's evidence is the ONLY thing standing between "a human
+    checked the device" and an agent's word for it, so existence alone is too
+    weak a test: a zero-byte or placeholder file satisfied the gate. A capture
+    is a capture when it is non-empty and carries the `## Captured output`
+    section that `runtime-evidence/SKILL.md` defines — the same structural
+    tell check_runtime_evidence.py uses. Whether the capture is HONEST
+    (transport, freshness, keys) stays that gate's job; running both is the
+    point.
+    """
+    try:
+        if path.stat().st_size == 0:
+            return "is zero bytes"
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError as exc:
+        return f"cannot be read ({exc})"
+    if not CAPTURED_OUTPUT_RE.search(text):
+        return ("has no '## Captured output' section — structurally not a "
+                "runtime capture")
+    return None
 
 
 def is_path_shaped(token):
@@ -583,6 +677,8 @@ def new_report(args):
         "lint_only": bool(args.lint_only),
         "require_priority": None,
         "min_scenarios": args.min_scenarios,
+        "changed_files": list(getattr(args, "changed_files", None) or []),
+        "stale_results": False,
         "scenarios": [],
         "gated_scenarios": [],
         "linted_scenarios": [],
@@ -634,7 +730,10 @@ def build_report(args):
     wanted = parse_priority_filter(args.require_priority)
     report["require_priority"] = sorted(wanted) if wanted else None
 
-    matrix_text = read_text(args.matrix)
+    # Fences are stripped ONCE, at read: a fenced example table must not
+    # contribute scenarios, and a fenced example result line must not overwrite
+    # a real one (duplicate keys resolve latest-wins).
+    matrix_text = strip_fenced_blocks(read_text(args.matrix))
     scenarios, parse_warnings = parse_matrix(matrix_text)
     report["warnings"].extend(parse_warnings)
     if not scenarios:
@@ -645,9 +744,29 @@ def build_report(args):
     if args.lint_only:
         return lint_report(report, scenarios, matrix_text, args)
 
-    results_text = read_text(args.results)
+    results_text = strip_fenced_blocks(read_text(args.results))
     if not results_text.strip():
         raise GateError(f"results file is empty: {args.results}")
+
+    # Freshness. Without it this gate had NO time dimension at all: a results
+    # file written before the code it claims to have exercised passed exactly
+    # as well as one written after. The same mtime PROXY (and the same
+    # documented limitation) as check_commit_gate.py's review staleness.
+    changed_files = list(getattr(args, "changed_files", None) or [])
+    if changed_files:
+        missing = [f for f in changed_files if not Path(f).exists()]
+        if missing:
+            raise GateError(
+                "changed_file_missing: --changed-files names path(s) that do "
+                "not exist on disk, which would silently disable the freshness "
+                "check: " + ", ".join(str(m) for m in missing))
+        newest = max(Path(f).stat().st_mtime for f in changed_files)
+        if Path(args.results).stat().st_mtime < newest:
+            report["stale_results"] = True
+            report["warnings"].append(
+                "stale_results: a changed file is newer than the results file "
+                "— this acceptance run predates the current diff and does not "
+                "count")
     results, unkeyed = parse_results(results_text)
     if not results:
         raise GateError(
@@ -742,9 +861,21 @@ def build_report(args):
 
             if needs_manual_evidence(entry):
                 entry["evidence"] = evidence_tokens(rest)
-                accepted = [t for t in entry["evidence"]
-                            if cited_under(t, "evidence", "runtime")
-                            and resolve_path(t, args.results, args.repo) is not None]
+                accepted = []
+                for token in entry["evidence"]:
+                    if not cited_under(token, "evidence", "runtime"):
+                        continue
+                    resolved = resolve_path(token, args.results, args.repo)
+                    if resolved is None:
+                        continue
+                    # Existence alone is too weak: a zero-byte or placeholder
+                    # file satisfied the gate outright.
+                    problem = capture_problem(resolved)
+                    if problem:
+                        entry["problems"].append(
+                            f"cited evidence {token} {problem}")
+                        continue
+                    accepted.append(token)
                 entry["evidence_ok"] = bool(accepted)
                 entry["evidence"] = accepted or entry["evidence"]
 
@@ -841,6 +972,7 @@ def build_report(args):
 
     gate_ok = (len(report["gated_scenarios"]) >= args.min_scenarios
                and report["steps_gated"] > 0
+               and not report["stale_results"]
                and not report["missing_results"]
                and not report["failed"]
                and not report["blocked"]
@@ -1087,8 +1219,20 @@ def build_parser():
     p.add_argument("--require-priority")
     p.add_argument("--min-scenarios", type=int, default=1)
     p.add_argument("--lint-only", action="store_true")
+    p.add_argument("--changed-files", nargs="+", default=[],
+                   help="the milestone's declared changes; the results file "
+                        "must be at least as new as the newest of them")
+    p.add_argument("--ledger",
+                   help="append one JSON record per run to this path")
     p.add_argument("--self-test", action="store_true")
     return p
+
+
+def ledger_inputs(args):
+    """Every file path this gate READ, in the order it was declared."""
+    paths = [args.matrix, args.results, args.requirements]
+    paths += list(getattr(args, "changed_files", None) or [])
+    return [p for p in paths if p]
 
 
 def main(argv):
@@ -1097,18 +1241,30 @@ def main(argv):
     if args.self_test:
         return run_self_test()
 
+    def finish(code, verdict):
+        """One exit point: EVERY return path records a ledger line."""
+        append_ledger(args.ledger, argv, None, ledger_inputs(args), verdict,
+                      code)
+        return code
+
     if args.lint_only:
+        if args.changed_files:
+            print(json.dumps({"result": "ERROR", "error":
+                              "--changed-files is not accepted with "
+                              "--lint-only: structure mode has no freshness "
+                              "dimension (nothing has been executed yet)."}))
+            return finish(2, "ERROR")
         if args.results:
             print(json.dumps({"result": "ERROR", "error":
                               "--results is not accepted with --lint-only: lint "
                               "mode gates matrix STRUCTURE, not execution. Drop "
                               "--results to lint, or drop --lint-only to gate "
                               "execution."}))
-            return 2
+            return finish(2, "ERROR")
         if not args.matrix:
             print(json.dumps({"result": "ERROR",
                               "error": "missing required argument(s): --matrix"}))
-            return 2
+            return finish(2, "ERROR")
     else:
         # Same mode-separation rule --results-with---lint-only enforces, read
         # from the other end: the FR->scenario link is a PLAN-time question
@@ -1121,22 +1277,23 @@ def main(argv):
                               "the FR->scenario link gates matrix STRUCTURE at "
                               "plan time, not execution. Add --lint-only (and "
                               "drop --results), or drop --requirements."}))
-            return 2
+            return finish(2, "ERROR")
         missing = [n for n, v in (("--matrix", args.matrix),
                                   ("--results", args.results)) if not v]
         if missing:
             print(json.dumps({"result": "ERROR",
                               "error": f"missing required argument(s): {', '.join(missing)}"}))
-            return 2
+            return finish(2, "ERROR")
 
     try:
         report = build_report(args)
     except GateError as exc:
         print(json.dumps({"result": "ERROR", "error": str(exc)}))
-        return 2
+        return finish(2, "ERROR")
 
     print(json.dumps(report, indent=2))
-    return 0 if report["result"] == "PASS" else 1
+    passed = report["result"] == "PASS"
+    return finish(0 if passed else 1, "PASS" if passed else "FAIL")
 
 
 # ---------------------------------------------------------------------------
@@ -1193,9 +1350,18 @@ Surface: web+api | Preconditions: integration connected (AS-1)
 - **NFR-2** (Should Have) — the mapping list renders within 500ms.
 """
 
+    # A conforming runtime capture: non-empty AND carrying the
+    # `## Captured output` section. A bare placeholder no longer satisfies a
+    # manual step.
+    CAPTURE = ("# Runtime capture: device check\n\n"
+               "- Probe command: `ssh lab@asset-x \"sc query SlideAgent\"`\n"
+               "- Exit code: 0\n\n"
+               "## Captured output\n\n```\nSTATE : 4 RUNNING\n```\n")
+
     EXPECTED_KEYS = {
         "matrix", "results", "requirements", "lint_only", "require_priority",
-        "min_scenarios", "scenarios", "gated_scenarios", "linted_scenarios",
+        "min_scenarios", "changed_files", "stale_results",
+        "scenarios", "gated_scenarios", "linted_scenarios",
         "steps", "steps_gated", "passed", "failed", "blocked", "not_run",
         "missing_results", "unevidenced_manual", "dangling_inverse",
         "undeclared_inverse", "exempt_steps", "invalid_exemption",
@@ -1226,7 +1392,7 @@ Surface: web+api | Preconditions: integration connected (AS-1)
             self.results = self.impl / "acceptance-results.md"
             self.matrix.write_text(MATRIX, encoding="utf-8")
             (self.impl / "evidence" / "runtime" / "as2-4-device-install.md"
-             ).write_text("# device capture\n", encoding="utf-8")
+             ).write_text(CAPTURE, encoding="utf-8")
 
         def tearDown(self):
             shutil.rmtree(self.dir, ignore_errors=True)
@@ -1235,7 +1401,8 @@ Surface: web+api | Preconditions: integration connected (AS-1)
             base = dict(matrix=str(self.matrix), results=str(self.results),
                         requirements=None, repo=str(self.dir),
                         require_priority=None, min_scenarios=1,
-                        lint_only=False, self_test=False)
+                        lint_only=False, changed_files=[], ledger=None,
+                        self_test=False)
             base.update(kw)
             return argparse.Namespace(**base)
 
@@ -1428,9 +1595,136 @@ Surface: web+api | Preconditions: integration connected (AS-1)
         def test_manual_evidence_resolved_against_repo(self):
             (self.dir / "evidence" / "runtime").mkdir(parents=True)
             (self.dir / "evidence" / "runtime" / "dev.md").write_text(
-                "x", encoding="utf-8")
+                CAPTURE, encoding="utf-8")
             r = self._run(GREEN[:-1] + ["- AS-2.4: PASS — evidence/runtime/dev.md"])
             self.assertEqual(r["result"], "PASS", r)
+
+        # ---- condition 3, second half: the cited file must BE a capture ----
+
+        def test_zero_byte_manual_evidence_blocks(self):
+            """`touch evidence/runtime/x.md` satisfied a device step outright."""
+            (self.impl / "evidence" / "runtime" / "as2-4-device-install.md"
+             ).write_bytes(b"")
+            r = self._run()
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["unevidenced_manual"], ["AS-2.4"])
+            step = [s for s in r["steps"] if s["key"] == "AS-2.4"][0]
+            self.assertTrue(any("zero bytes" in p for p in step["problems"]))
+
+        def test_manual_evidence_without_captured_output_blocks(self):
+            """A non-empty note is not a capture."""
+            (self.impl / "evidence" / "runtime" / "as2-4-device-install.md"
+             ).write_text("I checked the device and it was fine.\n",
+                          encoding="utf-8")
+            r = self._run()
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["unevidenced_manual"], ["AS-2.4"])
+            step = [s for s in r["steps"] if s["key"] == "AS-2.4"][0]
+            self.assertTrue(any("Captured output" in p for p in step["problems"]))
+
+        # ---- freshness (--changed-files) ----
+
+        def test_results_older_than_the_diff_block(self):
+            import os
+
+            code = self.dir / "src.py"
+            code.write_text("code\n", encoding="utf-8")
+            r = self._run(changed_files=[str(code)])
+            os.utime(self.results, (1000, 1000))
+            os.utime(code, (2000, 2000))
+            r = build_report(self._args(changed_files=[str(code)]))
+            self.assertTrue(r["stale_results"])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertTrue(any("stale_results" in w for w in r["warnings"]))
+
+        def test_results_newer_than_the_diff_pass(self):
+            import os
+
+            code = self.dir / "src.py"
+            code.write_text("code\n", encoding="utf-8")
+            self._run()
+            os.utime(code, (1000, 1000))
+            os.utime(self.results, (2000, 2000))
+            r = build_report(self._args(changed_files=[str(code)]))
+            self.assertFalse(r["stale_results"])
+            self.assertEqual(r["result"], "PASS", r["warnings"])
+
+        def test_missing_changed_file_is_structural(self):
+            self._run()
+            with self.assertRaises(GateError) as ctx:
+                build_report(self._args(
+                    changed_files=[str(self.dir / "never-existed.py")]))
+            self.assertIn("changed_file_missing", str(ctx.exception))
+
+        def test_changed_files_omitted_skips_freshness(self):
+            r = self._run()
+            self.assertEqual(r["changed_files"], [])
+            self.assertFalse(r["stale_results"])
+            self.assertEqual(r["result"], "PASS")
+
+        def test_changed_files_with_lint_only_is_usage_error(self):
+            self.assertEqual(main(["--lint-only", "--matrix", str(self.matrix),
+                                   "--changed-files", str(self.matrix)]), 2)
+
+        # ---- fences and encoding ----
+
+        def test_fenced_result_line_does_not_overwrite_a_real_one(self):
+            """Latest-wins made a fenced grammar example able to bury a FAIL."""
+            self.results.write_text(
+                results(GREEN[:-1] + ["- AS-2.4: FAIL — agent never installed"])
+                + "\nThe result grammar is:\n\n"
+                "```\n- AS-2.4: PASS — evidence/runtime/as2-4-device-install.md\n```\n",
+                encoding="utf-8")
+            r = build_report(self._args())
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["failed"], ["AS-2.4"])
+
+        def test_fenced_matrix_table_contributes_no_scenario(self):
+            fenced = MATRIX + (
+                "\nAuthoring template:\n\n"
+                "```markdown\n"
+                "## AS-9 Example — P0 — (FR-9)\n\n"
+                "| # | GO | DO | ASSERT | Stores | Mode |\n"
+                "|---|----|----|--------|--------|------|\n"
+                "| 1 | x | y | z | api | auto |\n"
+                "```\n")
+            r = self._run(matrix=fenced)
+            self.assertEqual(r["gated_scenarios"], ["AS-1", "AS-2"])
+            self.assertEqual(r["result"], "PASS", r)
+
+        def test_strip_fenced_blocks_preserves_line_count(self):
+            text = "a\n```\nb\n```\nc\n"
+            self.assertEqual(len(strip_fenced_blocks(text).split("\n")),
+                             len(text.split("\n")))
+
+        def test_bom_prefixed_artifacts_still_parse(self):
+            self.matrix.write_bytes(b"\xef\xbb\xbf" + MATRIX.encode("utf-8"))
+            self.results.write_bytes(
+                b"\xef\xbb\xbf" + results(GREEN).encode("utf-8"))
+            r = build_report(self._args())
+            self.assertEqual(r["result"], "PASS", r)
+
+        # ---- the shared gate ledger ----
+
+        def test_ledger_records_every_exit_path(self):
+            ledger = self.dir / "logs" / "gates.jsonl"
+            self.results.write_text(results(GREEN), encoding="utf-8")
+            base = ["--matrix", str(self.matrix), "--results", str(self.results),
+                    "--repo", str(self.dir), "--ledger", str(ledger)]
+            self.assertEqual(main(base), 0)
+            self.results.write_text(
+                results(GREEN[:-1] + ["- AS-2.4: FAIL — never installed"]),
+                encoding="utf-8")
+            self.assertEqual(main(base), 1)
+            self.assertEqual(main(["--ledger", str(ledger)]), 2)
+            records = [json.loads(l) for l in
+                       ledger.read_text(encoding="utf-8").splitlines() if l.strip()]
+            self.assertEqual([r["verdict"] for r in records],
+                             ["PASS", "FAIL", "ERROR"])
+            self.assertTrue(all(r["gate"] == "check_acceptance_suite.py"
+                                for r in records))
+            self.assertIsNone(records[0]["milestone"])
+            self.assertIn(str(self.matrix), records[0]["inputs"])
 
         def test_auto_step_needs_no_evidence_file(self):
             r = self._run()

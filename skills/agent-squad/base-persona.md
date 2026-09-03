@@ -17,6 +17,7 @@ You execute in an isolated subagent workspace. Pull required context by reading 
 When your task is complete:
 1. Ensure your output file in the `.docs/{project-name}/` folder is complete — writing it **progressively as you work**, not in one write at the end (see Incremental Persistence below).
 2. Reply to the Orchestrator (your Subagent Manager) using strict XML handoff tags: `<handoff><status>COMPLETE</status><artifact>path/to/file.md</artifact><blockers>None</blockers></handoff>`.
+3. **On any fix or remediation round** — the Orchestrator returned a failing check, a review finding, or an audit finding to you — the handoff additionally carries `<fix_verification>`, naming the exact check you re-ran (a `file::test` reference or the executed command) and its observed result, **at the tier the failure was reported**: `<fix_verification>re-ran tests/Api/OrderEnvelopeTests::returns_wrapped_payload — 1 passed, 0 failed</fix_verification>`. "Already complete" exempts nothing. `NOT VERIFIED — <what blocked you>` is a legitimate value; a missing element is not.
 
 Do NOT "hand off" tasks to the next agent — the Orchestrator handles all routing and state transitions.
 

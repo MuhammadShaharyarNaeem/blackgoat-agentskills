@@ -64,7 +64,8 @@ if (-not (Test-Path $planPath)) {
 }
 Write-Output '[2] PASSED: plan.md exists'
 
-$planContent = Get-Content -Path $planPath -Raw
+$planContent = Get-Content -Path $planPath -Raw -Encoding UTF8
+$planContent = $planContent -replace "`r`n", "`n"
 
 # --- (a)+(b) domain tags and milestone homogeneity: defer to the plugin's
 # own domain-tag lint (check_coverage.py plan mode) instead of reimplementing

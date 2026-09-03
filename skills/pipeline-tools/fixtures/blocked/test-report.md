@@ -2,8 +2,8 @@
 
 #Task [1]:
 
-- FR-1: PASS — notification appears after a finished job (test_notification_appears)
-- NFR-1: PASS — emitted 1.2s after job completion (test_notification_latency)
+- FR-1: PASS — `npm test` — exit 0 — tests/notifications.test.js::notification appears after a finished job
+- NFR-1: PASS — `npm test` — exit 0 — tests/notifications.test.js::emitted 1.2s after job completion
 
 #Task [2]:
 

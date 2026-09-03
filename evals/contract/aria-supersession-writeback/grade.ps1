@@ -94,8 +94,8 @@ if (-not (Test-Path $requirementsPath)) {
 # --- [1] run sanity: the blueprint was authored at all -----------------------
 $designText = ''
 if (Test-Path $designPath) {
-    $rawDesign = Get-Content -Path $designPath -Raw
-    if ($null -ne $rawDesign) { $designText = $rawDesign }
+    $rawDesign = Get-Content -Path $designPath -Raw -Encoding UTF8
+    if ($null -ne $rawDesign) { $designText = $rawDesign -replace "`r`n", "`n" }
 }
 if ([string]::IsNullOrWhiteSpace($designText)) {
     Add-Failure 1 "no detailed-design.md at $designPath - the claude invocation did not run, or Aria wrote the blueprint somewhere the pipeline does not read; criteria 2-5 below will cascade and say nothing about the supersession contract"

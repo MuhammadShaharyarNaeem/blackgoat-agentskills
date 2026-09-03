@@ -16,15 +16,17 @@ there — and therefore this gate — accepts a heading containing
 no items under it passes.
 
 Usage:
-    python check_ship_decision.py --report <path> [--require-go]
+    python check_ship_decision.py --report <path> [--require-go] [--ledger <path>]
     python check_ship_decision.py --self-test
 """
 import argparse
+import hashlib
 import json
 import re
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 VERDICT_LINE_RE = re.compile(
@@ -34,6 +36,7 @@ ROLLBACK_HEADING_RE = re.compile(r"(?im)^#{1,6}\s*.*\brollback\b")
 CHECKLIST_HEADING_RE = re.compile(r"(?im)^#{1,6}\s*.*\bchecklist\b")
 CHECKBOX_RE = re.compile(r"(?m)^\s*[-*]\s*\[[ xX]\]")
 HEADING_RE = re.compile(r"(?m)^#{1,6}\s+\S")
+FENCE_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
 
 
 class GateError(Exception):
@@ -41,13 +44,75 @@ class GateError(Exception):
 
 
 def read_text(path):
+    """Read a UTF-8 artifact, tolerating a byte-order mark."""
     p = Path(path)
     if not p.is_file():
         raise GateError(f"file not found or not readable: {path}")
-    text = p.read_text(encoding="utf-8", errors="replace")
+    text = p.read_text(encoding="utf-8-sig", errors="replace")
     if not text.strip():
         raise GateError(f"file is empty: {path}")
     return text
+
+
+def strip_fenced_blocks(text):
+    """Blank out every ```/~~~ fenced region, preserving the line count.
+
+    A `Ship Decision: GO` inside a fenced TEMPLATE block is an example of the
+    format, not a decision — but it parsed as one and, being in the last
+    verdict-bearing section, won outright.
+
+    Duplicated per file: this script family has no shared module by convention.
+    """
+    out, fence = [], None
+    for line in text.split("\n"):
+        m = FENCE_RE.match(line)
+        if fence is None:
+            if m:
+                fence = m.group(1)
+                out.append("")
+                continue
+            out.append(line)
+        else:
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
+                fence = None
+            out.append("")
+    return "\n".join(out)
+
+
+def sha256_file(path):
+    """Hex sha256 of a file's bytes, or None when it cannot be read."""
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code):
+    """Append ONE JSON line recording this run. Best-effort by design."""
+    if not ledger_path:
+        return
+    record = {
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "gate": Path(__file__).name,
+        "argv": list(argv),
+        "milestone": milestone,
+        "inputs": {str(p): sha256_file(p) for p in inputs if p},
+        "verdict": verdict,
+        "exit": exit_code,
+    }
+    try:
+        p = Path(ledger_path)
+        if str(p.parent):
+            p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+    except OSError as exc:
+        print(f"Warning: could not append to ledger {ledger_path}: {exc}",
+              file=sys.stderr)
 
 
 def normalize_verdict(token):
@@ -82,7 +147,9 @@ def parse_verdicts(text):
 
 
 def build_report(path, require_go):
-    text = read_text(path)
+    # Fences are stripped ONCE, here: the verdict scan, the Rollback heading
+    # and the checklist all read a document with no example blocks in it.
+    text = strip_fenced_blocks(read_text(path))
     verdicts = parse_verdicts(text)
     distinct = sorted(set(verdicts))
     has_rollback = bool(ROLLBACK_HEADING_RE.search(text))
@@ -131,24 +198,32 @@ def main(argv):
         action="store_true",
         help="fail unless the unambiguous verdict is GO",
     )
+    parser.add_argument("--ledger",
+                        help="append one JSON record per run to this path")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
 
     if args.self_test:
         return run_self_test()
 
+    def finish(code, verdict):
+        """One exit point: EVERY return path records a ledger line."""
+        append_ledger(args.ledger, argv, None,
+                      [args.report] if args.report else [], verdict, code)
+        return code
+
     if not args.report:
         print(json.dumps({"pass": False, "error": "missing required argument: --report"}))
-        return 2
+        return finish(2, "ERROR")
 
     try:
         report = build_report(args.report, args.require_go)
     except GateError as exc:
         print(json.dumps({"pass": False, "error": str(exc)}))
-        return 2
+        return finish(2, "ERROR")
 
     print(json.dumps(report, indent=2))
-    return 0 if report["pass"] else 1
+    return finish(0, "PASS") if report["pass"] else finish(1, "FAIL")
 
 
 def run_self_test():
@@ -286,6 +361,67 @@ Verdict: NO-GO
             self.path.write_text("   \n", encoding="utf-8")
             with self.assertRaises(GateError):
                 build_report(str(self.path), require_go=False)
+
+        # ---- fences and encoding ----
+
+        def test_fenced_go_template_does_not_win(self):
+            """A `GO` inside a fenced format example is not a decision."""
+            self.path.write_text(
+                NO_GO + "\nFor the next round, write:\n\n"
+                "```markdown\nShip Decision: GO\n```\n", encoding="utf-8")
+            report = build_report(str(self.path), require_go=True)
+            self.assertEqual(report["verdict"], "NO-GO")
+            self.assertFalse(report["pass"])
+
+        def test_fenced_go_only_leaves_no_verdict(self):
+            self.path.write_text(
+                "# Ship Decision\n\n## Rollback\nx\n\n## Checklist\n"
+                "- [ ] a\n- [ ] b\n- [ ] c\n\n"
+                "~~~\nShip Decision: GO\n~~~\n", encoding="utf-8")
+            report = build_report(str(self.path), require_go=False)
+            self.assertIsNone(report["verdict"])
+            self.assertFalse(report["pass"])
+
+        def test_strip_fenced_blocks_preserves_line_count(self):
+            text = "a\n```\nb\n```\nc\n"
+            self.assertEqual(len(strip_fenced_blocks(text).split("\n")),
+                             len(text.split("\n")))
+
+        def test_bom_prefixed_decision_still_parses(self):
+            self.path.write_bytes(b"\xef\xbb\xbf" + HAPPY.encode("utf-8"))
+            report = build_report(str(self.path), require_go=True)
+            self.assertTrue(report["pass"])
+            self.assertEqual(report["verdict"], "GO")
+
+        # ---- the shared gate ledger ----
+
+        def _ledger_records(self, path):
+            return [json.loads(l) for l in
+                    Path(path).read_text(encoding="utf-8").splitlines() if l.strip()]
+
+        def test_ledger_records_every_exit_path(self):
+            ledger = self.dir / "logs" / "gates.jsonl"
+            self.path.write_text(HAPPY, encoding="utf-8")
+            self.assertEqual(main(["--report", str(self.path), "--require-go",
+                                   "--ledger", str(ledger)]), 0)
+            self.path.write_text(NO_GO, encoding="utf-8")
+            self.assertEqual(main(["--report", str(self.path), "--require-go",
+                                   "--ledger", str(ledger)]), 1)
+            self.assertEqual(main(["--report", str(self.dir / "gone.md"),
+                                   "--ledger", str(ledger)]), 2)
+            records = self._ledger_records(ledger)
+            self.assertEqual([r["verdict"] for r in records],
+                             ["PASS", "FAIL", "ERROR"])
+            self.assertEqual([r["exit"] for r in records], [0, 1, 2])
+            self.assertTrue(all(r["gate"] == "check_ship_decision.py"
+                                for r in records))
+            self.assertIsNone(records[0]["milestone"])
+            # The NO-GO run's recorded hash is the file's CURRENT content —
+            # the PASS run's is the earlier revision, which is the point.
+            self.assertEqual(records[1]["inputs"][str(self.path)],
+                             sha256_file(self.path))
+            self.assertNotEqual(records[0]["inputs"][str(self.path)],
+                                records[1]["inputs"][str(self.path)])
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(ShipDecisionTests)
     result = unittest.TextTestRunner(verbosity=1).run(suite)

@@ -123,7 +123,7 @@ if (Test-Path $reportPath) {
     # into "â€"". That silently broke finding segmentation for the `#### Ln — **Sev:**`
     # layout real reviews use - the corrupted separator no longer matches the pattern.
     $rawReport = Get-Content -Path $reportPath -Raw -Encoding UTF8
-    if ($null -ne $rawReport) { $reportText = $rawReport }
+    if ($null -ne $rawReport) { $reportText = $rawReport -replace "`r`n", "`n" }
 }
 
 $milestoneHeadingPattern = '(?im)^##\s*Review:.*(?<![a-z0-9])(?:milestone\s*1|m1)(?![a-z0-9])'

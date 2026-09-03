@@ -9,7 +9,8 @@ This replaces re-reading the entire plan (290K+ chars in real plans) every
 time the Orchestrator must decide what to build next.
 
 Usage:
-    python next_milestone.py --plan <path> [--state <path>]
+    python next_milestone.py --plan <path> [--state <path>] \
+        [--ledger <path>] [--emit-gate-args]
     python next_milestone.py --self-test
 
 Pure standard library. See ../SKILL.md for the full contract (JSON shape,
@@ -36,16 +37,42 @@ VALID_SURFACES = ("api", "ui", "web+api", "rmm", "fn", "none")
 
 EXIT_CODES = {"NEXT": 0, "DONE": 0, "MIXED": 1, "ERROR": 2}
 
+# --- RUNTIME PROBE parsing (for --emit-gate-args) --------------------------
+# The probe line the plan already declares carries exactly the arguments
+# check_runtime_evidence.py needs. Deriving them mechanically removes the step
+# where the Orchestrator retypes them — and a retyped assertion is one that can
+# be quietly weakened. The parse is deliberately CONSERVATIVE: anything it is
+# unsure of comes back null/empty so the caller supplies it explicitly, never
+# a guess that reads as a declaration.
+PROBE_MARKER_RE = re.compile(r"RUNTIME\s+PROBE\s*:", re.IGNORECASE)
+EXPECT_STATUS_RES = (
+    re.compile(r"\bexpect[-_\s]*status\s*[:=]?\s*(\d{3})\b", re.IGNORECASE),
+    re.compile(r"\bexpects?\s+(\d{3})\b", re.IGNORECASE),
+    re.compile(r"\bstatus\s+(\d{3})\b", re.IGNORECASE),
+    re.compile(r"\b(\d{3})\s+(?:OK|Created|Accepted|No\s+Content)\b",
+               re.IGNORECASE),
+)
+# A keys FIELD, whose value runs to the next `;` or newline. Backticked and
+# bare identifiers inside the value both parse.
+REQUIRE_KEYS_FIELD_RE = re.compile(
+    r"\brequire[-_]?keys?\s*[:=]\s*([^;\n]*)|\bkeys\s*[:=]\s*([^;\n]*)",
+    re.IGNORECASE)
+REQUIRE_KEY_SINGLE_RE = re.compile(
+    r"\brequire[-_]?key\s+`?([A-Za-z_][A-Za-z0-9_]*)`?", re.IGNORECASE)
+KEY_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
+EMPTY_KEY_VALUES = {"none", "n/a", "na", "-", "tbd"}
+
 
 class GateError(Exception):
     """Structural/usage failure — maps to exit 2."""
 
 
 def read_text(path):
+    """Read a UTF-8 artifact, tolerating a byte-order mark."""
     p = Path(path)
     if not p.is_file():
         raise GateError(f"file not found or not readable: {path}")
-    return p.read_text(encoding="utf-8", errors="replace")
+    return p.read_text(encoding="utf-8-sig", errors="replace")
 
 
 def milestone_domain(heading_line, block_text):
@@ -207,6 +234,144 @@ def derive_next(milestones):
     }
 
 
+def _probe_lines(block_text):
+    """Every `RUNTIME PROBE:` line in a milestone block, in file order."""
+    return [line for line in block_text.split("\n")
+            if PROBE_MARKER_RE.search(line)]
+
+
+def _parse_expect_status(line):
+    for pattern in EXPECT_STATUS_RES:
+        m = pattern.search(line)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def _parse_require_keys(line):
+    """Identifier list from a keys FIELD only — never from the whole line.
+
+    Harvesting backticked tokens line-wide would read the probe COMMAND
+    (`` `npm run start` ``) as required response keys. A key is only a key
+    where the author declared one.
+    """
+    values = []
+    for m in REQUIRE_KEYS_FIELD_RE.finditer(line):
+        values.append(m.group(1) if m.group(1) is not None else m.group(2))
+    keys = []
+    for value in values:
+        for part in (value or "").split(","):
+            part = part.strip().strip("`").strip()
+            if not part or part.lower() in EMPTY_KEY_VALUES:
+                continue
+            token = KEY_TOKEN_RE.match(part)
+            if token and token.group(0) not in keys:
+                keys.append(token.group(0))
+    for m in REQUIRE_KEY_SINGLE_RE.finditer(line):
+        if m.group(1) not in keys:
+            keys.append(m.group(1))
+    return keys
+
+
+def derive_gate_args(milestone):
+    """Parse a milestone's probe declarations into gate arguments.
+
+    Returns ({surface, expect_status, require_keys, forbid_hosts}, warnings).
+
+    When a milestone declares SEVERAL probe lines that disagree, the
+    disagreement is reported and the field comes back null/empty: a gate
+    argument invented from an ambiguous plan is worse than an absent one,
+    because it reads to every later consumer as a declaration.
+
+    `forbid_hosts` is ALWAYS empty. Forbidden hosts are project-declared by
+    the caller (check_runtime_evidence.py's contract) and nothing in a plan
+    can supply them; the key exists so the object's shape is stable.
+    """
+    warnings = []
+    lines = _probe_lines(milestone["text"])
+    statuses = [s for s in (_parse_expect_status(l) for l in lines)
+                if s is not None]
+    key_sets = [_parse_require_keys(l) for l in lines]
+    key_sets = [k for k in key_sets if k]
+
+    expect_status = None
+    if len({*statuses}) == 1:
+        expect_status = statuses[0]
+    elif len({*statuses}) > 1:
+        warnings.append(
+            f"milestone {milestone['title']!r} declares conflicting probe "
+            f"statuses ({', '.join(str(s) for s in sorted({*statuses}))}); "
+            "gate_args.expect_status left null — pass --expect-status "
+            "explicitly")
+
+    require_keys = []
+    distinct = {tuple(k) for k in key_sets}
+    if len(distinct) == 1:
+        require_keys = list(key_sets[0])
+    elif len(distinct) > 1:
+        warnings.append(
+            f"milestone {milestone['title']!r} declares conflicting probe key "
+            "sets; gate_args.require_keys left empty — pass --require-key "
+            "explicitly")
+
+    if not lines:
+        warnings.append(
+            f"milestone {milestone['title']!r} declares no 'RUNTIME PROBE:' "
+            "line, so gate_args carries only the surface")
+
+    return {
+        "surface": milestone["surface"],
+        "expect_status": expect_status,
+        "require_keys": require_keys,
+        "forbid_hosts": [],
+    }, warnings
+
+
+def check_unbacked_complete(ledger_path, milestones):
+    """Milestones marked `[x]` with no PASS commit-gate record behind them.
+
+    ADVISORY ONLY — exit codes are unchanged. Completion is recorded by
+    hand-appending `[x]` to a heading, which nothing tied to a commit or a
+    gate: a milestone could be marked done by editing one character. This
+    cannot refuse the edit, but it can refuse to stay quiet about it.
+
+    Matching mirrors the cursor check: a case-insensitive substring test in
+    either direction between the ledger entry's milestone and the title.
+    """
+    warnings = []
+    p = Path(ledger_path)
+    if not p.is_file():
+        return [], [f"ledger {ledger_path} does not exist; the "
+                    "unbacked-completion check reports nothing"]
+    passed = []
+    for line in p.read_text(encoding="utf-8-sig", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (isinstance(rec, dict) and rec.get("gate") == "check_commit_gate.py"
+                and rec.get("verdict") == "PASS"
+                and isinstance(rec.get("milestone"), str)):
+            passed.append(rec["milestone"].lower())
+
+    unbacked = []
+    for m in milestones:
+        if not m["complete"]:
+            continue
+        title = m["title"].lower()
+        if not any(entry in title or title in entry for entry in passed):
+            unbacked.append(m["title"])
+    if unbacked:
+        warnings.append(
+            "unbacked_complete (ADVISORY): milestone(s) marked '[x]' with no "
+            "PASS check_commit_gate.py ledger entry behind them — completion "
+            "was asserted, not gated: " + ", ".join(unbacked))
+    return unbacked, warnings
+
+
 def check_cursor(state_path, milestones, next_milestone):
     """Compare orchestrator-state.json's milestone_cursor against plan order.
 
@@ -254,6 +419,8 @@ def build_report(args):
         "completed_count": 0,
         "total_count": 0,
         "cursor": None,
+        "gate_args": None,
+        "unbacked_complete": [],
         "warnings": [],
         "error": None,
     }
@@ -270,6 +437,18 @@ def build_report(args):
         report["cursor"] = cursor_info
         report["warnings"] += warnings
 
+    if getattr(args, "ledger", None):
+        unbacked, warnings = check_unbacked_complete(args.ledger, milestones)
+        report["unbacked_complete"] = unbacked
+        report["warnings"] += warnings
+
+    if getattr(args, "emit_gate_args", False) and derived["result"] == "NEXT":
+        next_m = next(m for m in milestones
+                      if m["line"] == derived["next_milestone"]["line"])
+        gate_args, warnings = derive_gate_args(next_m)
+        report["gate_args"] = gate_args
+        report["warnings"] += warnings
+
     return report
 
 
@@ -277,6 +456,13 @@ def main(argv):
     parser = argparse.ArgumentParser(prog="next_milestone.py")
     parser.add_argument("--plan")
     parser.add_argument("--state")
+    parser.add_argument(
+        "--ledger",
+        help="the shared gate ledger; enables the ADVISORY unbacked_complete "
+             "check (exit codes are unchanged)")
+    parser.add_argument(
+        "--emit-gate-args", action="store_true",
+        help="parse the next milestone's RUNTIME PROBE line into gate_args")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
 
@@ -488,10 +674,12 @@ Notes about the checkpoint.
             p.write_text(json.dumps({"milestone_cursor": cursor}))
             return p
 
-        def _run(self, plan_path, state_path=None):
-            ns = argparse.Namespace(plan=str(plan_path),
-                                    state=str(state_path) if state_path else None)
-            return build_report(ns)
+        def _run(self, plan_path, state_path=None, **kw):
+            base = dict(plan=str(plan_path),
+                        state=str(state_path) if state_path else None,
+                        ledger=None, emit_gate_args=False)
+            base.update(kw)
+            return build_report(argparse.Namespace(**base))
 
         def test_happy_path_derives_next(self):
             r = self._run(self._plan(HAPPY_PLAN))
@@ -679,6 +867,135 @@ Notes about the checkpoint.
             self.assertEqual(r["result"], "NEXT")
             self.assertIn("Checkpoint: schema review", r["milestone_text"])
             self.assertTrue(any("Checkpoint" in w for w in r["warnings"]))
+
+        # ---- --emit-gate-args ----
+
+        def _probe_plan(self, checkpoint):
+            return ("# P\n\n## Milestone 1 — Orders [API] [vs:api]\n\n"
+                    "## Task 1: t\n\n**Tags:** [API]\n\n"
+                    "### Checkpoint: Milestone 1\n" + checkpoint)
+
+        def test_gate_args_parsed_from_the_canonical_probe_line(self):
+            plan = self._probe_plan(
+                "- [ ] RUNTIME PROBE: start: `npm run start`; probe: "
+                "`curl -sS -i http://localhost:5142/api/orders`; "
+                "expect-status: 200; require-keys: isSuccess, data\n")
+            r = self._run(self._plan(plan), emit_gate_args=True)
+            self.assertEqual(r["gate_args"], {
+                "surface": "api", "expect_status": 200,
+                "require_keys": ["isSuccess", "data"], "forbid_hosts": []})
+
+        def test_gate_args_parses_loose_status_spellings(self):
+            for probe, expected in (
+                    ("- [ ] RUNTIME PROBE: probe: `curl /a`; expect 201\n", 201),
+                    ("- [ ] RUNTIME PROBE: probe: `curl /a`; status 204\n", 204),
+                    ("- [ ] RUNTIME PROBE: probe: `curl /a` returns 200 OK\n", 200)):
+                r = self._run(self._plan(self._probe_plan(probe)),
+                              emit_gate_args=True)
+                self.assertEqual(r["gate_args"]["expect_status"], expected, probe)
+
+        def test_gate_args_parses_loose_key_spellings(self):
+            for probe in ("- [ ] RUNTIME PROBE: probe: `curl /a`; keys: a, b\n",
+                          "- [ ] RUNTIME PROBE: probe: `curl /a`; "
+                          "require-keys: `a`, `b`\n"):
+                r = self._run(self._plan(self._probe_plan(probe)),
+                              emit_gate_args=True)
+                self.assertEqual(r["gate_args"]["require_keys"], ["a", "b"], probe)
+            r = self._run(self._plan(self._probe_plan(
+                "- [ ] RUNTIME PROBE: probe: `curl /a`; require-key isSuccess\n")),
+                emit_gate_args=True)
+            self.assertEqual(r["gate_args"]["require_keys"], ["isSuccess"])
+
+        def test_gate_args_never_harvests_keys_from_the_probe_command(self):
+            """Line-wide backtick harvesting would read `npm run start` as keys."""
+            r = self._run(self._plan(self._probe_plan(
+                "- [ ] RUNTIME PROBE: start: `npm run start`; probe: "
+                "`curl -sS -i http://localhost:5142/api/orders`\n")),
+                emit_gate_args=True)
+            self.assertEqual(r["gate_args"]["require_keys"], [])
+            self.assertIsNone(r["gate_args"]["expect_status"])
+
+        def test_gate_args_are_null_when_probes_disagree(self):
+            plan = self._probe_plan(
+                "- [ ] RUNTIME PROBE: probe: `curl /a`; expect-status: 200; "
+                "require-keys: a\n"
+                "- [ ] RUNTIME PROBE: probe: `curl /b`; expect-status: 404; "
+                "require-keys: b\n")
+            r = self._run(self._plan(plan), emit_gate_args=True)
+            self.assertIsNone(r["gate_args"]["expect_status"])
+            self.assertEqual(r["gate_args"]["require_keys"], [])
+            self.assertTrue(any("conflicting probe statuses" in w
+                                for w in r["warnings"]))
+
+        def test_gate_args_absent_probe_warns_and_carries_only_the_surface(self):
+            r = self._run(self._plan(self._probe_plan("- [ ] All tests pass\n")),
+                          emit_gate_args=True)
+            self.assertEqual(r["gate_args"], {
+                "surface": "api", "expect_status": None,
+                "require_keys": [], "forbid_hosts": []})
+            self.assertTrue(any("no 'RUNTIME PROBE:'" in w for w in r["warnings"]))
+
+        def test_gate_args_null_without_the_flag_and_on_a_defect(self):
+            r = self._run(self._plan(HAPPY_PLAN))
+            self.assertIsNone(r["gate_args"])
+            r = self._run(self._plan(MIXED_PLAN), emit_gate_args=True)
+            self.assertEqual(r["result"], "MIXED")
+            self.assertIsNone(r["gate_args"])
+
+        # ---- --ledger: the ADVISORY unbacked-completion check ----
+
+        def _ledger(self, *milestones, name="gates.jsonl"):
+            p = self.dir / name
+            with open(p, "w", encoding="utf-8") as fh:
+                for m in milestones:
+                    fh.write(json.dumps({
+                        "ts": "2026-09-02T00:00:00Z",
+                        "gate": "check_commit_gate.py", "argv": [],
+                        "milestone": m, "inputs": {}, "verdict": "PASS",
+                        "exit": 0}) + "\n")
+            return p
+
+        def test_hand_marked_complete_milestone_is_reported_as_unbacked(self):
+            """`[x]` is a hand edit; nothing tied it to a commit or a gate."""
+            ledger = self._ledger()
+            r = self._run(self._plan(HAPPY_PLAN), ledger=str(ledger))
+            self.assertEqual(r["unbacked_complete"],
+                             ["Milestone 1 — Setup [API] [vs:api] [x]"])
+            self.assertTrue(any("unbacked_complete" in w for w in r["warnings"]))
+            self.assertEqual(r["result"], "NEXT")
+            self.assertEqual(EXIT_CODES[r["result"]], 0)   # advisory only
+
+        def test_backed_complete_milestone_is_not_reported(self):
+            ledger = self._ledger("Milestone 1 — Setup")
+            r = self._run(self._plan(HAPPY_PLAN), ledger=str(ledger))
+            self.assertEqual(r["unbacked_complete"], [])
+
+        def test_failing_ledger_entry_does_not_back_a_completion(self):
+            ledger = self.dir / "gates.jsonl"
+            ledger.write_text(json.dumps({
+                "ts": "2026-09-02T00:00:00Z", "gate": "check_commit_gate.py",
+                "argv": [], "milestone": "Milestone 1 — Setup", "inputs": {},
+                "verdict": "FAIL", "exit": 1}) + "\n", encoding="utf-8")
+            r = self._run(self._plan(HAPPY_PLAN), ledger=str(ledger))
+            self.assertEqual(len(r["unbacked_complete"]), 1)
+
+        def test_missing_ledger_warns_and_does_not_raise(self):
+            r = self._run(self._plan(HAPPY_PLAN),
+                          ledger=str(self.dir / "absent.jsonl"))
+            self.assertEqual(r["unbacked_complete"], [])
+            self.assertTrue(any("does not exist" in w for w in r["warnings"]))
+            self.assertEqual(r["result"], "NEXT")
+
+        def test_ledger_key_absent_without_the_flag(self):
+            r = self._run(self._plan(HAPPY_PLAN))
+            self.assertEqual(r["unbacked_complete"], [])
+
+        def test_bom_prefixed_plan_still_parses(self):
+            p = self.dir / "bom-plan.md"
+            p.write_bytes(b"\xef\xbb\xbf" + HAPPY_PLAN.encode("utf-8"))
+            r = self._run(p)
+            self.assertEqual(r["result"], "NEXT")
+            self.assertEqual(r["total_count"], 3)
 
         def test_level3_checkpoint_form_has_no_warning(self):
             # Canonical '### Checkpoint:' form is unchanged: included, no warning.

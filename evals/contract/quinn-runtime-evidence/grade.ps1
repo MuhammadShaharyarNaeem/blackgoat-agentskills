@@ -67,7 +67,8 @@ if (-not (Test-Path $testReportPath)) {
 }
 Write-Output '[2] PASSED: test-report.md exists'
 
-$reportContent = Get-Content -Path $testReportPath -Raw
+$reportContent = Get-Content -Path $testReportPath -Raw -Encoding UTF8
+$reportContent = $reportContent -replace "`r`n", "`n"
 
 # --- [3] FR-1 is never PASS. Latest ledger line per ID wins. ------------------
 $fr1Matches = [regex]::Matches($reportContent, '^-\s*FR-1:\s*(PASS|FAIL|BLOCKED)\b', 'IgnoreCase, Multiline')
@@ -103,7 +104,8 @@ $requiredFields = @(
 $bestCaptureName = $null
 $bestMissing = $null
 foreach ($file in $captureFiles) {
-    $captureText = Get-Content -Path $file.FullName -Raw
+    $captureText = Get-Content -Path $file.FullName -Raw -Encoding UTF8
+    $captureText = $captureText -replace "`r`n", "`n"
     $missing = New-Object System.Collections.Generic.List[string]
     foreach ($field in $requiredFields) {
         if ($captureText -notmatch $field.Pattern) { $missing.Add($field.Name) }

@@ -9,19 +9,23 @@ exit code) or an explicit NOT RUN / BLOCKED reason, and no Critical finding
 stands. Fail-closed: a verdict the evidence does not support never passes.
 
 Usage:
-    python check_agent_report.py --report <path>
+    python check_agent_report.py --report <path> [--milestone "<title>"] \
+        [--ledger <path>]
     python check_agent_report.py --self-test
 
 Pure standard library. See ../SKILL.md for the full contract (JSON shape,
 exit codes, parsing rules).
 """
 import argparse
+import hashlib
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 SECTION_HEADING_RE = re.compile(r"^##\s+(.*)$")
+FENCE_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
 VERDICT_LINE_RE = re.compile(r"^\s*\*\*Verdict:\*\*(.*)$")
 VERDICT_TOKEN_RE = re.compile(r"^\s*(Pass|Fail)\s*$")
 CHECK_LINE_RE = re.compile(
@@ -35,10 +39,83 @@ class GateError(Exception):
 
 
 def read_text(path):
+    """Read a UTF-8 artifact, tolerating a byte-order mark.
+
+    `utf-8` (not `-sig`) glued a BOM to the first character, so a conforming
+    report whose first line was a heading exited 2 ("not a conforming agent
+    report") purely because of how its editor saved it.
+    """
     p = Path(path)
     if not p.is_file():
         raise GateError(f"file not found or not readable: {path}")
-    return p.read_text(encoding="utf-8", errors="replace")
+    return p.read_text(encoding="utf-8-sig", errors="replace")
+
+
+def strip_fenced_blocks(text):
+    """Blank out every ```/~~~ fenced region, preserving the line count.
+
+    A `**Verdict:** Pass` or a `- Secrets scan: PASS — exit 0` inside a fence
+    is a TEMPLATE or a pasted transcript, not this round's claim — and because
+    the last verdict line in the gated section wins, a pasted example silently
+    became the verdict.
+
+    Duplicated per file: this script family has no shared module by convention.
+    """
+    out, fence = [], None
+    for line in text.split("\n"):
+        m = FENCE_RE.match(line)
+        if fence is None:
+            if m:
+                fence = m.group(1)
+                out.append("")
+                continue
+            out.append(line)
+        else:
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
+                fence = None
+            out.append("")
+    return "\n".join(out)
+
+
+def sha256_file(path):
+    """Hex sha256 of a file's bytes, or None when it cannot be read."""
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code):
+    """Append ONE JSON line recording this run. Best-effort by design.
+
+    A ledger that cannot be written must never change this gate's verdict —
+    the ledger is an audit trail for LATER gates (check_commit_gate.py's
+    --require-ledger-gates), not a term in this one.
+    """
+    if not ledger_path:
+        return
+    record = {
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "gate": Path(__file__).name,
+        "argv": list(argv),
+        "milestone": milestone,
+        "inputs": {str(p): sha256_file(p) for p in inputs if p},
+        "verdict": verdict,
+        "exit": exit_code,
+    }
+    try:
+        p = Path(ledger_path)
+        if str(p.parent):
+            p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+    except OSError as exc:
+        print(f"Warning: could not append to ledger {ledger_path}: {exc}",
+              file=sys.stderr)
 
 
 def parse_sections(text):
@@ -111,9 +188,13 @@ def build_report(args):
         "result": "FAIL",
         "error": None,
     }
-    text = read_text(args.report)
-    if not text.strip():
+    raw = read_text(args.report)
+    if not raw.strip():
         raise GateError(f"report file is empty: {args.report}")
+    # Fences are stripped ONCE, here: section splitting, verdict lines, check
+    # lines and Critical findings all then read a document with no example
+    # blocks in it.
+    text = strip_fenced_blocks(raw)
 
     gated = find_gated_section(text)
     if gated is None:
@@ -186,27 +267,42 @@ def build_report(args):
     return report
 
 
-def main(argv):
+def build_parser():
     parser = argparse.ArgumentParser(prog="check_agent_report.py")
     parser.add_argument("--report")
+    parser.add_argument("--milestone",
+                        help="scope this run's ledger record to a milestone")
+    parser.add_argument("--ledger",
+                        help="append one JSON record per run to this path")
     parser.add_argument("--self-test", action="store_true")
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv):
+    args = build_parser().parse_args(argv)
 
     if args.self_test:
         return run_self_test()
 
+    def finish(code, verdict):
+        """One exit point: EVERY return path records a ledger line."""
+        append_ledger(args.ledger, argv, args.milestone,
+                      [args.report] if args.report else [], verdict, code)
+        return code
+
     if not args.report:
         print(json.dumps({"result": "ERROR",
                           "error": "missing required argument: --report"}))
-        return 2
+        return finish(2, "ERROR")
 
     try:
         report = build_report(args)
     except GateError as exc:
         print(json.dumps({"result": "ERROR", "error": str(exc)}))
-        return 2
+        return finish(2, "ERROR")
     print(json.dumps(report, indent=2))
-    return 0 if report["result"] == "PASS" else 1
+    passed = report["result"] == "PASS"
+    return finish(0 if passed else 1, "PASS" if passed else "FAIL")
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +447,81 @@ def run_self_test():
                 "**Verdict:** Pass\n")
             self.assertEqual(r["result"], "FAIL")  # zero parseable checks
             self.assertEqual(r["checks"], 0)
+
+        # ---- fences and encoding ----
+
+        def test_fenced_pass_verdict_does_not_count(self):
+            """A pasted TEMPLATE cannot become this round's verdict."""
+            r = self._run(
+                "## Security Audit: Shipping\n\n"
+                "- Secrets scan: PASS — `git grep -n secret` — exit 1 — 0 matches\n\n"
+                "**Verdict:** Fail\n\n"
+                "Next round, use:\n\n"
+                "```markdown\n**Verdict:** Pass\n```\n")
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["verdict"], "Fail")
+
+        def test_fenced_check_line_does_not_count(self):
+            """A check line inside a transcript fence is not an executed check."""
+            r = self._run(
+                "## Security Audit: Shipping\n\n"
+                "Example of the format:\n\n"
+                "~~~\n- Secrets scan: PASS — exit 0 — 0 matches\n~~~\n\n"
+                "**Verdict:** Pass\n")
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["checks"], 0)
+
+        def test_fenced_critical_finding_does_not_count(self):
+            r = self._run(
+                "## Security Audit: Shipping\n\n"
+                "- Secrets scan: PASS — `git grep -n secret` — exit 1 — 0 matches\n\n"
+                "```\n- **Critical** — example finding from the template\n```\n\n"
+                "**Verdict:** Pass\n")
+            self.assertEqual(r["result"], "PASS")
+            self.assertEqual(r["critical_findings"], 0)
+
+        def test_strip_fenced_blocks_preserves_line_count(self):
+            text = "a\n```\nb\n```\nc\n"
+            self.assertEqual(len(strip_fenced_blocks(text).split("\n")),
+                             len(text.split("\n")))
+
+        def test_bom_prefixed_report_still_passes(self):
+            """utf-8 (not -sig) made a valid BOM-prefixed report exit 2."""
+            self.path.write_bytes(b"\xef\xbb\xbf" + HAPPY.encode("utf-8"))
+            r = build_report(argparse.Namespace(report=str(self.path)))
+            self.assertEqual(r["result"], "PASS")
+
+        # ---- the shared gate ledger ----
+
+        def _ledger_records(self, path):
+            return [json.loads(l) for l in
+                    Path(path).read_text(encoding="utf-8").splitlines() if l.strip()]
+
+        def test_ledger_records_a_pass_run(self):
+            self.path.write_text(HAPPY, encoding="utf-8")
+            ledger = self.dir / "logs" / "gates.jsonl"
+            rc = main(["--report", str(self.path), "--milestone", "M3",
+                       "--ledger", str(ledger)])
+            self.assertEqual(rc, 0)
+            rec = self._ledger_records(ledger)[-1]
+            self.assertEqual(rec["gate"], "check_agent_report.py")
+            self.assertEqual(rec["verdict"], "PASS")
+            self.assertEqual(rec["exit"], 0)
+            self.assertEqual(rec["milestone"], "M3")
+            self.assertEqual(rec["inputs"][str(self.path)],
+                             sha256_file(self.path))
+
+        def test_ledger_records_fail_and_error_runs(self):
+            ledger = self.dir / "gates.jsonl"
+            self.path.write_text(FAIL_VERDICT, encoding="utf-8")
+            self.assertEqual(main(["--report", str(self.path),
+                                   "--ledger", str(ledger)]), 1)
+            self.assertEqual(main(["--report", str(self.dir / "absent.md"),
+                                   "--ledger", str(ledger)]), 2)
+            self.assertEqual(main(["--ledger", str(ledger)]), 2)
+            verdicts = [r["verdict"] for r in self._ledger_records(ledger)]
+            self.assertEqual(verdicts, ["FAIL", "ERROR", "ERROR"])
+            self.assertIsNone(self._ledger_records(ledger)[0]["milestone"])
 
         def test_missing_file_raises(self):
             with self.assertRaises(GateError):

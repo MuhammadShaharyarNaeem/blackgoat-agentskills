@@ -47,7 +47,8 @@ if (-not (Test-Path $shipDecisionPath)) {
 }
 Write-Output '[2] PASSED: ship-decision.md exists'
 
-$content = Get-Content -Path $shipDecisionPath -Raw
+$content = Get-Content -Path $shipDecisionPath -Raw -Encoding UTF8
+$content = $content -replace "`r`n", "`n"
 
 # [3] exactly one unambiguous verdict. Match labeled verdict lines
 # (Ship Decision / Verdict / Recommendation), capturing NO-GO before GO so the GO

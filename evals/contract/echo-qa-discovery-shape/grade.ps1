@@ -58,7 +58,8 @@ if (Test-Path $codeWorkflowPath) {
 if (Test-Path $manualTestingPath) {
     Write-Output '[4] PASSED: QA/manual-testing.md exists'
 
-    $manualContent = Get-Content -Path $manualTestingPath -Raw
+    $manualContent = Get-Content -Path $manualTestingPath -Raw -Encoding UTF8
+    $manualContent = $manualContent -replace "`r`n", "`n"
 
     # [5] at least one markdown table row with adjacent GO | DO | ASSERT columns
     # (extra columns before GO or after ASSERT are fine)

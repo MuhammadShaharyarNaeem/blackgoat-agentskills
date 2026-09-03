@@ -1,0 +1,146 @@
+# check_coverage.py — reference
+
+Depth for the `check_coverage.py` section of `../SKILL.md`: the full JSON key semantics, the document grammars it parses, the plan-mode lints, the fixture inventory, and the authoring-conformance smoke test. The spine owns invocation, flags, keys and exit codes; this file owns everything else.
+
+## JSON output shape
+
+The tool always prints exactly one JSON object to stdout (diagnostics go to stderr):
+
+```json
+{
+  "mode": "plan",
+  "requirements_file": "<path as given>",
+  "target_file": "<path as given>",
+  "must_have": ["FR-1", "FR-2", "NFR-1"],
+  "should_have": ["FR-3", "NFR-2"],
+  "covered": ["FR-1", "NFR-1", "FR-3"],
+  "uncovered": ["FR-2"],
+  "uncovered_should": ["NFR-2"],
+  "blocked": [],
+  "warnings": ["Task 5 has no 'Requirements covered:' field"],
+  "lint_failures": [
+    {"check": "literal-count", "task": "2", "detail": "hardcoded count \"7 error codes\": ..."}
+  ],
+  "result": "FAIL",
+  "error": null
+}
+```
+
+- `mode` is `"plan"`, `"test"` or `"design"`.
+- `uncovered` and `lint_failures` are the **two gating arrays**: `uncovered` holds Must-Have coverage gaps, `lint_failures` holds lint violations. Either one non-empty ⇒ `"result": "FAIL"`. `uncovered_should` is informational and never affects exit code.
+- `blocked` (test mode) lists every requirement ID whose latest status token is `BLOCKED`. It is **informational and simultaneously gating**: a BLOCKED Must-Have also appears in `uncovered`, so the gate exits 1 — the array exists so a reader can tell *"unperformed and said so"* from *"never mentioned"*. Always present, always `[]` outside test mode. Reported unfiltered (not intersected with the known-ID set) so an ID the requirements never declared still surfaces rather than vanishing.
+- `lint_failures` entries are always `{"check", "task", "detail"}`. `check` is one of `literal-count`, `consumes-provides`, `path-hygiene`, `runtime-criterion`, `domain-tag` (plan mode) or `supersession-annotation` / `fr-citation` (design mode — `fr-citation` when the script emits Must-Have IDs missing from the design); `detail` is the author-facing message. `task` names the offending unit: in plan mode the task number as a string, or the owning **milestone's heading text** for `runtime-criterion` and for `domain-tag`'s milestone half; in design mode the **register row's identifier** (`SUP-01`, `DIV-10`, …) or the missing FR/NFR id for `fr-citation`. The array is always present and always empty in test mode (test mode runs no lints).
+- **Design mode is supersession-lint + fr-citation, not full FR→design coverage.** `covered`, `uncovered` and `uncovered_should` are always empty for the coverage arrays; `must_have` / `should_have` are still populated (design mode still requires a parseable requirements.md and still exits 2 on one with zero Must-Haves). Only `lint_failures` gates. Every Must-Have ID must appear at least once in the design text (`fr-citation`); register rows must route to matching in-place supersession annotations (`supersession-annotation`). Citation presence is not proof the design satisfies the requirement.
+- On error: `"result": "ERROR"`, `"error"` holds the message, other arrays hold whatever was parsed before the failure.
+- ID arrays are naturally sorted (`FR-2` before `FR-10`).
+
+## Parsing rules (condensed)
+
+**requirements.md**: MoSCoW section headings (`## / ### / ####` + `Must|Should|Could|Won't Have`, trailing text tolerated) open a tier that closes at the next heading of the same-or-higher level. Within a Must/Should/Could tier, any `**FR-n**` bold ID registers at that tier. `**NFR-n**` IDs are found anywhere in the document via `- **NFR-n** (Must|Should|Could ...)`; an NFR ID with no parseable tier tag defaults to **Must** (fail-safe) and emits a warning. Won't-Have IDs are excluded from all sets unless the same ID also appears in a real tier, in which case the first non-Won't tier wins (with a warning). Duplicate IDs across tiers: first occurrence wins (with a warning). Zero Must-Have IDs found across FRs and NFRs combined → exit 2 ("an empty gate must never silently pass").
+
+**Supersession annotations in requirements.md.** A design decision that supersedes an FR/NFR is recorded by *annotating* the requirement in place (strikethrough plus a "superseded by D-x" note), never by renumbering or deleting it. The parser deliberately does **not** treat strikethrough as a tier change: `~~**FR-2** ...~~ — superseded by D-3` keeps FR-2 at whatever tier its section declares, stays in `must_have` if that section is Must Have, and emits one warning per struck ID. This is the same fail-safe precedence the duplicate-ID and Won't-Have rules use — an annotation can never silently remove a gating requirement. A superseded Must-Have is therefore still covered the normal way: the task that implements the superseding design decision cites the original ID in its `**Requirements covered:**` field. Genuinely dropped scope moves to a `Won't Have` section, which is the only construct that de-gates an ID.
+
+**detailed-design.md** (design mode): the machine twin of the annotation doctrine above — it checks the *routing* between the design's register and `requirements.md`, and nothing else.
+
+- The register section opens at a heading (level 2–4) whose text is `Divergence & Supersession Register` (leading section numbering such as `## 17. ` and `and` for `&` are tolerated) and closes at the next heading of the same-or-higher level, so its `###` subsections (`17.1 Divergences`, `17.2 Supersessions`, closing-pass additions) are all included. **A design with no register section is a warning, not a failure** — a greenfield design may legitimately have zero divergences.
+- Inside the section, every markdown table row (a line starting with `|`, separator rows excluded) is examined. Ids are read from the row's **subject cells only — the first two**: the `#` cell and the `Requirement` / `Departs from` cell. Later cells are *justification prose*, which cites other requirements as supporting argument without superseding them (an observed register's DIV-04 explains itself by reference to "the FR-1 retry budget"; FR-1 is not superseded). Reading whole rows made 20+ correctly-unannotated requirements look like violations. Ids are deduplicated per row; a row whose subject cells cite no id is skipped.
+- **Rule:** for every id named in a register row's subject, `requirements.md` must carry a supersession annotation on that requirement. A requirement's *block* runs from its `**FR-n**` / `**NFR-n**` bold-id line to the next bold-id line (an id declared more than once owns all of its blocks). The block counts as annotated if it contains **any** of: strikethrough (`~~`), a `supersed*` word, or a **citation of the register row's own id** (`SUP-01`, `DIV-07`, …). The row-id citation is the load-bearing one: real annotations read "**REINTERPRETED by SUP-05**", "**SCOPE PINNED by SUP-06**", "**SUPERSEDED IN PART by SUP-02**", so a verb whitelist would reject correctly-annotated requirements. An annotation citing a *different* row does not satisfy a row that names the requirement.
+- A violation appends one `lint_failures` entry (`check: "supersession-annotation"`, `task`: the row id) and forces `FAIL`/exit 1. An id named in the register but not defined in `requirements.md` takes the existing unknown-id **warning** path ("unknown requirement ID ... cited in design register") and is not linted — there is no block to annotate.
+- **Deliberate scope limit — this lint checks rows-that-exist → annotations, one direction only.** It proves that every divergence the design *filed* was routed back to its requirement. It cannot see a divergence that was **never filed at all**, and it cannot see one filed *outside* the register section (an observed v8 run deleted Cognito custom attributes that FR-29 mandates, resolved it in a §19 revision section rather than the §17 register, and never annotated FR-29 — this lint does not catch that). Detecting an unfiled divergence requires reading the design against the requirements, which stays with the **Phase 2.5 design review gate**. Design mode narrows that gate's surface; it does not replace it. A `PASS` here means "nothing filed was left unrouted", never "this design diverges from nothing".
+
+**plan.md** (plan mode): task blocks split on `## Task [N]:` (brackets optional). Zero task blocks → exit 2. Within each block, the first `**Requirements covered:**` line's `FR-n`/`NFR-n` tokens are unioned into `covered`. "None"/"N/A" is a legitimate empty value (no warning); a field missing entirely from a task warns by task number; an ID cited in the plan but not defined in requirements warns ("unknown requirement ID ... cited in plan") without failing the gate.
+
+**Plan-mode lints (gating).** Five lints run in plan mode only: `literal-count`, `consumes-provides`, `path-hygiene` and `domain-tag` over the same task blocks (`domain-tag` also reads the milestone headings, `runtime-criterion` the checkpoint blocks — described in its own section below). Each violation appends one `lint_failures` entry and forces `FAIL`/exit 1 even when coverage is complete.
+
+**`literal-count`** — enforces "count definitions, not mentions" (below). Flags a transcribed artifact-inventory count anywhere in a task block: a number immediately followed by an inventory noun (`codes`, `error codes`, `status codes`, `routes`, `endpoints`, `entries`, `components`, `screens`, `tables`) — e.g. "maps 7 error codes", "exposes 4 endpoints". A plan states the *rule*, not the tally: assert set-equality against the source table ("every code in the error table has a mapping"), because a transcribed number goes stale the moment the table changes and no test catches it. Unit and threshold values are **not** inventory counts and are never flagged ("2 decimal places", "3 attempts", "60 seconds"), nor are digits that are part of an ID token (`FR-3 endpoints`). Repeated identical phrases report once per task.
+
+**`consumes-provides`** — parses each task block's optional `**Boundary contracts:**` field. Grammar, deliberately forgiving:
+
+```
+**Boundary contracts:** provides: auth.session, auth.token; consumes: db.schema
+```
+
+- The field is the marker line plus any continuation lines up to the first blank line, next `**Field:**` line, or next heading — so a multi-line indented form works too.
+- Inside it, `consumes:` and `provides:` keywords (case-insensitive) each introduce a comma-separated identifier list terminated by `;`, a newline, the next keyword, or the first **sentence break** within the line — a `. ` (period followed by whitespace) or a ` — ` (space-emdash-space). This last terminator exists because a machine line is sometimes followed by explanatory prose on the same physical line ("`consumes: none. The ruling is read by Tasks 3, 4, 5.`"); without it, the prose's own commas comma-split into fake identifiers (an observed run produced `4`, `5`, and `not` this way). An identifier's internal dots (`api.mode.ruling`) are never followed by whitespace, so `. ` is safe to use as a terminator without truncating real identifiers. Both keywords may appear in either order, more than once.
+- **A single keyword's identifier list terminates at a newline as well as at `;`.** The *field* may span continuation lines, but a *wrapped list* silently contributes only its first line — the gate then reports a missing provider for identifiers the author can plainly see in the file. Authors: keep each keyword's list on one physical line, opening a second `provides:` keyword on the next line rather than wrapping one. Readers of a surprising verdict: before re-doing any work, re-read the raw field and look for a wrap — **a `lint_failures` entry naming an identifier that is visibly present is a format mismatch, not a missing dependency.**
+- An identifier is the first `[A-Za-z0-9_./-]` token of each comma-separated part, so backticks and trailing parentheticals are tolerated. Matching is case-insensitive. Leading/trailing `.`, `/`, and `-` characters are stripped from that token before comparison. `none` / `n/a` / `-` / `tbd` are empty values.
+- **Rule:** every consumed identifier must be provided by a **strictly lower-numbered** task. Provided by a later task, by the same task, or by no task at all is a failure naming the task and the identifier. This is the machine twin of the external-prerequisite ownership rule in `planning-and-task-breakdown`.
+- **The field is optional.** A task with no `**Boundary contracts:**` field is never a failure and emits no warning. A consumed identifier with no provider always is.
+
+**`path-hygiene`** — flags file-path-shaped strings that point outside the plan's own repository: Windows absolute paths (`D:\repos\...`), UNC paths (`\\server\share\...`), `file:///` URIs, and repo-escaping relative paths (any `../` segment). Repo-relative paths (`src/import/parser.ts`) are the sanctioned form and pass, as do URL routes (`/auth/login`). Rationale: an observed plan referenced a sibling repository's files by absolute path, which no builder on another machine can resolve and which silently smuggles another codebase into scope. A `file:///D:/...` URI counts once, not twice.
+
+**`domain-tag`** — every task declares exactly one domain tag and every milestone is domain-homogeneous, the machine twin of `planning-and-task-breakdown`'s tag legend and **Milestone domain homogeneity** rule (its contract authority). Two halves:
+
+- **Per task**: the block's `**Tags:**` field is read with the same extent rule as `Boundary contracts:` (marker line plus continuation lines to the first blank line, next `**Field:**` line, or next heading). Three failures, `task` = the task number: no `**Tags:**` field at all; a field carrying neither `[UI]` nor `[API]`; a field carrying both (split the task). Overlays (`[SEC]`/`[EXT]`/`[BLOCKED]`) are ignored here.
+- **Per milestone**: a milestone heading carrying zero or two domain tags fails outright; otherwise every `## Task <n>:` heading inside that milestone's extent whose task declares the *other* domain is one mixed-domain failure. Both name the milestone's title as `task`.
+
+Rationale (convention #9's conversion): an untagged task is unroutable — `next_milestone.py` routes `[UI]`→Nova and `[API]`→Mason — and a mixed milestone is rejected as `MIXED` at build time, so both defects must die at plan time rather than a milestone into the build. Scope limit, mirroring `runtime-criterion`: a plan with no milestone headings skips the homogeneity half; the per-task half always applies.
+
+**test-report.md** (test mode): line-based across the whole file — the `#Task [N]:` headers are for humans only. A line is "status-bearing" if it has both an ID token and a status token (`PASS`/`PASSED`/`✅` vs `FAIL`/`FAILED`/`❌`, word-boundary matched; a line with both counts as FAIL). **Latest mention wins** — the last status-bearing line for an ID in file order determines its status. IDs whose only mentions lack a status token get one warning each and are not counted as covered. A missing/unreadable report file → exit 2. A report with zero status-bearing mentions is **not** a structural error — every Must-Have goes to `uncovered` and the gate exits 1 (a report that proves nothing is a coverage failure, not a tool failure).
+
+This section is the grammar authority for the Coverage Ledger format Quinn emits (her persona §6 carries only her role-specific deltas and points back here). The test-report parser expects: within each `#Task [N]:` block, one line per exercised ID —
+
+```
+- FR-3: PASS — {test name / evidence}
+- NFR-1: FAIL — {failing assertion}
+```
+
+Only `PASS`/`FAIL` as the status word for a check you executed; `BLOCKED` per its own rule below. Latest mention wins, so a retest appends a fresh line rather than editing history.
+
+**What the evidence field must contain.** The gate is deterministic about the *status* token and completely trusting about the *evidence* prose beside it — so the evidence field carries the entire integrity burden of the gate:
+
+- A `PASS` cites **the executed test that asserts that requirement's own acceptance criterion**, named by test file plus test name. A source file, a component, an infrastructure resource, a design document, or a prior milestone's `PASS` is **not** evidence — those establish that code exists, not that the requirement holds.
+- **Never restate a `PASS` you did not just re-execute.** This is the sharp edge of *latest mention wins*: a later, vaguer line silently **overwrites** an earlier, stronger one, and it is the last line in file order that the gate reads. Appending "re-verified" or "final verification" prose over a genuine earlier measurement does not strengthen the ledger — it destroys the only real evidence in it and leaves the gate reading the weakest claim in the file. If you did not run it this round, append nothing.
+- **A verification you could not perform is recorded as `BLOCKED`, with the reason.** `- FR-3: BLOCKED — app will not start; Tier 2 suite green only`. This is the sanctioned record and it is status-bearing: it counts as **not covered**, lands a Must-Have in `uncovered`, and exits 1 — honesty routes the work, it never passes it. Do **not** write `FAIL` (that asserts a test ran and failed, a different fabrication) and do **not** omit the line (that hides the gap). It is never `PASS` with a hedge (see `agent-squad/base-persona.md`, Evidence Integrity). A gap the gate can see is cheap; a gap it cannot is what the gate exists to prevent.
+- **Status precedence on one line is `FAIL > BLOCKED > PASS`**, extending the pre-existing both-PASS-and-FAIL-counts-as-FAIL rule. Across lines, latest mention wins, so a `BLOCKED` appended after a stale `PASS` downgrades the ID and a later genuine `PASS` clears it.
+- **`NOT RUN` is deliberately NOT a token here** — a divergence (convention #8) from `check_agent_report.py`'s four-token grammar: in the coverage ledger, omission already means "not run", and a status-less mention already warns and stays uncovered. A `NOT RUN` line therefore behaves exactly like any other status-less mention.
+- **Authoring hazard**: token matching is case-insensitive prose matching, the same posture as `PASS`/`FAIL`. So `- FR-1: PASS — the BLOCKED-state banner renders` downgrades to BLOCKED. The family's bias is deliberate (a false BLOCKED routes work; a false PASS ships a gap) but avoid the words in evidence prose.
+- **Authoring hazard — a status line is a cumulative claim about the requirement, not a per-round log entry.** Because latest mention wins across lines, appending a status token for a requirement you did **not** exercise this round overwrites the evidenced verdict of the round that did; there is no round scoping in the ledger. So: report only requirements this round actually touched; write per-round narration ("not attempted this round", "out of scope for this stage") as prose with **no status token in the token position**; and never repair a downgraded id by writing a `PASS` you did not measure — re-run the check, or leave the honest `BLOCKED` standing and say which round measured what.
+
+**`runtime-criterion` (plan mode).** Mechanizes `planning-and-task-breakdown`'s rule that a compile, typecheck, bundle, or source-search command is not a runtime exit criterion — at **plan time, before any code exists**. It reads each `Checkpoint` block's machine-parseable `RUNTIME PROBE:` line and reports one entry per defect, with `task` = the owning milestone's full heading text and every `detail` naming the checkpoint (one milestone may own several).
+
+Six conditions: (1) no `RUNTIME PROBE:` line at all — this **short-circuits**, since it is the single root cause and reporting 2–6 on top would be noise; (2) `probe:` absent or empty (suppressed when the surface is `none`, where the SKILL replaces the probe fields with `justification:`); (3) `probe:` names an **in-process test client**; (4) `probe:` is a build / typecheck / search / **test-runner** command — `dotnet test` proves a suite is green, never that the running system emits anything; (5) the milestone's surface is `api`, `web+api`, or `fn` but the probe declares no `expect-status:` and/or no `require-keys:` (only the actually-missing field is named), because those become `check_runtime_evidence.py`'s arguments verbatim; (6) the surface is `none` but no `justification:` field is present.
+
+The in-process tell list and the non-runtime-probe regexes are **duplicated verbatim** from `check_runtime_evidence.py` (this family has no shared module by convention), and a test asserts byte-equality of both so the two cannot drift. Milestone block extents mirror `next_milestone.py`'s `parse_milestones()`, with a cross-check test and one deliberate difference: a milestone-less plan yields `[]` here rather than raising, because the coverage gate also runs against plans predating the milestone convention.
+
+**Checkpoint headings are matched at level 2 **and** 3** (`#{2,3}`), not level 3 only. `next_milestone.py` tolerates the deprecated `## Checkpoint:` form inside a milestone block, so linting only `###` would leave the deprecated spelling as a free escape hatch from the probe requirement. `### Checkpoints Overview` does not match (the pattern requires a word boundary after `Checkpoint`).
+
+Scope limits: a plan with **zero** checkpoints yields zero failures — checkpoint *presence* is Step 5's own review item, and failing on absence would retroactively fail every pre-convention plan. A checkpoint outside every milestone block has no surface, so only conditions 1–4 apply. A missing or misspelled `[vs:]` tag is not this lint's business — `next_milestone.py` already halts the build for it. A `;` inside a probe command truncates the value, the documented cost of the `;`-delimited grammar shared with `Boundary contracts:`. The probe is never executed here; the capture it later produces is `check_runtime_evidence.py`'s business. And the tell list is a blocklist, therefore incomplete.
+## Fixtures & self-test
+
+`fixtures/happy/`, `fixtures/uncovered/`, and `fixtures/malformed/` each hold a `requirements.md` (+ `plan.md` and/or `test-report.md`) exercising the pass, gap, and structural-failure paths respectively. Six more cover the lints and annotation handling, each with complete Must-Have coverage (or, in design mode, no coverage computation at all) so the verdict isolates the behaviour under test:
+
+- `fixtures/annotated/` — a requirements.md carrying a struck-through, "superseded by D-x" Must-Have FR; exits **0** with a supersession warning.
+- `fixtures/lint-literal-count/` — transcribed inventory counts alongside legitimate unit values; exits **1** on `literal-count` only.
+- `fixtures/lint-boundary-contracts/` — an identifier provided by a later task, one provided by no task, and a task with no contracts field; exits **1** on `consumes-provides` only.
+- `fixtures/lint-paths/` — absolute path, `file:///` URI, and `../sibling-repo/` reference beside sanctioned repo-relative paths; exits **1** on `path-hygiene` only.
+- `fixtures/lint-runtime-criterion/` — a checkpoint whose probe is `npm test -- --grep orders` (condition 4) and a second on a `[vs:api]` milestone whose valid `curl` probe declares no `expect-status:`/`require-keys:` (condition 5); exits **1** on exactly two `runtime-criterion` entries and no sibling lint.
+- `fixtures/blocked/` — a `- FR-2: BLOCKED — …` ledger line; exits **1** with `FR-2` in **both** `uncovered` and `blocked`, and no warnings (BLOCKED is status-bearing, so it earns no status-less-mention warning).
+- `fixtures/design-annotated/` — a `detailed-design.md` whose register supersedes two requirements, both annotated in place (one by strikethrough + note, one by note alone), plus a divergence row citing no requirement; exits **0**.
+- `fixtures/design-unannotated/` — the observed evasion shape: a **divergence** row whose subject is an FR that was never annotated, beside an annotated supersession row and a row citing an undefined id; exits **1** on one `supersession-annotation` entry, with the undefined id as a warning.
+
+Run the bundled suite either directly or through the CLI:
+
+```bash
+python scripts/test_check_coverage.py
+python scripts/check_coverage.py --self-test
+```
+## Pre-gate authoring conformance (smoke-test before you trust the verdict)
+
+The gate is only as trustworthy as its inputs' format. Before relying on a coverage verdict, run check_coverage.py against the ACTUAL requirements.md and test-report.md as a format smoke-test. Treat any of these as "artifacts not in parseable format," NOT as a real coverage result: exit 2 (structural failure / "no Must-Have requirements found"), every ID reported as "unknown requirement ID", or "zero status-bearing mentions". The fix is to correct the artifact to the documented format — **FR-n** bold IDs under MoSCoW headings in requirements.md, and Quinn Coverage Ledger lines (- FR-n: PASS — evidence) in test-report.md — never to fall back to eyeballing coverage by hand. A gate you bypass manually is not a gate.
+
+Design mode has two such tells, both warnings rather than results: "design has no 'Divergence & Supersession Register' section" and "register section has no table row citing an FR/NFR id". On a design that plainly diverges somewhere, either warning means the register is missing or not in table form, so the `PASS` beside it proves nothing — fix the register, then re-run.
+
+**Count definitions, not mentions.** In plan.md this doctrine is now *enforced* by the `literal-count` lint (see Plan-mode lints), which fails the gate on any transcribed artifact-inventory count in a task block; the guidance below still applies wherever you count by hand rather than through this tool. When you verify an artifact's structure with a text search rather than this tool — how many requirements exist, whether every ID carries a tier, whether a document is complete — anchor the pattern on the *definition-line* form (e.g. `- [ ] **FR-n**` under a MoSCoW heading), never on the bare ID token. Cross-references, prose citations, and downstream task fields all contain the same tokens, so a bare-ID count silently inflates: an observed run counted 131 `FR-` matches against 74 actual definitions. An inflated count can make an incomplete or malformed artifact appear to pass. Report unique-ID counts derived from definition lines only, and when a count disagrees with the artifact's own declared total, treat the disagreement itself as the finding — never pick whichever number agrees with the outcome you expect. A check that counts ID *mentions* rather than ID *definitions* can pass a malformed artifact, which makes it worse than no check at all.
+
+## The test-mode evidence rule (P2b)
+
+A test-mode status is read only from a LIST ITEM (`- FR-3: PASS — …`). Bare prose containing an id and the word "pass" is a status-LESS mention: warned about, never covered. Prose is where a report narrates; a ledger line is where it asserts, and only the assertion may move a gate.
+
+A `PASS` whose evidence half cites nothing checkable is recorded as **`UNEVIDENCED`** — status-bearing like `BLOCKED`, NOT covered, so a Must-Have lands in `uncovered` and the gate exits 1. Accepted evidence is the grammar Quinn already emits (`agents/quinn.md` §6): an exit code (`exit 0`, `exit code 1`); a `file::test-name` reference; a `**Runtime evidence:**` or `evidence/runtime/` capture citation. The rule closes the gap between the section above — which says at length what the evidence field must contain — and a gate that read none of it: the prose demanded evidence, the machine accepted `- FR-1: PASS — done`.
+
+**Scope limit**: this checks the SHAPE of the citation, never its truth. A `file::test-name` that names no real test still passes here; whether the cited capture is honest is `check_runtime_evidence.py`'s job.
+
+**Deliberate divergence (convention #8) from the family-wide fence rule.** Plan and design modes are NOT fence-stripped: probe command lines and register rows legitimately live inside fenced blocks, so blanking fences there would blind the `runtime-criterion` and `supersession-annotation` lints. Test mode and the verdict parsers in the sibling gates are stripped, per `../SKILL.md`'s "Fenced blocks and encoding".
+
+Two fixtures cover it: `fixtures/unevidenced/` (exit **1**, `FR-1` in both `uncovered` and `unevidenced`) and `fixtures/fenced/` (exit **1** — a status line that only exists inside a fence covers nothing).

@@ -49,7 +49,7 @@ if (Test-Path $researchPath) {
     # Windows-1252. This grader matches ASCII tokens so the bug is dormant, but the
     # uniform UTF-8 read is correct and future-proofs it against non-ASCII content.
     $rawResearch = Get-Content -Path $researchPath -Raw -Encoding UTF8
-    if ($null -ne $rawResearch) { $researchText = $rawResearch }
+    if ($null -ne $rawResearch) { $researchText = $rawResearch -replace "`r`n", "`n" }
 }
 
 if ([string]::IsNullOrWhiteSpace($researchText)) {
@@ -130,7 +130,7 @@ if ($badLedgerLines.Count -gt 0) {
 $handoffText = ''
 if (Test-Path $handoffPath) {
     $rawHandoff = Get-Content -Path $handoffPath -Raw -Encoding UTF8
-    if ($null -ne $rawHandoff) { $handoffText = $rawHandoff }
+    if ($null -ne $rawHandoff) { $handoffText = $rawHandoff -replace "`r`n", "`n" }
 }
 if ([string]::IsNullOrWhiteSpace($handoffText)) {
     Add-Failure 5 'handoff.txt missing or empty at the working-copy root - the claude invocation or its pipe failed'

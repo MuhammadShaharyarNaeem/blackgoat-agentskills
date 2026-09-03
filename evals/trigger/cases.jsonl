@@ -17,3 +17,4 @@
 {"prompt": "Brownfield: run global discovery on this repo so Iris/Scout/Echo fill .docs/summary before we touch the feature.", "expected_skill": "bgpdd-discovery", "acceptable_alternatives": []}
 {"prompt": "Build is green and ship-decision says GO - run the Launch Squad and ship it.", "expected_skill": "bgpdd-shipping", "acceptable_alternatives": []}
 {"prompt": "Launch the app: Vera, Cipher, Dep against the shipping checklist, then open the PR.", "expected_skill": "bgpdd-shipping", "acceptable_alternatives": []}
+{"prompt": "Iris and Echo already mapped the login flow last sprint and Quinn baselined the locked-account behavior at a 423 with a specific error body - can you confirm the running service still matches that baseline? I don't want any code touched, just check it still holds.", "expected_skill": "bgpdd-verify", "acceptable_alternatives": []}

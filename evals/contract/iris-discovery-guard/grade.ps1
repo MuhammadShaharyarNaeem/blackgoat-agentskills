@@ -84,7 +84,7 @@ if (Test-Path $handoffPath) {
     # Windows-1252. This grader matches ASCII tokens (Godot, GDScript, context.md) so the
     # bug is dormant, but the uniform UTF-8 read is correct and future-proofs it.
     $rawHandoff = Get-Content -Path $handoffPath -Raw -Encoding UTF8
-    if ($null -ne $rawHandoff) { $handoffText = $rawHandoff }
+    if ($null -ne $rawHandoff) { $handoffText = $rawHandoff -replace "`r`n", "`n" }
 }
 
 $mentionsFile = ($handoffText -match '(?i)(context\.md|summary\s+knowledge\s+base|\.docs[\\/]summary)')
