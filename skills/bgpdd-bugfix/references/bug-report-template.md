@@ -71,7 +71,7 @@ rather than a failure — paste the actual observed output here instead and say 
 
 ## Reproduction
 
-- Command: `<the single argv-runnable command that reproduces this, exactly as it must be run>`
+- Command: `<the single argv-runnable command that reproduces this, exactly as it must be run; its exit code must be non-zero while the bug is present and zero once fixed — use curl --fail only when the correct response is 2xx>`
 
 <Use numbered steps INSTEAD of the Command line only when no single command can
 reproduce it (a multi-screen UI journey). Delete the Command line if you do, and
