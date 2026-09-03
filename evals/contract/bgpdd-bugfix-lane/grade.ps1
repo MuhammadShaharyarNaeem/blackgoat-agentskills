@@ -867,7 +867,7 @@ if (-not (Test-Path $targetBaseline)) {
         }
         $beforeRows = @(Get-RegressionRows -Path $fixtureBaseline)
         $afterRows = @(Get-RegressionRows -Path $targetBaseline)
-        $addedRows = @($afterRows | Where-Object { $beforeRows -notcontains $_ })
+        $addedRows = @($afterRows | Where-Object { $beforeRows -cnotcontains $_ })
         if ($addedRows.Count -eq 0) {
             Add-Failure '11' "the QA baseline changed but added no GO/DO/ASSERT row under '## Regression Risks' (before $($beforeRows.Count) row(s), after $($afterRows.Count)) - the prevent step requires Echo's table shape, not prose"
         } else {
