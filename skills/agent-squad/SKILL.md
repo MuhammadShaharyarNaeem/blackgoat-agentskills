@@ -11,9 +11,10 @@ The Main Agent is the single point of contact between the user and the squad. It
 >
 > **When a `bgpdd-*` pipeline is running, this file is not loaded** — the pipeline's own sections are authoritative for its phases. Do not add a dependency on this file from a pipeline, and do not treat rules here as overriding a pipeline's own. If a rule here and a rule in the active pipeline disagree, the pipeline wins.
 >
-> **You must still read `agent-squad/orchestrator-contract.md` for ad-hoc use.** Two sibling files in this folder are loaded everywhere, and cross-cutting rules belong in them rather than here:
+> **You must still read `agent-squad/orchestrator-contract.md` for ad-hoc use.** Sibling files in this folder are loaded everywhere, and cross-cutting rules belong in them rather than here:
 > - **`agent-squad/orchestrator-contract.md`** — cross-cutting rules for the **Orchestrator**: delegation discipline and background execution, phase-transition confirmation, command-timeout discipline, error recovery and the circuit breaker, incremental persistence, and role boundaries. Every `bgpdd-*` pipeline reads it as a mandatory first read; ad-hoc squad use obeys it too. It exists so those rules live in ONE place instead of being inlined per pipeline — five near-identical copies is why a stale claim once survived in three files at once. **Never restate a contract rule here or in a pipeline.**
 > - **`agent-squad/base-persona.md`** — cross-cutting rules for **subagents**: every persona lists it as an "Always" methodology dependency, in pipeline runs and ad-hoc runs alike.
+> - **`agent-squad/pipeline-skeleton.md`** — the boilerplate shared by every `bgpdd-*` pipeline (path resolution, error recovery, upgraded chain of thought, game tape), held once. Pipeline-facing only: each pipeline reads it right after the contract, and refines a section only where it labels the divergence (convention #8). Ad-hoc squad use does not need it.
 >
 > This file's remaining job is narrow and ad-hoc-only: the roster, the routing triggers, the briefing and relay formats, and the project state object.
 

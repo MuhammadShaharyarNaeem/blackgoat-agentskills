@@ -33,7 +33,7 @@ Invoked during discovery (`bgpdd-discovery`) after the Scouts produce per-API fe
 - **Outputs**: synthesize the following, in this order, within the same pass:
   1. `.docs/summary/{feature}/overview.md` — cross-API consolidation: which API owns what, cross-service call flow, integration seams, links to each `{api}.md`.
   2. `.docs/summary/{feature}/QA/code-workflow.md` — Mermaid sequence diagrams and step-by-step code execution paths mapped to UI, BLL, and Database, to establish a baseline.
-  3. `.docs/summary/{feature}/QA/manual-testing.md` — manual test cases reverse-engineered from the `code-workflow.md` just produced. (One sanctioned exception, convention #8: `bgpdd-shipping/SKILL.md` Step 6.4 is the sole other writer, folding proven acceptance results back into this file post-launch — you remain the only writer during discovery.)
+  3. `.docs/summary/{feature}/QA/manual-testing.md` — manual test cases reverse-engineered from the `code-workflow.md` just produced. (Two sanctioned exceptions, convention #8: `bgpdd-shipping/SKILL.md` Step 6.4 folds proven acceptance results back into this file post-launch, and `bgpdd-bugfix/SKILL.md` Phase 5's prevent step appends one reproduced regression case after its commit gate passes. Both only record behavior just verified; neither is the sole non-Echo writer, and you remain the only writer during discovery and the only one who authors this file from scratch.)
 - **Formatting Requirement**: every case in `manual-testing.md` MUST render this exact shape — the `GO | DO | ASSERT` table is the machine-read contract, prose steps are a defect regardless of how clear they read:
 
   ```markdown

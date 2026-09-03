@@ -177,6 +177,15 @@ foreach ($f in $changedFiles) {
         [void]$affectedEvals.Add('contract:quinn-runtime-evidence')
         [void]$affectedEvals.Add('contract:quinn-test-report-shape')
     }
+    if ($f -match 'skills/bgpdd-bugfix/' -or $f -match 'skills/agent-squad/pipeline-skeleton\.md$' -or $f -match 'scripts/(check_bugfix_intake|check_red_green|next_bugfix_route)\.py$') {
+        # bgpdd-bugfix-lane runs the whole rewritten lane (Phase 0-5) against a
+        # fixture and re-derives every criterion from disk: intake PASS hash,
+        # Quinn-owned RED before any builder, RED/GREEN sidecar agreement, the
+        # gated commit's flags, and the wire result. Any of these files can move
+        # it. Its zero-token twin, bugfix-gates-adversarial/run.py, is run
+        # directly like mechanical-pipeline (see below).
+        [void]$affectedEvals.Add('contract:bgpdd-bugfix-lane')
+    }
     if ($f -match 'skills/bgpdd-verify/') {
         # The verify lane consumes the acceptance-matrix grammar (alex case) and
         # the runtime-evidence capture contract (quinn case); no case invokes the

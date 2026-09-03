@@ -12,19 +12,13 @@ This Standard Operating Procedure (SOP) is the mid-weight lane between a bare si
 
 ---
 
-## Path Resolution
-
-Skill and agent paths in this document use `{PLUGIN_ROOT}` as a placeholder for the plugin's `skills/` directory. When this skill is invoked, its base directory is provided to you; `{PLUGIN_ROOT}` is that `skills/` directory (the agents live at `{PLUGIN_ROOT}/../agents/`). List files to confirm a path exists before referencing it.
-
-`base-persona.md` resolves at `{PLUGIN_ROOT}/agent-squad/base-persona.md`, never under `{PLUGIN_ROOT}/../agents/` — the injection rule and its rationale live in the Orchestrator Contract §1 (Delegation Discipline). Verify the path resolves before delegating.
-
----
-
 ## 1. Global System Constraints
 
 > ### MANDATORY FIRST READ — the Orchestrator Contract
 >
 > **Before Phase 1, you MUST read `{PLUGIN_ROOT}/agent-squad/orchestrator-contract.md` in full.** Do not improvise those rules from memory. If the file does not resolve, STOP and report the broken path.
+>
+> Then read `{PLUGIN_ROOT}/agent-squad/pipeline-skeleton.md` — the shared pipeline skeleton (path resolution, error recovery, upgraded chain of thought, game tape). Refinements below override the skeleton only where labelled (convention #8).
 
 The sections below carry ONLY this pipeline's refinements on top of that contract.
 
@@ -41,9 +35,7 @@ The sections below carry ONLY this pipeline's refinements on top of that contrac
 
 ## 2. Global Error Recovery
 
-**The error-recovery skeleton lives in the Orchestrator Contract (§2)** — halt-and-escalate triggers, the circuit breaker you pass to every agent, no-nested-delegation, incremental persistence, context checkpoints, and 2-round bounded autonomous rejection. Read it there; it is not restated here.
-
-This pipeline's only refinement: the artifacts subject to the 2-round bound are `requirements.md` and `plan.md`; checkpoint your own state to `.docs/{project-name}/orchestrator-state.json` via `update_state.py` (initialized at Phase 1 step 5, updated at Phase 3) — never hand-edit.
+This pipeline's only refinement on the skeleton's Error Recovery section: the artifacts subject to the 2-round bound are `requirements.md` and `plan.md`; checkpoint your own state to `.docs/{project-name}/orchestrator-state.json` via `update_state.py` (initialized at Phase 1 step 5, updated at Phase 3) — never hand-edit.
 
 ---
 
@@ -114,7 +106,7 @@ This pipeline's only refinement: the artifacts subject to the 2-round bound are 
 ### Phase 3: Handoff to Build (Orchestrator)
 - **Delegated Agent**: None — the Orchestrator performs this phase directly. No delegation, no halt.
 - **Workflow**:
-  1. **Game Tape checkpoint**: While your session context is still alive, append a `## bgpdd-lite — [date]` section to `.docs/{project-name}/implementation/game-tape.md` (create the file if it does not exist). At most 10 bullets, covering: user corrections made, agent failures/retries, re-delegation rounds and why, circuit-breaker trips, gates that were rubber-stamped vs. genuinely exercised, and this session's id/transcript path if the runtime exposes it.
+  1. **Game Tape checkpoint**: write it at the skeleton's default cadence and cap — once per run, at most 10 bullets, heading `## bgpdd-lite — [date]`. This pipeline adds no refinement to that section.
   2. **State Persistence**: Update the state file Phase 1 step 5 initialized — via `update_state.py`, never by hand-editing JSON, and **without `--init`** (this is an update of the artifacts Alex produced, not a fresh file). Schema authority is `update_state.py` (schema version string `"1"`).
      ```bash
      python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py \

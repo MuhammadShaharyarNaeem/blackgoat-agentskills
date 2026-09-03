@@ -34,12 +34,18 @@ conclusion.
   is the regression check for "does this prompt still route where it should." It judges
   an actual `Skill` tool invocation — see "Trigger judging" below.
 
-One `contract/` case is an exception to the statistical-N doctrine above:
+Two `contract/` cases are exceptions to the statistical-N doctrine above.
 **`mechanical-pipeline`** is a zero-LLM, deterministic integration case that walks the
 full milestone lifecycle (`next_milestone.py` → `update_state.py` → `check_commit_gate.py`
 across its failure paths → gated commit → `run_quiet.py`) in a disposable git repo with no
-`claude -p` call anywhere in it. It has no LLM variance to average out, so it is safe to
-run unconfirmed and is graded on a single run, not `runs=5`.
+`claude -p` call anywhere in it. **`bugfix-gates-adversarial`** is its `/bgpdd-bugfix`
+counterpart: it walks intake → RED → route → fix → GREEN → red/green → commit gate through
+the real scripts and asserts the exit code *and* a naming JSON field on each fabricated
+input the lane must refuse. Neither has LLM variance to average out, so both are safe to
+run unconfirmed and are graded on a single run, not `runs=5`. Both are also **invisible to
+`run-evals.ps1`** by design — `Get-ContractCases` discovers a case by the presence of both
+`case.md` and `grade.ps1`, and neither directory has either — so each is run directly as
+`python run.py`.
 
 ## Layout
 
@@ -394,6 +400,38 @@ artifact and at least two cheap-path artifacts:
   discovery brief, over a deliberately distinctive Godot fixture. Graded on the
   do-not-overwrite rule (byte-identical), no side-channel `.docs/` writes, the
   prominent handoff note, and proof the scan actually read the tree.
+
+## The two cases added 2026-09-03 (rewritten `/bgpdd-bugfix` lane)
+
+The first pair in the suite that measures a **pipeline** rather than one delegation, and
+the first pair where an LLM case and a zero-LLM case are deliberately complementary
+halves of one claim:
+
+- **`bgpdd-bugfix-lane`** (LLM, `runs=5`, threshold `4/5`) — the whole
+  `skills/bgpdd-bugfix/SKILL.md` lane, Phase 0 through Phase 5, against a dependency-free
+  Node fixture whose `POST /orders` answers `500` when the request carries no coupon. The
+  prompt supplies only what a user supplies (observed/expected behaviour, the verbatim
+  error, one reproduction command, the environment, the three enum answers) and names **no
+  artifact, gate, flag or root cause**. Eleven criteria, all re-derived from disk — a
+  ledger `verdict` is never trusted alone. Four are the load-bearing traps: a
+  builder-owned RED (the run log's delegation order), a frozen suite edited to make the
+  fix pass (byte compare — the suite is green before *and* after the fix, so the trap is
+  inviting), an unbounded or ungated commit (`--require-ledger-gates` in the recorded
+  argv), and a fix verified only in-process (the grader starts the service on its own port
+  and reads the response back). `src/validation.js` is a correct decoy so a lazy RCA names
+  the wrong file. **The first contract case whose agent-under-test needs a shell** — it
+  runs its own gates — so read that case.md's harness-exposure section before trusting a
+  pass rate, and expect ~100k–200k tokens per run against the harness's 20k guess.
+- **`bugfix-gates-adversarial`** (zero-LLM, single run) — the same lane's gate chain run
+  against fabricated input: the shipped `bug-report-template.md` must fail its own gate, a
+  route must refuse an unbacked or post-PASS-edited report, a GREEN of a different argv is
+  not a proof, 4-of-5 green is not fixed, and the shipped `rca-template.md`'s placeholder
+  `## Size waiver` must waive nothing. Two positive controls (the honest pair passing, a
+  real waiver clearing the size term) keep it from being satisfied by a suite that fails
+  closed on everything.
+
+Neither substitutes for the other: `bgpdd-bugfix-lane` measures whether the lane invokes
+the gates, `bugfix-gates-adversarial` measures whether the gates hold when invoked.
 
 ## Adding a new contract case
 
