@@ -17,6 +17,8 @@ A Claude Code plugin that packages an **agent squad** and a **Prompt-Driven Deve
 
 The plugin is designed with a deliberate adoption gradient. Each step gives you value on its own; none requires the previous one.
 
+**Step 0 — Use it every day, not only for epics.** Type `/bg` in front of an ordinary ask and the plugin picks the lane; for a rename, an added test or a one-file tidy that is `/bgpdd-quick`, which stays in the main session and ends with one gate and one commit. A session-start hook injects a one-screen index of the lanes and the four rules that hold outside any lane (evidence over claims, never edit a test to pass, commits go through a gate, ask before anything irreversible), so an ordinary chat already follows them. The worker methodologies — TDD, debugging, code review, simplification, source-driven development — are directly invocable on named files too.
+
 **Step 1 — Fix one bug with `/bgpdd-bugfix`.** One command, one bug, the smallest squad that can prove it. It walks six gated phases on written evidence: you write a lint-gated bug report with the Orchestrator, Quinn captures the failing run (RED) before anyone touches code, you trace the root cause in the main session and a script routes the fix FAST, FULL or PLAN, Mason (or Nova for UI-side bugs, both for a shared-contract bug) lands the surgical fix without touching the RED, Quinn re-runs the identical command for GREEN plus the full suite, a fresh Luna reviews the diff and its blast radius, and the commit exists only if the commit gate passes with the RED/GREEN pair, a five-file size bound and the review on record. If you currently debug with ad-hoc prompts, this is the smallest possible taste of the disciplined, gated workflow — now with the smallest squad that can carry it.
 
 **Step 2 — Delegate one task to one agent.** Every squad member can be invoked ad hoc, at any project state: "have Luna review this diff", "have Cipher audit the auth routes", "have Quinn write tests for this module". The agent runs in isolation, does exactly its job, and returns a handoff. No pipeline required.
@@ -29,6 +31,8 @@ The plugin is designed with a deliberate adoption gradient. Each step gives you 
 
 | Situation | Command | Runs where |
 |---|---|---|
+| Not sure which lane, or just an everyday ask | `/bg <what you want>` | Main session — classifies and invokes exactly one lane |
+| One small contained change (≤ 3 files: rename, add a test, tidy, config) | `/bgpdd-quick` | Main session only — no agents; one captured check, one closing gate that commits |
 | New feature, brownfield codebase | `/bgpdd-discovery` then `/bgpdd-plan` | Spawns agents (Iris/Scout/Echo, then Rex/Aria/Alex) |
 | Well-specified small feature (known pattern/contract) | `/bgpdd-lite` | Main session (mini-requirements) + spawns Alex |
 | Execute an existing plan | `/bgpdd-build [auto]` | Spawns agents (Mason/Nova, Quinn, Luna, Dep, Cipher) |
@@ -365,6 +369,8 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 
 ### SOP orchestrators (slash-command pipelines)
 - **agent-squad** — the Orchestrator/delegation model itself; also home of `base-persona.md`, the one shared base persona
+- **bg** — the front door: classifies an everyday ask with three questions and invokes exactly one lane; never does the work itself
+- **bgpdd-quick** — the daily-driver lane: one contained change of ≤ 3 files in the main session, no delegation, a captured check, and `check_quick_close.py` as the only gate (commits the declared files, refuses undeclared tree changes, edited frozen tests, stale captures and size overruns)
 - **bgpdd-discovery** — global context discovery (Iris, Scout, Echo)
 - **bgpdd-plan** — design & architecture (Rex, Aria, Alex)
 - **bgpdd-lite** — mid-weight planning for well-specified work (Orchestrator mini-requirements + Alex; hands off to bgpdd-build)
@@ -431,6 +437,8 @@ The plugin's `.mcp.json` wires up four MCP servers used by the testing, review, 
 
 ## Usage Examples
 
+- `/bg <ask>` — when you do not know or care which lane applies; it announces the classification and invokes one lane
+- `/bgpdd-quick` — rename, add a test, small refactor, config tweak: three-line note, one captured check, one gate, one commit; escalates itself to bugfix, lite or plan when the change outgrows it
 - `/bgpdd-bugfix` — fix a single bug end-to-end on written evidence: a lint-gated bug report, Quinn's pre-fix RED capture, root-cause analysis and a scripted FAST/FULL/PLAN route in the main session, Mason or Nova's fix, Quinn's same-command GREEN, a fresh Luna review, and a commit gate that requires the RED/GREEN pair and a five-file bound. The smallest squad, not no squad.
 - "have Luna review this diff" — delegate one task to one specialist ad hoc; Luna runs in isolation and returns a `<handoff>` with her findings.
 - "have Quinn write tests for this module" — same ad-hoc delegation pattern, aimed at test coverage instead of review.

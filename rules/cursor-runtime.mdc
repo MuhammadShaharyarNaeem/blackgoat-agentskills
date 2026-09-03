@@ -9,7 +9,7 @@ The squad's skills and personas are written **runtime-neutral** -- they say "del
 
 ## When this applies
 
-Whenever you invoke a `bgpdd-*` pipeline (`/bgpdd-discovery`, `/bgpdd-plan`, `/bgpdd-lite`, `/bgpdd-build`, `/bgpdd-verify`, `/bgpdd-shipping`, `/bgpdd-bugfix`, `/bgpdd-learn`) or delegate to any squad member: Rex, Aria, Alex, Mason, Nova, Luna, Max, Quinn, Echo, Vera, Cipher, Dep, Forge, Iris, Scout.
+Whenever you invoke a `bgpdd-*` pipeline (`/bg`, `/bgpdd-quick`, `/bgpdd-discovery`, `/bgpdd-plan`, `/bgpdd-lite`, `/bgpdd-build`, `/bgpdd-verify`, `/bgpdd-shipping`, `/bgpdd-bugfix`, `/bgpdd-learn`) or delegate to any squad member: Rex, Aria, Alex, Mason, Nova, Luna, Max, Quinn, Echo, Vera, Cipher, Dep, Forge, Iris, Scout.
 
 ## Read the always-on index at session start
 

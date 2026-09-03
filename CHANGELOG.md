@@ -3,6 +3,28 @@
 All notable changes to the `blackgoat-agentskills` plugin are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [2.3.0] — 2026-09-04
+
+The daily-driver wave: the plugin now serves ordinary work, not only epics.
+
+### Added
+- **`/bg` — the front door** (`skills/bg/SKILL.md`). Classifies an everyday ask with three questions (a reproduction of wrong behaviour → `bgpdd-bugfix`; new capability, schema or contract, or unknown spec → `bgpdd-plan`, discovery first when the codebase is unmapped; ≤ 3 files with no external dependents → `bgpdd-quick`; else spec known and pattern established → `bgpdd-lite`), announces the classification and invokes exactly one lane. Named lane wins; ambiguity costs exactly one question; lanes escalate upward only. Never does the work itself.
+- **`/bgpdd-quick` — the daily-driver lane** (`skills/bgpdd-quick/SKILL.md`, `references/quick-rationale.md`). One contained change of ≤ 3 files, main session only, no delegation, no epic: a three-line `note.md` (What / Where / How verified), the check run through `run_quiet.py --capture`, and `check_quick_close.py` as the single gate — note complete and matching the declared files, capture sidecar-backed and newer than every changed file, no undeclared tree changes, frozen tests unedited (adding a test is allowed), size bound with the escalation lane named, commit of exactly the declared files. Labelled divergences: the Orchestrator is the worker (Contract §3), no state file or run log (Contract §4), one-bullet game tape in `note.md`, round bound 1, no size waiver.
+- **Always-on index via a session-start hook** (`hooks/hooks.json`, `hooks/run-hook.cmd`, `hooks/session-start`, `skills/agent-squad/always-on.md`). Injected on `startup|clear|compact`: one line per lane taken from each lane's own description, plus the four rules that bind outside any lane, each pointing at its owner. Runtime-neutral content held once; Cursor reads the same file via `rules/cursor-runtime.mdc`. Proven end to end with a headless `claude -p --plugin-dir` session.
+- **Direct invocation of the worker methodologies.** TDD, debugging-and-error-recovery, code-review-and-quality, code-simplification, source-driven-development, doubt-driven-development, performance-optimization and security-and-hardening can be asked for on named files outside any pipeline; the Orchestrator applies the Worker Execution Contract inline, no delegation, and routes anything over three files or touching shared behaviour through `/bg`. agent-audit Metric 12 carries the sanctioned exception.
+- **`review_package.py`** (`pipeline-tools`, 19 self-tests): writes commits + stat + unified diff for a range or the uncommitted worktree (`--head WORKTREE`) with a run_quiet-shaped sidecar. `bgpdd-build` Phase 3 and `bgpdd-bugfix` Phase 5 generate it before briefing Luna and regenerate it per remediation round — "review the remediation diff" is now an artifact she opens, not a path list she reads around.
+- **`record_run.py --model` is mandatory for `--event delegation`** (exit 2 without it; `--from-json` may supply it). Alex's plan task block gains an optional `Model tier` recommendation; agent-audit Metric 14 still owns the verifier-tier rule.
+- **Branch-close step** in `bgpdd-bugfix` (Phase 5 step 9) and `bgpdd-lite`: base branch read from the repo, exactly three options (merge locally / publish and open a pull request / keep), typed branch name to discard, post-merge suite captured with `run_quiet.py`, worktree cleanup. Labelled divergence from shipping Step 4.5/6.6.
+- **Evals**: 9 trigger cases for the new lanes (4 quick, 2 bugfix, 1 lite, 1 plan, 2 via `/bg`); README documents that a `/bg` case grades only the first hop until the judge records the invocation chain. `weekly-check.ps1` maps the quick lane, the skeleton and the new gates.
+
+### Changed
+- `bgpdd-bugfix` Phase 3: **the builder does NOT commit** — the commit is Phase 5's gate (from eval run 1, where Mason committed his own fix 17 minutes before the gate ran).
+- `check_commit_gate.py --commit` (79 self-tests) refuses with `already_committed` when no declared file differs from HEAD: a fix committed outside the gate can no longer be passed around it. A partial checkpoint commit with other declared files still dirty is unaffected.
+- `agents/luna.md` reviews the packaged diff when one is named; `agents/alex.md` may recommend a model tier per task.
+
+### Fixed
+- `evals/contract/bgpdd-bugfix-lane` fixture ignores `handoff.txt` (the harness's own artifact tripped `--verify-tree`) and its Command passes `--allowedTools` (headless runs deny write-effect commands without it). Run 1 of the lane graded 9/11 in 36 minutes; both failures traced to these.
+
 ## [2.2.1] — 2026-09-04
 
 ### Migration notes — read before upgrading a project with in-flight `.docs/` artifacts
