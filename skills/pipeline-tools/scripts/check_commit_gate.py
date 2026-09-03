@@ -504,6 +504,23 @@ def run_git(args, repo):
     return proc.stdout
 
 
+def declared_files_uncommitted(changed_files, repo):
+    """Declared paths that still differ from HEAD (staged or unstaged) or are untracked.
+
+    The gate's promise is that the commit exists only because the gate ran. A
+    fix its author already committed (observed: a builder committing his own
+    change in Phase 3 of the bugfix lane) leaves the declared files clean, so
+    `--commit` would either commit nothing or commit around the gate. Ignored
+    files never appear in porcelain output, so a harness artifact under an
+    ignore rule does not count.
+    """
+    if not changed_files:
+        return []
+    out = run_git(["status", "--porcelain", "--untracked-files=all", "--"]
+                  + list(changed_files), repo)
+    return [parse_porcelain_line(l) for l in out.splitlines() if l.strip()]
+
+
 def perform_commit(changed_files, message, repo):
     run_git(["add", "--"] + list(changed_files), repo)
     run_git(["commit", "-m", message], repo)
@@ -844,6 +861,7 @@ def build_report(args):
         "size_ok": args.max_changed_files is None,
         "warnings": [],
         "committed": False,
+        "already_committed": False,
         "result": "FAIL",
         "error": None,
     }
@@ -946,6 +964,16 @@ def build_report(args):
                 f"--verify-tree set but the working tree has an undeclared "
                 f"change outside --changed-files and .docs/: {path}")
 
+    if args.commit and args.changed_files:
+        pending = declared_files_uncommitted(args.changed_files, args.repo)
+        if not pending:
+            report["already_committed"] = True
+            report["warnings"].append(
+                "--commit set but no declared --changed-files path differs from "
+                "HEAD: the change was committed outside this gate (a builder "
+                "committing its own fix, or a hand commit). The commit must be "
+                "the gate's; reset the outside commit (keep the tree) and re-run")
+
     gate_ok = (found and verdict == "Approve" and not stale and not scoped
                and not report["ambiguous_review_section"]
                and (args.ignore_unscoped or not unscoped)
@@ -953,7 +981,8 @@ def build_report(args):
                and report["runtime_evidence_ok"]
                and report["ledger_gates_ok"]
                and report["size_ok"]
-               and report["tree_verified"])
+               and report["tree_verified"]
+               and not report["already_committed"])
     report["result"] = "PASS" if gate_ok else "FAIL"
 
     if gate_ok and args.commit:
@@ -2093,6 +2122,63 @@ def run_self_test():
             self.assertTrue(r["committed"])
             log = run_git(["log", "--oneline"], str(self.dir))
             self.assertIn("M3: auth endpoints", log)
+
+        @unittest.skipUnless(shutil.which("git"), "git not on PATH")
+        def test_commit_refused_when_fix_already_committed(self):
+            """A builder committed the fix itself: the declared file is clean
+            against HEAD, so the gate has nothing of its own to commit and must
+            say so instead of passing around the outside commit."""
+            run_git(["init", "-q"], str(self.dir))
+            run_git(["config", "user.email", "gate@test"], str(self.dir))
+            run_git(["config", "user.name", "gate"], str(self.dir))
+            run_git(["add", "--", str(self.changed)], str(self.dir))
+            run_git(["commit", "-q", "-m", "builder committed the fix"], str(self.dir))
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            ns = self._ns(milestone="M3", commit=True,
+                           message="M3: auth endpoints (FR-1, FR-2)")
+            r = build_report(ns)
+            self.assertEqual(r["result"], "FAIL")
+            self.assertTrue(r["already_committed"])
+            self.assertFalse(r["committed"])
+            self.assertTrue(any("committed outside this gate" in w for w in r["warnings"]))
+            log = run_git(["log", "--oneline"], str(self.dir))
+            self.assertNotIn("M3: auth endpoints", log)
+
+        @unittest.skipUnless(shutil.which("git"), "git not on PATH")
+        def test_already_committed_not_checked_without_commit_flag(self):
+            run_git(["init", "-q"], str(self.dir))
+            run_git(["config", "user.email", "gate@test"], str(self.dir))
+            run_git(["config", "user.name", "gate"], str(self.dir))
+            run_git(["add", "--", str(self.changed)], str(self.dir))
+            run_git(["commit", "-q", "-m", "already in"], str(self.dir))
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            r = build_report(self._ns(milestone="M3"))
+            self.assertEqual(r["result"], "PASS")
+            self.assertFalse(r["already_committed"])
+
+        @unittest.skipUnless(shutil.which("git"), "git not on PATH")
+        def test_partial_prior_commit_still_commits_the_rest(self):
+            """A context-checkpoint commit of PART of the work is legitimate:
+            one declared file is already in HEAD, another is still dirty."""
+            run_git(["init", "-q"], str(self.dir))
+            run_git(["config", "user.email", "gate@test"], str(self.dir))
+            run_git(["config", "user.name", "gate"], str(self.dir))
+            run_git(["add", "--", str(self.changed)], str(self.dir))
+            run_git(["commit", "-q", "-m", "checkpoint"], str(self.dir))
+            other = self.dir / "src" / "Other.cs"
+            other.parent.mkdir(parents=True, exist_ok=True)
+            other.write_text("// more", encoding="utf-8")
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            self._order(other, self.review)
+            ns = self._ns(milestone="M3", commit=True,
+                           changed=[str(self.changed), str(other)],
+                           message="M3: auth endpoints (FR-1, FR-2)")
+            r = build_report(ns)
+            self.assertEqual(r["result"], "PASS", r["warnings"])
+            self.assertTrue(r["committed"])
 
         def _init_repo_for_tree_check(self):
             run_git(["init", "-q"], str(self.dir))
