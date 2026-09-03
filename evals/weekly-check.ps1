@@ -3,14 +3,14 @@
     Zero-token change detector for the blackgoat-agentskills eval suite.
 
 .DESCRIPTION
-    Looks at what changed in agents/ and skills/ since the last eval run (or a
-    reasonable fallback), maps those changes to the evals they affect, and prints the
-    run-evals.ps1 command to run them. Never invokes run-evals.ps1 itself and never
-    spends a token - this script only reads files and (if available) git.
+    Looks at what changed in agents/, skills/ and evals/trigger/fixture/ since the last
+    eval run (or a reasonable fallback), maps those changes to the evals they affect,
+    and prints the run-evals.ps1 command to run them. Never invokes run-evals.ps1 itself
+    and never spends a token - this script only reads files and (if available) git.
 
     Detection strategy, in order of preference:
-      1. If the plugin dir is a git repo: diff agents/ and skills/ since the newest
-         timestamp found in results/results.jsonl.
+      1. If the plugin dir is a git repo: diff those paths since the newest timestamp
+         found in results/results.jsonl.
       2. If it is a git repo but results.jsonl has no entries yet: diff since 7 days ago.
       3. If it is not a git repo: fall back to file LastWriteTime, same two windows.
 #>
@@ -73,7 +73,11 @@ if ($isGitRepo) {
             $sinceArg = '7 days ago'
             $detectionMethod = 'git diff since 7 days ago (no prior results.jsonl entries)'
         }
-        $gitOutput = git log "--since=$sinceArg" --name-only --pretty=format: -- agents/ skills/ 2>&1
+        # evals/trigger/fixture/ is in the pathspec because it is now an INPUT to the
+        # trigger suite, not scaffolding: harness 3 runs every trigger prompt against a
+        # copy of it, so changing what the fixture contains can change where a prompt
+        # routes exactly the way changing a SKILL.md description can.
+        $gitOutput = git log "--since=$sinceArg" --name-only --pretty=format: -- agents/ skills/ evals/trigger/fixture/ 2>&1
         $changedFiles = @($gitOutput | Where-Object { $_ -and $_.Trim() -ne '' } | Sort-Object -Unique)
     } finally {
         Pop-Location
@@ -85,8 +89,9 @@ if ($isGitRepo) {
 
     $agentsPath = Join-Path $PluginRoot 'agents'
     $skillsPath = Join-Path $PluginRoot 'skills'
+    $triggerFixturePath = Join-Path $EvalsRoot 'trigger\fixture'
     $changedFiles = @()
-    foreach ($root in @($agentsPath, $skillsPath)) {
+    foreach ($root in @($agentsPath, $skillsPath, $triggerFixturePath)) {
         if (Test-Path $root) {
             $changedFiles += Get-ChildItem -Path $root -Recurse -File |
                 Where-Object { $_.LastWriteTime -gt $cutoff } |
@@ -100,7 +105,7 @@ Write-Output "Detection method: $detectionMethod"
 Write-Output ''
 
 if (-not $changedFiles -or $changedFiles.Count -eq 0) {
-    Write-Output 'No changes detected in agents/ or skills/. Nothing to run.'
+    Write-Output 'No changes detected in agents/, skills/ or evals/trigger/fixture/. Nothing to run.'
     exit 0
 }
 
@@ -269,6 +274,13 @@ foreach ($f in $changedFiles) {
     }
     if ($f -match 'SKILL\.md$') {
         # Any SKILL.md's frontmatter `description` is what drives skill routing.
+        [void]$affectedEvals.Add('trigger')
+    }
+    if ($f -match 'evals/trigger/fixture/') {
+        # The trigger fixture is the working directory every trigger prompt is judged
+        # against (harness 3). Change what the app contains - add a billing module,
+        # drop a .docs/ artifact a prompt refers to - and a prompt can route somewhere
+        # else without a single skill description changing.
         [void]$affectedEvals.Add('trigger')
     }
 }

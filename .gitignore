@@ -17,3 +17,6 @@ __pycache__/
 .DS_Store
 Thumbs.db
 *.swp
+
+# Per-run eval transcripts and artifacts (large; results.jsonl is the record of truth)
+evals/results/transcripts/

@@ -30,11 +30,13 @@
     Required to actually spend tokens. Without it, prints the plan and exits 0.
 
 .PARAMETER SelfTest
-    Zero-token, offline check of the trigger judge (harness_version 2): feeds canned
-    transcripts (a positive substring match, a negated substring match, and a
-    tool_use record) through Invoke-TriggerJudge and verifies each comes out the
-    expected way. Exits 0 if every case matches, non-zero on any mismatch. Ignores
-    every other parameter and never calls `claude` or touches results.jsonl.
+    Zero-token, offline check of the trigger judge (harness_version 3): feeds six
+    canned stream-json transcripts - ROUTED_OK, ROUTED_WRONG despite a positive
+    mention, NO_ROUTE with and without a mention, a plugin-namespaced skill name, and
+    two invocations where the first must decide - through Invoke-TriggerJudge and
+    verifies each outcome, pass flag, first_skill and mentioned_only. Exits 0 if every
+    case matches, non-zero on any mismatch. Ignores every other parameter and never
+    calls `claude` or touches results.jsonl.
 
 .EXAMPLE
     # Dry run - prints plan + cost estimate, spends nothing.
@@ -71,7 +73,13 @@ $ResultsPath = Join-Path $EvalsRoot 'results\results.jsonl'
 # Rough, deliberately conservative per-run estimates. These are guesses, not
 # measurements - once results.jsonl has real duration/outcome data, replace them.
 $EstTokensPerContractRun = 20000
-$EstTokensPerTriggerRun = 3000
+# Raised from 3000 at harness 3, then raised again from a MEASURED run rather than a
+# guess: trigger-1 under harness 3 cost $1.77 over 15 turns and 252s (2026-09-03), because
+# a trigger run is no longer a bare routing prompt with nothing to look at - it runs
+# against a copied app fixture the model reads, and a NO_ROUTE run keeps exploring
+# instead of stopping at a skill invocation. 175000 is what $1.77 comes to under the
+# crude per-1k rate below. A full trigger sweep (20 cases x 5 runs) is ~$175, not ~$3.
+$EstTokensPerTriggerRun = 175000
 $EstUsdPerThousandTokens = 0.01
 
 # Bump this string whenever the result-record contract (the set of keys written to
@@ -81,7 +89,12 @@ $EstUsdPerThousandTokens = 0.01
 # case_sha256/judge added; the array-with-record-last stream leak closed). Every
 # results.jsonl line written before this fix has no harness_version key at all and
 # is a bare JSON array, not an object - see README's "Known stale results" note.
-$HarnessVersion = '2'
+# "3" = the trigger suite measures ROUTING instead of mention: stream-json transcript,
+# a real app-shaped fixture as the working directory, outcome/first_skill/
+# mentioned_only/transcript on every trigger record, and NO_ROUTE is a failure.
+# EVERY trigger record written under harness_version 1 or 2 measured mention, not
+# routing, and must not be read as routing accuracy - see the README.
+$HarnessVersion = '3'
 
 # --- Provenance helpers ---------------------------------------------------------
 
@@ -152,74 +165,110 @@ function Get-Sha256HexOfText {
 }
 
 # --- Trigger judge ----------------------------------------------------------------
-# harness_version 2 tightens the old "expected skill name appears anywhere in the
-# transcript as a substring" check, which would happily pass a response that says
-# "don't use bgpdd-lite here". Preferred path: parse a structured transcript for an
-# actual Skill tool_use record and judge on the FIRST skill invoked. Fallback (used
-# only when no tool_use record is present, e.g. an older `claude` CLI that ignores
-# --output-format json): a substring match that rejects hits preceded within 40
-# characters by a negation word.
+# harness_version 3 makes the trigger suite measure ROUTING, not mention.
+#
+# What harness 2 got wrong, empirically (probed 2026-09-03): `claude -p
+# --output-format json` returns ONE result object carrying `is_error`, `num_turns`,
+# `usage` and a `result` string - and no message content blocks at all. So harness 2's
+# tool_use path could never fire, every trigger run silently fell through to the
+# substring path, and a run whose model never invoked a skill at all "passed" because
+# its clarifying prose happened to name one. `--output-format stream-json --verbose`
+# emits one JSON object per line, including
+# {"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill",...}]}},
+# which is what this judge parses.
+#
+# Three outcomes, one pass path:
+#   ROUTED_OK    - the FIRST Skill tool_use names an acceptable skill. The only pass.
+#   ROUTED_WRONG - the first Skill tool_use names something else. Named in the record.
+#   NO_ROUTE     - no Skill tool_use anywhere in the transcript. Never a pass, even
+#                  when the final answer discusses the right skill in prose; that
+#                  diagnostic is recorded as `mentioned_only` and nothing more.
+#
+# Slash-command note: the CLI's init event lists `Skill` in its `tools` array and has
+# no SlashCommand-style tool, and the probe stream contained no such block. Skills are
+# invoked exclusively through the `Skill` tool here, so this judge looks for that and
+# nothing else. Plugin skills ARE named with a plugin prefix in the CLI's
+# `slash_commands` list (`blackgoat-agentskills:bgpdd-plan`), so a skill name is
+# normalized by stripping everything up to and including the last colon before it is
+# compared against a case's acceptable set.
 
-function Get-FirstSkillFromToolUseJson {
-    param([string]$JsonText)
-
-    if ([string]::IsNullOrWhiteSpace($JsonText)) { return $null }
-
-    # `claude -p --output-format json` emits one JSON object; `--output-format
-    # stream-json` emits one JSON object per line. Accept either: try the whole text
-    # as one document first, then fall back to per-line parsing.
+function ConvertFrom-StreamJsonText {
+    param([AllowNull()][string]$Text)
+    # One JSON object per line. Non-JSON lines (a stderr warning that got interleaved,
+    # a blank line) are skipped rather than fatal.
     $messages = @()
-    try {
-        $parsed = $JsonText | ConvertFrom-Json -ErrorAction Stop
-        if ($parsed -is [System.Array]) {
-            $messages = $parsed
-        } else {
-            $messages = @($parsed)
-        }
-    } catch {
-        foreach ($jsonLine in ($JsonText -split "`r?`n")) {
-            if ([string]::IsNullOrWhiteSpace($jsonLine)) { continue }
-            try {
-                $messages += ($jsonLine | ConvertFrom-Json -ErrorAction Stop)
-            } catch {
-                continue
-            }
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $messages }
+    foreach ($jsonLine in ($Text -split "`r?`n")) {
+        $trimmed = $jsonLine.Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
+        if ($trimmed[0] -ne '{' -and $trimmed[0] -ne '[') { continue }
+        try {
+            $messages += ($trimmed | ConvertFrom-Json -ErrorAction Stop)
+        } catch {
+            continue
         }
     }
-    if ($messages.Count -eq 0) { return $null }
+    return $messages
+}
 
-    foreach ($msg in $messages) {
+function Get-SkillNameFromToolUseBlock {
+    param($Block)
+    # The bare skill name for a `Skill` tool_use block, or $null for anything else.
+    if ($null -eq $Block) { return $null }
+    $props = @()
+    if ($Block.PSObject) { $props = $Block.PSObject.Properties.Name }
+    if ($props -notcontains 'type' -or $Block.type -ne 'tool_use') { return $null }
+    if ($props -notcontains 'name' -or $Block.name -ne 'Skill') { return $null }
+    if ($props -notcontains 'input' -or $null -eq $Block.input) { return $null }
+
+    $blockInput = $Block.input
+    $inputProps = @()
+    if ($blockInput.PSObject) { $inputProps = $blockInput.PSObject.Properties.Name }
+    $raw = $null
+    if ($inputProps -contains 'skill') { $raw = $blockInput.skill }
+    elseif ($inputProps -contains 'name') { $raw = $blockInput.name }
+    if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+
+    # 'blackgoat-agentskills:bgpdd-plan' -> 'bgpdd-plan'
+    return (([string]$raw) -replace '^.*:', '').Trim()
+}
+
+function Get-FirstSkillInvocation {
+    param([AllowNull()][string]$StreamJsonText)
+    foreach ($msg in (ConvertFrom-StreamJsonText -Text $StreamJsonText)) {
         if ($null -eq $msg) { continue }
         $content = $null
-        if ($msg.PSObject.Properties.Name -contains 'message' -and $msg.message -and
+        $msgProps = @()
+        if ($msg.PSObject) { $msgProps = $msg.PSObject.Properties.Name }
+        if ($msgProps -contains 'message' -and $msg.message -and
             $msg.message.PSObject.Properties.Name -contains 'content') {
             $content = $msg.message.content
-        } elseif ($msg.PSObject.Properties.Name -contains 'content') {
+        } elseif ($msgProps -contains 'content') {
             $content = $msg.content
         }
         if (-not $content) { continue }
-
         foreach ($block in @($content)) {
-            if ($null -eq $block) { continue }
-            $blockType = $null
-            if ($block.PSObject.Properties.Name -contains 'type') { $blockType = $block.type }
-            if ($blockType -ne 'tool_use') { continue }
-
-            $toolName = $null
-            if ($block.PSObject.Properties.Name -contains 'name') { $toolName = $block.name }
-
-            $skillName = $null
-            if ($block.PSObject.Properties.Name -contains 'input' -and $block.input -and
-                $block.input.PSObject.Properties.Name -contains 'skill') {
-                $skillName = $block.input.skill
-            }
-
-            if ($toolName -eq 'Skill' -and $skillName) {
-                return $skillName
-            }
+            $skillName = Get-SkillNameFromToolUseBlock -Block $block
+            if ($skillName) { return $skillName }
         }
     }
     return $null
+}
+
+function Get-StreamResultText {
+    param([AllowNull()][string]$StreamJsonText)
+    # The final `{"type":"result", ..., "result":"..."}` line's text - what the user
+    # would have seen. Used ONLY for the `mentioned_only` diagnostic.
+    $text = $null
+    foreach ($msg in (ConvertFrom-StreamJsonText -Text $StreamJsonText)) {
+        if ($null -eq $msg) { continue }
+        $msgProps = @()
+        if ($msg.PSObject) { $msgProps = $msg.PSObject.Properties.Name }
+        if ($msgProps -contains 'type' -and $msg.type -eq 'result' -and $msgProps -contains 'result') {
+            $text = [string]$msg.result
+        }
+    }
+    return $text
 }
 
 function Test-PositiveSubstringMatch {
@@ -227,6 +276,11 @@ function Test-PositiveSubstringMatch {
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text,
         [Parameter(Mandatory = $true)][string]$Needle
     )
+    # DIAGNOSTIC ONLY as of harness 3. This used to be a pass path; it is not one any
+    # more. Its single remaining caller computes `mentioned_only` for a NO_ROUTE run,
+    # so a reader can tell "the model reasoned about the right skill but never invoked
+    # it" apart from "the model went somewhere else entirely". Neither passes.
+    #
     # True if $Needle occurs at least once in $Text without a negation word (not,
     # don't, never, instead of, rather than, avoid) within the preceding 40
     # characters. A needle that occurs only in a negated context returns false.
@@ -246,17 +300,22 @@ function Test-PositiveSubstringMatch {
 function Invoke-TriggerJudge {
     param(
         [Parameter(Mandatory = $true)][AllowNull()][string[]]$Acceptable,
-        [AllowNull()][string]$ToolUseJson,
-        [AllowNull()][string]$FallbackText
+        [AllowNull()][string]$StreamJson
     )
-    # Returns a PSCustomObject: Pass (bool), Judge ('tool_use'|'substring'), Detail
-    # (string, only meaningful context - not machine-parsed by callers).
+    # Returns a PSCustomObject: Outcome ('ROUTED_OK'|'ROUTED_WRONG'|'NO_ROUTE'),
+    # Pass (bool - true for ROUTED_OK and nothing else), FirstSkill (string or $null),
+    # Judge (always 'tool_use'), MentionedOnly (bool, diagnostic), Detail (string).
     $acceptableClean = @($Acceptable | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 
-    $firstSkill = $null
-    if (-not [string]::IsNullOrWhiteSpace($ToolUseJson)) {
-        $firstSkill = Get-FirstSkillFromToolUseJson -JsonText $ToolUseJson
+    $firstSkill = Get-FirstSkillInvocation -StreamJsonText $StreamJson
+    $resultText = Get-StreamResultText -StreamJsonText $StreamJson
+    if ($null -eq $resultText) { $resultText = '' }
+
+    $mentioned = $false
+    foreach ($skillName in $acceptableClean) {
+        if (Test-PositiveSubstringMatch -Text $resultText -Needle $skillName) { $mentioned = $true; break }
     }
+
     if ($firstSkill) {
         $isAcceptable = $false
         foreach ($skillName in $acceptableClean) {
@@ -264,87 +323,129 @@ function Invoke-TriggerJudge {
         }
         if ($isAcceptable) {
             return [PSCustomObject]@{
-                Pass   = $true
-                Judge  = 'tool_use'
-                Detail = "first skill invoked: '$firstSkill' (acceptable)"
+                Outcome       = 'ROUTED_OK'
+                Pass          = $true
+                FirstSkill    = $firstSkill
+                Judge         = 'tool_use'
+                MentionedOnly = $mentioned
+                Detail        = "first Skill invocation was '$firstSkill' (acceptable)"
             }
         }
         return [PSCustomObject]@{
-            Pass   = $false
-            Judge  = 'tool_use'
-            Detail = "first skill invoked was '$firstSkill', not one of [$($acceptableClean -join ', ')]"
+            Outcome       = 'ROUTED_WRONG'
+            Pass          = $false
+            FirstSkill    = $firstSkill
+            Judge         = 'tool_use'
+            MentionedOnly = $mentioned
+            Detail        = "first Skill invocation was '$firstSkill', not one of [$($acceptableClean -join ', ')]"
         }
     }
 
-    # No tool_use record found - fall back to the textual judge.
-    foreach ($skillName in $acceptableClean) {
-        if (Test-PositiveSubstringMatch -Text $FallbackText -Needle $skillName) {
-            return [PSCustomObject]@{
-                Pass   = $true
-                Judge  = 'substring'
-                Detail = "matched '$skillName' with no negation word in the preceding 40 characters"
-            }
-        }
-    }
+    $mentionNote = 'the final answer did not name one either'
+    if ($mentioned) { $mentionNote = 'the final answer only MENTIONED an acceptable skill - a mention is not a route' }
     return [PSCustomObject]@{
-        Pass   = $false
-        Judge  = 'substring'
-        Detail = "none of [$($acceptableClean -join ', ')] found in output as a non-negated match"
+        Outcome       = 'NO_ROUTE'
+        Pass          = $false
+        FirstSkill    = $null
+        Judge         = 'tool_use'
+        MentionedOnly = $mentioned
+        Detail        = "no Skill tool_use anywhere in the transcript; $mentionNote (expected one of [$($acceptableClean -join ', ')])"
     }
 }
 
 function Invoke-TriggerJudgeSelfTest {
+    # Every canned transcript below is shaped like a real `--output-format stream-json
+    # --verbose` stream: one JSON object per line, assistant messages carrying a
+    # `message.content` array, and a final `{"type":"result","result":"..."}` line.
+    # The line shapes are copied from the 2026-09-03 probe of trigger-1, so a CLI
+    # output-shape change breaks this self-test rather than silently zeroing the suite.
     $failures = 0
+    $sysLine = '{"type":"system","subtype":"init","permissionMode":"plan"}'
 
-    # Case 1: plain positive substring match, no tool_use record available.
-    $r1 = Invoke-TriggerJudge -Acceptable @('bgpdd-lite') -ToolUseJson $null `
-        -FallbackText 'The spec is already known, so I will route this to bgpdd-lite instead of full planning.'
-    if ($r1.Pass -eq $true -and $r1.Judge -eq 'substring') {
-        Write-Host "SELFTEST PASSED: case 1 (positive substring) - $($r1.Detail)"
-    } else {
-        Write-Host "SELFTEST FAILED: case 1 (positive substring) - got Pass=$($r1.Pass) Judge=$($r1.Judge)"
-        $failures++
+    function Test-JudgeCase {
+        param(
+            [string]$Label,
+            $Result,
+            [string]$ExpectedOutcome,
+            [bool]$ExpectedPass,
+            [AllowNull()][string]$ExpectedFirstSkill,
+            [bool]$ExpectedMentionedOnly
+        )
+        # FirstSkill is compared as a string on both sides: the judge returns $null for
+        # NO_ROUTE, while [AllowNull()][string] coerces the expected $null to '', and
+        # `$null -eq ''` is false in PowerShell.
+        $ok = ($Result.Outcome -eq $ExpectedOutcome) -and
+              ($Result.Pass -eq $ExpectedPass) -and
+              (([string]$Result.FirstSkill) -eq ([string]$ExpectedFirstSkill)) -and
+              ($Result.MentionedOnly -eq $ExpectedMentionedOnly) -and
+              ($Result.Judge -eq 'tool_use')
+        if ($ok) {
+            Write-Host "SELFTEST PASSED: $Label - $($Result.Outcome), first_skill=$($Result.FirstSkill), mentioned_only=$($Result.MentionedOnly)"
+            return 0
+        }
+        Write-Host ("SELFTEST FAILED: $Label - got Outcome=$($Result.Outcome) Pass=$($Result.Pass) " +
+            "FirstSkill=$($Result.FirstSkill) MentionedOnly=$($Result.MentionedOnly) Judge=$($Result.Judge); " +
+            "expected Outcome=$ExpectedOutcome Pass=$ExpectedPass FirstSkill=$ExpectedFirstSkill MentionedOnly=$ExpectedMentionedOnly")
+        return 1
     }
 
-    # Case 2: a negated mention must NOT count as a match - the exact bug this
-    # rewrite closes ("don't use bgpdd-lite here").
-    $r2 = Invoke-TriggerJudge -Acceptable @('bgpdd-lite') -ToolUseJson $null `
-        -FallbackText "This needs full discovery, so don't use bgpdd-lite here."
-    if ($r2.Pass -eq $false -and $r2.Judge -eq 'substring') {
-        Write-Host "SELFTEST PASSED: case 2 (negated substring rejected) - $($r2.Detail)"
-    } else {
-        Write-Host "SELFTEST FAILED: case 2 (negated substring rejected) - got Pass=$($r2.Pass) Judge=$($r2.Judge)"
-        $failures++
-    }
+    # Case 1: ROUTED_OK. The transcript also carries a negated mention of a different
+    # skill; the invocation decides, not the prose.
+    $s1 = $sysLine + "`n" +
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"This is a verify-only ask."},{"type":"tool_use","id":"t1","name":"Skill","input":{"skill":"bgpdd-verify"}}]}}' + "`n" +
+        '{"type":"result","subtype":"success","is_error":false,"result":"Ran bgpdd-verify. I did not use bgpdd-build."}'
+    $failures += Test-JudgeCase -Label 'case 1 (ROUTED_OK)' `
+        -Result (Invoke-TriggerJudge -Acceptable @('bgpdd-verify') -StreamJson $s1) `
+        -ExpectedOutcome 'ROUTED_OK' -ExpectedPass $true -ExpectedFirstSkill 'bgpdd-verify' -ExpectedMentionedOnly $true
 
-    # Case 3: a tool_use record naming the acceptable skill passes via the tool_use
-    # path even though the same transcript also carries a negated mention of a
-    # different skill - proof the tool_use path is preferred over the substring one.
-    $toolUseJsonPositive = '{"type":"message","message":{"content":[' +
-        '{"type":"text","text":"do not use bgpdd-build for this"},' +
-        '{"type":"tool_use","name":"Skill","input":{"skill":"bgpdd-verify"}}' +
-        ']}}'
-    $r3 = Invoke-TriggerJudge -Acceptable @('bgpdd-verify') -ToolUseJson $toolUseJsonPositive -FallbackText $toolUseJsonPositive
-    if ($r3.Pass -eq $true -and $r3.Judge -eq 'tool_use') {
-        Write-Host "SELFTEST PASSED: case 3 (tool_use positive) - $($r3.Detail)"
-    } else {
-        Write-Host "SELFTEST FAILED: case 3 (tool_use positive) - got Pass=$($r3.Pass) Judge=$($r3.Judge)"
-        $failures++
-    }
+    # Case 2: ROUTED_WRONG. The final answer names the acceptable skill positively -
+    # under harness 2 that was a pass. It must not be one.
+    $s2 = $sysLine + "`n" +
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Skill","input":{"skill":"bgpdd-build"}}]}}' + "`n" +
+        '{"type":"result","subtype":"success","is_error":false,"result":"I went to build; bgpdd-verify would also have been reasonable."}'
+    $failures += Test-JudgeCase -Label 'case 2 (ROUTED_WRONG despite a positive mention)' `
+        -Result (Invoke-TriggerJudge -Acceptable @('bgpdd-verify') -StreamJson $s2) `
+        -ExpectedOutcome 'ROUTED_WRONG' -ExpectedPass $false -ExpectedFirstSkill 'bgpdd-build' -ExpectedMentionedOnly $true
 
-    # Case 4: a tool_use record naming a skill NOT in the acceptable list must fail
-    # via the tool_use path - it must never silently fall back to a substring match
-    # that happens to find the acceptable skill's name in surrounding prose.
-    $toolUseJsonNegative = '{"type":"message","message":{"content":[' +
-        '{"type":"tool_use","name":"Skill","input":{"skill":"bgpdd-build"}}' +
-        ']}}'
-    $r4 = Invoke-TriggerJudge -Acceptable @('bgpdd-verify') -ToolUseJson $toolUseJsonNegative -FallbackText $toolUseJsonNegative
-    if ($r4.Pass -eq $false -and $r4.Judge -eq 'tool_use') {
-        Write-Host "SELFTEST PASSED: case 4 (tool_use negative) - $($r4.Detail)"
-    } else {
-        Write-Host "SELFTEST FAILED: case 4 (tool_use negative) - got Pass=$($r4.Pass) Judge=$($r4.Judge)"
-        $failures++
-    }
+    # Case 3: NO_ROUTE with mentioned_only. This is the 2026-09-03 probe verbatim in
+    # shape: the model explored with Glob/ToolSearch/Bash, invoked no skill, and only
+    # named bgpdd-plan in its closing prose. Harness 2 scored this a PASS.
+    $s3 = $sysLine + "`n" +
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Glob","input":{"pattern":"**/*.vue"}}]}}' + "`n" +
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"ToolSearch","input":{"query":"select:AskUserQuestion","max_results":3}}]}}' + "`n" +
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t3","name":"Bash","input":{"command":"git remote -v"}}]}}' + "`n" +
+        '{"type":"result","subtype":"success","is_error":false,"result":"Which repo is the app? Once I know, I would run bgpdd-plan for the spec proper."}'
+    $failures += Test-JudgeCase -Label 'case 3 (NO_ROUTE, mentioned_only)' `
+        -Result (Invoke-TriggerJudge -Acceptable @('bgpdd-plan', 'bgpdd-lite') -StreamJson $s3) `
+        -ExpectedOutcome 'NO_ROUTE' -ExpectedPass $false -ExpectedFirstSkill $null -ExpectedMentionedOnly $true
+
+    # Case 4: NO_ROUTE where the only mention is negated - mentioned_only must be false,
+    # which is how the negation-aware matcher stays honest as a diagnostic.
+    $s4 = $sysLine + "`n" +
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Glob","input":{"pattern":"**/*.cs"}}]}}' + "`n" +
+        '{"type":"result","subtype":"success","is_error":false,"result":"This is contained, so do not use bgpdd-plan here."}'
+    $failures += Test-JudgeCase -Label 'case 4 (NO_ROUTE, negated mention not counted)' `
+        -Result (Invoke-TriggerJudge -Acceptable @('bgpdd-plan') -StreamJson $s4) `
+        -ExpectedOutcome 'NO_ROUTE' -ExpectedPass $false -ExpectedFirstSkill $null -ExpectedMentionedOnly $false
+
+    # Case 5: a plugin-namespaced skill name must normalize to its bare name, or every
+    # correct route in a plugin-installed CLI would read as ROUTED_WRONG.
+    $s5 = $sysLine + "`n" +
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Skill","input":{"skill":"blackgoat-agentskills:bgpdd-discovery"}}]}}' + "`n" +
+        '{"type":"result","subtype":"success","is_error":false,"result":"Discovery started."}'
+    $failures += Test-JudgeCase -Label 'case 5 (namespaced skill name normalized)' `
+        -Result (Invoke-TriggerJudge -Acceptable @('bgpdd-discovery') -StreamJson $s5) `
+        -ExpectedOutcome 'ROUTED_OK' -ExpectedPass $true -ExpectedFirstSkill 'bgpdd-discovery' -ExpectedMentionedOnly $false
+
+    # Case 6: FIRST invocation decides. A wrong first route is not redeemed by a
+    # correct second one - that is the routing failure the suite exists to catch.
+    $s6 = $sysLine + "`n" +
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Skill","input":{"skill":"bgpdd-plan"}}]}}' + "`n" +
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Skill","input":{"skill":"bgpdd-bugfix"}}]}}' + "`n" +
+        '{"type":"result","subtype":"success","is_error":false,"result":"Fixed."}'
+    $failures += Test-JudgeCase -Label 'case 6 (first invocation decides)' `
+        -Result (Invoke-TriggerJudge -Acceptable @('bgpdd-bugfix') -StreamJson $s6) `
+        -ExpectedOutcome 'ROUTED_WRONG' -ExpectedPass $false -ExpectedFirstSkill 'bgpdd-plan' -ExpectedMentionedOnly $false
 
     return $failures
 }
@@ -503,11 +604,18 @@ function Invoke-ContractRun {
     $tempDir = Join-Path $env:TEMP "eval-$($CaseInfo.Name)-$RunIndex-$suffix"
     New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
 
-    # Every run's full agent transcript is archived here - not just failing runs -
-    # so a run's output survives after $tempDir is deleted in the finally block below.
-    $transcriptDir = Join-Path $resultsDir 'transcripts'
+    # Every run's evidence is archived here - not just failing runs - so it survives
+    # after $tempDir is deleted in the finally block below. A DIRECTORY, not a single
+    # .txt: four cases (mason-fix-verification, mason-fix-verification-tier3,
+    # iris-discovery-guard, forge-blackgoat-carveout) pipe the agent's reply into
+    # `Out-File handoff.txt` inside the temp copy, so their stdout capture is empty by
+    # construction and the entire graded artifact - the handoff element, and whatever
+    # the agent wrote under .docs/ - used to be deleted with the temp directory on a
+    # PASS. It holds stdout.txt plus handoff.txt and .docs/ when the run produced them.
+    $transcriptDirRel = "$($CaseInfo.Name)-run$RunIndex-$suffix"
+    $transcriptDir = Join-Path (Join-Path $resultsDir 'transcripts') $transcriptDirRel
     New-Item -ItemType Directory -Force -Path $transcriptDir | Out-Null
-    $transcriptPath = Join-Path $transcriptDir "$($CaseInfo.Name)-run$RunIndex-$suffix.txt"
+    $transcriptPath = Join-Path $transcriptDir 'stdout.txt'
 
     try {
         $docsRelPath = Get-ContractCaseDocsPath -CaseMdPath $CaseInfo.CaseMd
@@ -554,6 +662,18 @@ function Invoke-ContractRun {
         $agentOutputText = ($agentOutput | Out-String)
         Write-Host $agentOutputText
         Set-Content -Path $transcriptPath -Value $agentOutputText -Encoding utf8
+
+        # Copied BEFORE grading, so a grader that throws still leaves the evidence
+        # behind. handoff.txt is where the four Out-File cases put the agent's entire
+        # reply; .docs/ is where every artifact-producing case writes its output.
+        $handoffSrc = Join-Path $tempDir 'handoff.txt'
+        if (Test-Path $handoffSrc) {
+            Copy-Item -Path $handoffSrc -Destination (Join-Path $transcriptDir 'handoff.txt') -Force
+        }
+        $docsSrc = Join-Path $tempDir '.docs'
+        if (Test-Path $docsSrc) {
+            Copy-Item -Path $docsSrc -Destination (Join-Path $transcriptDir '.docs') -Recurse -Force
+        }
 
         $gradeOutput = & $CaseInfo.GradeScript -TargetDir $tempDir
         $gradeExit = $LASTEXITCODE
@@ -602,6 +722,7 @@ function Invoke-ContractRun {
         plugin_dirty     = $PluginDirty
         claude_version   = $ClaudeVersion
         case_sha256      = (Get-Sha256HexOfFile -Path $CaseInfo.CaseMd)
+        transcript       = "results/transcripts/$transcriptDirRel"
         harness_version  = $HarnessVersion
     }
 }
@@ -612,28 +733,106 @@ function Invoke-TriggerRun {
     $started = Get-Date
     $pass = $false
     $failedCriterion = $null
-    $judgeUsed = $null
+    $outcome = $null
+    $firstSkill = $null
+    $mentionedOnly = $false
+
+    $suffix = [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $tempDir = Join-Path $env:TEMP "eval-$($CaseInfo.Name)-$RunIndex-$suffix"
+    $stdinFile = Join-Path $env:TEMP "eval-stdin-$suffix.txt"
+    $stdoutFile = Join-Path $env:TEMP "eval-stdout-$suffix.jsonl"
+    $stderrFile = Join-Path $env:TEMP "eval-stderr-$suffix.txt"
+
+    $transcriptDir = Join-Path $resultsDir 'transcripts'
+    $transcriptName = "$($CaseInfo.Name)-run$RunIndex-$suffix.jsonl"
+    $transcriptPath = Join-Path $transcriptDir $transcriptName
+    $transcriptRel = "results/transcripts/$transcriptName"
 
     try {
-        # One call only, with --output-format json: a structured transcript lets
-        # Invoke-TriggerJudge check for an actual Skill tool_use record instead of
-        # substring-matching prose (a response saying "don't use bgpdd-lite here"
-        # used to count as a pass for bgpdd-lite). The same text doubles as the
-        # substring fallback's input - a second plain-text call would double the
-        # token cost of every trigger run for no benefit, since the raw JSON text
-        # still contains any skill name mentioned in it.
-        $output = claude -p $CaseInfo.Prompt --permission-mode plan --output-format json 2>&1 | Out-String
+        New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
+        New-Item -ItemType Directory -Force -Path $transcriptDir | Out-Null
+
+        # A trigger run needs something to route ABOUT. Run from the plugin repo root
+        # (what harness 2 did), every prompt is unanswerable - the 2026-09-03 probe
+        # found no application, asked "which repo?", and invoked no skill at all. The
+        # working directory is a per-run copy of trigger/fixture/: a small app-shaped
+        # tree (Vue 3 SPA + .NET API + a .docs/ tree) the 20 prompts refer to.
+        $fixtureRoot = Join-Path $EvalsRoot 'trigger\fixture'
+        if (-not (Test-Path $fixtureRoot)) {
+            throw "trigger fixture missing at $fixtureRoot - a trigger run has nothing to route about without it"
+        }
+        Copy-Item -Path (Join-Path $fixtureRoot '*') -Destination $tempDir -Recurse -Force
+
+        # Same plugin copy-in as Invoke-ContractRun: the prompts that ask about the
+        # squad itself (Rex/Alex persona contradictions) need agents/ and skills/ to
+        # resolve relative to the working directory, and the copy keeps a run from
+        # touching the live repo. Note this does NOT determine which skills are
+        # routable - the Skill tool's catalogue comes from the installed plugin, not
+        # from the working directory.
+        $pluginRoot = Split-Path -Parent $EvalsRoot
+        foreach ($pluginDir in @('agents', 'skills', 'references')) {
+            $src = Join-Path $pluginRoot $pluginDir
+            if (-not (Test-Path $src)) { continue }
+            $dst = Join-Path $tempDir $pluginDir
+            New-Item -ItemType Directory -Force -Path $dst | Out-Null
+            Copy-Item -Path (Join-Path $src '*') -Destination $dst -Recurse -Force
+        }
+
+        # stdin redirected from an empty file, not left attached to the console: the
+        # CLI otherwise waits and emits "Warning: no stdin data received in 3s..." on
+        # stderr ahead of the JSON stream. Start-Process (not a PS pipeline) because
+        # it is the only PS 5.1 form that redirects all three streams to files
+        # deterministically; the prompt goes through as a single quoted argument.
+        New-Item -ItemType File -Path $stdinFile -Force | Out-Null
+        $promptArg = ([string]$CaseInfo.Prompt) -replace '"', '\"'
+        $argString = '-p "' + $promptArg + '" --permission-mode plan --output-format stream-json --verbose'
+
+        $proc = Start-Process -FilePath 'claude' -ArgumentList $argString `
+            -WorkingDirectory $tempDir -NoNewWindow -Wait -PassThru `
+            -RedirectStandardInput $stdinFile `
+            -RedirectStandardOutput $stdoutFile `
+            -RedirectStandardError $stderrFile
+
+        $output = ''
+        if (Test-Path $stdoutFile) { $output = Get-Content -Path $stdoutFile -Raw -Encoding UTF8 }
+        if ($null -eq $output) { $output = '' }
+
+        # Archived for every run, pass or fail - a routing verdict is only auditable if
+        # the stream it was read from survives the temp directory's deletion. Copied,
+        # not Set-Content'd: PS 5.1's `-Encoding utf8` prepends a BOM, which makes the
+        # archived transcript's FIRST line (the system/init event) unparseable to a
+        # plain JSON reader. The archive has to be the bytes the judge read.
+        if (Test-Path $stdoutFile) { Copy-Item -Path $stdoutFile -Destination $transcriptPath -Force }
+
+        $stderrText = ''
+        if (Test-Path $stderrFile) { $stderrText = (Get-Content -Path $stderrFile -Raw -Encoding UTF8) }
+        if ($stderrText -and $stderrText.Trim().Length -gt 0) {
+            Copy-Item -Path $stderrFile -Destination ($transcriptPath -replace '\.jsonl$', '-stderr.txt') -Force
+            Write-Host "    stderr: $($stderrText.Trim())"
+        }
 
         $acceptable = @($CaseInfo.ExpectedSkill) + @($CaseInfo.AcceptableAlternatives)
-        $judgeResult = Invoke-TriggerJudge -Acceptable $acceptable -ToolUseJson $output -FallbackText $output
+        $judgeResult = Invoke-TriggerJudge -Acceptable $acceptable -StreamJson $output
 
         $pass = $judgeResult.Pass
-        $judgeUsed = $judgeResult.Judge
+        $outcome = $judgeResult.Outcome
+        $firstSkill = $judgeResult.FirstSkill
+        $mentionedOnly = $judgeResult.MentionedOnly
+        Write-Host "    $($judgeResult.Outcome): $($judgeResult.Detail)"
         if (-not $pass) {
             $failedCriterion = $judgeResult.Detail
+            if ($proc -and $proc.ExitCode -ne 0) {
+                $failedCriterion = "claude exited $($proc.ExitCode); $failedCriterion"
+            }
         }
     } catch {
+        $outcome = 'HARNESS_ERROR'
         $failedCriterion = "harness error: $($_.Exception.Message)"
+    } finally {
+        Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        foreach ($scratch in @($stdinFile, $stdoutFile, $stderrFile)) {
+            Remove-Item -Path $scratch -Force -ErrorAction SilentlyContinue
+        }
     }
 
     $duration = [math]::Round(((Get-Date) - $started).TotalSeconds, 2)
@@ -642,9 +841,13 @@ function Invoke-TriggerRun {
         case             = $CaseInfo.Name
         run_index        = $RunIndex
         pass             = $pass
+        outcome          = $outcome
+        first_skill      = $firstSkill
+        judge            = 'tool_use'
+        mentioned_only   = $mentionedOnly
+        transcript       = $transcriptRel
         failed_criterion = $failedCriterion
         duration_s       = $duration
-        judge            = $judgeUsed
         plugin_sha       = $PluginSha
         plugin_dirty     = $PluginDirty
         claude_version   = $ClaudeVersion
