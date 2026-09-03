@@ -110,6 +110,24 @@ python check_runtime_evidence.py --self-test
 - **Exit codes** — **0** at least `--min-captures` accepted captures for this milestone and `declared_absent` empty; **1** any evidence failure (no citation, missing file, cited outside `evidence/runtime/`, no capture naming this milestone, stale, in-process transport, build/test-runner/search probe, a non-allowlisted client, a missing/mismatched/non-zero-exit sidecar, forbidden host, missing required key, status or build-marker mismatch, unreachable OpenAPI under its flag, or a declared-but-absent schema property); **2** structural/usage — missing `--report`/`--milestone`, unreadable report, a cited capture with no `## Captured output` section, a `--changed-files` path that does not exist (`changed_file_missing`), `--min-captures 0`, or an incomplete/invalid `--openapi-*` combination.
 - **Self-test** — **91** cases. Depth (sidecar and client-allowlist essays, OpenAPI flags, parsing rules, scope limits, fixtures): `references/check_runtime_evidence.md`.
 
+## review_package.py
+
+Materializes the diff a reviewer is told to review, as ONE markdown file plus a provenance sidecar. `bgpdd-build` Phase 3 step 4 told a fresh Luna to re-review "the remediation diff itself"; she received a path list and read the amended tree, which shows the files' CURRENT state — a fix is indistinguishable from the status quo and a deletion is invisible. That prose instruction is converted here into an artifact the Orchestrator must generate and name in the brief (convention #9). It renders; it does not judge — there is no exit 1.
+
+```bash
+python review_package.py --repo <dir> --base <ref> [--head <ref>|WORKTREE] \
+    [--changed-files <p1> [<p2> ...]] --out <dir>/review-package.md \
+    [--context <N>] [--ledger <path>] [--milestone "<title>"]
+python review_package.py --self-test
+```
+
+- **Flags** — `--base` and `--out` required; `--repo` defaults to `.`, `--head` to `HEAD`, `--context` to `10`. `--changed-files` is a git pathspec restricting `## Stat` and `## Diff` only (never `## Commits`). **`--head WORKTREE`** compares the base against the **uncommitted working tree** — that is the `bgpdd-build` Phase 3 case, where the milestone is not committed until the Phase 5 commit gate and a two-dot range would render an empty package for work that plainly exists.
+- **Output** — `<out>` carries a header (repo, base, head with resolved shas, timestamp, generated-by, scope), `## Commits` (`git log --oneline base..head`), `## Stat` (`git diff --stat`) and `## Diff` (`git diff -U<context>`, fenced with a backtick run one longer than any inside the diff — these packages routinely contain diffs OF markdown).
+- **Sidecar** — `<out>.meta.json` mirrors `run_quiet.py`'s shape: `argv` (the exact `git diff` argv), `cwd`, `started`, `finished`, `exit_code`, `capture_sha256` (over the finished package FILE's bytes), `tool`, `schema: 1`; plus `git_argv` (all three commands) and the resolved `base`/`head` shas.
+- **JSON keys** — `written`, `out`, `sidecar`, `repo`, `base`, `head`, `context`, `changed_files`, `commit_count`, `diff_bytes`, `capture_sha256`, `result`, `error`.
+- **Exit codes** — **0** package written; **2** git failed or is absent, a ref is unresolvable, `--repo` is not a git repo, a required flag is missing, `--out` cannot be written, or **the diff is empty** — an empty diff is not a package, and a review of nothing looks exactly like a review of something (a deliberate divergence from `run_quiet.py`, where empty output is a legitimate observation, per convention #8).
+- **Self-test** — **19** cases in a disposable `git init` repo. Depth (the observed failure, rendering rules, sidecar meaning, scope limits): `references/review_package.md`.
+
 ## check_bugfix_intake.py
 
 The `bgpdd-bugfix` Phase 0 intake gate. Converts the prose rule that a bugfix starts from a written report rather than chat scrollback into an artifact that has to exist on disk: it lints `{bugfix-root}/bug-report.md` (template and field rules: `bgpdd-bugfix/references/bug-report-template.md`) for present, non-placeholder sections, a re-runnable reproduction, and the two enums later phases read. No delegation in that lane happens before it exits 0.
@@ -302,11 +320,12 @@ python record_run.py --log <path> --pipeline <name> --phase <name> --event <dele
 python record_run.py --self-test
 ```
 
-- **Flags** — `--log`, `--pipeline`, `--phase`, `--event` required. `--status` ∈ `COMPLETE|PARTIAL|BLOCKED|PASS|FAIL|ERROR`. `--from-json <file>` maps a runtime completion payload; explicit flags override the payload.
+- **Flags** — `--log`, `--pipeline`, `--phase`, `--event` required. **`--model` is additionally required for `--event delegation`** (see below). `--status` ∈ `COMPLETE|PARTIAL|BLOCKED|PASS|FAIL|ERROR`. `--from-json <file>` maps a runtime completion payload; explicit flags override the payload.
 - **Record** — `{"ts", "pipeline", "phase", "unit", "agent", "model", "event", "duration_s", "tokens_in", "tokens_out", "tokens_total", "rounds", "status", "note"}`.
+- **`--model` is mandatory on a delegation record.** Measured finding: model choice left to prose decays — 17 dispatches in one audited wave silently inherited the most expensive tier, and the run log could not tell that apart from a deliberate choice because the field was simply null. A null there is **not** "not measured": the tier is always known at dispatch, so its absence records a decision nobody made (convention #9 — a restraint rule skipped at the moment the Orchestrator wants to proceed becomes a gate, not louder prose). Checked **after** `--from-json` merges, so a payload carrying `model` satisfies it. `gate`/`phase`/`note` events are unchanged — demanding a tier there would invite a fabrication.
 - **Unknown is `null`, never `0`** (Evidence Integrity). An explicit `0` is preserved. `tokens_total` is derived only when both halves are known.
-- **Exit codes** — **0** appended; **2** usage error, a bad/unreadable `--from-json`, or an unwritable log. There is no exit 1. Unlike the best-effort ledger, a failed write is exit 2 — the record IS the artifact.
-- **Self-test** — **15** cases. Depth (`--from-json` mapping table, the deliberately unmapped fields): `references/record_run.md`.
+- **Exit codes** — **0** appended; **2** usage error (including a delegation with no model), a bad/unreadable `--from-json`, or an unwritable log. There is no exit 1. Unlike the best-effort ledger, a failed write is exit 2 — the record IS the artifact.
+- **Self-test** — **19** cases. Depth (`--from-json` mapping table, the deliberately unmapped fields): `references/record_run.md`.
 
 ## summarize_run.py
 
