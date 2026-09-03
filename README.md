@@ -17,7 +17,7 @@ A Claude Code plugin that packages an **agent squad** and a **Prompt-Driven Deve
 
 The plugin is designed with a deliberate adoption gradient. Each step gives you value on its own; none requires the previous one.
 
-**Step 1 — Fix one bug with `/bgpdd-bugfix`.** One command, one bug, the smallest squad that can prove it. It walks a strict 5-phase sequence: you trace the root cause yourself in the main session (no code edits allowed until the cause is stated), then Mason (or Nova for UI-side bugs) writes the failing test that *proves* the bug and lands the surgical fix under TDD, Quinn independently re-runs the suite to verify it, Luna reviews the diff and its blast radius on every consumer of what you touched, and finally you get an offer to route any systemic lesson through `/bgpdd-learn`. If you currently debug with ad-hoc prompts, this is the smallest possible taste of the disciplined, gated workflow — now with the smallest squad that can carry it.
+**Step 1 — Fix one bug with `/bgpdd-bugfix`.** One command, one bug, the smallest squad that can prove it. It walks six gated phases on written evidence: you write a lint-gated bug report with the Orchestrator, Quinn captures the failing run (RED) before anyone touches code, you trace the root cause in the main session and a script routes the fix FAST, FULL or PLAN, Mason (or Nova for UI-side bugs, both for a shared-contract bug) lands the surgical fix without touching the RED, Quinn re-runs the identical command for GREEN plus the full suite, a fresh Luna reviews the diff and its blast radius, and the commit exists only if the commit gate passes with the RED/GREEN pair, a five-file size bound and the review on record. If you currently debug with ad-hoc prompts, this is the smallest possible taste of the disciplined, gated workflow — now with the smallest squad that can carry it.
 
 **Step 2 — Delegate one task to one agent.** Every squad member can be invoked ad hoc, at any project state: "have Luna review this diff", "have Cipher audit the auth routes", "have Quinn write tests for this module". The agent runs in isolation, does exactly its job, and returns a handoff. No pipeline required.
 
@@ -33,7 +33,7 @@ The plugin is designed with a deliberate adoption gradient. Each step gives you 
 | Well-specified small feature (known pattern/contract) | `/bgpdd-lite` | Main session (mini-requirements) + spawns Alex |
 | Execute an existing plan | `/bgpdd-build [auto]` | Spawns agents (Mason/Nova, Quinn, Luna, Dep, Cipher) |
 | Ship a green epic | `/bgpdd-shipping` | Spawns agents (Vera, Cipher, Dep, Forge) |
-| Fix a bug | `/bgpdd-bugfix` | Main session (RCA) + spawns agents (Mason/Nova, Quinn, Luna) |
+| Fix a bug | `/bgpdd-bugfix` | Main session (intake, RCA, route) + spawns agents (Quinn RED, Mason/Nova fix, Quinn GREEN, Luna) |
 | Verify an already-discovered feature still works | `/bgpdd-verify {feature}` | Main session (matrix) + spawns Quinn |
 | Capture lessons from a session | `/bgpdd-learn` | Main session + spawns Forge |
 | Audit the plugin itself | `agent-audit` skill | Main session |
@@ -370,7 +370,7 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **bgpdd-lite** — mid-weight planning for well-specified work (Orchestrator mini-requirements + Alex; hands off to bgpdd-build)
 - **bgpdd-build** — execution (Mason or Nova, routed by the milestone's [API]/[UI] domain tag; Quinn, Luna, Dep)
 - **bgpdd-shipping** — verification & Launch Squad (Vera, Cipher, Dep, Forge)
-- **bgpdd-bugfix** — lean orchestrated bugfix loop: RCA (main session) → TDD fix → independent verification → blast-radius review (Mason or Nova, Quinn, Luna)
+- **bgpdd-bugfix** — evidence-gated bugfix lane: lint-gated intake → Quinn's RED capture → RCA and mechanical FAST/FULL/PLAN route (main session) → fix (Mason and/or Nova) → same-command GREEN + red/green gate → fresh Luna → bounded commit gate → Tier-1 prevent write-back
 - **bgpdd-verify** — standalone regression-verification lane for an already-discovered feature: derives a lint-gated acceptance matrix from Echo's QA baseline, Quinn automates and executes it as permanent Playwright specs against the running application, gated on runtime evidence; product defects it finds route to `/bgpdd-bugfix`
 
 ### Methodology skills (execution contracts loaded by agents via their dependency tables)
@@ -431,7 +431,7 @@ The plugin's `.mcp.json` wires up four MCP servers used by the testing, review, 
 
 ## Usage Examples
 
-- `/bgpdd-bugfix` — fix a single bug end-to-end: root-cause analysis in the main session, then Mason or Nova's TDD fix, Quinn's independent verification, and Luna's blast-radius review. The smallest squad, not no squad.
+- `/bgpdd-bugfix` — fix a single bug end-to-end on written evidence: a lint-gated bug report, Quinn's pre-fix RED capture, root-cause analysis and a scripted FAST/FULL/PLAN route in the main session, Mason or Nova's fix, Quinn's same-command GREEN, a fresh Luna review, and a commit gate that requires the RED/GREEN pair and a five-file bound. The smallest squad, not no squad.
 - "have Luna review this diff" — delegate one task to one specialist ad hoc; Luna runs in isolation and returns a `<handoff>` with her findings.
 - "have Quinn write tests for this module" — same ad-hoc delegation pattern, aimed at test coverage instead of review.
 - `/bgpdd-lite` — the mid-weight lane for well-specified work: write mini-requirements with the Orchestrator, Alex plans, the coverage gate checks traceability, then hand off to build.

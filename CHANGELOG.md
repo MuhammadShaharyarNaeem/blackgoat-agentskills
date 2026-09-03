@@ -3,6 +3,35 @@
 All notable changes to the `blackgoat-agentskills` plugin are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [2.2.1] — 2026-09-04
+
+### Migration notes — read before upgrading a project with in-flight `.docs/` artifacts
+
+- **`/bgpdd-bugfix` is a new lane.** A bug started under 2.1.0 has no `bug-report.md`, no RED capture and no route record, so Phase 2's `next_bugfix_route.py` refuses to route it (`intake_unbacked`). Re-enter at Phase 0: write the report from `skills/bgpdd-bugfix/references/bug-report-template.md`, gate it, and let Quinn take the RED before the fix continues. On a feature route the lane now uses the epic's own `orchestrator-state.json` and never changes its `pipeline`; a second state file inside `implementation/` from an interrupted 2.1.0 bugfix should be deleted.
+- **`check_runtime_evidence.py` ledger keys changed.** Cited captures are now keyed by their cwd-relative resolved path instead of the citation string, so `check_commit_gate.py --require-ledger-gates check_runtime_evidence.py` can re-hash them. A 2.1.0 ledger entry whose key was a report-relative citation will read as stale at the next commit gate; re-run the runtime-evidence gate once for that milestone.
+- **Every pipeline now reads `skills/agent-squad/pipeline-skeleton.md`** right after the Orchestrator Contract. Nothing changes in behaviour; the boilerplate each pipeline used to carry (path resolution, error recovery, chain of thought, game tape) lives there once. A runtime that vendors the `skills/` tree must include the new file.
+- **`check_commit_gate.py --max-changed-files`** is opt-in; existing build invocations without it behave exactly as before (self-test `test_pipeline_value_never_changes_the_verdict` also guards that the state file's `pipeline` value never affects a verdict).
+
+### Added
+- **`bgpdd-bugfix` rewrite** (`skills/bgpdd-bugfix/SKILL.md`, `references/bug-report-template.md`, `references/rca-template.md`, `references/bugfix-rationale.md`): six phases on written evidence — lint-gated intake, Quinn-owned RED capture, Orchestrator RCA with a hypothesis ledger and a scripted FAST/FULL/PLAN route, fix by Mason and/or Nova who may not touch the RED, same-command GREEN plus the full suite, fresh Luna, bounded commit gate, Tier-1 prevent write-back, next command named. FAST and FULL differ only in user check-ins; neither skips RED, GREEN, Luna or the commit gate.
+- **`check_bugfix_intake.py`** (33 self-tests): sections present and non-placeholder, a backtick-wrapped runnable `- Command:` or at least two numbered steps, `Surface` / `Runtime observable` / `Regression` enums, last-known-good on a regression, ledger record with the report's hash.
+- **`check_red_green.py`** (24): both captures sidecar-backed, identical `argv`, RED exit non-zero, GREEN exit zero and newer, `--green-runs N` for flaky bugs (4 of 5 is not fixed), capture-hash tamper check.
+- **`next_bugfix_route.py`** (49): refuses without an intake PASS whose hash still matches the report; `--red` ties the RED sidecar's `argv` to the report's command by shell-token comparison; prints FAST / FULL / PLAN with reasons.
+- **`check_commit_gate.py --max-changed-files N --waiver <rca.md>`** (76): fix-size bound, waivable only by a non-empty, non-placeholder `## Size waiver` section — the user's recorded decision, deliberately hand-typed.
+- **`skills/agent-squad/pipeline-skeleton.md`**: the boilerplate shared by every `bgpdd-*` pipeline, held once (path resolution, error recovery pointer, upgraded chain of thought, game-tape default cadence). Pipelines refine it only where labelled (convention #8).
+- **Evals**: `contract/bgpdd-bugfix-lane` — the first case that measures a whole pipeline; eleven criteria re-derived from disk (intake hash, Quinn's RED before any builder, RED/GREEN sidecar agreement, frozen tests untouched, FAST mechanically implied, executed disproof in the RCA, exactly one gated commit, defect gone on the wire, prevent step appended). `contract/bugfix-gates-adversarial/run.py` — zero-LLM walk of the four bugfix gates over fabricated inputs (17/17). `weekly-check.ps1` maps the lane, the skeleton and the new gates to the case.
+
+### Changed
+- **`bgpdd-build`** distilled 8,345 → 7,276 words; rationale, observed-failure narratives and the few-shot example moved to `references/build-rationale.md`; the commit-gate bullet is an eight-step ordered list with every flag intact; script/flag/HALT/exit-route sets identical.
+- **`bgpdd-shipping`** distilled 6,643 → 5,214 words (`references/shipping-rationale.md`, `references/shipping-delegation-briefs.md` — the three delegation prompts, pasted verbatim at each step); **`bgpdd-discovery`** 2,733 → 2,482 (`references/discovery-rationale.md`; provenance-stamp and runtime-environment rules kept at full strength); **`bgpdd-verify`** states "Quinn never authors what she is graded against" once with four corollaries and gains the bidirectional contract with `/bgpdd-bugfix`. `bgpdd-plan` and `bgpdd-lite` swap their boilerplate for the skeleton read; no other change.
+- **`agents/echo.md`**: `manual-testing.md` now names both sanctioned non-Echo writers (shipping Step 6.4 and the bugfix prevent step).
+- **`bgpdd-bugfix` reproduction command is an exit-code oracle**: `curl --fail` qualifies only when the correct response is 2xx; for a bug whose correct behaviour is itself an error status the command is a one-line status assertion, and Quinn takes a separate plain `curl` capture for `check_runtime_evidence.py`.
+
+### Fixed
+- **`check_runtime_evidence.py`**: ledger `inputs` keyed by a re-hashable path (a report-relative citation used to block the commit gate as `ledger_stale`, in `bgpdd-build` too); an unquoted executable path containing spaces (`C:\Program Files\…\curl.EXE`) is now recognised as its client instead of being rejected as `program`.
+- **`bgpdd-build` hydration** no longer advertises a `bgpdd-bugfix` re-entry that nothing could reach.
+- **Eval harness notes**: headless `claude -p` denies every write-effect command unless `--allowedTools` names the tools; the bugfix-lane case passes them, and the two aborted runs are archived as INFRA in `results-invalid-infra-2026-09-03.jsonl`.
+
 ## [2.1.0] — 2026-09-03
 
 ### Migration notes — read before upgrading a project with in-flight `.docs/` artifacts
