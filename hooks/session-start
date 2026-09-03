@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# SessionStart hook for the blackgoat-agentskills plugin.
+#
+# Prints skills/agent-squad/always-on.md, wrapped in a <blackgoat-always-on>
+# framing line, as this runtime's session-context injection.
+#
+# This file is PACKAGING, not content (CLAUDE.md convention #5): every word it
+# injects lives once, in always-on.md. Never inline rule text here.
+#
+# It must never fail a session. Any problem -> exit 0 having printed nothing.
+#
+# Extensionless on purpose: Claude Code on Windows prepends "bash" to any
+# command containing ".sh", which breaks the run-hook.cmd dispatcher.
+
+set -u
+
+# Anything unexpected: stay silent, succeed.
+trap 'exit 0' ERR
+
+# Plugin root: the runtime's variable when it sets one, else this script's parent.
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+  PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT}"
+elif [ -n "${CURSOR_PLUGIN_ROOT:-}" ]; then
+  PLUGIN_ROOT="${CURSOR_PLUGIN_ROOT}"
+else
+  SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)" || exit 0
+  PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." 2>/dev/null && pwd)" || exit 0
+fi
+
+INDEX="${PLUGIN_ROOT}/skills/agent-squad/always-on.md"
+[ -r "${INDEX}" ] || exit 0
+
+index_content="$(cat "${INDEX}" 2>/dev/null)" || exit 0
+[ -n "${index_content}" ] || exit 0
+
+# JSON string escaping with bash builtins only — no jq, no PATH dependency.
+escape_for_json() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    s="${s//$'\t'/\\t}"
+    printf '%s' "$s"
+}
+
+framed="<blackgoat-always-on root=\"${PLUGIN_ROOT}\">
+${index_content}
+</blackgoat-always-on>"
+
+session_context="$(escape_for_json "${framed}")" || exit 0
+
+# Which field the platform reads:
+#   Cursor            -> additional_context (top-level, snake_case)
+#   Claude Code       -> hookSpecificOutput.additionalContext (nested)
+#   other SDK hosts   -> additionalContext (top-level)
+# Claude Code reads both top-level and nested without de-duplicating, so emit
+# exactly one field. printf, not a heredoc (bash 5.3+ hangs on some heredocs).
+if [ -n "${CURSOR_PLUGIN_ROOT:-}" ]; then
+  printf '{\n  "additional_context": "%s"\n}\n' "${session_context}"
+elif [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+  printf '{\n  "hookSpecificOutput": {\n    "hookEventName": "SessionStart",\n    "additionalContext": "%s"\n  }\n}\n' "${session_context}"
+else
+  printf '{\n  "additionalContext": "%s"\n}\n' "${session_context}"
+fi
+
+exit 0

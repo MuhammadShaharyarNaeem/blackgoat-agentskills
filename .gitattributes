@@ -1,0 +1,8 @@
+# Hook scripts must keep LF. `core.autocrlf=true` is set in this environment, so
+# without this the polyglot dispatcher is checked out with CRLF and bash fails to
+# find the `CMDBLOCK` heredoc terminator — the hook then dies on every session.
+# Deliberately scoped to hooks/ only: a repo-wide rule would renormalize the
+# whole tree.
+hooks/run-hook.cmd text eol=lf
+hooks/session-start text eol=lf
+hooks/hooks.json text eol=lf
