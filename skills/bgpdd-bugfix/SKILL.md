@@ -83,10 +83,11 @@ Reading and searching is not writing application code (Contract §3); write or e
 **Mason** (`api`), **Nova** (`ui`), or **both** when the report says `- Surface: both`.
 1. **Route by the report's surface field**, not by impression. **`both` is delegated, not refused** — deliberately reversing this skill's own prior HALT (convention #8): one shared RED exists, so two builders partition by surface against a single reproduction and one shared GREEN closes both. Partition every write surface before launching concurrently, or serialize (Contract §1).
 2. **Brief each builder** with the root cause exactly as `rca.md` states it, `rca.md`'s path, the RED capture's path, `{bugfix-root}`, and its surface's share of the fix.
-3. **The builder MUST NOT modify the RED test file or the reproduction command.** Structural, not only prose: Quinn owns the RED artifact and Phase 4 re-runs the identical command from its sidecar's `argv`, so editing the check to pass *fails* that gate. Name the RED path in the brief; check `<changed_files>` against it.
-4. **Blast radius** (`mason.md` §2 owns the rule): before modifying any shared DTO, model or library the builder traces every consumer; a radius past the bug's own module or service is documented and returned, not absorbed.
-5. **`<consumers>` in the handoff**: require, beside `<changed_files>`, a `<consumers>` element naming the callers of every changed symbol the builder inspected — Phase 5's blast-radius judgement runs against it.
-6. Read the `<handoff>`; verify every `<changed_files>` path exists.
+3. **The builder does NOT commit.** The commit is Phase 5's gate, so a fix committed by its author is a fix that skipped the gate — `check_commit_gate.py --commit` now refuses it (`already_committed`). Deliberate refinement of `base-persona.md`'s incremental-persistence rule (convention #8): that rule commits partial work only when a run *cannot finish*; a bugfix builder finishes in one run and returns `<changed_files>` uncommitted. Say so in the brief.
+4. **The builder MUST NOT modify the RED test file or the reproduction command.** Structural, not only prose: Quinn owns the RED artifact and Phase 4 re-runs the identical command from its sidecar's `argv`, so editing the check to pass *fails* that gate. Name the RED path in the brief; check `<changed_files>` against it.
+5. **Blast radius** (`mason.md` §2 owns the rule): before modifying any shared DTO, model or library the builder traces every consumer; a radius past the bug's own module or service is documented and returned, not absorbed.
+6. **`<consumers>` in the handoff**: require, beside `<changed_files>`, a `<consumers>` element naming the callers of every changed symbol the builder inspected — Phase 5's blast-radius judgement runs against it.
+7. Read the `<handoff>`; verify every `<changed_files>` path exists.
 
 ### Phase 4: Verify — GREEN (Quinn)
 **Quinn** — a continuation of her Phase 1 delegation where the runtime supports it (Contract §1: same role, same unit), fresh otherwise.
