@@ -12,6 +12,7 @@ Usage:
         --milestone "<title>" --changed-files <p1> [<p2> ...] \
         [--commit --message "<msg>"] [--repo <dir>] [--ignore-unscoped] \
         [--require-rendered-evidence] [--verify-tree] \
+        [--max-changed-files <N> [--waiver <path>]] \
         [--ledger <path>] [--require-ledger-gates <name>[,<name>...]]
     python check_commit_gate.py --self-test
 
@@ -628,6 +629,110 @@ def check_ledger_gates(ledger_path, gate_names, milestone):
     return problems
 
 
+# A `## Size waiver` heading at any level 2-4. Its body runs to the next
+# heading of level 2-6 (ANY_HEADING_RE), the same boundary rule the review
+# sections use.
+SIZE_WAIVER_HEADING_RE = re.compile(r"^#{2,4}\s*Size\s+waiver\s*:?\s*$",
+                                    re.IGNORECASE)
+# A waiver body line that is only a template stand-in. The waiver is
+# deliberately hand-typed -- see check_size_bound() -- so the ONLY thing worth
+# rejecting is a section that was never filled in.
+WAIVER_PLACEHOLDER_RE = re.compile(
+    r"^(?:<[^>]*>|todo|tbd|fixme|n/?a|none|\?+|\.{3,}|xxx+)[.:]?$",
+    re.IGNORECASE)
+
+
+def read_size_waiver(waiver_path):
+    """Return (section_found, body_nonempty) for `## Size waiver`.
+
+    Fences are stripped first, so a waiver section pasted as a TEMPLATE inside
+    an example block cannot license a commit -- the same rule the verdict
+    parser applies above.
+
+    A body is a PLACEHOLDER in either of two shapes, and the second one is the
+    load-bearing addition: every line individually a stand-in, OR one `<...>`
+    span WRAPPED across several lines. The shipped `rca-template.md` writes the
+    second shape ("<Delete this whole section unless ...>"), and a line-by-line
+    test alone accepted it -- so copying the template was a complete bypass of
+    the file bound. Same fix as check_bugfix_intake.is_placeholder_body().
+    """
+    text = strip_fenced_blocks(read_text(waiver_path))
+    found, capturing, body = False, False, []
+    for line in text.splitlines():
+        if SIZE_WAIVER_HEADING_RE.match(line):
+            found, capturing, body = True, True, []   # LAST section wins
+            continue
+        if capturing and ANY_HEADING_RE.match(line):
+            capturing = False
+            continue
+        if capturing:
+            body.append(line)
+    real = [l.strip() for l in body if l.strip()]
+    if not real:
+        return found, False
+    if all(WAIVER_PLACEHOLDER_RE.match(l) for l in real):
+        return found, False
+    if WAIVER_PLACEHOLDER_RE.match(" ".join(real)):
+        return found, False   # one `<...>` span wrapped across several lines
+    return found, True
+
+
+def check_size_bound(args):
+    """Return the `size_waiver` sub-report plus whether the bound is satisfied.
+
+    **What is counted**: `len(--changed-files)` -- the paths the caller
+    DECLARED, which this gate already validates exist on disk
+    (`changed_file_missing`) and already uses for the staleness comparison.
+    It deliberately does not re-derive the list from git: pairing this with
+    `--verify-tree` is what makes the declared list equal the real diff, and
+    that pairing is the bugfix lane's Phase 5 invocation.
+
+    **Why the waiver is hand-typed.** Every other evidence path in this family
+    refuses author-written proof. A size waiver is the documented exception:
+    the decision to exceed the bound is the USER's, and no script can verify a
+    judgement call. What the gate buys is that the decision is durable and
+    attributable -- written into `rca.md`, hashed into the ledger record --
+    instead of spoken once in chat. So the check is existence plus a
+    non-placeholder body, and nothing more.
+    """
+    waiver = {"path": args.waiver, "present": False, "section_found": False,
+              "body_nonempty": False, "satisfied": False}
+    count = len(args.changed_files or [])
+    if count <= args.max_changed_files:
+        return count, waiver, True, None
+    if not args.waiver:
+        return count, waiver, False, (
+            f"{count} changed file(s) exceeds --max-changed-files "
+            f"{args.max_changed_files} and no --waiver was given — a fix this "
+            "wide is either not localized (route it to /bgpdd-plan) or needs "
+            "the user's recorded decision under a '## Size waiver' heading")
+    if not Path(args.waiver).is_file():
+        return count, waiver, False, (
+            f"{count} changed file(s) exceeds --max-changed-files "
+            f"{args.max_changed_files} and the --waiver file {args.waiver} does "
+            "not exist")
+    waiver["present"] = True
+    found, nonempty = read_size_waiver(args.waiver)
+    waiver["section_found"] = found
+    waiver["body_nonempty"] = nonempty
+    if not found:
+        return count, waiver, False, (
+            f"{count} changed file(s) exceeds --max-changed-files "
+            f"{args.max_changed_files} and {args.waiver} has no '## Size "
+            "waiver' heading outside a fenced block")
+    if not nonempty:
+        return count, waiver, False, (
+            f"{count} changed file(s) exceeds --max-changed-files "
+            f"{args.max_changed_files} and the '## Size waiver' section in "
+            f"{args.waiver} is empty or still a placeholder — an unwritten "
+            "waiver records no decision")
+    waiver["satisfied"] = True
+    return count, waiver, True, (
+        f"{count} changed file(s) exceeds --max-changed-files "
+        f"{args.max_changed_files}, waived by the '## Size waiver' section in "
+        f"{args.waiver}")
+
+
 RUNTIME_GATE = Path(__file__).parent / "check_runtime_evidence.py"
 
 
@@ -733,6 +838,10 @@ def build_report(args):
         "ledger_gates_ok": True,
         "undeclared_changes": [],
         "tree_verified": True,
+        "max_changed_files": args.max_changed_files,
+        "changed_file_count": len(args.changed_files or []),
+        "size_waiver": None,
+        "size_ok": args.max_changed_files is None,
         "warnings": [],
         "committed": False,
         "result": "FAIL",
@@ -820,6 +929,14 @@ def build_report(args):
                 "per-capture cause. An in-process suite cannot pass a claim "
                 "about observed behavior")
 
+    if args.max_changed_files is not None:
+        count, waiver, size_ok, note = check_size_bound(args)
+        report["changed_file_count"] = count
+        report["size_waiver"] = waiver
+        report["size_ok"] = size_ok
+        if note:
+            report["warnings"].append(note)
+
     if args.verify_tree:
         undeclared = check_undeclared_tree(args.changed_files, args.repo)
         report["undeclared_changes"] = undeclared
@@ -835,6 +952,7 @@ def build_report(args):
                and report["rendered_evidence_ok"]
                and report["runtime_evidence_ok"]
                and report["ledger_gates_ok"]
+               and report["size_ok"]
                and report["tree_verified"])
     report["result"] = "PASS" if gate_ok else "FAIL"
 
@@ -862,6 +980,13 @@ def build_parser():
     parser.add_argument("--ignore-unscoped", action="store_true")
     parser.add_argument("--require-rendered-evidence", action="store_true")
     parser.add_argument("--verify-tree", action="store_true")
+    # Fix-size bound (bgpdd-bugfix Phase 5; lane default 5). Counts the
+    # DECLARED --changed-files paths -- see check_size_bound().
+    parser.add_argument("--max-changed-files", type=int)
+    parser.add_argument(
+        "--waiver",
+        help="a document whose '## Size waiver' section records the user's "
+             "decision to exceed --max-changed-files (typically rca.md)")
     # Runtime-evidence delegation. This gate owns the commit, so the restraint
     # has to live here -- but the checking logic lives once, in
     # check_runtime_evidence.py, rather than being duplicated across two files.
@@ -903,7 +1028,7 @@ def parse_gate_names(values):
 def ledger_inputs(args):
     """Every file path this gate READ, in the order it was declared."""
     paths = [args.review_report, args.state] + list(args.changed_files or [])
-    for extra in (args.runtime_report, args.openapi_doc):
+    for extra in (args.runtime_report, args.openapi_doc, args.waiver):
         if extra:
             paths.append(extra)
     return [p for p in paths if p]
@@ -943,6 +1068,17 @@ def main(argv):
                           "error": "--require-runtime-evidence requires --runtime-report "
                                     "(the test or verification report carrying the "
                                     "**Runtime evidence:** citations)"}))
+        return finish(2, "ERROR")
+    if args.max_changed_files is not None and args.max_changed_files < 1:
+        print(json.dumps({"result": "ERROR",
+                          "error": "--max-changed-files must be >= 1 (a bound "
+                                    "of 0 can never be satisfied)"}))
+        return finish(2, "ERROR")
+    if args.waiver and args.max_changed_files is None:
+        print(json.dumps({"result": "ERROR",
+                          "error": "--waiver given without "
+                                    "--max-changed-files — there is no bound "
+                                    "for it to waive"}))
         return finish(2, "ERROR")
     if args.require_ledger_gates and not args.ledger:
         print(json.dumps({"result": "ERROR",
@@ -1587,6 +1723,236 @@ def run_self_test():
                 "--review-report", str(self.review), "--state", str(self.state),
                 "--milestone", "M3", "--changed-files", str(self.changed),
                 "--require-ledger-gates", "check_agent_report.py"]), 2)
+
+        # ---- --max-changed-files (the bugfix lane's fix-size bound) ----
+
+        def _n_changed(self, n):
+            """n existing source paths, all older than the review report."""
+            paths = []
+            for i in range(n):
+                p = self.dir / f"src_{i}.py"
+                p.write_text(f"code {i}\n")
+                os.utime(p, (1000, 1000))
+                paths.append(str(p))
+            return paths
+
+        def _waiver_doc(self, body="Approved by the user 2026-09-03: the null "
+                                   "guard touches 7 call sites."):
+            p = self.dir / "rca.md"
+            p.write_text("# RCA: coupon-500\n\n## Root cause\n\nmissing guard\n\n"
+                          f"## Size waiver\n\n{body}\n", encoding="utf-8")
+            return str(p)
+
+        def test_size_bound_under_the_limit_passes(self):
+            self.review.write_text(REVIEW_OK)
+            changed = self._n_changed(3)
+            os.utime(self.review, (2000, 2000))
+            r = build_report(self._ns(changed=changed,
+                                       extra=["--max-changed-files", "5"]))
+            self.assertEqual(r["result"], "PASS", r["warnings"])
+            self.assertTrue(r["size_ok"])
+            self.assertEqual(r["changed_file_count"], 3)
+
+        def test_size_bound_exactly_at_the_limit_passes(self):
+            self.review.write_text(REVIEW_OK)
+            changed = self._n_changed(5)
+            os.utime(self.review, (2000, 2000))
+            r = build_report(self._ns(changed=changed,
+                                       extra=["--max-changed-files", "5"]))
+            self.assertEqual(r["result"], "PASS", r["warnings"])
+            self.assertTrue(r["size_ok"])
+
+        def test_size_bound_exceeded_without_waiver_fails(self):
+            self.review.write_text(REVIEW_OK)
+            changed = self._n_changed(7)
+            os.utime(self.review, (2000, 2000))
+            r = build_report(self._ns(changed=changed,
+                                       extra=["--max-changed-files", "5"]))
+            self.assertEqual(r["result"], "FAIL")
+            self.assertFalse(r["size_ok"])
+            self.assertEqual(r["changed_file_count"], 7)
+            self.assertTrue(any("no --waiver was given" in w
+                                for w in r["warnings"]))
+
+        def test_size_bound_exceeded_with_waiver_passes(self):
+            self.review.write_text(REVIEW_OK)
+            changed = self._n_changed(7)
+            waiver = self._waiver_doc()
+            os.utime(self.review, (2000, 2000))
+            r = build_report(self._ns(
+                changed=changed,
+                extra=["--max-changed-files", "5", "--waiver", waiver]))
+            self.assertEqual(r["result"], "PASS", r["warnings"])
+            self.assertTrue(r["size_ok"])
+            self.assertTrue(r["size_waiver"]["satisfied"])
+            self.assertTrue(any("waived by" in w for w in r["warnings"]))
+
+        def test_size_bound_waiver_with_no_such_section_fails(self):
+            self.review.write_text(REVIEW_OK)
+            changed = self._n_changed(7)
+            p = self.dir / "rca.md"
+            p.write_text("# RCA\n\n## Root cause\n\nmissing guard\n",
+                          encoding="utf-8")
+            os.utime(self.review, (2000, 2000))
+            r = build_report(self._ns(
+                changed=changed,
+                extra=["--max-changed-files", "5", "--waiver", str(p)]))
+            self.assertEqual(r["result"], "FAIL")
+            self.assertFalse(r["size_waiver"]["section_found"])
+
+        def test_size_bound_empty_waiver_section_fails(self):
+            self.review.write_text(REVIEW_OK)
+            changed = self._n_changed(7)
+            waiver = self._waiver_doc(body="")
+            os.utime(self.review, (2000, 2000))
+            r = build_report(self._ns(
+                changed=changed,
+                extra=["--max-changed-files", "5", "--waiver", waiver]))
+            self.assertEqual(r["result"], "FAIL")
+            self.assertTrue(r["size_waiver"]["section_found"])
+            self.assertFalse(r["size_waiver"]["body_nonempty"])
+
+        def test_size_bound_placeholder_waiver_section_fails(self):
+            self.review.write_text(REVIEW_OK)
+            changed = self._n_changed(7)
+            waiver = self._waiver_doc(body="<one or two sentences>")
+            os.utime(self.review, (2000, 2000))
+            r = build_report(self._ns(
+                changed=changed,
+                extra=["--max-changed-files", "5", "--waiver", waiver]))
+            self.assertEqual(r["result"], "FAIL")
+            self.assertFalse(r["size_waiver"]["body_nonempty"])
+
+        def test_size_bound_fenced_waiver_section_does_not_count(self):
+            """A waiver pasted as a template inside a fence licenses nothing."""
+            self.review.write_text(REVIEW_OK)
+            changed = self._n_changed(7)
+            p = self.dir / "rca.md"
+            p.write_text("# RCA\n\nUse this shape:\n\n```markdown\n"
+                          "## Size waiver\n\nApproved by the user.\n```\n",
+                          encoding="utf-8")
+            os.utime(self.review, (2000, 2000))
+            r = build_report(self._ns(
+                changed=changed,
+                extra=["--max-changed-files", "5", "--waiver", str(p)]))
+            self.assertEqual(r["result"], "FAIL")
+            self.assertFalse(r["size_waiver"]["section_found"])
+
+        # ---- the `pipeline` field is not an input to this gate ------------
+
+        def test_pipeline_value_never_changes_the_verdict(self):
+            """This gate MUST ignore `pipeline` entirely.
+
+            `bgpdd-bugfix` depends on it: on its feature route the lane shares
+            the epic's state file and deliberately never stamps its own
+            `pipeline` value, so `/bgpdd-build` and `/bgpdd-shipping`
+            re-hydrate the epic exactly as they would have before the fix.
+            That design is only safe while this gate's verdict is independent
+            of the field. The claim used to live as prose in that pipeline's
+            spine; this test is the mechanical guard the spine now cites
+            (CLAUDE.md convention #9).
+
+            Byte-identical JSON is the assertion, not merely an equal
+            `result`: a future term that only *reported* `pipeline` would
+            still change what a caller reads.
+            """
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            base = {"blockers": [{"id": "B-1", "text": "unrelated open item",
+                                   "milestone": "M9"}],
+                    "project_name": "coupons",
+                    "milestone_cursor": None}
+
+            def verdict_json(pipeline_value):
+                state = dict(base)
+                if pipeline_value is not None:
+                    state["pipeline"] = pipeline_value
+                self.state.write_text(json.dumps(state))
+                return json.dumps(build_report(self._ns()),
+                                   indent=2, sort_keys=True)
+
+            reference = verdict_json("bgpdd-build")
+            for value in ("bgpdd-bugfix", "bgpdd-shipping", "bgpdd-plan",
+                          "bgpdd-lite", "", "not-a-pipeline", None):
+                self.assertEqual(
+                    verdict_json(value), reference,
+                    f"the gate's verdict changed for pipeline={value!r} — "
+                    "bgpdd-bugfix's shared-state design depends on this field "
+                    "being ignored here")
+            self.assertNotIn('"pipeline"', reference,
+                              "the gate must not echo `pipeline` into its "
+                              "report either")
+
+        def test_size_bound_multiline_placeholder_waiver_fails(self):
+            """One `<...>` span wrapped across lines is still a placeholder."""
+            self.review.write_text(REVIEW_OK)
+            changed = self._n_changed(7)
+            waiver = self._waiver_doc(body=(
+                "<Delete this whole section unless the fix exceeds the file\n"
+                "bound. When it does: one or two sentences naming how many\n"
+                "files and that the user approved proceeding.>"))
+            os.utime(self.review, (2000, 2000))
+            r = build_report(self._ns(
+                changed=changed,
+                extra=["--max-changed-files", "5", "--waiver", waiver]))
+            self.assertEqual(r["result"], "FAIL")
+            self.assertTrue(r["size_waiver"]["section_found"])
+            self.assertFalse(r["size_waiver"]["body_nonempty"])
+
+        def test_the_shipped_rca_template_waiver_fails(self):
+            """Copying the template must not license a wide fix.
+
+            Mirror of check_bugfix_intake's template test: a template whose
+            waiver section satisfies the gate is a complete bypass of the
+            file bound.
+            """
+            template = (Path(__file__).resolve().parents[2]
+                        / "bgpdd-bugfix" / "references" / "rca-template.md")
+            if not template.is_file():
+                self.skipTest(f"template not found at {template}")
+            found, nonempty = read_size_waiver(str(template))
+            self.assertTrue(found, "the template should carry the heading")
+            self.assertFalse(
+                nonempty,
+                "the shipped rca-template.md '## Size waiver' body must NOT "
+                "satisfy the gate")
+            # ...and end to end, through the gate itself.
+            self.review.write_text(REVIEW_OK)
+            changed = self._n_changed(7)
+            os.utime(self.review, (2000, 2000))
+            r = build_report(self._ns(
+                changed=changed,
+                extra=["--max-changed-files", "5", "--waiver", str(template)]))
+            self.assertEqual(r["result"], "FAIL")
+            self.assertFalse(r["size_ok"])
+
+        def test_size_bound_missing_waiver_file_fails(self):
+            self.review.write_text(REVIEW_OK)
+            changed = self._n_changed(7)
+            os.utime(self.review, (2000, 2000))
+            r = build_report(self._ns(
+                changed=changed,
+                extra=["--max-changed-files", "5",
+                       "--waiver", str(self.dir / "nope.md")]))
+            self.assertEqual(r["result"], "FAIL")
+            self.assertFalse(r["size_waiver"]["present"])
+
+        def test_size_bound_flag_unset_is_backcompat(self):
+            self.review.write_text(REVIEW_OK)
+            changed = self._n_changed(30)
+            os.utime(self.review, (2000, 2000))
+            r = build_report(self._ns(changed=changed))
+            self.assertEqual(r["result"], "PASS")
+            self.assertTrue(r["size_ok"])
+            self.assertIsNone(r["max_changed_files"])
+            self.assertIsNone(r["size_waiver"])
+
+        def test_size_bound_usage_errors(self):
+            base = ["--review-report", str(self.review), "--state",
+                    str(self.state), "--milestone", "M3",
+                    "--changed-files", str(self.changed)]
+            self.assertEqual(main(base + ["--max-changed-files", "0"]), 2)
+            self.assertEqual(main(base + ["--waiver", str(self.dir / "r.md")]), 2)
 
         def test_nonstandard_verdict_token_fails(self):
             self.review.write_text("## Review: M3\n\n**Verdict:** Approved\n")
