@@ -34,6 +34,18 @@ conclusion.
   is the regression check for "does this prompt still route where it should." It judges
   an actual `Skill` tool invocation — see "Trigger judging" below.
 
+  **Two-hop cases (`/bg …`).** Two cases open with `/bg`, the router skill's trigger. The
+  router's whole job is to invoke a second skill, so the *first* `Skill` invocation the
+  judge sees is `bg` — and the judge decides on the first invocation, full stop. Those
+  cases therefore name the destination lane as `expected_skill` and carry `bg` in
+  `acceptable_alternatives`: they grade `ROUTED_OK` on the hop into the router, which is
+  all a first-invocation judge can see. **They do not verify the destination.** Reading a
+  green `/bg` case as proof the router routed *correctly* is the same category error
+  harness 2 made with `mentioned_only`. Verifying the second hop needs a judge change —
+  record the full ordered list of `Skill` invocations and let a case assert the *last* one
+  (or the chain) — which has not been made; until it is, a green `/bg` case means only
+  "the front door opened".
+
 Two `contract/` cases are exceptions to the statistical-N doctrine above.
 **`mechanical-pipeline`** is a zero-LLM, deterministic integration case that walks the
 full milestone lifecycle (`next_milestone.py` → `update_state.py` → `check_commit_gate.py`
