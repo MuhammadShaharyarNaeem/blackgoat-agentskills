@@ -474,6 +474,37 @@ def probe_exempt_reason(raw):
     return m.group(1).strip() or "(no reason given)"
 
 
+SPACED_PATH_START_RE = re.compile(r"^(?:[A-Za-z]:[\\/]|[\\/]{1,2}|\.{1,2}[\\/])")
+
+
+def merge_spaced_exe_path(toks, i):
+    """Re-join an UNQUOTED executable path that contains spaces.
+
+    `C:\\Program Files\\Git\\mingw64\\bin\\curl.EXE -sS http://...` splits on
+    whitespace into a client called "program", which the allowlist rejects --
+    silently, on every Windows box where curl lives under Program Files. Only
+    a token that LOOKS like a path start is considered, and tokens are joined
+    only up to the first join that names an executable (an `.exe`-style suffix
+    or an allowlisted client basename); a path whose first token already names
+    one is left alone. A join that names a non-client (`node.exe`) is still
+    merged, so it is then rejected for the right reason rather than as
+    "program".
+    """
+    if i >= len(toks) or not SPACED_PATH_START_RE.match(toks[i]):
+        return toks
+
+    def names_exe(s):
+        return bool(EXE_SUFFIX_RE.search(s)) or exe_basename(s) in PROBE_CLIENT_ALLOWLIST
+
+    if names_exe(toks[i]):
+        return toks
+    for k in range(2, min(len(toks) - i, 6) + 1):
+        joined = " ".join(toks[i:i + k])
+        if names_exe(joined):
+            return toks[:i] + [joined] + toks[i + k:]
+    return toks
+
+
 def probe_client(raw):
     """(client basename or None, trailing tokens) for a `Probe command:` value.
 
@@ -487,6 +518,7 @@ def probe_client(raw):
     toks = text.split()
     i = 0
     while i < len(toks):
+        toks = merge_spaced_exe_path(toks, i)
         tok = toks[i]
         if ENV_ASSIGN_RE.match(tok):
             i += 1
@@ -1141,11 +1173,33 @@ def ledger_inputs(args, citations):
     if args.report:
         inputs[args.report] = sha256_file(args.report)
     for cited in citations:
-        if cited in inputs:
-            continue
         resolved = resolve_path(cited, args.report or ".", args.repo)
-        inputs[cited] = sha256_file(resolved) if resolved else None
+        # Key by a path a LATER gate can re-hash from this cwd, not by the
+        # citation string: a report-relative citation resolves here (against
+        # the report's directory) but not from the commit gate's cwd, and
+        # `check_commit_gate.py --require-ledger-gates` re-hashes the key as
+        # written -- so keying by the raw citation made every report-relative
+        # citation read as "missing now" at commit time.
+        key = ledger_key(resolved) if resolved else cited
+        if key in inputs:
+            continue
+        inputs[key] = sha256_file(resolved) if resolved else None
     return inputs
+
+
+def ledger_key(path):
+    """The path a later gate can re-hash from the same cwd.
+
+    Relative to the cwd when the file lives under it (the normal case: every
+    pipeline invocation runs from the repo root), else absolute. Forward
+    slashes so the same key hashes on either OS.
+    """
+    p = Path(path).resolve()
+    try:
+        rel = p.relative_to(Path.cwd().resolve())
+        return str(rel).replace("\\", "/")
+    except ValueError:
+        return str(p)
 
 
 def append_ledger(path, record):
@@ -2168,9 +2222,38 @@ def run_self_test():
             self.assertRegex(rec["ts"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
             self.assertEqual(rec["inputs"][str(self.report)],
                               sha256_file(self.report))
-            self.assertEqual(
-                rec["inputs"][cited],
-                sha256_file(self.impl / "evidence" / "runtime" / "m3-orders.md"))
+            captured = self.impl / "evidence" / "runtime" / "m3-orders.md"
+            self.assertEqual(rec["inputs"][ledger_key(captured)],
+                             sha256_file(captured))
+            self.assertNotIn(cited, rec["inputs"])   # not the raw citation
+
+        def test_ledger_inputs_re_hash_from_cwd(self):
+            """The property the commit gate relies on: every hashed key must
+            re-hash to the recorded value from the invoking cwd, even when the
+            report cited the capture relative to its own directory."""
+            self._report(self._write())
+            led = self.dir / "gates.jsonl"
+            code, _, _ = self._cli("--ledger", str(led))
+            self.assertEqual(code, 0)
+            rec = self._ledger_lines(led)[0]
+            hashed = {k: v for k, v in rec["inputs"].items() if v}
+            self.assertGreaterEqual(len(hashed), 2)
+            for key, recorded in hashed.items():
+                self.assertEqual(sha256_file(key), recorded, key)
+
+        def test_probe_client_unquoted_path_with_spaces_accepted(self):
+            for good in ("C:\\Program Files\\Git\\mingw64\\bin\\curl.EXE -sS http://localhost:5142/x",
+                         "/Applications/My Tools/curl -sS http://localhost:5142/x",
+                         "TOKEN=abc C:\\Program Files\\curl\\bin\\curl.exe -sS http://localhost:5142/x"):
+                self._report(self._write(probe=good))
+                r = build_report(self._args())
+                self.assertEqual(r["result"], "PASS", (good, r["captures"]))
+
+        def test_probe_client_unquoted_path_with_spaces_non_client_rejected(self):
+            self._report(self._write(probe="C:\\Program Files\\nodejs\\node.exe probe.js"))
+            r = build_report(self._args())
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("'node' is not a runtime probe client", json.dumps(r))
 
         def test_ledger_line_written_on_fail_and_appends(self):
             self._report(self._write(sidecar=False))
