@@ -4,7 +4,7 @@
 
 A Claude Code plugin that packages an **agent squad** and a **Prompt-Driven Development (PDD)** workflow into reusable skills and personas. An Orchestrator delegates self-contained tasks to specialized subagents, each of which runs in isolation and returns a structured `<handoff>`. Instead of one agent trying to hold an entire project in context, work is split across a squad of narrow specialists coordinated through slash-command SOPs — with requirement traceability enforced from the first honing question to the final pre-launch gate.
 
-- **Plugin:** `blackgoat-agentskills` v2.0.0 — see [CHANGELOG.md](CHANGELOG.md)
+- **Plugin:** `blackgoat-agentskills` v2.1.0 — see [CHANGELOG.md](CHANGELOG.md)
 - **Author:** shaharyar.naeem (shaharyar.naeem@gorelo.io)
 
 > Note: this repo's `AGENTS.md` is the Google Antigravity runtime contract, not the generic cross-tool "AGENTS.md" coding-agent convention — see [docs/cursor-setup.md](docs/cursor-setup.md).

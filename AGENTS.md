@@ -9,7 +9,7 @@ The squad's skills and personas are written **runtime-neutral** — they say "de
 
 ## When this applies
 
-Whenever you invoke a `bgpdd-*` pipeline (`/bgpdd-plan`, `/bgpdd-build`, `/bgpdd-discovery`, `/bgpdd-shipping`, `/bgpdd-lite`, `/bgpdd-learn`) or delegate to any squad member: Rex, Aria, Alex, Mason, Nova, Luna, Max, Quinn, Echo, Vera, Cipher, Dep, Forge, Iris, Scout.
+Whenever you invoke a `bgpdd-*` pipeline (`/bgpdd-discovery`, `/bgpdd-plan`, `/bgpdd-lite`, `/bgpdd-build`, `/bgpdd-verify`, `/bgpdd-shipping`, `/bgpdd-bugfix`, `/bgpdd-learn`) or delegate to any squad member: Rex, Aria, Alex, Mason, Nova, Luna, Max, Quinn, Echo, Vera, Cipher, Dep, Forge, Iris, Scout.
 
 ## Load the orchestration model first
 

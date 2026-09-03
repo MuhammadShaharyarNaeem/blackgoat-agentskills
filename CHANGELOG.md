@@ -3,7 +3,24 @@
 All notable changes to the `blackgoat-agentskills` plugin are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [2.1.0] — 2026-09-03
+
+### Migration notes — read before upgrading a project with in-flight `.docs/` artifacts
+
+Several gates now fail closed on artifacts that passed under 2.0.0. Nothing changes for work started after the upgrade; an epic mid-build needs one of the following per item.
+
+- **Review reports**: `**Verdict:**` must appear before any `###` subheading inside its `## Review:` section. A report written to the old bottom-of-section template reads as no verdict. Move the line up.
+- **Runtime captures**: every capture cited by `**Runtime evidence:**` must have the `<capture>.meta.json` sidecar `run_quiet.py --capture` now writes, with a matching hash and a zero probe exit. Regenerate old captures, or pass `--allow-missing-sidecar` to `check_runtime_evidence.py` / `check_commit_gate.py` for that milestone only (absence is waived; a mismatch or failed probe never is).
+- **Probe commands** must be a real client (`curl`, `httpie`, `newman`, `psql`, …) or carry `[probe-exempt: <reason>]` on the probe line.
+- **Coverage ledgers**: a `PASS` line must cite an exit code, a `file::test` reference, or a capture path; `- FR-1: PASS — done` is now `UNEVIDENCED` and uncovered.
+- **Rendered evidence** must be a non-empty image with valid magic bytes, newer than the changed files.
+- **Milestone closure**: `[x]` is written only by `mark_milestone.py --require-commit --ledger`; a hand-typed marker is refused by the commit gate on the next milestone.
+- **Blockers**: legacy string entries still work (read as unscoped, Critical) and are never rewritten; new entries are structured and scoped by milestone.
+- **Ship decisions at shipping Step 3** now require a rehearsed rollback line and a three-metric baseline section; prep decisions at build Phase 5 and shipping Step 0.4 do not.
+- **Eval results**: every trigger-suite record before harness version 3 measured whether a skill was *mentioned*, not whether it was *invoked*, and must not be read as routing accuracy.
+
+Only the Scout frontmatter break in 2.0.0 came from the distillation wave; `bgpdd-verify` and `doubt-driven-development` had never registered since they shipped.
+
 
 A hardening wave over the 2026-09-02 audit. Its through-line is convention #9: every rule in here that an agent or the Orchestrator was previously asked to honor voluntarily — a gate that must actually have run, a capture that must actually have been observed, a completion marker that must actually be backed — is now an artifact something has to produce, hash, or refuse.
 
