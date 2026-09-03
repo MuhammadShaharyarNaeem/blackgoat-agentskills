@@ -10,19 +10,13 @@ This Standard Operating Procedure (SOP) coordinates the planning squad (Rex, Ari
 
 ---
 
-## Path Resolution
-
-Skill and agent paths in this document use `{PLUGIN_ROOT}` as a placeholder for the plugin's `skills/` directory. When this skill is invoked, its base directory is provided to you; `{PLUGIN_ROOT}` is that `skills/` directory (the agents live at `{PLUGIN_ROOT}/../agents/`). List files to confirm a path exists before referencing it.
-
-`base-persona.md` resolves at `{PLUGIN_ROOT}/agent-squad/base-persona.md`, never under `{PLUGIN_ROOT}/../agents/` — the injection rule and its rationale live in the Orchestrator Contract §1 (Delegation Discipline). Verify the path resolves before delegating.
-
----
-
 ## 1. Global System Constraints
 
 > ### MANDATORY FIRST READ — the Orchestrator Contract
 >
 > **Before Phase 1, you MUST read `{PLUGIN_ROOT}/agent-squad/orchestrator-contract.md` in full.** Do not improvise those rules from memory. If the file does not resolve, STOP and report the broken path.
+>
+> Then read `{PLUGIN_ROOT}/agent-squad/pipeline-skeleton.md` — the shared pipeline skeleton (path resolution, error recovery, upgraded chain of thought, game tape). Refinements below override the skeleton only where labelled (convention #8).
 
 The sections below carry ONLY this pipeline's refinements on top of that contract.
 
@@ -38,9 +32,7 @@ The sections below carry ONLY this pipeline's refinements on top of that contrac
 
 ## 2. Global Error Recovery
 
-**The error-recovery skeleton lives in the Orchestrator Contract (§2)** — halt-and-escalate triggers, the circuit breaker you pass to every agent, no-nested-delegation, incremental persistence, context checkpoints, and 2-round bounded autonomous rejection. Read it there; it is not restated here.
-
-This pipeline's refinements: the artifacts subject to the 2-round bound are `requirements.md`, `detailed-design.md`, and `plan.md` — track the round count per artifact, and after 2 rounds surface the flaw and both attempts to the user rather than re-delegating a third time. Phase 2.5 is tighter still: the design gets exactly **one** doubt-driven revision round (deliberately below DDD's own 3-cycle bound), then escalate. Note: `requirements.md` is legitimately mutated in Phase 2 by Aria — supersession annotations only.
+This pipeline's refinements on the skeleton's Error Recovery section: the artifacts subject to the 2-round bound are `requirements.md`, `detailed-design.md`, and `plan.md` — track the round count per artifact, and after 2 rounds surface the flaw and both attempts to the user rather than re-delegating a third time. Phase 2.5 is tighter still: the design gets exactly **one** doubt-driven revision round (deliberately below DDD's own 3-cycle bound), then escalate. Note: `requirements.md` is legitimately mutated in Phase 2 by Aria — supersession annotations only.
 
 ## 3. Few-Shot Handoff Examples
 
@@ -201,7 +193,7 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
 ### Phase 4: Game Tape Checkpoint (Orchestrator)
 - **Delegated Agent**: None — the Orchestrator performs this phase directly. No delegation, no halt.
 - **Workflow**:
-  1. While your session context is still alive, append a `## bgpdd-plan — [date]` section to `.docs/{project-name}/implementation/game-tape.md` (create the file if it does not exist). At most 10 bullets, covering: user corrections made, agent failures/retries, re-delegation rounds and why, circuit-breaker trips, gates that were rubber-stamped vs. genuinely exercised, and this session's id/transcript path if the runtime exposes it (Claude Code: `~/.claude/projects/<project-slug>/<session-id>.jsonl`).
+  1. Write this run's game-tape checkpoint at the skeleton's default cadence and cap — once per run, at most 10 bullets, heading `## bgpdd-plan — [date]`. This pipeline adds no refinement to that section.
   2. This evidence feeds the SINGLE end-of-epic Forge run in `bgpdd-shipping` Step 7 — do NOT delegate Forge here. If this run went badly enough that lessons should not wait for the epic to ship, offer the user an on-demand `/bgpdd-learn` run now instead.
   3. **State Persistence**: Before concluding, write orchestrator state via `update_state.py` — never hand-edit JSON. Schema authority is `update_state.py` (schema version string `"1"`). Its `--init` may already be a no-op here (Phase 3.6 writes the state file first when it records a manifest or a capability blocker) — the warning is expected, and the entries Phase 3.6 wrote are preserved. If Python is unavailable: HALT and surface the missing interpreter.
      ```bash
