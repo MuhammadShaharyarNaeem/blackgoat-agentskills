@@ -18,10 +18,12 @@ One front door. Classify the request, then invoke exactly **one** lane — or sa
 
 ## Routing
 
-Check the **state rows** first; if none matches, answer the three questions in order and stop at the first `yes`.
+Check the **state rows** first; if none matches, answer the three questions in order and stop at the first `yes`. **The order is load-bearing, not a convenience**: "execute the existing plan" answers *yes* to question 2 (it does need a new capability — that is what the plan is for) and would re-plan work that is already planned; the `bgpdd-build` state row fires first and reads the plan instead. Row 2a's discovery entry survives as the *plan-first* branch; the discovery state row above is the standalone ask, where nothing is being planned yet.
 
 | The ask | Lane | What it costs |
 |---|---|---|
+| "execute the plan" / "carry on with the build" — a `.docs/<project>/implementation/plan.md` exists with unchecked milestones | `bgpdd-build` | Mason or Nova per milestone tag, plus Quinn, Luna, Dep; the coverage and commit gates. |
+| "map this codebase" / "how does this repo work" — or the ask needs today's behaviour and there is no `.docs/summary/` | `bgpdd-discovery` | Iris, Scout and Echo write the Tier-1 knowledge base. |
 | "it's built — ship it" | `bgpdd-shipping` | Launch Squad — Vera, Cipher, Dep — plus the ship-decision gate. |
 | "prove a discovered feature still works", no code change | `bgpdd-verify` | Quinn automates the acceptance matrix against the running app; runtime-evidence gate. |
 | "what did we learn" | `bgpdd-learn` | One Forge triage; nothing is written without your approval. |

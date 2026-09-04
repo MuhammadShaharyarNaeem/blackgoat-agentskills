@@ -237,9 +237,43 @@ would break at Phase 0 with nothing in this package testing it. So the epic's
 `orchestrator-state.json` is now a **precondition**: read it first, and HALT if
 it is absent, because a feature route with no epic state is not a missing file
 -- it is a mis-resolved `{bugfix-root}`, and the honest answers are the
-standalone route or a corrected resolution. `--set-branch` is then a plain
-update on a file that exists, and `--init` survives only on the standalone
-route, where creating the file is the whole point.
+standalone route or a corrected resolution. `--init` survives only on the
+standalone route, where creating the file is the whole point.
+
+**And `--set-branch` does not survive on the feature route at all.** The design
+above once ran it, on the reading that a bugfix gets its own branch like every
+other unit of work. On a *shared* state file that is destructive in two places
+downstream, both mechanical:
+
+- `bgpdd-shipping` Step 3's Runtime Evidence Gate derives `--changed-files`
+  from `git diff <the default branch>...<branch>`, reading `branch` straight
+  off this file. Pointed at a small fix branch, that diff is the fix and
+  nothing else — the epic's entire body of work stops being under
+  verification, and the gate passes on a set it was never meant to grade.
+- `bgpdd-shipping` Step 4.5 pushes `branch` and opens the pull request on it.
+  Pointed at the fix branch, shipping publishes the fix and leaves the epic
+  unshipped, with a green launch report over it.
+
+So on the feature route **the fix is made on the epic's existing branch**: read
+`branch`, check it out, write the field never. The epic keeps one branch for its
+whole life, which is what makes both downstream derivations correct by
+construction rather than by a reader remembering this section. The `{bug-slug}`
+scoping in `gates.jsonl` and the blockers ledger is what separates the fix from
+the milestones around it — a separate branch was never carrying that, and a
+separate `## Review:` and `test-report.md` section carry the rest.
+
+Two consequences worth stating, because both used to read as gaps:
+
+1. **The route rule is now an in-flight test, not a folder test.** A feature
+   route requires the epic's state to exist *and* its `branch` to exist
+   unmerged. `implementation/` outlives the epic — shipping Step 6.6 deletes
+   only `orchestrator-state.json` — so folder presence alone would route a bug
+   in long-shipped code onto a branch that no longer exists. Such a bug is
+   standalone work and takes the standalone route.
+2. **The feature route has no branch to close.** Phase 5 step 9's three offers
+   (merge, publish-and-PR, keep) apply to a branch this lane created, which on
+   the feature route it did not. Offering them there offers to close the
+   *epic*; shipping Step 4.5 owns that. The commit is the close.
 
 **And on the feature route the lane never touches `pipeline`.** A deliberate
 divergence (convention #8) from the each-pipeline-stamps-its-own-value pattern
@@ -327,9 +361,10 @@ environment = `main`, `2.1.0`, .NET 8 on Windows; `- Regression: no`;
 Standalone route, so `{state-file}` = `.docs/bugfix/coupon-500/orchestrator-state.json`
 and the init carries the pipeline value: `update_state.py --state {state-file}
 --init --project-name coupon-500 --set-pipeline bgpdd-bugfix --set-branch
-fix/coupon-500`. (On a feature route there is no `--init` at all: the epic's own state
-file one level above `implementation/` must already exist -- HALT if it does
-not -- and the call is just `--set-branch` against it.)
+fix/coupon-500`. (On a feature route Phase 0 writes no state at all: the epic's
+own state file one level above `implementation/` must already exist -- HALT if
+it does not -- and the run rides the `branch` that file already names, so there
+is no `--init`, no `--set-pipeline` and no `--set-branch`.)
 
 **Phase 1.** Quinn runs the reproduction through
 `run_quiet.py --capture .docs/bugfix/coupon-500/evidence/red/coupon-500.md -- curl --fail …`.
