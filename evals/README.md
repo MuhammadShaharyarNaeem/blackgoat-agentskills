@@ -17,6 +17,15 @@ Do not treat a single failing run as proof of a broken persona, and do not treat
 single passing run as proof it's fixed. Re-run at the declared `runs=N` before drawing a
 conclusion.
 
+**An INFRA run is not one of the N.** A run whose `claude` produced nothing, hit an API
+error, hit a permission prompt or a usage limit, or finished far too fast to have run at
+all measured the *harness*, not the plugin. Since harness 4 the harness classifies those
+mechanically, retries once, and writes them to `results/results-invalid-infra-<date>.jsonl`
+with `pass: null` — **never** to `results.jsonl`. So "4/5" means four of five *graded*
+runs: if a case recorded two INFRA runs, it has three data points and no pass rate yet.
+Read the console summary, which prints the INFRA count, before reporting a number. See
+"INFRA classification" below for the exact rules.
+
 ## Two suites
 
 - **`contract/`** — deterministic, structural evals. Each case is: a frozen fixture
@@ -35,29 +44,60 @@ conclusion.
   an actual `Skill` tool invocation — see "Trigger judging" below.
 
   **Two-hop cases (`/bg …`).** Two cases open with `/bg`, the router skill's trigger. The
-  router's whole job is to invoke a second skill, so the *first* `Skill` invocation the
-  judge sees is `bg` — and the judge decides on the first invocation, full stop. Those
-  cases therefore name the destination lane as `expected_skill` and carry `bg` in
-  `acceptable_alternatives`: they grade `ROUTED_OK` on the hop into the router, which is
-  all a first-invocation judge can see. **They do not verify the destination.** Reading a
-  green `/bg` case as proof the router routed *correctly* is the same category error
-  harness 2 made with `mentioned_only`. Verifying the second hop needs a judge change —
-  record the full ordered list of `Skill` invocations and let a case assert the *last* one
-  (or the chain) — which has not been made; until it is, a green `/bg` case means only
-  "the front door opened".
+  router's whole job is to invoke a second skill, so the *first* `Skill` invocation is
+  always `bg` and a first-invocation judge can only ever prove that the front door
+  opened. **Harness 4 verifies the destination.** Every trigger record now carries
+  `skills_invoked` — the full ordered list of `Skill` invocations — and a case may declare
+  an `expected_chain` array in `cases.jsonl`; when it does, the case passes only if
+  `skills_invoked` **starts with** that chain, and `expected_skill` /
+  `acceptable_alternatives` are consulted only for the `mentioned_only` diagnostic. The
+  two `/bg` cases (`trigger-28`, `trigger-29`) declare
+  `["bg", "bgpdd-bugfix"]` and `["bg", "bgpdd-quick"]` respectively.
+
+  Three router behaviours used to score the same green: routed on correctly, routed on to
+  the wrong lane, and never routed on at all. `-SelfTest` cases 7-9 are exactly those
+  three, and only the first passes now. Every other case is unchanged: with no
+  `expected_chain`, the first invocation decides, full stop.
+
+  One trap the chain judge also sidesteps: `bg` is a **substring** of every lane it could
+  misroute to (`bgpdd-lite`, `bgpdd-quick`, …), and `mentioned_only`'s matcher is a plain
+  substring test — so a `/bg` case judged on prose is positively "mentioned" no matter
+  where it went. Diagnostics are diagnostics; the chain is the assertion.
 
 Two `contract/` cases are exceptions to the statistical-N doctrine above.
 **`mechanical-pipeline`** is a zero-LLM, deterministic integration case that walks the
 full milestone lifecycle (`next_milestone.py` → `update_state.py` → `check_commit_gate.py`
-across its failure paths → gated commit → `run_quiet.py`) in a disposable git repo with no
-`claude -p` call anywhere in it. **`bugfix-gates-adversarial`** is its `/bgpdd-bugfix`
+across its failure paths → gated commit → `run_quiet.py` → `check_runtime_evidence.py` →
+`check_acceptance_suite.py` → `check_agent_report.py`) in a disposable git repo with no
+`claude -p` call anywhere in it. Two of its 20 steps are the sidecar-forgery attacks:
+**10c** edits *only* a capture's sidecar (`exit_code` 3 → 0, leaving the hash-protected
+body saying 3) and requires `sidecar_body_disagrees`, asserting that the older
+sidecar-missing/hash/staleness terms are **not** what caught it; **12a** is a wholly typed
+security report whose verdict token and exit codes are all correct and which must still be
+refused with `check_uncaptured`, against **12b**, the same two checks actually run through
+`run_quiet.py --capture` and cited, which must pass. A gate proven only against failure is
+a gate that fails closed on everything. **`bugfix-gates-adversarial`** is its `/bgpdd-bugfix`
 counterpart: it walks intake → RED → route → fix → GREEN → red/green → commit gate through
 the real scripts and asserts the exit code *and* a naming JSON field on each fabricated
 input the lane must refuse. Neither has LLM variance to average out, so both are safe to
 run unconfirmed and are graded on a single run, not `runs=5`. Both are also **invisible to
-`run-evals.ps1`** by design — `Get-ContractCases` discovers a case by the presence of both
-`case.md` and `grade.ps1`, and neither directory has either — so each is run directly as
-`python run.py`.
+`run-evals.ps1`'s case discovery** by design — `Get-ContractCases` discovers a case by the
+presence of both `case.md` and `grade.ps1`, and neither directory has either — so each is
+run directly as `python run.py`.
+
+Both now take a **`--record`** flag (default OFF) that appends one flat record to
+`results/results.jsonl` carrying `judge: "script"` and `run_index: 1`. Until that landed,
+neither case wrote anything anywhere: they were the only two cases in the suite for which
+"has this ever run, and did it pass?" was unanswerable from disk, which is the exact
+failure mode the rest of the suite exists to prevent. `run-evals.ps1` invokes **both with
+`--record` at the start of every confirmed contract batch** — they are free, and a red
+gate chain is something you want to know before spending the paid cases that invoke those
+same gates. A red step does not abort the batch; it prints loudly.
+
+Default OFF so that iterating on either file does not fill the run log with
+half-finished runs. The record shape lives in **`evals/eval_record.py`**, shared by both
+scripts rather than copy-pasted, and it reads `$HarnessVersion` out of `run-evals.ps1`
+so these rows can never claim a harness version the harness itself has moved past.
 
 ## Layout
 
@@ -65,9 +105,17 @@ run unconfirmed and are graded on a single run, not `runs=5`. Both are also **in
 evals/
   README.md              this file
   run-evals.ps1           the harness: dry-run cost estimate, -Confirm to execute, -SelfTest
-                          for an offline check of the trigger judge
+                          for an offline check of the trigger judge + INFRA classifier
   weekly-check.ps1        zero-token: what changed, what to re-run, never runs it for you
-  results/results.jsonl   append-only run log (created on first real run)
+  eval_record.py          the one writer of a zero-LLM case's results.jsonl record
+  results/results.jsonl   append-only log of GRADED runs (created on first real run).
+                          Flat JSON objects only - see "Result record shape"
+  results/results-invalid-infra-<date>.jsonl
+                          runs the harness classified INFRA: measured the API or the
+                          harness, never counted toward a case's N
+  results/results-legacy-array-shape-2026-08.jsonl
+                          the 160 pre-harness-2 array-shaped lines, moved out of
+                          results.jsonl so the live file has exactly one shape
   results/transcripts/    every run's evidence, pass or fail:
                             <case>-run<N>-<suffix>/          contract: stdout.txt, plus
                                                              handoff.txt and .docs/ when
@@ -78,8 +126,8 @@ evals/
   results/artifacts/      the failing run's temp working copy, preserved for diagnosis
                           (contract cases only, on failure only - see "The harness
                           copies the plugin in" below)
-  trigger/cases.jsonl     20 prompt -> expected_skill cases
-  trigger/fixture/        the frozen app the 20 prompts route about; copied to the temp
+  trigger/cases.jsonl     29 prompt -> expected_skill cases (two carry an expected_chain)
+  trigger/fixture/        the frozen app the prompts route about; copied to the temp
                           working directory of every trigger run
   contract/<case-name>/
     case.md               purpose, frozen input, exact command, numbered pass criteria
@@ -87,24 +135,43 @@ evals/
     grade.ps1             deterministic grader: exit 0 = pass, 1 = fail, prints WHICH criterion failed
 ```
 
-## Result record shape (harness_version 3)
+## Result record shape (harness_version 4)
 
 Every line `run-evals.ps1` appends to `results/results.jsonl` is one flat, compact JSON
 **object** — not an array. Each object carries:
 
 - `timestamp`, `case`, `run_index`, `pass`, `failed_criterion`, `duration_s` — unchanged
-  from every prior version of the harness.
-- `outcome` — **trigger records only**: `"ROUTED_OK"`, `"ROUTED_WRONG"`, `"NO_ROUTE"`, or
-  `"HARNESS_ERROR"`. `pass` is `true` for `ROUTED_OK` and nothing else.
+  from every prior version of the harness, except that `pass` may now be `null`. It is
+  `null` **only** on an `INFRA` record, and no `INFRA` record is written to
+  `results.jsonl`, so a line in the live file always has a boolean `pass`.
+- `outcome` — on **every** record since harness 4. Contract records read `"GRADED"` or
+  `"INFRA"`. Trigger records read `"ROUTED_OK"`, `"ROUTED_WRONG"`, `"NO_ROUTE"` or
+  `"INFRA"`. `pass` is `true` for `ROUTED_OK` and nothing else.
+  **`"HARNESS_ERROR"` is retired**: it always meant the run produced nothing judgeable,
+  which is what `INFRA` now names, and its message is preserved verbatim inside
+  `failed_criterion`.
+- `triage` — present, and always `"INFRA"`, on an `INFRA` record only. Written by the
+  harness rather than left for a reader to infer, because `agent-audit`'s eval-suite-health
+  metric requires every red to carry a triage class.
 - `first_skill` — **trigger records only**: the skill named by the FIRST `Skill` tool
   invocation in the transcript, plugin namespace stripped, or `null` for `NO_ROUTE`.
+- `skills_invoked` — **trigger records only**: every `Skill` invocation in the transcript,
+  in stream order, namespaces stripped. Recorded on all trigger cases, not just
+  `expected_chain` ones — it is what tells a later reader whether a `ROUTED_WRONG`
+  recovered on its second hop, which `first_skill` alone destroys.
+- `expected_chain` — **trigger records only**: the case's declared chain, or `[]`. Present
+  on the record so a reader can tell which rule judged the run without re-reading
+  `cases.jsonl`.
 - `mentioned_only` — **trigger records only**: whether the final answer text named an
   acceptable skill without a negation word in front of it. A **diagnostic**, never a
   pass condition — see "Trigger judging" below.
 - `transcript` — path, relative to `evals/`, of this run's archived evidence: a
   directory for a contract run, a `.jsonl` file for a trigger run.
-- `judge` — **trigger records only**: always `"tool_use"` at harness 3. The field is kept
-  so a harness-2 line (where it could read `"substring"`) stays distinguishable.
+- `judge` — `"tool_use"` on a trigger record, and `"script"` on a record written by a
+  zero-LLM case's `--record` (the only rows in the file `run-evals.ps1` did not write).
+  The field is kept so a harness-2 line (where it could read `"substring"`) stays
+  distinguishable. A `judge: "script"` row has no LLM variance and must not be pooled into
+  a pass rate with LLM rows — see the two zero-LLM cases above.
 - `plugin_sha` — `git rev-parse HEAD` in the plugin root at the moment the harness
   started, or `null` if the plugin isn't a git repo or the lookup failed.
 - `plugin_dirty` — `true` if `git status --porcelain` reported anything at that moment,
@@ -116,19 +183,87 @@ Every line `run-evals.ps1` appends to `results/results.jsonl` is one flat, compa
   for a contract case, or the raw `cases.jsonl` line for a trigger case. Lets you tell
   whether two runs recorded against the same case name actually graded the same frozen
   input.
-- `harness_version` — the constant in `run-evals.ps1` (currently `"3"`), bumped whenever
-  this record shape or its field meanings change.
+- `harness_version` — the constant in `run-evals.ps1` (currently `"4"`), bumped whenever
+  this record shape or its field meanings change. `"4"` marks: mechanical INFRA
+  classification with `pass: null` and archive quarantine, `outcome` on contract records,
+  `skills_invoked`/`expected_chain` on trigger records, and `judge: "script"` rows from
+  the two zero-LLM cases.
 
-**Pre-harness-2 lines are different and are not rewritten.** Every line appended before
-this fix is a bare JSON **array** whose *last* element is the actual record (the array's
-earlier elements are the agent's own transcript lines and the grader's console output,
-which used to leak into the pipeline instead of going to the console — see "The harness
-copies the plugin in" history for why). A reader parsing `results.jsonl` must handle
-both shapes: `if (line starts with '[') { record = JSON.parse(line)[-1] } else { record
-= JSON.parse(line) }`. None of `plugin_sha`/`plugin_dirty`/`claude_version`/
-`case_sha256`/`harness_version`/`judge` exist on a pre-harness-2 record — treat their
-absence as "unknown", not as `false`/`null` with meaning. `outcome`/`first_skill`/
-`mentioned_only`/`transcript` exist only from harness 3 onward.
+**`results.jsonl` is now single-shape: flat objects only.** It used to hold two, because
+every line appended before harness 2 is a bare JSON **array** whose *last* element is the
+actual record (the array's earlier elements are the agent's own transcript lines and the
+grader's console output, which used to leak into the pipeline instead of going to the
+console — see "The harness copies the plugin in" history for why). Those 160 lines — all
+of them from 2026-08, cleanly separated from the 140 flat 2026-09 lines — now live in
+**`results/results-legacy-array-shape-2026-08.jsonl`**, byte-identical, parseable with
+the same one-liner they always needed:
+`if (line starts with '[') { record = JSON.parse(line)[-1] }`.
+
+So a reader of the **live** file needs no shape branch at all. A reader of the **archive**
+does. None of `plugin_sha`/`plugin_dirty`/`claude_version`/`case_sha256`/
+`harness_version`/`judge` exist on a pre-harness-2 record — treat their absence as
+"unknown", not as `false`/`null` with meaning. `outcome`/`first_skill`/`mentioned_only`/
+`transcript` exist only from harness 3 onward, and `skills_invoked`/`expected_chain`/
+`triage` only from harness 4.
+
+## INFRA classification (harness 4)
+
+Before harness 4 this was done by hand, after the fact, by reading a red row and deciding
+it was noise. `Invoke-ContractRun` recorded `pass = ($gradeExit -eq 0)` unconditionally,
+`duration_s` was written and never read, and a run whose `claude` produced zero bytes in
+2-30 s — **observed ten times on 2026-09-04** — was written to `results.jsonl` as a FAIL
+that failed every criterion of a case it never touched.
+
+The classifier runs **after the agent invocation and before grading**, which is the whole
+fix: a grader never gets to fail eleven criteria against an empty working copy. It is
+`Get-InfraReason` in `run-evals.ps1`, and it is proven in both directions by `-SelfTest`.
+
+A **contract** run is INFRA when any of these holds:
+
+1. **stdout is empty or whitespace** — the CLI exited without writing a word, so there is
+   no artifact, no handoff, nothing to grade.
+2. **the agent's output matches a refusal signature** — `^\s*API Error` (line-anchored;
+   the `API Error: Connection closed` banner), `requires approval` (a permission prompt a
+   headless run cannot answer), or `usage limit|rate limit`.
+3. **the run finished under the case's minimum expected duration** — default **60 s**,
+   overridable per case with an optional `## Minimum duration` section in `case.md`
+   holding a bare number of seconds. Measured at the *agent* boundary, not including
+   grading. Every real contract run in `results.jsonl` is minutes; every run hand-triaged
+   INFRA so far was 2-30 s. A typo, a `0`, or a missing section falls back to the default
+   rather than taking the batch down or silently disabling the rule.
+
+   **No case declares a floor above the default today, and the four `pressure-*` cases
+   must not.** Two of them pass on a *halt* — a run that refuses the shortcut and stops
+   without fixing anything — and the pressure section below notes that "a halted run of
+   either costs far less, which makes a low mean duration across five runs a signal in
+   itself". A floor there would quarantine the most virtuous possible run as noise and
+   destroy the signal. Raise a floor only for a case with no halt branch, and only once
+   `results.jsonl` has enough `duration_s` history to justify the number.
+4. **the harness threw** — grading never ran, so `pass: false` would be a claim about the
+   persona that nothing measured. This matches the hand triage it replaces: all three
+   records in `results-invalid-infra-2026-09-03.jsonl` are exactly this shape (a git CRLF
+   warning on stderr killing the run at ~3 s). **Triage these first** — unlike an API
+   refusal, a harness error can be a defect in the harness or the fixture, which a retry
+   will not fix.
+
+A **trigger** run is INFRA when the transcript is empty (the model never got a turn, so a
+`NO_ROUTE` verdict over it measures nothing — see the 65 records of
+`results-invalid-quota-2026-09-02.jsonl`, 3-7 s each), when stdout **or stderr** matches a
+refusal signature, or when the harness threw. It gets **no duration floor**: there is no
+`case.md` to declare one, and a genuinely fast route or refusal-to-route is a real result.
+
+What happens to an INFRA run:
+
+- **retried once, and only on INFRA.** A graded FAIL is a measurement and is never
+  re-rolled — that would make the suite a best-of-two, which is the opposite of what the
+  4/5 threshold is for.
+- if it is still INFRA, the record is written to
+  `results/results-invalid-infra-<date>.jsonl` with `pass: null`, `outcome: "INFRA"`,
+  `triage: "INFRA"` and `failed_criterion: "INFRA: <reason>"`, and **not** to
+  `results.jsonl`.
+- the console prints the reason per run, and the batch's closing summary prints the INFRA
+  count with the reminder that those runs are not part of any N.
+- its transcript is still archived under `results/transcripts/`, like every other run.
 
 Every run's evidence is archived under `results/transcripts/`, independently of pass/fail
 — unlike `results/artifacts/`, which is written only for a failing run:
@@ -145,7 +280,7 @@ Every run's evidence is archived under `results/transcripts/`, independently of 
   judge parsed, byte for byte, plus a sibling `-stderr.txt` if the CLI wrote anything to
   stderr. A routing verdict is only auditable if the stream it was read from survives.
 
-## Trigger judging (harness_version 3)
+## Trigger judging (harness_version 4)
 
 **A trigger run measures routing: did the model actually invoke the right skill.** Two
 earlier judges did not measure that, and their records are invalid — see "Known invalid
@@ -163,19 +298,25 @@ results" below.
 3. Archives stdout verbatim to `results/transcripts/<case>-run<N>-<suffix>.jsonl` and
    judges from it.
 
-**The three outcomes.** `Invoke-TriggerJudge` parses the stream line by line, finds the
-**first** `tool_use` block whose `name` is `Skill`, and reads its skill from
-`input.skill` (or `input.name`), stripping any plugin namespace so
-`blackgoat-agentskills:bgpdd-plan` compares as `bgpdd-plan`:
+**The outcomes.** `Invoke-TriggerJudge` parses the stream line by line, collects **every**
+`tool_use` block whose `name` is `Skill`, and reads each skill from `input.skill` (or
+`input.name`), stripping any plugin namespace so `blackgoat-agentskills:bgpdd-plan`
+compares as `bgpdd-plan`. The full list is recorded as `skills_invoked`; which part of it
+decides depends on whether the case declares an `expected_chain`:
 
-| Outcome | Meaning | `pass` |
-|---|---|---|
-| `ROUTED_OK` | the first `Skill` invocation is the expected skill or an acceptable alternative | **true** |
-| `ROUTED_WRONG` | the first `Skill` invocation names something else (recorded in `first_skill`) | false |
-| `NO_ROUTE` | there is no `Skill` invocation anywhere in the transcript | false |
+| Outcome | Meaning (default rule) | Meaning (`expected_chain` declared) | `pass` |
+|---|---|---|---|
+| `ROUTED_OK` | the **first** `Skill` invocation is the expected skill or an acceptable alternative | `skills_invoked` **starts with** the declared chain | **true** |
+| `ROUTED_WRONG` | the first invocation names something else (recorded in `first_skill`) | the chain does not match — wrong hop, or a chain shorter than the expected one | false |
+| `NO_ROUTE` | there is no `Skill` invocation anywhere in the transcript | same | false |
+| `INFRA` | — | the run never got a turn; see "INFRA classification" | `null` |
 
-The first invocation decides, full stop. A wrong first route followed by a correct second
-one is still `ROUTED_WRONG` — recovering after the fact is not the thing being measured.
+Under the default rule the first invocation decides, full stop: a wrong first route
+followed by a correct second one is still `ROUTED_WRONG` — recovering after the fact is
+not the thing being measured. Under `expected_chain` the *prefix* decides, which is the
+only way to judge a skill whose correct behaviour is to invoke another one; a chain case
+never consults `expected_skill`/`acceptable_alternatives` except for the `mentioned_only`
+diagnostic.
 
 **Why `NO_ROUTE` is not a pass.** This is the whole point of harness 3. A model that
 discusses the right skill in prose, asks a clarifying question naming it, or writes "I'd
@@ -196,15 +337,59 @@ either. Plugin skills are invoked through the `Skill` tool and nothing else here
 judge looks for exactly that. Plugin skills *are* namespaced in the CLI's
 `slash_commands` list, which is why the judge normalizes the name before comparing.
 
-**`-SelfTest`**: `powershell -File run-evals.ps1 -SelfTest` runs six canned stream-json
-transcripts — shaped from the real probe — through `Invoke-TriggerJudge`: `ROUTED_OK`;
-`ROUTED_WRONG` in a transcript whose final answer positively mentions the acceptable skill
-(the harness-2 false pass); `NO_ROUTE` with `mentioned_only=true` (the probe verbatim in
-shape); `NO_ROUTE` where the only mention is negated, so `mentioned_only=false`; a
-plugin-namespaced skill name that must normalize; and two invocations where the first must
-decide. No `claude` invocation, no tokens spent, no `results.jsonl` write. Exits `0` if
-every case matches, non-zero otherwise. Run it after touching the judge functions, and
-before trusting a live `-Confirm` trigger run's numbers.
+**`-SelfTest`**: `powershell -File run-evals.ps1 -SelfTest` runs **nine** canned
+stream-json transcripts — shaped from the real probe — through `Invoke-TriggerJudge`:
+`ROUTED_OK`; `ROUTED_WRONG` in a transcript whose final answer positively mentions the
+acceptable skill (the harness-2 false pass); `NO_ROUTE` with `mentioned_only=true` (the
+probe verbatim in shape); `NO_ROUTE` where the only mention is negated, so
+`mentioned_only=false`; a plugin-namespaced skill name that must normalize; two
+invocations where the first must decide; and three two-hop `expected_chain` cases —
+`bg → bgpdd-quick` (the only pass), `bg → bgpdd-lite` (misrouted on), and `bg` alone
+(never routed on). Every case asserts `skills_invoked` as well as the outcome, so a
+regression in the invocation collector cannot hide behind a correct verdict.
+
+It then runs **nine** cases through `Get-InfraReason`: empty stdout, whitespace-only
+stdout, an `API Error` banner in a long run, a permission prompt, a usage limit, real
+output that finished impossibly fast — and three that must **not** be quarantined: real
+output at a real duration, a fast run with no floor in force (the trigger case), and a
+genuine failing run. The last three are the ones that matter most: a classifier that
+swallows real reds is the same category error in the other direction.
+
+Finally it runs **seven** cases through `Get-ContractCaseMinDuration`: no section, a
+declared `240`, a number behind blank lines and indentation, unparseable text, a declared
+`0`, a missing `case.md` — each of which must fall back to the 60 s default rather than
+either throwing or silently ignoring a real declaration — and then the parser against all
+25 **real** `case.md` files, requiring every one to resolve to a plausible floor.
+
+No `claude` invocation, no tokens spent, no `results.jsonl` write. Exits `0` if every case
+matches, non-zero otherwise. Run it after touching the judge functions or the classifier,
+and before trusting a live `-Confirm` run's numbers. `weekly-check.ps1` now flags it
+whenever `run-evals.ps1` itself changes — two whole generations of trigger records are
+invalid because a judge broke quietly and nothing re-checked it.
+
+## Pre-flight (harness 4)
+
+A confirmed batch runs two checks **once, after `-Confirm` and before the first case**.
+Either failing aborts with exit `3` and **records nothing** — a batch that cannot produce
+evidence must not produce rows. Both are printed in the dry-run plan, so the plan a
+reviewer approves is the plan that runs.
+
+1. **CLI probe.** One `claude -p "reply with the word READY" --output-format json` round
+   trip. It aborts if the CLI exits non-zero, writes nothing, emits unparseable JSON,
+   reports `is_error`, or answers anything but `READY`. It costs a handful of tokens —
+   orders of magnitude less than one contract run — and it is the only way to tell "the
+   plugin regressed" from "the API is down" *before* spending the batch. On 2026-09-04 ten
+   runs were spent finding that out afterwards.
+2. **Port check.** Ports **5182-5186** must have no listener, checked for every case whose
+   `fixture/package.json` declares a `scripts.start` (read off the fixture, not a
+   hand-maintained list, so a new server-shaped fixture is covered the day it lands:
+   `bgpdd-bugfix-lane`, the four `pressure-*` cases, `quinn-runtime-evidence`, both
+   `luna-*`, `dep-ship-decision-shape`, `cipher-security-report`, `scout-brief-path`,
+   `mason-fix-verification*`). A stray process holding one of these makes a grader's own
+   wire probe read the wrong service, so the verdict would be about the wrong process. The
+   abort message names the port, the owning PID and the process name. If
+   `Get-NetTCPConnection` is unavailable on the host the check is skipped with a printed
+   note rather than a false abort.
 
 ## The trigger fixture
 
@@ -212,7 +397,7 @@ before trusting a live `-Confirm` trigger run's numbers.
 every trigger run. There is no `- Copies to:` line to parse as there is for a contract
 case: **the fixture root becomes the temp working directory root**, always.
 
-It exists because the 20 prompts have to have something to route *about*. Harness 2 ran
+It exists because the prompts have to have something to route *about*. Harness 2 ran
 them from the plugin repo root, where there is no application at all — the 2026-09-03
 probe of `trigger-1` ("add a whole new checkout flow…") shows the model globbing for
 source files, finding none, and asking *which repo?* instead of routing. Every prompt was
@@ -243,19 +428,53 @@ Keep every file small — the whole tree is copied per run. When editing it, re-
 `weekly-check.ps1` flags the `trigger` suite when anything under `trigger/fixture/`
 changes, for exactly this reason.
 
-`cases.jsonl` itself is unchanged by harness 3: same 20 prompts, same expected skills.
-Prompts that are ambiguous without project context are left ambiguous on purpose — the
-fixture *is* the context.
+`cases.jsonl` holds **29** prompts today. Harness 3 changed none of them; harness 4
+changed exactly two — `trigger-28` and `trigger-29`, the `/bg` router cases, which gained
+an `expected_chain` so their destination is actually judged. Prompts that are ambiguous
+without project context are left ambiguous on purpose — the fixture *is* the context.
+
+## The results/ directory
+
+One live file, and one archive per reason a batch of records is not evidence. Nothing is
+ever rewritten to look valid; it is moved and labelled.
+
+| File | What it holds | `triage` |
+|---|---|---|
+| `results.jsonl` | every GRADED run, flat objects only | — |
+| `results-legacy-array-shape-2026-08.jsonl` | the 160 pre-harness-2 array-shaped lines, byte-identical | — |
+| `results-invalid-wiring-2026-08-20.jsonl` | runs from before the plugin was copied into the working copy — no contract case could validly pass | `INFRA` |
+| `results-invalid-quota-2026-09-02.jsonl` | 65 runs the CLI refused on a usage limit, 3-7 s each | `INFRA` |
+| `results-invalid-instrument-2026-09-03.jsonl` | 4 runs judged by the pre-v3 mention judge | `INSTRUMENT` |
+| `results-invalid-infra-2026-09-03.jsonl`, `…-09-04.jsonl` | hand-triaged INFRA runs; harness 4 writes this file itself | `INFRA` |
+| `results-invalid-grader-2026-09-04.jsonl` | a run failed by a grader defect, not by the lane | `GRADER` |
+
+Every record in every `results-invalid-*` file now carries a `triage` class and a
+`triage_note` saying what went wrong (on the *record*, which for the array-shaped wiring
+archive means its last element), because `agent-audit`'s eval-suite-health metric requires
+a red to be triaged — `GRADER`/`FIXTURE`/`CONTRACT`/`AGENT`/`INFRA` — before it is
+reported, and three of these archives had no such field at all. The legacy array-shape
+file is the exception and needs none: it is not a *red* archive, it is the old record
+shape, and its runs' verdicts stand.
+
+`results-invalid-wiring-2026-08-20.jsonl` was also **not valid UTF-8** — a run's archived
+transcript carried console-codepage bytes (`0xC7` at offset 4519) that no UTF-8 reader
+could decode, so the file was unreadable to any tool that opened it as UTF-8. It has been
+re-encoded: the 7 lines that already decoded as UTF-8 keep their exact characters, and the
+8 that did not were decoded as `cp1252` and re-encoded. **Content is unchanged** —
+including the mojibake that was already *inside* its string values, where an em-dash had
+been double-mangled by an earlier console write. That is archived evidence of what a
+broken run looked like and must not be "fixed".
 
 ## Known invalid results
 
 **Every trigger record written before `harness_version: "3"` measured mention, not
 routing. Do not read any of them as routing accuracy.** Two distinct generations are
-affected, and both are kept in `results.jsonl` rather than rewritten:
+affected:
 
 - **The original substring judge** passed a case if the expected skill name appeared
   anywhere in the transcript — including inside a sentence saying not to use it.
-- **The 2026-09-03 harness-2 records** look better but are not. Harness 2 invoked
+- **The 2026-09-03 harness-2 records** (now in `results-invalid-instrument-2026-09-03.jsonl`,
+  triaged `INSTRUMENT`) look better but are not. Harness 2 invoked
   `claude -p ... --output-format json`, which returns **one result object** (`is_error`,
   `num_turns`, `usage`, `result`) with no message content blocks at all. Its `tool_use`
   path could therefore never fire; every run silently fell through to the substring path,
@@ -434,13 +653,18 @@ halves of one claim:
   the wrong file. **The first contract case whose agent-under-test needs a shell** — it
   runs its own gates — so read that case.md's harness-exposure section before trusting a
   pass rate, and expect ~100k–200k tokens per run against the harness's 20k guess.
-- **`bugfix-gates-adversarial`** (zero-LLM, single run) — the same lane's gate chain run
-  against fabricated input: the shipped `bug-report-template.md` must fail its own gate, a
-  route must refuse an unbacked or post-PASS-edited report, a GREEN of a different argv is
-  not a proof, 4-of-5 green is not fixed, and the shipped `rca-template.md`'s placeholder
-  `## Size waiver` must waive nothing. Two positive controls (the honest pair passing, a
-  real waiver clearing the size term) keep it from being satisfied by a suite that fails
-  closed on everything.
+- **`bugfix-gates-adversarial`** (zero-LLM, single run, 18 steps) — the same lane's gate
+  chain run against fabricated input: the shipped `bug-report-template.md` must fail its
+  own gate, a route must refuse an unbacked or post-PASS-edited report, a GREEN of a
+  different argv is not a proof, 4-of-5 green is not fixed, and the shipped
+  `rca-template.md`'s placeholder `## Size waiver` must waive nothing. Step **12b** is the
+  one forgery `capture_sha256` cannot see: an *honest* capture taken while the bug is back
+  (body records `- Exit code: 22`) whose **sidecar alone** is edited to `exit_code: 0` —
+  "the fix didn't work, so I said it did". Every older term stays green (the sidecar
+  exists, the capture still hashes to it, the argv matches, the capture is newer), and the
+  step asserts `sidecar_body_disagrees` *and* that none of those older terms is what
+  caught it. Two positive controls (the honest pair passing, a real waiver clearing the
+  size term) keep it from being satisfied by a suite that fails closed on everything.
 
 Neither substitutes for the other: `bgpdd-bugfix-lane` measures whether the lane invokes
 the gates, `bugfix-gates-adversarial` measures whether the gates hold when invoked.
@@ -535,6 +759,12 @@ duration across five runs a signal in itself.
      --permission-mode acceptEdits` invocation (`run-evals.ps1` parses this too).
    - `## Pass Criteria` — numbered, deterministic checks.
    - `## Runs / Threshold` — normally `runs=5`, threshold `4/5`.
+   - `## Minimum duration` — **optional**, a bare number of seconds on its own line. A
+     run that finishes faster is classified `INFRA` rather than graded (see "INFRA
+     classification"). Omit it unless this case's floor should be *higher* than the 60 s
+     default — a case whose agent-under-test runs its own gates (`bgpdd-bugfix-lane`, the
+     two `pressure-bugfix-*` cases) takes minutes, and a 90-second "run" of one of them
+     is an API refusal wearing a grader's clothes.
    - `## Future (not implemented)` — anything that would need an LLM-judge.
 3. Write `contract/<case-name>/grade.ps1` taking a single `-TargetDir` parameter
    (the temp working copy root), printing `PASSED:`/`FAILED:` per numbered criterion,
@@ -550,6 +780,20 @@ Append one JSON line to `trigger/cases.jsonl`:
 {"prompt": "...", "expected_skill": "...", "acceptable_alternatives": ["..."]}
 ```
 
+For a **router** prompt — one where the correct behaviour is to invoke a skill that then
+invokes another — add an `expected_chain` instead of relying on `expected_skill`:
+
+```json
+{"prompt": "/bg ...", "expected_skill": "bgpdd-quick", "acceptable_alternatives": ["bg"],
+ "expected_chain": ["bg", "bgpdd-quick"]}
+```
+
+The case then passes only if `skills_invoked` starts with that ordered chain. Keep
+`expected_skill`/`acceptable_alternatives` populated anyway: they still feed the
+`mentioned_only` diagnostic, and they document the intent if the chain is ever removed.
+Use a chain **only** where the second hop is genuinely obligatory — for an ordinary prompt
+the first-invocation rule is the stricter and simpler measurement.
+
 Write the prompt the way a real user would type it — no keyword-stuffing the skill name
 into the prompt. Prefer genuinely ambiguous prompts near real boundaries (e.g.
 `bgpdd-plan` vs `bgpdd-lite`, `learn` vs `agent-audit`) over easy ones; an eval suite
@@ -563,14 +807,16 @@ will score `NO_ROUTE` forever.
 
 ## The weekly check + manual approval flow
 
-1. Run `weekly-check.ps1` any time — it costs zero tokens. It diffs `agents/` and
-   `skills/` since the last recorded run in `results/results.jsonl` (or the last 7 days
-   if there's no history yet, or file `LastWriteTime` if the plugin isn't a git repo),
-   maps the changed files to the evals they affect, and prints an estimated run count
-   and the exact `run-evals.ps1` command to run them.
+1. Run `weekly-check.ps1` any time — it costs zero tokens. It diffs `agents/`, `skills/`,
+   `evals/trigger/fixture/` **and the harness files themselves** since the last recorded
+   run in `results/results.jsonl` (or the last 7 days if there's no history yet, or file
+   `LastWriteTime` if the plugin isn't a git repo), maps the changed files to the evals
+   they affect, and prints an estimated run count and the exact `run-evals.ps1` command to
+   run them.
 2. **It never runs `run-evals.ps1` for you.** Review what it flagged.
 3. Run the printed command **without** `-Confirm` first — this is still zero-cost and
-   shows you the real run plan and a rough cost estimate.
+   shows you the real run plan, the pre-flight steps it will take, and a rough cost
+   estimate.
 4. If that looks right, re-run the same command with `-Confirm` to actually spend
    tokens and append results.
 
@@ -579,11 +825,22 @@ will score `NO_ROUTE` forever.
 flags the cases that plant traps against it, the same way editing `agents/mason.md`
 already flagged `mason-fix-verification`.
 
+**The instrument is in the mapping too.** A change to `run-evals.ps1` flags no LLM case —
+it changed the measuring device, not the thing measured — and instead flags three
+zero-token checks: `-SelfTest` (the judge, the `expected_chain` rule, and the INFRA
+classifier), plus a `-Suite contract` and `-Suite trigger` dry run, because discovery and
+`cases.jsonl` parsing are the two things `-SelfTest` cannot see. A change to
+`evals/eval_record.py` or either zero-LLM `run.py` flags that case's
+`python … run.py --record`. Before this, an edit to the judge matched no pathspec at all:
+`weekly-check.ps1` flagged nothing, so nothing told you to re-run the one check that
+proves the judge still reads correctly.
+
 ## Cost warnings
 
 - `run-evals.ps1` refuses to spend a token without `-Confirm`. There is no "just do it"
   flag beyond that — this is intentional friction for a suite that calls a paid API in
-  a loop.
+  a loop. The one paid call `-Confirm` makes before the plan begins is the READY probe
+  (see "Pre-flight"), which exists to stop the rest of the batch being wasted.
 - The token/cost numbers `run-evals.ps1` prints are rough, unmeasured guesses (see the
   constants at the top of that script). Once `results/results.jsonl` has real
   `duration_s` data across enough runs, replace the guesses with something derived from

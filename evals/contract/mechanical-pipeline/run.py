@@ -14,11 +14,17 @@ works or doesn't.
 See README.md in this directory for what this proves and when to re-run it.
 
 Usage:
-    python run.py
+    python run.py               # run, print, record nothing
+    python run.py --record      # ... and append one record to results/results.jsonl
 
 Exit 0 only if every step below passes. Prints a PASS/FAIL table and cleans
 up its temp directory unconditionally (even on failure).
+
+--record is OFF by default so an iteration loop on this file does not pollute the
+run log, and `run-evals.ps1` passes it at the start of every confirmed contract
+batch: the case is free, and until that landed it left no history at all.
 """
+import argparse
 import hashlib
 import itertools
 import json
@@ -27,6 +33,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 # evals/contract/mechanical-pipeline/run.py -> plugin root is 3 levels up.
@@ -38,6 +45,13 @@ CHECK_COMMIT_GATE = SCRIPTS / "check_commit_gate.py"
 RUN_QUIET = SCRIPTS / "run_quiet.py"
 CHECK_RUNTIME_EVIDENCE = SCRIPTS / "check_runtime_evidence.py"
 CHECK_ACCEPTANCE_SUITE = SCRIPTS / "check_acceptance_suite.py"
+CHECK_AGENT_REPORT = SCRIPTS / "check_agent_report.py"
+
+# The shared record writer lives in evals/, two levels up from this file. Shared,
+# not copied into each case, because the record shape has to match the one
+# run-evals.ps1 appends to the same file.
+sys.path.insert(0, str(PLUGIN_ROOT / "evals"))
+from eval_record import append_script_record  # noqa: E402
 
 # The TOKEN used for --milestone / --set-cursor: deliberately untagged. Cursor
 # and milestone matching are word-boundary token tests, so a cursor written
@@ -97,6 +111,17 @@ ENVELOPE_BODY = ('{"statusCode":200,"isSuccess":true,"notifications":[],'
                  '"data":{"id":1,"total":9}}')
 BARE_BODY = '{"id":1,"total":9}'
 
+# The capture header's `- Captured:` and the sidecar's `finished` are ONE fact
+# recorded twice, and check_runtime_evidence.py's `sidecar_body_disagrees` term now
+# requires them to agree (0 <= captured - finished <= CAPTURED_SKEW_SECONDS). They
+# are constants here so the honest fixture cannot drift into looking forged: before
+# this, the capture said 2026-08-12 and write_sidecar() said 2026-01-01, 223 days
+# apart, and step 10a began failing the moment that term landed. The same pair is
+# what an ATTACK moves - see step 10c.
+CAPTURE_STARTED = "2026-08-12T09:59:59Z"
+CAPTURE_FINISHED = "2026-08-12T10:00:00Z"
+CAPTURED_STAMP = CAPTURE_FINISHED
+
 CAPTURE_TEMPLATE = """# Runtime capture: GET /api/contacts
 
 - Milestone: {milestone}
@@ -105,7 +130,7 @@ CAPTURE_TEMPLATE = """# Runtime capture: GET /api/contacts
 - Transport: out-of-process HTTP (curl)
 - Base URL: http://localhost:5142
 - Probe command: `curl -sS -i http://localhost:5142/api/contacts`
-- Captured: 2026-08-12T10:00:00Z
+- Captured: {captured}
 - Exit code: 0
 
 ## Captured output
@@ -202,8 +227,8 @@ def write_sidecar(capture_path, exit_code=0):
         "cwd": str(capture_path.parent),
         "host": "eval-fixture",
         "pid": 0,
-        "started": "2026-01-01T00:00:00Z",
-        "finished": "2026-01-01T00:00:01Z",
+        "started": CAPTURE_STARTED,
+        "finished": CAPTURE_FINISHED,
         "exit_code": int(exit_code),
         "body_sha256": hashlib.sha256(b"").hexdigest(),
         "capture_sha256": hashlib.sha256(capture_path.read_bytes()).hexdigest(),
@@ -248,18 +273,35 @@ def parse_json(proc, step_name):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--record", action="store_true",
+                        help="append one flat record to evals/results/results.jsonl")
+    args = parser.parse_args()
+
+    started = time.time()
     tmp = Path(tempfile.mkdtemp(prefix="eval-mechanical-pipeline-"))
     try:
         run_lifecycle(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+    duration = round(time.time() - started, 2)
 
     print()
     failed = [n for n, ok in results if not ok]
     if failed:
         print(f"RESULT: FAIL ({len(failed)}/{len(results)} steps failed)")
+    else:
+        print(f"RESULT: PASS ({len(results)}/{len(results)} steps passed)")
+
+    if args.record:
+        detail = None
+        if failed:
+            detail = " | ".join(f"[FAIL] {name}" for name in failed)
+        append_script_record(case="mechanical-pipeline", passed=(not failed),
+                             failed_criterion=detail, duration_s=duration)
+
+    if failed:
         return 1
-    print(f"RESULT: PASS ({len(results)}/{len(results)} steps passed)")
     return 0
 
 
@@ -518,7 +560,8 @@ def run_lifecycle(repo):
 
     good_capture = runtime_dir / "m2-contacts-get.md"
     good_capture.write_text(
-        CAPTURE_TEMPLATE.format(milestone=MILESTONE2_HEADING, body=ENVELOPE_BODY),
+        CAPTURE_TEMPLATE.format(milestone=MILESTONE2_HEADING, body=ENVELOPE_BODY,
+                                captured=CAPTURED_STAMP),
         encoding="utf-8")
     set_mtime(good_capture)
     set_mtime(write_sidecar(good_capture))
@@ -550,7 +593,8 @@ def run_lifecycle(repo):
     # The 2026-08 incident, mechanically: everything honest except the body.
     bare_capture = runtime_dir / "m2-contacts-get-bare.md"
     bare_capture.write_text(
-        CAPTURE_TEMPLATE.format(milestone=MILESTONE2_HEADING, body=BARE_BODY),
+        CAPTURE_TEMPLATE.format(milestone=MILESTONE2_HEADING, body=BARE_BODY,
+                                captured=CAPTURED_STAMP),
         encoding="utf-8")
     set_mtime(bare_capture)
     set_mtime(write_sidecar(bare_capture))
@@ -570,6 +614,50 @@ def run_lifecycle(repo):
               and data.get("in_process_transport") == []
               and data.get("stale") == [])
         record("10b. check_runtime_evidence: envelope keys absent -> exit 1", ok,
+               "" if ok else json.dumps(data))
+
+    # --- Step 10c: ONLY the sidecar is edited -> sidecar_body_disagrees ------
+    # The forgery the `capture_sha256` term alone cannot see. The hash protects
+    # the capture FILE; nothing protects the sidecar. So: take an honest capture
+    # of a probe that FAILED (its body records `- Exit code: 3`), then edit the
+    # sidecar's `exit_code` to 0. Every older term stays green -- the file exists,
+    # is under evidence/runtime/, is fresh, hashes to the sidecar, and the sidecar
+    # now claims a clean exit. Only the capture's own hash-protected header
+    # contradicts it, which is what this term reads.
+    forged_capture = runtime_dir / "m2-contacts-get-forged.md"
+    forged_capture.write_text(
+        CAPTURE_TEMPLATE.format(milestone=MILESTONE2_HEADING, body=ENVELOPE_BODY,
+                                captured=CAPTURED_STAMP)
+        .replace("- Exit code: 0", "- Exit code: 3"),
+        encoding="utf-8")
+    set_mtime(forged_capture)
+    # exit_code=0 over a body that says 3. The hash is computed AFTER the body is
+    # written, so it still matches: the capture was never touched.
+    set_mtime(write_sidecar(forged_capture, exit_code=0))
+
+    forged_report = impl_dir / "test-report-forged.md"
+    forged_report.write_text(
+        RUNTIME_REPORT_TEMPLATE.format(
+            capture="evidence/runtime/m2-contacts-get-forged.md"),
+        encoding="utf-8")
+
+    proc = run_py(CHECK_RUNTIME_EVIDENCE, ["--report", forged_report] + evidence_common)
+    data = parse_json(proc, "10c. check_runtime_evidence: sidecar exit_code edited to 0 -> exit 1")
+    if data is not None:
+        captures = data.get("captures", [])
+        codes = []
+        if captures:
+            codes = list(captures[0].get("problem_codes") or [])
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and data.get("sidecar_body_disagrees")
+                  == ["evidence/runtime/m2-contacts-get-forged.md"]
+              and "sidecar_body_disagrees" in codes
+              # The older terms must NOT be what caught it, or this step would
+              # pass for a reason that predates the check being asserted.
+              and data.get("sidecar_missing") == []
+              and data.get("sidecar_hash_mismatch") == []
+              and data.get("stale") == [])
+        record("10c. check_runtime_evidence: sidecar exit_code edited to 0 -> exit 1", ok,
                "" if ok else json.dumps(data))
 
     # --- Step 11a: check_acceptance_suite, green walkthrough -> exit 0 -------
@@ -611,6 +699,80 @@ def run_lifecycle(repo):
               and data.get("failed") == []
               and data.get("missing_results") == [])
         record("11b. check_acceptance_suite: unevidenced manual PASS -> exit 1", ok,
+               "" if ok else json.dumps(data))
+
+    # --- Step 12: check_agent_report's capture term -------------------------
+    # The gate that used to read NOTHING unforgeable. Every term it checked was
+    # text an agent types, so a wholly invented security report whose check lines
+    # carried plausible exit codes passed. 12a is that report; 12b is the same
+    # report with the same two checks actually run through run_quiet.py --capture,
+    # so the step proves the term fires on a typed report AND clears on an
+    # executed one -- a gate proven only against failure is a gate that fails
+    # closed on everything.
+    security_dir = impl_dir / "evidence" / "security"
+    security_dir.mkdir(parents=True, exist_ok=True)
+
+    TYPED_REPORT = (
+        "# Security Report\n\n"
+        "## Security Audit: proj — 2026-08-12\n\n"
+        "- Dependency audit: PASS — `npm audit --audit-level=high` — exit 0 — 0 high, 0 critical\n"
+        "- Secrets scan: PASS — `git grep -nE \"(api_key|secret)\"` — exit 1 — 0 matches\n\n"
+        "**Verdict:** Pass\n")
+    typed_report_path = impl_dir / "security-report-typed.md"
+    typed_report_path.write_text(TYPED_REPORT, encoding="utf-8")
+
+    proc = run_py(CHECK_AGENT_REPORT, ["--report", typed_report_path,
+                                       "--milestone", MILESTONE2_TITLE,
+                                       "--repo", repo])
+    data = parse_json(proc, "12a. check_agent_report: a wholly TYPED report -> exit 1 (check_uncaptured)")
+    if data is not None:
+        problems = [p.get("problem") for p in (data.get("capture_problems") or [])]
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              # The verdict token and the exit codes are all correct: the report
+              # is refused for citing nothing, not for a grammar slip.
+              and data.get("verdict") == "Pass"
+              and data.get("unevidenced") == []
+              and sorted(data.get("uncaptured") or [])
+                  == ["Dependency audit", "Secrets scan"]
+              and set(problems) == {"check_uncaptured"})
+        record("12a. check_agent_report: a wholly TYPED report -> exit 1 (check_uncaptured)", ok,
+               "" if ok else json.dumps(data))
+
+    # 12b: the SAME two checks, actually executed through run_quiet.py --capture,
+    # each line citing its own artifact and claiming the exit code the sidecar
+    # recorded. The `exit 1` line is deliberate: a clean `git grep` for secrets
+    # exits 1 (no matches), so the gate must tie a line to its capture by exit-code
+    # EQUALITY rather than by "was it zero".
+    audit_capture = security_dir / "npm-audit.md"
+    secrets_capture = security_dir / "secrets-scan.md"
+    run_py(RUN_QUIET, ["--capture", audit_capture, "--",
+                       sys.executable, "-c", "print('0 high, 0 critical')"])
+    run_py(RUN_QUIET, ["--capture", secrets_capture, "--",
+                       sys.executable, "-c", "import sys; print('no matches'); sys.exit(1)"])
+
+    EXECUTED_REPORT = (
+        "# Security Report\n\n"
+        "## Security Audit: proj — 2026-08-12\n\n"
+        "- Dependency audit: PASS — `npm audit --audit-level=high` — exit 0 — 0 high, 0 critical"
+        " — capture: evidence/security/npm-audit.md\n"
+        "- Secrets scan: PASS — `git grep -nE \"(api_key|secret)\"` — exit 1 — 0 matches"
+        " — capture: evidence/security/secrets-scan.md\n\n"
+        "**Verdict:** Pass\n")
+    executed_report_path = impl_dir / "security-report-executed.md"
+    executed_report_path.write_text(EXECUTED_REPORT, encoding="utf-8")
+
+    proc = run_py(CHECK_AGENT_REPORT, ["--report", executed_report_path,
+                                       "--milestone", MILESTONE2_TITLE,
+                                       "--repo", repo])
+    data = parse_json(proc, "12b. check_agent_report: the same checks, really captured -> exit 0")
+    if data is not None:
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and data.get("verdict") == "Pass"
+              and data.get("uncaptured") == []
+              and data.get("capture_disagrees") == []
+              and data.get("capture_problems") == []
+              and data.get("allow_uncaptured") is False)
+        record("12b. check_agent_report: the same checks, really captured -> exit 0", ok,
                "" if ok else json.dumps(data))
 
 
