@@ -1,0 +1,124 @@
+---
+name: bgpdd-bugfix
+description: "Fixes a localized bug on written evidence: a lint-gated bug report, Quinn's pre-fix RED capture, mechanical FAST/FULL/PLAN routing, Mason's and/or Nova's fix, Quinn's GREEN re-run of the same command, then a fresh Luna and the commit gate. Trigger phrases: 'fix this bug', 'debug this error', 'use bgpdd-bugfix'."
+trigger: /bgpdd-bugfix
+category: execution
+risk: safe
+---
+
+# bgPDD-Bugfix
+
+## Purpose
+Fixes a localized bug on written evidence rather than chat scrollback: a durable bug report, a pre-fix failure capture taken by someone other than the author of the fix, one root cause, and the smallest squad that can prove it. Rationale, anti-patterns and worked examples: `{PLUGIN_ROOT}/bgpdd-bugfix/references/bugfix-rationale.md`.
+
+## When to Use This Skill
+- The user reports a bug or defect, or an error stack needs tracing before a fix.
+- **NOT** when the fix needs a new capability, a schema or contract change, or more than five files — Phase 2's gate returns `PLAN` for those.
+- Trigger phrases: "fix this bug", "debug this error", "use bgpdd-bugfix".
+
+---
+
+## 1. Global System Constraints
+
+> ### MANDATORY FIRST READ — the Orchestrator Contract
+>
+> **Before Phase 0, you MUST read `{PLUGIN_ROOT}/agent-squad/orchestrator-contract.md` in full.** Do not improvise those rules from memory. If the file does not resolve, STOP and report the broken path.
+>
+> Then read `{PLUGIN_ROOT}/agent-squad/pipeline-skeleton.md` — the shared pipeline skeleton (path resolution, error recovery, upgraded chain of thought, game tape). Refinements below override the skeleton only where labelled (convention #8).
+
+The bullets below carry ONLY this skill's refinements.
+
+- **Strict Delegation — this skill's agents**: **Quinn** (Phases 1, 4), **Mason** and/or **Nova** (Phase 3), **Luna** (Phase 5). Phases 0, 2 and the close of 5 are yours, in the main session. You MUST NOT write the fix, the captures, or the review yourself.
+- **Artifact verification at every phase transition** (Contract §4): confirm every file a handoff cites exists on disk before acting on it.
+- **Bugfix workspace (deliberate divergence, convention #8)**: no epic of its own — no `requirements.md`, no `plan.md`, so `check_coverage.py` has nothing to read and is never run here. Resolve `{bugfix-root}` **and** `{state-file}` once, in Phase 0, and name both in every brief (a subagent cannot ask you where to write):
+  - `{bugfix-root}` = `.docs/{project-name}/implementation/` when the bug belongs to a feature that already has that folder (the **feature route**), else `.docs/bugfix/{bug-slug}/` (the **standalone route**) — refining `base-persona.md`'s `.docs/{project-name}/` model and `runtime-evidence`'s capture path for a run with no project folder. Every artifact the phases name lives there, plus `game-tape.md`, `gates.jsonl`, `run-log.jsonl`.
+  - **`{state-file}` is the one artifact NOT under `{bugfix-root}` on the feature route**: it is the epic's own `.docs/{project-name}/orchestrator-state.json`, one level up. **One state file per tree** — a second one inside `implementation/` hides this fix's blockers from the epic that owns the code. Standalone route: `.docs/bugfix/{bug-slug}/orchestrator-state.json`.
+- **On the feature route this lane NEVER changes `pipeline`** — deliberate divergence (convention #8) from the each-pipeline-stamps-its-own-value pattern of Contract §4 that every other lane follows: `/bgpdd-build` and `/bgpdd-shipping` must re-hydrate the epic exactly as they would have before the fix, and `check_commit_gate.py` never reads `pipeline` (guarded by its self-test `test_pipeline_value_never_changes_the_verdict`). What records that the fix was gated is `gates.jsonl` (every entry scoped `milestone: {bug-slug}`) plus the commit. Set `pipeline` only on the standalone route.
+- **Gate ledger and scope**: every *gate* below carries `--ledger {bugfix-root}/gates.jsonl` and `--milestone "{bug-slug}"` (`update_state.py` is a state writer, not a gate). Contract §4 owns the obligation; this binds the path and the scope value.
+- **Run log** (Contract §4's obligation, bound here; CLI contract in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`). Per delegation return: `python {PLUGIN_ROOT}/pipeline-tools/scripts/record_run.py --log {bugfix-root}/run-log.jsonl --pipeline bgpdd-bugfix --phase "<phase>" --event delegation --agent <name> --model <tier> --unit {bug-slug} …` (`--model` is mandatory on a delegation record — exit 2 without it). Into Phase 5's game tape: `python {PLUGIN_ROOT}/pipeline-tools/scripts/summarize_run.py --run-log {bugfix-root}/run-log.jsonl --ledger {bugfix-root}/gates.jsonl --unit {bug-slug} --markdown`.
+- **Game tape — deliberate divergence (convention #8) from the skeleton's cadence, cap and heading grammar**, which that section already names: **once per phase transition** rather than once per run, **2–4 bullets** rather than at most 10, under `## bgpdd-bugfix — [phase] — [date]` rather than `## <pipeline-name> — [date]`, in `{bugfix-root}/game-tape.md`. Bullet content is the skeleton's, unchanged. Not restated per phase.
+- **State is written only through `update_state.py`** against `{state-file}`; never hand-edit that JSON. This skill's only refinement of the skeleton's error-recovery section.
+- **Round bound: 2 rounds per artifact (convention #8, deliberately tighter than `bgpdd-build` Phase 2's 3)** — a root cause is already stated, so a second failure means the RCA is wrong: back to Phase 2 with the user, never a third attempt.
+- **Conditional routing — PowerShell**: a bug in a `.ps1` or in a script embedded in a host-language string puts `{PLUGIN_ROOT}/powershell-script-patterns/SKILL.md` and its Worker Execution Contract in the Phase 3 brief.
+
+---
+
+## 2. Execution Workflow
+
+Six phases, 0 through 5. Do not skip or reorder them.
+
+### Phase 0: Intake (Orchestrator, main session — no delegation)
+1. Pick `{bug-slug}` and the fix branch; resolve `{bugfix-root}` and `{state-file}` (§1). Reuse all four in every brief.
+2. **Write the bug report with the user** into `{bugfix-root}/bug-report.md`, filling in every section of `{PLUGIN_ROOT}/bgpdd-bugfix/references/bug-report-template.md` — which owns the section list and the `- Surface: api | ui | both` / `- Runtime observable: yes | no` enums both later phases read. Ask for what is missing; never fill a field from inference. **The `- Command:` line is an exit-code oracle** (non-zero while the bug is present, zero once fixed — Phase 1 step 3 says how to write one when the correct behaviour is itself an error status); Quinn runs it verbatim and Phase 2's gate compares.
+3. **Gate**: `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_bugfix_intake.py --report {bugfix-root}/bug-report.md --milestone "{bug-slug}" --ledger {bugfix-root}/gates.jsonl`
+   Exit 0 = pass. Exit 1 = **BLOCK**: fix the named section, placeholder or unanswered enum with the user, re-run. Exit 2 = not a bug report. **No delegation until this exits 0.**
+4. **Establish state** at `{state-file}` (§1). The two routes differ:
+   - **Standalone route** — create it: `python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state {state-file} --init --project-name {bug-slug} --set-pipeline bgpdd-bugfix --set-branch <the fix branch>`
+   - **Feature route** — the epic's `orchestrator-state.json` **MUST already exist**. Read it first; if it does not, **HALT**: *a feature route with no epic state is a mis-resolved `{bugfix-root}` — use the standalone route, or fix the resolution.* Then update it in place, with **no `--init`** and **no `--set-pipeline`** (§1): `python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state {state-file} --set-branch <the fix branch>`
+
+   Phase 5's commit gate reads the `blockers` ledger this guarantees. Append every BLOCKED verification and unresolved Critical/Important finding as it arises: `--add-blocker "<text>" --blocker-milestone "{bug-slug}" --blocker-source <who raised it>`; removal requires `--evidence`. **`--blocker-milestone` is mandatory on both routes** — on a shared epic file, scoping is what stops a bugfix blocker from freezing unrelated milestones. The reverse holds too: the epic's own **unscoped** blockers *do* block this commit, by `check_commit_gate.py`'s fail-safe rule, and `--ignore-unscoped` is the sanctioned override (Phase 5 step 5).
+
+### Phase 1: Reproduce — RED (Quinn)
+**Quinn, not the builder, produces the RED evidence** — **deliberately reversing this skill's own prior rule** (convention #8): `quinn.md` §1's narrowing only *exempts* her from RED-before-implementation; it does not forbid this.
+1. Brief her with `bug-report.md`'s resolved path, `{bugfix-root}`, and the reproduction command **copied verbatim** — never paraphrased, re-quoted or "tidied". Phase 2's gate compares the RED sidecar's `argv` against the report's `- Command:` exactly, so a rewritten command blocks the route.
+2. **The RED run is captured to disk, not narrated**:
+   `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture {bugfix-root}/evidence/red/{bug-slug}.md -- <the reproduction command>`
+   The `{bug-slug}.md.meta.json` sidecar beside it is what Phase 4's gate reads. No `--capture-field` here: no runtime gate reads a RED capture (its exit code is non-zero by design), so the sidecar carries everything `check_red_green.py` checks.
+3. **The command's exit code is the oracle — non-zero while the bug is present, zero once it is fixed** — Phase 4's gate rejects a RED that succeeded and a GREEN that failed. `curl --fail` (`-f`) is that oracle **only when the correct response is 2xx/3xx**: it exits 22 on any 4xx/5xx (a bare `curl` exits 0 on a 500), so for a bug whose correct behaviour is itself an error status — a 400 that today comes back as 500 — a `--fail` GREEN can never exit 0. There the command is a one-line assertion of the expected status (a `bash -c`/`powershell -Command` one-liner around `curl -s -o /dev/null -w "%{http_code}" …` that exits non-zero unless the code is the expected one); `check_red_green.py` has no client allowlist, so a shell wrapper is legitimate for the RED/GREEN pair. Given steps rather than a command, she writes the smallest failing test reproducing the reported behaviour and captures **that** run identically.
+4. She reports the **baseline suite state** (green / red / not run) in her `<handoff>`: Phase 2's gate reads it.
+5. **Cannot reproduce** → `BLOCKED`, never `PASS` and never a guess (`base-persona.md`, Evidence Integrity). Append a blocker; return to Phase 0 for a better reproduction.
+6. Verify the capture and its sidecar exist.
+
+### Phase 2: Isolate — RCA and route (Orchestrator, main session — no delegation)
+Reading and searching is not writing application code (Contract §3); write or edit none here.
+1. Trace the execution path and isolate the failure's mechanism. Load `{PLUGIN_ROOT}/debugging-and-error-recovery/SKILL.md` on demand when the trace stalls.
+2. **On `- Regression: yes`**, bisect between the last-known-good reference and the failing one before hypothesising — the report already names the boundary.
+3. **Write `{bugfix-root}/rca.md`** from `{PLUGIN_ROOT}/bgpdd-bugfix/references/rca-template.md`: a **hypothesis ledger** (hypothesis / disproof attempt / result, one row each), the root cause, `- Root cause file:` per file, and the `## Fix shape` fields the gate reads. Contract §3a owns the disproof rule; a row whose disproof column names no executed read is a preference, not a disproof.
+4. **Gate**: `python {PLUGIN_ROOT}/pipeline-tools/scripts/next_bugfix_route.py --report {bugfix-root}/bug-report.md --rca {bugfix-root}/rca.md --red {bugfix-root}/evidence/red/{bug-slug}.md --milestone "{bug-slug}" --ledger {bugfix-root}/gates.jsonl --max-changed-files 5`
+   `--red` is **required** whenever the report carries a `- Command:` line — the gate requires the RED sidecar's `argv` to equal that command exactly, which certifies the captured failure is the *reported* one; omit it only for a steps-only report. Exit 0 prints `FAST`, `FULL` or `PLAN` with reasons. Exit 1 = `INCOMPLETE` (`rca.md` lacks a routing field) or `BLOCKED` (`red_command_mismatch` / `red_sidecar_missing` — re-take the RED against the report's command, or correct the report and re-run Phase 0's gate). Exit 2 = `--red` missing when required, or the intake PASS absent or no longer matching the report's bytes.
+5. **`PLAN`** → **HALT** and surface it: not a bugfix. Route the user to `/bgpdd-plan` or `/bgpdd-build`.
+6. **`FAST` vs `FULL` differ ONLY in user check-ins.** FAST: proceed phase to phase without pausing. FULL: pause for the user after this phase and again before the commit. **Neither route ever skips RED, GREEN, Luna, or the commit gate.** On FULL, state the root cause to the user now.
+
+### Phase 3: Fix (Mason and/or Nova)
+**Mason** (`api`), **Nova** (`ui`), or **both** when the report says `- Surface: both`.
+1. **Route by the report's surface field**, not by impression. **`both` is delegated, not refused** — deliberately reversing this skill's own prior HALT (convention #8): one shared RED exists, so two builders partition by surface against a single reproduction and one shared GREEN closes both. Partition every write surface before launching concurrently, or serialize (Contract §1).
+2. **Brief each builder** with the root cause exactly as `rca.md` states it, `rca.md`'s path, the RED capture's path, `{bugfix-root}`, and its surface's share of the fix.
+3. **The builder does NOT commit.** The commit is Phase 5's gate, so a fix committed by its author is a fix that skipped the gate — `check_commit_gate.py --commit` now refuses it (`already_committed`). Deliberate refinement of `base-persona.md`'s incremental-persistence rule (convention #8): that rule commits partial work only when a run *cannot finish*; a bugfix builder finishes in one run and returns `<changed_files>` uncommitted. Say so in the brief.
+4. **The builder MUST NOT modify the RED test file or the reproduction command.** Structural, not only prose: Quinn owns the RED artifact and Phase 4 re-runs the identical command from its sidecar's `argv`, so editing the check to pass *fails* that gate. Name the RED path in the brief; check `<changed_files>` against it.
+5. **Blast radius** (`mason.md` §2 owns the rule): before modifying any shared DTO, model or library the builder traces every consumer; a radius past the bug's own module or service is documented and returned, not absorbed.
+6. **`<consumers>` in the handoff**: require, beside `<changed_files>`, a `<consumers>` element naming the callers of every changed symbol the builder inspected — Phase 5's blast-radius judgement runs against it.
+7. Read the `<handoff>`; verify every `<changed_files>` path exists.
+
+### Phase 4: Verify — GREEN (Quinn)
+**Quinn** — a continuation of her Phase 1 delegation where the runtime supports it (Contract §1: same role, same unit), fresh otherwise.
+1. Brief her with the RED capture path, the builder's `<changed_files>`, and `{bugfix-root}`.
+2. **She re-runs the SAME command** the RED sidecar records, captured to `{bugfix-root}/evidence/green/{bug-slug}.md` — or, when the bug is runtime-observable, to `{bugfix-root}/evidence/runtime/{bug-slug}-green.md` with `--capture-field "Milestone={bug-slug}" --capture-field "Surface=<api|ui>" --capture-field "Transport=out-of-process HTTP"`, so the one capture serves both gates below (step 7 reads those fields). That single-capture path is open only when the command is itself an allowlisted client call (plain `curl …`); when the oracle is a shell wrapper (Phase 1 step 3) she takes the GREEN with the wrapper for step 6 **and** a separate plain `curl -sS -i` capture under `{bugfix-root}/evidence/runtime/` for step 7 — two captures, two gates.
+3. **She runs the full regression suite herself** through `run_quiet.py`, reporting the verbatim command, its exit code and the failure detail for anything red. **The floor is the full suite of the affected project** — a suite scoped to the fix cannot see a correct local fix breaking a distant caller. Narrower scope only when her `<handoff>` names the exclusion and why; an unexplained narrow run is `BLOCKED`, not `PASS`.
+4. She writes `{bugfix-root}/test-report.md`, citing the GREEN capture on a `**Runtime evidence:**` line when the bug is runtime-observable (grammar owned by `runtime-evidence/SKILL.md`). **Cite it repo-relative** (`.docs/…/evidence/runtime/{bug-slug}-green.md`), not relative to the report, so Phase 5's `--require-ledger-gates check_runtime_evidence.py` resolves the same path from the repo root.
+5. **No coverage-gate machinery here**: no `requirements.md`, so no `FR`/`NFR` IDs exist for her ledger to trace — she must not invent them.
+6. **Gate — RED before GREEN**: `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_red_green.py --red {bugfix-root}/evidence/red/{bug-slug}.md --green <her green capture> --milestone "{bug-slug}" --ledger {bugfix-root}/gates.jsonl`
+   Verifies both captures are sidecar-backed, the sidecars record the **identical command**, RED exited non-zero, GREEN exited zero, and GREEN finished later than RED. Exit 1 = **BLOCK**; the JSON names the failing term. For a **flaky** bug add `--green-runs 5` with five `--green` captures — **4 of 5 green is not fixed**.
+7. **Gate — runtime evidence, on `- Runtime observable: yes`**: `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_runtime_evidence.py --report {bugfix-root}/test-report.md --milestone "{bug-slug}" --changed-files <the builder's paths> --repo . --surface <api|ui> --ledger {bugfix-root}/gates.jsonl`
+   An in-process test can fail this bug but never prove it fixed; neither gate substitutes for the other.
+8. **Red on her run** → return to the **same spawned builder** as a delta-only follow-up carrying her exact failing output (Contract §1), then re-verify. Bounded by §1's 2-round rule.
+
+### Phase 5: Review & Close (Luna, then Orchestrator)
+**Luna** — always a fresh delegation (Contract §1, independent-verification exemption); `code-review-and-quality` owns her axes, format and severity labels.
+1. **Generate the review package before briefing her** — a reviewer handed only a path list reads the amended tree, where a fix is indistinguishable from the status quo and a deletion is invisible: `python {PLUGIN_ROOT}/pipeline-tools/scripts/review_package.py --repo . --base HEAD --head WORKTREE --changed-files <the builder's paths> --out {bugfix-root}/review-package.md --ledger {bugfix-root}/gates.jsonl --milestone "{bug-slug}"` (`--head WORKTREE` because the fix is uncommitted until step 5; exit 2 = git failed or the diff is empty — fix the range, never delegate without the artifact; regenerate on every remediation round so step 3's *current diff* is an artifact too). Then brief her with that package path, the builder's `<changed_files>` and `<consumers>`, the root cause, **the RED path she must confirm was not modified**, Quinn's evidence, and `{bugfix-root}/review-report.md` as her report path.
+2. Require her **Impact Analysis** directive explicitly (`luna.md` owns it): per consumer, whether the fix is safe for it.
+3. **Critical or Important finding** → remediate as a follow-up to the same builder, re-enter **Phase 4**, return here for a **fresh** Luna. Exit only on a fresh `Approve` against the *current* diff.
+4. **Blast radius beyond the isolated bug** — other consumers must change, or the fix implies a contract or architecture change → **HALT** and surface it: `/bgpdd-plan` scope.
+5. **Phase 5 exit is the commit gate, not Luna's word (convention #9)**:
+   `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_commit_gate.py --review-report {bugfix-root}/review-report.md --state {state-file} --milestone "{bug-slug}" --changed-files <the builder's paths> --verify-tree --max-changed-files 5 --waiver {bugfix-root}/rca.md --require-ledger-gates check_bugfix_intake.py,check_red_green.py --ledger {bugfix-root}/gates.jsonl --commit --message "<the commit message>"`
+   Add `check_runtime_evidence.py` to `--require-ledger-gates` on `- Runtime observable: yes`. `--verify-tree` catches an `Approve` written against a tree that has since moved. `--max-changed-files 5` is this lane's fix-size bound, waived only by a non-empty `## Size waiver` section in `rca.md` — hand-typed on purpose: exceeding the bound is the **user's** decision, made durable and attributable rather than judged. On the feature route the state is the epic's, so its **unscoped** blockers block this commit too; add `--ignore-unscoped` only after reading them, and record in the game tape which you skipped. Exit 0 = committed. Exit 1 = **BLOCK**; the JSON names the stale verdict, standing blocker, tree mismatch, size overrun or unbacked sibling gate. Exit 2 = non-conforming report → back to Luna.
+6. **State the fix**: root cause, changed files, Quinn's command and exit code, the RED/GREEN pair, and the runtime capture path where one exists.
+7. **Prevent — Tier-1 write-back.** With a `.docs/summary/{feature}/` knowledge base, append the reproduced case to `.docs/summary/{feature}/QA/manual-testing.md` in Echo's exact `GO → DO → ASSERT` shape, under Regression Risks. **Deliberate divergence (convention #8)** from `echo.md`'s Echo-only rule, and the narrower of the two sanctioned exceptions both `echo.md` and shipping's Path Model name: shipping Step 6.4 folds a whole proven matrix back post-launch; this appends **one** case, only after the gate exits 0. No `{feature}` base → write nothing and say so.
+8. **Close and name the next command.** Do **not** delete `{state-file}` (deliberately unlike `bgpdd-shipping` Step 6.6, convention #8) — standalone, it and `gates.jsonl` are the only record that this fix was gated; on the feature route it is the epic's. Leave `pipeline` as you found it (§1). Then name exactly one: **`/bgpdd-verify {feature}`**, which makes the reproduced case a permanent executed spec — offer it whenever a Tier-1 base exists, since Quinn's run proved the fix once only — or **`/bgpdd-shipping`** / **`/bgpdd-build`** when the fix must move on, which simply hydrate the untouched epic state. Add `/bgpdd-learn` if a systemic lesson surfaced. No Tier-1 base → offer nothing in its place.
+9. **Close the branch** — main session, interactive; never delegated (Contract §1). **Deliberate divergence (convention #8) from `bgpdd-shipping` Step 4.5/6.6**: those close an *epic*; this closes one *branch*, leaving `{state-file}` standing (step 8).
+   - Read the base branch from the repo (`git symbolic-ref refs/remotes/origin/HEAD`, else its configured default) — never guess.
+   - Offer exactly three: **merge locally**; **publish the branch and open a pull request through the runtime's tooling**; **keep the branch**. Discarding requires the user to type the branch name.
+   - **After a merge, done is a capture (convention #9)**: `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture {bugfix-root}/evidence/post-merge.md -- <the project's test command>`. Non-zero exit → report it; the fix is not closed.
+   - Worktree branch: offer to remove the worktree after merging.
+
+## Limitations
+- Phase 2's gate says `PLAN` mechanically, but reads what the RCA *declares* — an RCA that understates the fix understates the route.

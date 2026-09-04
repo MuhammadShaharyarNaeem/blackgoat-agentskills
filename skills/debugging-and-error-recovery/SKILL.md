@@ -1,11 +1,15 @@
 ---
 name: debugging-and-error-recovery
-description: Guides systematic root-cause debugging. Use when tests fail, builds break, behavior doesn't match expectations, or you encounter any unexpected error. Use when you need a systematic approach to finding and fixing the root cause rather than guessing. Squad-internal execution contract loaded by agents via their Methodology Dependencies table.
+description: "Guides systematic root-cause debugging. Use when tests fail, builds break, behavior doesn't match expectations, or you encounter any unexpected error. Use when you need a systematic approach to finding and fixing the root cause rather than guessing. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator applies the Worker Execution Contract itself in the main session — no delegation."
 ---
 
 # Debugging and Error Recovery
 
-Systematic root-cause debugging. When something breaks, stop adding features, preserve evidence, reproduce the failure, and trace to the actual cause instead of guessing. Works for test failures, build errors, runtime bugs, and production incidents.
+Systematic root-cause debugging for test failures, build errors, runtime bugs, and production incidents: stop, preserve evidence, reproduce, trace — never guess.
+
+## Direct invocation
+
+A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no editing tests to pass, no unobserved claims (`base-persona.md`, Evidence Integrity). Over three files, or shared behaviour: route via `/bg` to a lane.
 
 ## Worker Execution Contract
 
@@ -22,8 +26,8 @@ Never guess. Reproduce first, then trace systematically. Fix the root cause, not
 5. **TEST**: Write a targeted test or add a log to confirm/deny the hypothesis.
 6. **FIX**: Make the smallest possible change that fixes the root cause.
 7. **VERIFY**: Confirm the fix resolves the original failure AND doesn't break other tests.
-   - **VERIFY runs at the tier the failure was reported at.** Re-run *the exact check that failed* — the named failing test if the report was a unit/integration failure, the declared runtime probe if it was an observed-runtime failure, a fresh render of the critiqued state if it was a rendered-output finding. A green suite at a lower tier does not discharge a failure observed at a higher one (`{PLUGIN_ROOT}/runtime-evidence/SKILL.md`, *Core Principle*). This is the step's *which*, deliberately added because "confirm the fix resolves the original failure" is silent on it and the cheapest available check is always the lowest one.
-   - **When you were handed the failure by someone else** (a rejection round, a review finding), report this re-run and its observed output back to whoever handed it to you. If you could not re-run it, say `NOT VERIFIED — <what blocked you>` rather than asserting the fix from the diff. The reporting *shape* belongs to your persona's handoff contract, not to this skill.
+   - **VERIFY runs at the tier the failure was reported at.** Re-run *the exact check that failed* — the named failing test if the report was a unit/integration failure, the declared runtime probe if it was an observed-runtime failure, a fresh render of the critiqued state if it was a rendered-output finding. A green suite at a lower tier does not discharge a failure observed at a higher one (`{PLUGIN_ROOT}/runtime-evidence/SKILL.md`, *Core Principle*).
+   - Handed the failure by someone else (a rejection round, a review finding) → report this re-run and its observed output back to them. Could not re-run it → say `NOT VERIFIED — <what blocked you>` rather than asserting the fix from the diff. Reporting shape: your persona's handoff contract.
 
 ### Rules
 

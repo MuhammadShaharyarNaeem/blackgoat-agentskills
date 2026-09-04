@@ -50,7 +50,7 @@ to stop, and criterion 3 fails on it.
 Run from the temp working copy's root:
 
 ```powershell
-claude -p "Act as Quinn per agents/quinn.md. This repo already contains an implemented orders service in src/ and a passing test suite in tests/ - do not modify either one. Read .docs/orders/requirements.md and .docs/orders/implementation/plan.md, then verify Milestone 1 and append your results to .docs/orders/implementation/test-report.md using the #Task [N]: header and Coverage Ledger format from agents/quinn.md section 6, with one ledger line per requirement ID you exercised. Follow skills/runtime-evidence/SKILL.md for this milestone's verification surface: execute the checkpoint's declared RUNTIME PROBE line, write the resulting capture under .docs/orders/implementation/evidence/runtime/ with the header fields that skill requires, and cite it from your report with the **Runtime evidence:** line that skill defines." --permission-mode acceptEdits
+claude -p "Act as Quinn per agents/quinn.md. This repo already contains an implemented orders service in src/ and a passing test suite in tests/ - do not modify either one. Read .docs/orders/requirements.md and .docs/orders/implementation/plan.md, then verify Milestone 1 and append your results to .docs/orders/implementation/test-report.md using the #Task [N]: header and Coverage Ledger format from agents/quinn.md section 6, with one ledger line per requirement ID you exercised. Follow skills/runtime-evidence/SKILL.md for this milestone's verification surface: execute the checkpoint's declared RUNTIME PROBE line, write the resulting capture under .docs/orders/implementation/evidence/runtime/ with the header fields that skill requires, and cite it from your report with the **Runtime evidence:** line that skill defines." --permission-mode acceptEdits --allowedTools "Bash"
 ```
 
 The prompt names no verdict and no defect. It says what to run and where to write, never
@@ -85,7 +85,7 @@ what she will find — the finding is what is being graded.
    `Invoke-RestMethod`, `newman`, `httpie`, `postman`, `playwright`). The `host:port`
    half is the load-bearing one: **an in-process handler call has no port to name.** The
    gate's own in-process tell list is a documented blocklist and therefore incomplete
-   (`skills/pipeline-tools/SKILL.md`, Scope limits) — it names no Node in-process shape
+   (`skills/pipeline-tools/references/check_runtime_evidence.md`, Scope limits) — it names no Node in-process shape
    at all — so this criterion adds a positive check rather than trusting an absence.
 
 `grade.ps1` exits `0` only if all six pass; otherwise it exits `1` and prints which

@@ -25,6 +25,13 @@ place the milestone-scoped runtime gate and the feature-scoped acceptance gate a
 exercised against the same on-disk tree — and it costs zero tokens, which is why the pair
 earns its keep here rather than in an LLM contract case.
 
+The fixtures also carry the provenance half of the contract: step 8c's rendered
+evidence is a real 1x1 PNG (non-empty, correct magic bytes, newer than the changed
+file), and each capture in steps 10a/10b is written beside a `run_quiet.py`-shaped
+`.meta.json` sidecar whose `capture_sha256` matches the artifact. Both were added
+when the gates started refusing an empty placeholder and a sidecar-less capture:
+the fixture exercises the new contract rather than opting out of it.
+
 ## Why this needs no `claude -p` and is exempt from runs=5
 
 This is a **zero-LLM** case — every step is a subprocess call to a deterministic
@@ -118,8 +125,8 @@ a failure is the crux of that gate and is asserted field-by-field.
 porcelain path ending in `/` as a directory entry — normalized with its trailing
 slash restored, allowed iff it's `.docs/`-prefixed or a declared `--changed-files`
 path lies under it, otherwise reported undeclared with the slash preserved. See
-`skills/pipeline-tools/SKILL.md`'s `--verify-tree` section ("Directory-shaped
-porcelain entries") for the current contract, and `check_commit_gate.py`'s
+`skills/pipeline-tools/references/check_commit_gate.md`'s `--verify-tree`
+rules ("Directory-shaped porcelain entries") for the current contract, and `check_commit_gate.py`'s
 `--self-test` for the fresh-`git init`-no-scaffold-commit regression cases. The
 original writeup below is kept as history — the defect it describes is real and
 was reproduced exactly as written before the fix.

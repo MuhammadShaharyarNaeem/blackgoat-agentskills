@@ -8,6 +8,13 @@ has to exist on disk. Reads a durable agent report, collects its
 
   * exists, resolved against the report's directory or --repo
   * is cited under an `evidence/runtime/` directory
+  * carries a run_quiet.py provenance sidecar whose `capture_sha256` still
+    matches the capture file's bytes and whose `exit_code` is 0 -- a
+    hand-typed capture has no sidecar, an edited one fails the hash, and a
+    probe whose client exited non-zero (connection refused, DNS failure)
+    observed nothing regardless of what its body says
+  * was taken by a real probe CLIENT (allowlist), not by `python -c`,
+    `echo`, `printf` or `cat` printing a plausible transcript
   * names an OUT-OF-PROCESS transport (an in-process test client is a
     gate failure, not a shortcut -- this is the mechanical twin of the
     "real HTTP" comment that let a missing response envelope ship)
@@ -18,6 +25,10 @@ has to exist on disk. Reads a durable agent report, collects its
   * recorded a reachable contract surface (--require-openapi-reachable)
   * agrees with the contract surface's declared success shape at the top
     level (--openapi-doc / --openapi-route / --openapi-method)
+
+Fenced code blocks (``` or ~~~) are MASKED before headers and citations are
+read, so an example block in a report or in a capture's prose preamble
+cannot gate. Every file is read as utf-8-sig, so a BOM cannot break parsing.
 
 THIS GATE NEVER OPENS A SOCKET. Both OpenAPI features read what the probe
 already recorded -- the `- OpenAPI:` header field, and a saved OpenAPI JSON
@@ -32,19 +43,29 @@ Usage:
         [--surface <key>] [--require-key <name>]... [--expect-status <N>] \
         [--forbid-host <pattern>]... [--require-build-marker <value>] \
         [--min-captures <N>] [--require-openapi-reachable] \
+        [--allow-missing-sidecar] [--ledger <path>] \
         [--openapi-doc <path> --openapi-route <path> [--openapi-method <verb>]]
     python check_runtime_evidence.py --self-test
 """
 import argparse
+import datetime
+import hashlib
 import json
 import os
 import re
 import sys
 from pathlib import Path
 
+READ_ENCODING = "utf-8-sig"   # a BOM must not break parsing anywhere here
+
 CITATION_RE = re.compile(r"\*\*Runtime evidence:\*\*(.*)", re.IGNORECASE)
 FIELD_RE = re.compile(r"^\s*-\s*([^:]{1,60}?):\s*(.*)$")
-CAPTURED_HEADING_RE = re.compile(r"(?im)^##\s+Captured\s+output\s*$")
+# Horizontal whitespace only, for the same reason FENCE_RE below uses it: a
+# trailing `\s*$` is greedy ACROSS lines, so against fence-masked text (where
+# the body is space-filled) it swallowed every blank line after the heading
+# and the body came back empty.
+CAPTURED_HEADING_RE = re.compile(
+    r"(?im)^##[^\S\n]+Captured[^\S\n]+output[^\S\n]*$")
 # Horizontal whitespace only ([^\S\n]), never \s: a `\s*` here consumes the
 # newline after the opening fence and then matches the NEXT line, silently
 # eating the first line of every captured body — which is exactly the HTTP
@@ -122,9 +143,48 @@ NON_RUNTIME_PROBE_RES = (
 
 REQUIRED_FIELDS = ("milestone", "transport", "probe command", "captured", "exit code")
 
+# --- provenance sidecar ----------------------------------------------------
+# run_quiet.py writes `<capture>.meta.json` next to every --capture artifact.
+# It is the only thing here that distinguishes an OBSERVED capture from a
+# well-formed authored one: the tool records the child argv, the real exit
+# code, and a hash of the finished capture file. The gate re-hashes the file
+# and compares. Nothing in the capture's own prose is trusted for any of it.
+SIDECAR_SUFFIX = ".meta.json"
+
+# --- probe client allowlist ------------------------------------------------
+# An ALLOWLIST, not a blocklist -- the deliberate inverse of IN_PROCESS_TELLS
+# and NON_RUNTIME_PROBE_RES below (convention #8: this refines the same rule
+# they serve, in the stricter direction, because the blocklist form let
+# `python -c "print('HTTP/1.1 200 OK')"` produce a conforming capture). A
+# client not on this list is not assumed hostile; it is assumed unproven, and
+# the author says why with `[probe-exempt: <reason>]`.
+PROBE_CLIENT_ALLOWLIST = frozenset({
+    "curl", "wget", "http", "https", "httpie", "newman", "k6", "hey", "ab",
+    "wrk", "invoke-webrequest", "invoke-restmethod", "iwr", "irm",
+    "playwright", "npx", "psql", "sqlcmd", "redis-cli", "mongosh", "grpcurl",
+    "websocat", "wscat", "nc", "ncat", "openssl", "ssh", "adb",
+})
+# `npx` is a launcher, not a client: it only counts when it launches one.
+NPX_ALLOWED_TARGETS = ("playwright", "@playwright")
+# Mirrors runtime-evidence's `[no inverse: <reason>]` idiom.
+PROBE_EXEMPT_RE = re.compile(r"\[probe-exempt:\s*([^\]]*)\]", re.IGNORECASE)
+ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+TIMEOUT_DURATION_RE = re.compile(r"^\d+(?:\.\d+)?[smhd]?$", re.IGNORECASE)
+EXE_SUFFIX_RE = re.compile(r"\.(?:exe|cmd|bat|com|ps1)$", re.IGNORECASE)
+PYTHON_EXES = ("python", "python3", "py", "pythonw")
+FENCE_OPEN_RE = re.compile(r"^[^\S\n]*(`{3,}|~{3,})")
+
 
 class GateError(Exception):
-    """Structural/usage failure — maps to exit 2."""
+    """Structural/usage failure — maps to exit 2.
+
+    `code` is the machine-readable cause, surfaced as `error_code` in the
+    JSON so a caller does not have to string-match the prose.
+    """
+
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +195,51 @@ def read_text(path):
     p = Path(path)
     if not p.is_file():
         raise GateError(f"file not found or not readable: {path}")
-    return p.read_text(encoding="utf-8", errors="replace")
+    return p.read_text(encoding=READ_ENCODING, errors="replace")
+
+
+def sha256_file(path):
+    """sha256 over a file's raw bytes. None if it cannot be read."""
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def mask_fenced_blocks(text):
+    """Blank out fenced code blocks, PRESERVING every character offset.
+
+    Same length, same line structure, fenced content replaced by spaces.
+    Offsets stay valid, so a heading found in the masked text can be sliced
+    out of the original -- which is what lets the capture's `## Captured
+    output` body survive while a fenced example above it does not.
+
+    Why mask rather than trust: a report carrying an EXAMPLE capture citation
+    or a documentation snippet inside ``` gated exactly like a real one, and
+    a capture could ship a fenced sample header block ahead of its own.
+    """
+    out, lines = [], text.splitlines(keepends=True)
+    fence = None          # the opening marker while inside a block
+    for line in lines:
+        stripped = line.rstrip("\r\n")
+        newline = line[len(stripped):]
+        m = FENCE_OPEN_RE.match(stripped)
+        if fence is None:
+            if m:
+                fence = m.group(1)
+                out.append(" " * len(stripped) + newline)
+            else:
+                out.append(line)
+            continue
+        # inside a block: it closes on a same-character run at least as long
+        out.append(" " * len(stripped) + newline)
+        if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
+            fence = None
+    return "".join(out)
 
 
 def is_path_shaped(token):
@@ -150,9 +254,12 @@ def collect_citations(report_text):
     capture's own `- Milestone:` field), because `test-report.md`'s
     `#Task [N]:` headers are documented human-only -- inventing a machine
     header there would break Quinn's append-only format.
+
+    Fenced blocks are masked first: a citation shown as an EXAMPLE inside
+    ``` is documentation, not evidence, and must not gate.
     """
     out = []
-    for line in report_text.splitlines():
+    for line in mask_fenced_blocks(report_text).splitlines():
         m = CITATION_RE.search(line)
         if not m:
             continue
@@ -223,9 +330,17 @@ def matches_milestone(patterns, haystack):
 
 
 def parse_capture(text):
-    """Return (fields dict keyed lowercase, captured_output str or None)."""
-    m = CAPTURED_HEADING_RE.search(text)
-    head = text[:m.start()] if m else text
+    """Return (fields dict keyed lowercase, captured_output str or None).
+
+    Header fields and the `## Captured output` heading are located in the
+    FENCE-MASKED text, so a fenced example header block in the capture's
+    prose preamble supplies neither a field nor a false heading. The body is
+    then sliced out of the ORIGINAL text at the same offset -- masking
+    preserves offsets precisely so the real captured output survives.
+    """
+    masked = mask_fenced_blocks(text)
+    m = CAPTURED_HEADING_RE.search(masked)
+    head = masked[:m.start()] if m else masked
     fields = {}
     for line in head.splitlines():
         fm = FIELD_RE.match(line)
@@ -244,16 +359,26 @@ def parse_capture(text):
 
 
 def newest_changed_mtime(changed_files):
-    """(newest mtime or None, warnings) over the declared changed files."""
-    warnings, newest = [], None
+    """(newest mtime or None, warnings) over the declared changed files.
+
+    A path that does not exist is a STRUCTURAL error (exit 2), never a
+    warning. It used to warn and skip -- which meant one typo'd or renamed
+    path silently disabled the freshness check for the whole run and a stale
+    capture sailed through with a green result. A gate that cannot perform
+    its check must say so in its exit code, not in prose nobody reads.
+    """
+    newest = None
     for f in changed_files:
         p = Path(f)
         if not p.exists():
-            warnings.append(f"declared changed file does not exist: {f}")
-            continue
+            raise GateError(
+                f"declared changed file does not exist: {f} — freshness cannot "
+                "be checked against a path that is not there, and silently "
+                "skipping it is how a stale capture passes",
+                code="changed_file_missing")
         mt = p.stat().st_mtime
         newest = mt if newest is None else max(newest, mt)
-    return newest, warnings
+    return newest, []
 
 
 def extract_body_json(captured):
@@ -306,6 +431,131 @@ def key_scopes(doc):
         if isinstance(doc.get("body"), dict):
             scopes.append(doc["body"])
     return scopes
+
+
+# ---------------------------------------------------------------------------
+# Provenance: the run_quiet.py sidecar
+# ---------------------------------------------------------------------------
+
+def sidecar_path_for(capture_path):
+    return Path(str(capture_path) + SIDECAR_SUFFIX)
+
+
+def load_sidecar(path):
+    """(meta dict or None, reason-when-None). Malformed reads as absent."""
+    p = Path(path)
+    if not p.is_file():
+        return None, "no sidecar file"
+    try:
+        meta = json.loads(p.read_text(encoding=READ_ENCODING, errors="replace"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return None, f"sidecar is unreadable or not valid JSON: {exc}"
+    if not isinstance(meta, dict):
+        return None, "sidecar is not a JSON object"
+    return meta, None
+
+
+# ---------------------------------------------------------------------------
+# Provenance: was the probe taken by a real client?
+# ---------------------------------------------------------------------------
+
+def exe_basename(token):
+    """Normalize an executable token to a bare lowercase name."""
+    t = token.strip().strip("`\"'")
+    t = t.replace("\\", "/").rsplit("/", 1)[-1]
+    return EXE_SUFFIX_RE.sub("", t).lower()
+
+
+def probe_exempt_reason(raw):
+    """The `[probe-exempt: <reason>]` escape hatch, or None."""
+    m = PROBE_EXEMPT_RE.search(raw or "")
+    if not m:
+        return None
+    return m.group(1).strip() or "(no reason given)"
+
+
+SPACED_PATH_START_RE = re.compile(r"^(?:[A-Za-z]:[\\/]|[\\/]{1,2}|\.{1,2}[\\/])")
+
+
+def merge_spaced_exe_path(toks, i):
+    """Re-join an UNQUOTED executable path that contains spaces.
+
+    `C:\\Program Files\\Git\\mingw64\\bin\\curl.EXE -sS http://...` splits on
+    whitespace into a client called "program", which the allowlist rejects --
+    silently, on every Windows box where curl lives under Program Files. Only
+    a token that LOOKS like a path start is considered, and tokens are joined
+    only up to the first join that names an executable (an `.exe`-style suffix
+    or an allowlisted client basename); a path whose first token already names
+    one is left alone. A join that names a non-client (`node.exe`) is still
+    merged, so it is then rejected for the right reason rather than as
+    "program".
+    """
+    if i >= len(toks) or not SPACED_PATH_START_RE.match(toks[i]):
+        return toks
+
+    def names_exe(s):
+        return bool(EXE_SUFFIX_RE.search(s)) or exe_basename(s) in PROBE_CLIENT_ALLOWLIST
+
+    if names_exe(toks[i]):
+        return toks
+    for k in range(2, min(len(toks) - i, 6) + 1):
+        joined = " ".join(toks[i:i + k])
+        if names_exe(joined):
+            return toks[:i] + [joined] + toks[i + k:]
+    return toks
+
+
+def probe_client(raw):
+    """(client basename or None, trailing tokens) for a `Probe command:` value.
+
+    Peels the wrappers that legitimately precede a client -- leading
+    `NAME=value` env assignments, `timeout <duration>`, and a
+    `python … run_quiet.py … --` prefix -- then reports the first real
+    executable. `python -c` is NOT peeled: python is the client there, and
+    it is not on the allowlist, which is the whole point.
+    """
+    text = PROBE_EXEMPT_RE.sub(" ", raw or "").strip().strip("`").strip()
+    toks = text.split()
+    i = 0
+    while i < len(toks):
+        toks = merge_spaced_exe_path(toks, i)
+        tok = toks[i]
+        if ENV_ASSIGN_RE.match(tok):
+            i += 1
+            continue
+        base = exe_basename(tok)
+        if base == "timeout":
+            i += 1
+            while i < len(toks) and toks[i].startswith("-"):
+                i += 1
+            if i < len(toks) and TIMEOUT_DURATION_RE.match(toks[i]):
+                i += 1
+            continue
+        if base in PYTHON_EXES and "--" in toks[i:]:
+            sep = toks.index("--", i)
+            if any("run_quiet.py" in t.lower() for t in toks[i:sep]):
+                i = sep + 1
+                continue
+        return base, toks[i + 1:]
+    return None, []
+
+
+def probe_client_problem(raw):
+    """None if the probe names an allowed client; else the prose cause."""
+    client, rest = probe_client(raw)
+    if client is None:
+        return "probe command names no executable"
+    if client not in PROBE_CLIENT_ALLOWLIST:
+        return (f"probe client {client!r} is not a runtime probe client — a "
+                "capture is only an observation if a real client made the "
+                "request; a general-purpose interpreter or a text command can "
+                "print a plausible transcript without touching the system")
+    if client == "npx":
+        target = next((t for t in rest if not t.startswith("-")), "")
+        if not target.lower().startswith(NPX_ALLOWED_TARGETS):
+            return ("'npx' is a launcher, not a client — it counts only when it "
+                    f"launches playwright, and here it launches {target or 'nothing'!r}")
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -514,11 +764,19 @@ def evaluate_capture(candidate, args, patterns, newest_mtime, schema_ctx=None):
         "transport": None, "probe_command": None, "status": None,
         "body_parsed": False, "body_keys": [], "missing_keys": [],
         "build_marker": None,
+        "sidecar": None, "sidecar_present": None, "sidecar_exit_code": None,
+        "sidecar_capture_sha256_ok": None, "sidecar_waived": False,
+        "probe_client": None, "probe_exempt_reason": None,
         "openapi_url": None, "openapi_status": None, "openapi_reachable": None,
         "schema_compared": None, "schema_skipped_reason": None,
         "observed_scope": None, "declared_absent": [], "observed_undeclared": [],
-        "problems": [],
+        "problems": [], "problem_codes": [],
     }
+
+    def fail(code, message):
+        """A problem carrying a machine-readable code, `code: prose`."""
+        res["problems"].append(f"{code}: {message}")
+        res["problem_codes"].append(code)
 
     res["cited_under_evidence_runtime"] = cited_under(candidate, "evidence", "runtime")
     if not res["cited_under_evidence_runtime"]:
@@ -532,7 +790,7 @@ def evaluate_capture(candidate, args, patterns, newest_mtime, schema_ctx=None):
         return res
     res["exists"] = True
 
-    text = resolved.read_text(encoding="utf-8", errors="replace")
+    text = resolved.read_text(encoding=READ_ENCODING, errors="replace")
     fields, captured = parse_capture(text)
     if captured is None:
         raise GateError(
@@ -553,6 +811,58 @@ def evaluate_capture(candidate, args, patterns, newest_mtime, schema_ctx=None):
     res["transport"] = fields.get("transport")
     res["probe_command"] = fields.get("probe command")
     res["build_marker"] = fields.get("build marker")
+
+    # --- provenance: the run_quiet.py sidecar ---
+    # Everything else in this file reads the capture's own prose, which an
+    # author writes. These three read a machine-written file and re-hash the
+    # artifact, so a hand-typed capture, a later edit of a real one, and a
+    # probe that never connected are each detectable without believing a word.
+    side_path = sidecar_path_for(resolved)
+    res["sidecar"] = str(side_path)
+    meta, side_error = load_sidecar(side_path)
+    res["sidecar_present"] = meta is not None
+    if meta is None:
+        if args.allow_missing_sidecar:
+            res["sidecar_waived"] = True
+        else:
+            fail("sidecar_missing",
+                 f"{side_error} at {side_path.name} — a capture with no "
+                 "run_quiet.py provenance sidecar is indistinguishable from a "
+                 "hand-typed one; re-take the probe with "
+                 "`run_quiet.py --capture`, or pass --allow-missing-sidecar "
+                 "if this is a legacy capture and say so in the report")
+    else:
+        declared_hash = meta.get("capture_sha256")
+        actual_hash = sha256_file(resolved)
+        res["sidecar_capture_sha256_ok"] = bool(
+            declared_hash and actual_hash and declared_hash == actual_hash)
+        if not res["sidecar_capture_sha256_ok"]:
+            fail("sidecar_hash_mismatch",
+                 f"the capture file's sha256 ({actual_hash}) does not match the "
+                 f"sidecar's capture_sha256 ({declared_hash}) — the artifact was "
+                 "edited after it was recorded, so its contents are authored, "
+                 "not observed")
+        exit_code = meta.get("exit_code")
+        res["sidecar_exit_code"] = exit_code if isinstance(exit_code, int) else None
+        if not isinstance(exit_code, int):
+            fail("probe_failed_exit",
+                 "the sidecar records no integer exit_code — the probe's outcome "
+                 "was never observed")
+        elif exit_code != 0:
+            fail("probe_failed_exit",
+                 f"the probe client exited {exit_code} — a probe whose client "
+                 "failed (connection refused, DNS failure, timeout) observed "
+                 "nothing, no matter what its captured body says")
+
+    # --- provenance: was this taken by a real client? ---
+    res["probe_exempt_reason"] = probe_exempt_reason(res["probe_command"])
+    res["probe_client"] = probe_client(res["probe_command"])[0]
+    if res["probe_exempt_reason"] is None:
+        client_problem = probe_client_problem(res["probe_command"])
+        if client_problem:
+            fail("probe_not_client",
+                 client_problem + " — if this really is a probe, declare it with "
+                 "`[probe-exempt: <reason>]` on the Probe command line")
 
     haystack = f"{res['transport'] or ''} {res['probe_command'] or ''}".lower()
     for tell in IN_PROCESS_TELLS:
@@ -735,6 +1045,9 @@ def build_report(args):
         "report": args.report, "milestone": args.milestone,
         "citations": [], "captures": [], "accepted": [], "rejected": [],
         "missing_keys": [], "stale": [], "in_process_transport": [],
+        "sidecar_missing": [], "sidecar_hash_mismatch": [],
+        "probe_failed_exit": [], "probe_not_client": [], "probe_exempt": [],
+        "allow_missing_sidecar": bool(args.allow_missing_sidecar),
         "openapi_unreachable": [],
         "require_openapi_reachable": bool(args.require_openapi_reachable),
         "openapi_doc": None, "openapi_route": None, "openapi_method": None,
@@ -764,6 +1077,22 @@ def build_report(args):
         report["captures"].append(res)
         if not res["milestone_match"]:
             continue  # another milestone's capture; not this gate's business
+        if res["probe_exempt_reason"]:
+            report["probe_exempt"].append(
+                {"path": res["path"], "reason": res["probe_exempt_reason"]})
+            report["warnings"].append(
+                f"{res['path']}: probe client allowlist WAIVED by "
+                f"[probe-exempt: {res['probe_exempt_reason']}] — the client was "
+                "not verified, the author's reason stands in its place")
+        if res["sidecar_waived"]:
+            report["warnings"].append(
+                f"{res['path']}: NO PROVENANCE SIDECAR, waived by "
+                "--allow-missing-sidecar — this capture's contents are "
+                "unverified and could have been typed by hand")
+        for code in ("sidecar_missing", "sidecar_hash_mismatch",
+                      "probe_failed_exit", "probe_not_client"):
+            if code in res["problem_codes"]:
+                report[code].append(res["path"])
         # Informational half of the schema diff: never gates.
         report["observed_undeclared"].extend(res["observed_undeclared"])
         if res["schema_compared"] is False and res["schema_skipped_reason"]:
@@ -815,8 +1144,97 @@ def build_report(args):
 
 
 # ---------------------------------------------------------------------------
+# Run ledger
+# ---------------------------------------------------------------------------
+
+def ledger_record(argv, milestone, inputs, verdict, exit_code):
+    """The shared gate-ledger line shape. Every gate in this family writes it."""
+    return {
+        "ts": datetime.datetime.now(datetime.timezone.utc)
+                .strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "gate": "check_runtime_evidence.py",
+        "argv": list(argv),
+        "milestone": milestone,
+        "inputs": inputs,
+        "verdict": verdict,
+        "exit": exit_code,
+    }
+
+
+def ledger_inputs(args, citations):
+    """{path as given: sha256 of its bytes or None} for the report + captures.
+
+    Hashing the INPUTS is what makes the ledger an audit trail rather than a
+    log: a later run over the same paths with different content is visibly a
+    different run, and a rewritten report cannot quietly inherit an earlier
+    line's verdict.
+    """
+    inputs = {}
+    if args.report:
+        inputs[args.report] = sha256_file(args.report)
+    for cited in citations:
+        resolved = resolve_path(cited, args.report or ".", args.repo)
+        # Key by a path a LATER gate can re-hash from this cwd, not by the
+        # citation string: a report-relative citation resolves here (against
+        # the report's directory) but not from the commit gate's cwd, and
+        # `check_commit_gate.py --require-ledger-gates` re-hashes the key as
+        # written -- so keying by the raw citation made every report-relative
+        # citation read as "missing now" at commit time.
+        key = ledger_key(resolved) if resolved else cited
+        if key in inputs:
+            continue
+        inputs[key] = sha256_file(resolved) if resolved else None
+    return inputs
+
+
+def ledger_key(path):
+    """The path a later gate can re-hash from the same cwd.
+
+    Relative to the cwd when the file lives under it (the normal case: every
+    pipeline invocation runs from the repo root), else absolute. Forward
+    slashes so the same key hashes on either OS.
+    """
+    p = Path(path).resolve()
+    try:
+        rel = p.relative_to(Path.cwd().resolve())
+        return str(rel).replace("\\", "/")
+    except ValueError:
+        return str(p)
+
+
+def append_ledger(path, record):
+    """Append one JSON line. Returns a warning string on failure, else None.
+
+    A ledger that cannot be written must not turn a real verdict into an
+    error -- it degrades to a loud stderr line.
+    """
+    try:
+        p = Path(path)
+        if str(p.parent) not in ("", "."):
+            p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+        return None
+    except OSError as exc:
+        return f"cannot append to --ledger {path}: {exc}"
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
+def positive_int(value):
+    """`--min-captures 0` asks the gate to pass with no evidence at all."""
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} is not an integer")
+    if n < 1:
+        raise argparse.ArgumentTypeError(
+            f"--min-captures must be >= 1 (got {n}); a gate that accepts zero "
+            "captures is not a gate")
+    return n
+
 
 def build_parser():
     p = argparse.ArgumentParser(prog="check_runtime_evidence.py")
@@ -829,8 +1247,14 @@ def build_parser():
     p.add_argument("--expect-status", type=int)
     p.add_argument("--forbid-host", action="append", default=[])
     p.add_argument("--require-build-marker")
-    p.add_argument("--min-captures", type=int, default=1)
+    p.add_argument("--min-captures", type=positive_int, default=1)
     p.add_argument("--require-openapi-reachable", action="store_true")
+    p.add_argument("--allow-missing-sidecar", action="store_true",
+                    help="LEGACY ESCAPE HATCH: accept a capture with no "
+                         "run_quiet.py provenance sidecar. Its contents are "
+                         "then unverified.")
+    p.add_argument("--ledger",
+                    help="append one JSON audit line per run to this path")
     p.add_argument("--openapi-doc")
     p.add_argument("--openapi-route")
     p.add_argument("--openapi-method")
@@ -844,21 +1268,37 @@ def main(argv):
     if args.self_test:
         return run_self_test()
 
+    if args.allow_missing_sidecar:
+        print("check_runtime_evidence: WARNING — --allow-missing-sidecar is set. "
+              "Captures with no run_quiet.py provenance sidecar are accepted "
+              "unverified; a hand-typed capture is indistinguishable from an "
+              "observed one under this flag.", file=sys.stderr)
+
+    def emit(payload, exit_code, verdict, citations=()):
+        if args.ledger:
+            warn = append_ledger(args.ledger, ledger_record(
+                argv, args.milestone, ledger_inputs(args, citations),
+                verdict, exit_code))
+            if warn:
+                print(f"check_runtime_evidence: WARNING — {warn}", file=sys.stderr)
+        print(json.dumps(payload, indent=2))
+        return exit_code
+
     missing = [n for n, v in (("--report", args.report),
                               ("--milestone", args.milestone)) if not v]
     if missing:
-        print(json.dumps({"result": "ERROR",
-                           "error": f"missing required argument(s): {', '.join(missing)}"}))
-        return 2
+        return emit({"result": "ERROR", "error_code": "missing_argument",
+                     "error": f"missing required argument(s): {', '.join(missing)}"},
+                    2, "ERROR")
 
     try:
         report = build_report(args)
     except GateError as exc:
-        print(json.dumps({"result": "ERROR", "error": str(exc)}))
-        return 2
+        return emit({"result": "ERROR", "error_code": exc.code,
+                     "error": str(exc)}, 2, "ERROR")
 
-    print(json.dumps(report, indent=2))
-    return 0 if report["result"] == "PASS" else 1
+    exit_code = 0 if report["result"] == "PASS" else 1
+    return emit(report, exit_code, report["result"], report["citations"])
 
 
 # ---------------------------------------------------------------------------
@@ -866,6 +1306,8 @@ def main(argv):
 # ---------------------------------------------------------------------------
 
 def run_self_test():
+    import contextlib
+    import io
     import shutil
     import tempfile
     import unittest
@@ -909,11 +1351,33 @@ def run_self_test():
         def tearDown(self):
             shutil.rmtree(self.dir, ignore_errors=True)
 
-        def _write(self, name="m3-orders.md", **kw):
+        def _write(self, name="m3-orders.md", sidecar=True, sidecar_exit=0,
+                    sidecar_hash=None, encoding="utf-8", **kw):
             p = self.impl / "evidence" / "runtime" / name
-            p.write_text(capture(**kw), encoding="utf-8")
+            p.write_text(capture(**kw), encoding=encoding)
+            if sidecar:
+                self._write_sidecar(p, exit_code=sidecar_exit,
+                                     capture_sha256=sidecar_hash)
             self._order(self.changed, p)
             return f"evidence/runtime/{name}"
+
+        def _write_sidecar(self, capture_path, exit_code=0, capture_sha256=None,
+                            drop=()):
+            """A run_quiet.py-shaped sidecar for a fixture capture."""
+            meta = {
+                "argv": ["curl", "-sS", "-i", "http://localhost:5142/api/orders"],
+                "cwd": str(self.dir), "host": "fixture-host", "pid": 4242,
+                "started": "2026-08-12T14:03:10Z",
+                "finished": "2026-08-12T14:03:11Z",
+                "exit_code": exit_code,
+                "body_sha256": "0" * 64,
+                "capture_sha256": capture_sha256 or sha256_file(capture_path),
+                "tool": "run_quiet.py", "schema": 1,
+            }
+            for key in drop:
+                meta.pop(key, None)
+            sidecar_path_for(capture_path).write_text(
+                json.dumps(meta), encoding="utf-8")
 
         def _order(self, older, newer):
             """Synthetic mtimes — never the real clock."""
@@ -933,6 +1397,7 @@ def run_self_test():
                         surface=None, require_key=[], expect_status=None,
                         forbid_host=[], require_build_marker=None,
                         min_captures=1, require_openapi_reachable=False,
+                        allow_missing_sidecar=False, ledger=None,
                         openapi_doc=None, openapi_route=None, openapi_method=None,
                         self_test=False)
             base.update(kw)
@@ -1485,7 +1950,350 @@ def run_self_test():
             with self.assertRaises(GateError):
                 build_report(self._schema_args(str(p)))
 
+        # ---- provenance: the run_quiet.py sidecar ----
+
+        def test_sidecar_missing_rejects_capture(self):
+            """A hand-typed capture has no sidecar. That is the whole tell."""
+            cited = self._write(sidecar=False)
+            self._report(cited)
+            r = build_report(self._args())
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["sidecar_missing"], [cited])
+            self.assertIn("sidecar_missing", r["captures"][0]["problem_codes"])
+
+        def test_sidecar_hash_mismatch_rejects_capture(self):
+            cited = self._write(sidecar_hash="ab" * 32)
+            self._report(cited)
+            r = build_report(self._args())
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["sidecar_hash_mismatch"], [cited])
+            self.assertFalse(r["captures"][0]["sidecar_capture_sha256_ok"])
+
+        def test_capture_edited_after_recording_is_rejected(self):
+            """The realistic shape: a real probe, then a 'small correction'."""
+            cited = self._write()
+            p = self.impl / "evidence" / "runtime" / "m3-orders.md"
+            p.write_text(p.read_text(encoding="utf-8").replace(
+                '"isSuccess":true', '"isSuccess":true,"notifications":[]'),
+                encoding="utf-8")
+            self._order(self.changed, p)
+            self._report(cited)
+            r = build_report(self._args())
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["sidecar_hash_mismatch"], [cited])
+
+        def test_nonzero_probe_exit_rejects_capture_whatever_the_body_says(self):
+            """`Exit code: 7` is connection-refused. A body cannot outvote it."""
+            cited = self._write(sidecar_exit=7)
+            self._report(cited)
+            r = build_report(self._args(require_key=["isSuccess", "notifications"],
+                                         expect_status=200))
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["probe_failed_exit"], [cited])
+            self.assertEqual(r["captures"][0]["sidecar_exit_code"], 7)
+            self.assertEqual(r["missing_keys"], [])   # body was fine; probe was not
+
+        def test_sidecar_without_integer_exit_code_rejected(self):
+            cited = self._write()
+            p = self.impl / "evidence" / "runtime" / "m3-orders.md"
+            self._write_sidecar(p, drop=("exit_code",))
+            self._report(cited)
+            r = build_report(self._args())
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["probe_failed_exit"], [cited])
+
+        def test_malformed_sidecar_reads_as_missing(self):
+            cited = self._write()
+            sidecar_path_for(
+                self.impl / "evidence" / "runtime" / "m3-orders.md"
+            ).write_text("{not json", encoding="utf-8")
+            self._report(cited)
+            r = build_report(self._args())
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["sidecar_missing"], [cited])
+
+        def test_allow_missing_sidecar_waives_only_absence_and_warns(self):
+            cited = self._write(sidecar=False)
+            self._report(cited)
+            r = build_report(self._args(allow_missing_sidecar=True))
+            self.assertEqual(r["result"], "PASS", r)
+            self.assertTrue(r["allow_missing_sidecar"])
+            self.assertTrue(r["captures"][0]["sidecar_waived"])
+            self.assertTrue(any("NO PROVENANCE SIDECAR" in w for w in r["warnings"]))
+            # ...but a sidecar that IS there and disagrees is still fatal.
+            self._report(self._write(name="m3b.md", sidecar_hash="cd" * 32))
+            r2 = build_report(self._args(allow_missing_sidecar=True))
+            self.assertEqual(r2["result"], "FAIL")
+
+        # ---- provenance: was a real client used? ----
+
+        def test_probe_client_allowlist_accepts_real_clients(self):
+            for good in ("curl -sS -i http://localhost:5142/api/orders",
+                          "/usr/bin/curl -sS http://localhost:5142/api/orders",
+                          "C:\\\\tools\\\\curl.exe -sS http://localhost:5142/x",
+                          "wget -S -O - http://localhost:5142/api/orders",
+                          "http GET http://localhost:5142/api/orders",
+                          "newman run postman/orders.json",
+                          "k6 run script.js", "hey -n 10 http://localhost:5142/",
+                          "TOKEN=abc curl -sS http://localhost:5142/api/orders",
+                          "timeout 30 curl -sS http://localhost:5142/api/orders",
+                          "npx playwright test orders.spec.ts",
+                          "psql -h localhost -p 5432 -d app -f probe.sql",
+                          "grpcurl -plaintext localhost:5000 list",
+                          "redis-cli -h localhost ping",
+                          "Invoke-WebRequest http://localhost:5142/api/orders",
+                          "irm http://localhost:5142/api/orders",
+                          "openssl s_client -connect localhost:5142",
+                          "adb shell am start -a VIEW",
+                          "ssh deploy@localhost curl -s localhost:5142/health"):
+                self._report(self._write(probe=good))
+                r = build_report(self._args())
+                self.assertEqual(r["result"], "PASS", (good, r["captures"]))
+
+        def test_python_dash_c_probe_rejected(self):
+            """The red-team vector: an interpreter printing a transcript."""
+            self._report(self._write(
+                probe="python -c \"print('HTTP/1.1 200 OK'); print('{}')\""))
+            r = build_report(self._args())
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(len(r["probe_not_client"]), 1)
+            self.assertEqual(r["captures"][0]["probe_client"], "python")
+
+        def test_text_printing_commands_rejected(self):
+            for bad in ("echo '{\"isSuccess\":true}'",
+                         "printf 'HTTP/1.1 200 OK\\n'",
+                         "cat fixtures/response.json",
+                         "type fixtures\\\\response.json",
+                         "python3 probe_helper.py",
+                         "./scripts/probe.sh --url http://localhost:5142"):
+                self._report(self._write(probe=bad))
+                r = build_report(self._args())
+                self.assertEqual(r["result"], "FAIL", bad)
+                self.assertEqual(len(r["probe_not_client"]), 1, bad)
+
+        def test_run_quiet_wrapper_prefix_is_peeled(self):
+            """`python … run_quiet.py … -- curl` is curl, not python."""
+            self._report(self._write(
+                probe="python skills/pipeline-tools/scripts/run_quiet.py "
+                       "--capture evidence/runtime/m3.md -- "
+                       "curl -sS -i http://localhost:5142/api/orders"))
+            r = build_report(self._args())
+            self.assertEqual(r["result"], "PASS", r["captures"])
+            self.assertEqual(r["captures"][0]["probe_client"], "curl")
+
+        def test_npx_counts_only_when_it_launches_playwright(self):
+            self._report(self._write(probe="npx playwright test orders.spec.ts"))
+            self.assertEqual(build_report(self._args())["result"], "PASS")
+            self._report(self._write(probe="npx serve ./public"))
+            r = build_report(self._args())
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(len(r["probe_not_client"]), 1)
+
+        def test_probe_exempt_accepts_any_client_and_records_the_reason(self):
+            self._report(self._write(
+                probe="./tools/mqtt-probe --host localhost "
+                       "[probe-exempt: bespoke MQTT client, no allowlisted "
+                       "equivalent]"))
+            r = build_report(self._args())
+            self.assertEqual(r["result"], "PASS", r["captures"])
+            self.assertEqual(len(r["probe_exempt"]), 1)
+            self.assertIn("MQTT", r["probe_exempt"][0]["reason"])
+            self.assertTrue(any("allowlist WAIVED" in w for w in r["warnings"]))
+
+        def test_probe_exempt_does_not_waive_the_in_process_tell(self):
+            """The exemption covers the allowlist only — nothing else relaxes."""
+            self._report(self._write(
+                transport="WebApplicationFactory<Program>",
+                probe="./tools/mqtt-probe [probe-exempt: bespoke client]"))
+            r = build_report(self._args())
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(len(r["in_process_transport"]), 1)
+
+        def test_probe_exempt_does_not_waive_the_sidecar(self):
+            self._report(self._write(
+                sidecar=False,
+                probe="./tools/mqtt-probe [probe-exempt: bespoke client]"))
+            r = build_report(self._args())
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(len(r["sidecar_missing"]), 1)
+
+        # ---- --changed-files must exist ----
+
+        def test_missing_changed_file_is_a_structural_error(self):
+            """It used to WARN and skip, silently disabling freshness."""
+            self._report(self._write())
+            with self.assertRaises(GateError) as ctx:
+                build_report(self._args(
+                    changed_files=[str(self.changed), str(self.dir / "gone.cs")]))
+            self.assertEqual(ctx.exception.code, "changed_file_missing")
+
+        # ---- fenced blocks cannot gate ----
+
+        def test_fenced_citation_does_not_gate(self):
+            """An EXAMPLE citation in a report's docs block is not evidence."""
+            self._write()
+            self.report.write_text(
+                "#Task [1]:\n\nExample of how to cite a capture:\n\n"
+                "```\n**Runtime evidence:** evidence/runtime/m3-orders.md\n```\n"
+                "- FR-4: PASS — EnvelopeTests.cs\n", encoding="utf-8")
+            r = build_report(self._args())
+            self.assertEqual(r["citations"], [])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertTrue(any("no '**Runtime evidence:**'" in w
+                                 for w in r["warnings"]))
+
+        def test_tilde_fenced_citation_does_not_gate(self):
+            self._write()
+            self.report.write_text(
+                "#Task [1]:\n\n~~~\n**Runtime evidence:** "
+                "evidence/runtime/m3-orders.md\n~~~\n", encoding="utf-8")
+            self.assertEqual(build_report(self._args())["citations"], [])
+
+        def test_fenced_field_in_a_capture_supplies_nothing(self):
+            self._report(self._write(extra=[
+                "", "```", "- Build marker: 9.9.9+sha.fabricated", "```", ""]))
+            r = build_report(self._args(require_build_marker="9.9.9"))
+            self.assertIsNone(r["captures"][0]["build_marker"])
+            self.assertEqual(r["result"], "FAIL")
+
+        def test_fenced_captured_output_heading_does_not_win(self):
+            """A fenced fake body ahead of the real one must not be parsed."""
+            self._report(self._write(body=BARE, extra=[
+                "", "````", "## Captured output", "",
+                '{"isSuccess":true,"notifications":[]}', "````", ""]))
+            r = build_report(self._args(require_key=["isSuccess", "notifications"]))
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["missing_keys"], ["isSuccess", "notifications"])
+
+        # ---- encoding ----
+
+        def test_bom_is_tolerated_in_capture_and_report(self):
+            """A BOM ahead of the first `- Field:` line broke utf-8 parsing."""
+            name = "m3-bom.md"
+            p = self.impl / "evidence" / "runtime" / name
+            # Drop the title so a FIELD line is the file's first line.
+            p.write_text(capture().split("\n", 2)[2], encoding="utf-8-sig")
+            self._write_sidecar(p)
+            self._order(self.changed, p)
+            self.report.write_text(
+                f"**Runtime evidence:** evidence/runtime/{name}\n",
+                encoding="utf-8-sig")
+            r = build_report(self._args(require_key=["isSuccess"],
+                                         expect_status=200))
+            self.assertEqual(r["result"], "PASS", r["captures"])
+
         # ---- CLI ----
+
+        def _cli(self, *extra, report=None):
+            argv = ["--report", report or str(self.report),
+                    "--milestone", "M3 — Order envelope",
+                    "--repo", str(self.dir)] + list(extra)
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = main(argv)
+            return code, out.getvalue(), err.getvalue()
+
+        def _ledger_lines(self, path):
+            return [json.loads(l) for l in
+                    Path(path).read_text(encoding="utf-8").splitlines() if l.strip()]
+
+        def test_min_captures_zero_is_a_usage_error(self):
+            """`--min-captures 0` passed with an in-process transport detected."""
+            self._report(self._write())
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as ctx:
+                    main(["--report", str(self.report), "--milestone", "M3",
+                          "--min-captures", "0"])
+            self.assertEqual(ctx.exception.code, 2)
+
+        def test_ledger_line_written_on_pass(self):
+            cited = self._write()
+            self._report(cited)
+            led = self.dir / "logs" / "nested" / "gates.jsonl"
+            code, _, _ = self._cli("--ledger", str(led))
+            self.assertEqual(code, 0)
+            self.assertTrue(led.is_file())          # parent dirs created
+            rec = self._ledger_lines(led)[0]
+            self.assertEqual(rec["gate"], "check_runtime_evidence.py")
+            self.assertEqual(rec["verdict"], "PASS")
+            self.assertEqual(rec["exit"], 0)
+            self.assertEqual(rec["milestone"], "M3 — Order envelope")
+            self.assertIn("--ledger", rec["argv"])
+            self.assertRegex(rec["ts"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+            self.assertEqual(rec["inputs"][str(self.report)],
+                              sha256_file(self.report))
+            captured = self.impl / "evidence" / "runtime" / "m3-orders.md"
+            self.assertEqual(rec["inputs"][ledger_key(captured)],
+                             sha256_file(captured))
+            self.assertNotIn(cited, rec["inputs"])   # not the raw citation
+
+        def test_ledger_inputs_re_hash_from_cwd(self):
+            """The property the commit gate relies on: every hashed key must
+            re-hash to the recorded value from the invoking cwd, even when the
+            report cited the capture relative to its own directory."""
+            self._report(self._write())
+            led = self.dir / "gates.jsonl"
+            code, _, _ = self._cli("--ledger", str(led))
+            self.assertEqual(code, 0)
+            rec = self._ledger_lines(led)[0]
+            hashed = {k: v for k, v in rec["inputs"].items() if v}
+            self.assertGreaterEqual(len(hashed), 2)
+            for key, recorded in hashed.items():
+                self.assertEqual(sha256_file(key), recorded, key)
+
+        def test_probe_client_unquoted_path_with_spaces_accepted(self):
+            for good in ("C:\\Program Files\\Git\\mingw64\\bin\\curl.EXE -sS http://localhost:5142/x",
+                         "/Applications/My Tools/curl -sS http://localhost:5142/x",
+                         "TOKEN=abc C:\\Program Files\\curl\\bin\\curl.exe -sS http://localhost:5142/x"):
+                self._report(self._write(probe=good))
+                r = build_report(self._args())
+                self.assertEqual(r["result"], "PASS", (good, r["captures"]))
+
+        def test_probe_client_unquoted_path_with_spaces_non_client_rejected(self):
+            self._report(self._write(probe="C:\\Program Files\\nodejs\\node.exe probe.js"))
+            r = build_report(self._args())
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("'node' is not a runtime probe client", json.dumps(r))
+
+        def test_ledger_line_written_on_fail_and_appends(self):
+            self._report(self._write(sidecar=False))
+            led = self.dir / "gates.jsonl"
+            code, _, _ = self._cli("--ledger", str(led))
+            self.assertEqual(code, 1)
+            code2, _, _ = self._cli("--ledger", str(led))
+            self.assertEqual(code2, 1)
+            recs = self._ledger_lines(led)
+            self.assertEqual(len(recs), 2)                # appended, not replaced
+            self.assertEqual([r["verdict"] for r in recs], ["FAIL", "FAIL"])
+            self.assertEqual([r["exit"] for r in recs], [1, 1])
+
+        def test_ledger_line_written_on_error(self):
+            led = self.dir / "gates.jsonl"
+            code, out, _ = self._cli("--ledger", str(led),
+                                      report=str(self.dir / "nope.md"))
+            self.assertEqual(code, 2)
+            rec = self._ledger_lines(led)[0]
+            self.assertEqual(rec["verdict"], "ERROR")
+            self.assertEqual(rec["exit"], 2)
+            self.assertIsNone(rec["inputs"][str(self.dir / "nope.md")])
+
+        def test_missing_changed_file_exits_2_with_error_code(self):
+            self._report(self._write())
+            led = self.dir / "gates.jsonl"
+            code, out, _ = self._cli(
+                "--ledger", str(led),
+                "--changed-files", str(self.changed), str(self.dir / "gone.cs"))
+            self.assertEqual(code, 2)
+            payload = json.loads(out)
+            self.assertEqual(payload["error_code"], "changed_file_missing")
+            self.assertEqual(self._ledger_lines(led)[0]["verdict"], "ERROR")
+
+        def test_allow_missing_sidecar_is_loud_on_stderr(self):
+            self._report(self._write(sidecar=False))
+            code, _, err = self._cli("--allow-missing-sidecar")
+            self.assertEqual(code, 0)
+            self.assertIn("--allow-missing-sidecar", err)
+            self.assertIn("WARNING", err)
 
         def test_usage_error_exits_2(self):
             self.assertEqual(main(["--milestone", "M3"]), 2)

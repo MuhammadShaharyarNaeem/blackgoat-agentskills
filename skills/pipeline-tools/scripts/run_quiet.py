@@ -21,16 +21,30 @@ the captured output -- so an agent cannot author them; `--capture-field`
 supplies only the descriptive header (milestone, surface, transport, base
 URL, environment). A field name the tool owns is rejected, not overwritten.
 
+`--capture` ALSO writes `<capture path>.meta.json`, a machine-owned sidecar
+recording the child argv, cwd, host, pid, start/finish instants, the real
+exit code, and two hashes: `body_sha256` over the captured text as embedded
+in the artifact, and `capture_sha256` over the finished capture FILE bytes.
+The sidecar is what makes a hand-typed capture detectable downstream --
+check_runtime_evidence.py requires it, re-hashes the capture file against
+`capture_sha256`, and rejects a capture whose probe exited non-zero.
+
 Pure standard library. Cross-platform (Windows/POSIX).
 """
 import argparse
+import hashlib
+import json
 import os
+import platform
 import re
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+SIDECAR_SUFFIX = ".meta.json"
+SIDECAR_SCHEMA = 1
 
 DEFAULT_CONTEXT = 5
 DEFAULT_TAIL = 15
@@ -219,6 +233,58 @@ def write_capture(capture_path, content):
         raise RunQuietError(f"cannot write capture file {capture_path}: {exc}")
 
 
+def sidecar_path_for(capture_path):
+    """`<capture filename>.meta.json`, in the capture's own directory."""
+    return str(capture_path) + SIDECAR_SUFFIX
+
+
+def sha256_text(text):
+    """sha256 over the LF-form text (what the artifact embeds)."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def sha256_file(path):
+    """sha256 over a file's raw bytes, exactly as they landed on disk."""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def build_sidecar(capture_path, cmd, exit_code, output, started, finished, pid):
+    """The machine-owned provenance record for a capture.
+
+    `capture_sha256` is computed from the finished file on disk, so it is
+    invalidated by ANY later edit of the artifact -- including a plausible
+    one. That, plus `exit_code`, is what a downstream gate can check without
+    trusting a word of the capture's prose.
+    """
+    body = output.rstrip("\n")
+    return {
+        "argv": list(cmd),
+        "cwd": os.getcwd(),
+        "host": platform.node(),
+        "pid": pid,
+        "started": started,
+        "finished": finished,
+        "exit_code": int(exit_code),
+        "body_sha256": sha256_text(body),
+        "capture_sha256": sha256_file(capture_path),
+        "tool": "run_quiet.py",
+        "schema": SIDECAR_SCHEMA,
+    }
+
+
+def write_sidecar(capture_path, meta):
+    path = sidecar_path_for(capture_path)
+    try:
+        Path(path).write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        raise RunQuietError(f"cannot write capture sidecar {path}: {exc}")
+    return path
+
+
 # ---------------------------------------------------------------------------
 # Child process execution
 # ---------------------------------------------------------------------------
@@ -239,13 +305,18 @@ def kill_process_tree(proc):
         pass
 
 
+def utc_now_iso():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def run_child(cmd, timeout):
     """Run cmd with merged stdout+stderr. Returns (output, exit_code,
-    duration_seconds, timed_out)."""
+    duration_seconds, timed_out, pid, started_iso, finished_iso)."""
     kwargs = {}
     if os.name != "nt":
         kwargs["start_new_session"] = True
 
+    started = utc_now_iso()
     start = time.monotonic()
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
@@ -269,7 +340,8 @@ def run_child(cmd, timeout):
         exit_code = 124
 
     duration = time.monotonic() - start
-    return output or "", exit_code, duration, timed_out
+    return (output or "", exit_code, duration, timed_out, proc.pid,
+            started, utc_now_iso())
 
 
 # ---------------------------------------------------------------------------
@@ -284,18 +356,26 @@ def execute(log_path, context, tail_n, timeout, cmd,
     """
     if log_path:
         ensure_log_parent(log_path)
-    output, exit_code, duration, timed_out = run_child(cmd, timeout)
+    (output, exit_code, duration, timed_out,
+     pid, started, finished) = run_child(cmd, timeout)
     if log_path:
         write_log(log_path, output)
+    sidecar = None
     if capture_path:
         write_capture(capture_path, build_capture(
             capture_fields, cmd, exit_code, duration, output, log_path, timed_out))
+        # Sidecar LAST: capture_sha256 is over the finished file's bytes, so
+        # it can only be computed once the capture is fully written and closed.
+        sidecar = write_sidecar(capture_path, build_sidecar(
+            capture_path, cmd, 124 if timed_out else exit_code, output,
+            started, finished, pid))
 
     lines = output.splitlines()
     report = [format_header(cmd, exit_code, duration, log_path or capture_path,
                              len(lines), timed_out, timeout)]
     if capture_path:
         report.append(f"capture:     {capture_path}")
+        report.append(f"sidecar:     {sidecar}")
 
     indices = find_matches(lines)
     if indices:
@@ -471,6 +551,73 @@ def run_self_test():
             # the tool stamps the timestamp itself
             self.assertRegex(text, r"- Captured: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
             self.assertIn(str(cap), out)
+
+        # ---- sidecar (machine-owned provenance) ----
+
+        def _sidecar(self, cap):
+            return json.loads(
+                Path(sidecar_path_for(cap)).read_text(encoding="utf-8"))
+
+        def test_sidecar_written_beside_capture_with_full_schema(self):
+            cap = self.dir / "evidence" / "runtime" / "m1-probe.md"
+            code, out = self._run_raw([
+                "--capture", str(cap), "--",
+                sys.executable, "-c", "print('{\"isSuccess\": true}')"])
+            self.assertEqual(code, 0)
+            side = Path(sidecar_path_for(cap))
+            self.assertTrue(side.is_file())
+            self.assertEqual(side.name, cap.name + ".meta.json")
+            meta = self._sidecar(cap)
+            for key in ("argv", "cwd", "host", "pid", "started", "finished",
+                         "exit_code", "body_sha256", "capture_sha256",
+                         "tool", "schema"):
+                self.assertIn(key, meta)
+            self.assertEqual(meta["tool"], "run_quiet.py")
+            self.assertEqual(meta["schema"], 1)
+            self.assertEqual(meta["exit_code"], 0)
+            self.assertEqual(meta["argv"][0], sys.executable)
+            self.assertIsInstance(meta["pid"], int)
+            for stamp in (meta["started"], meta["finished"]):
+                self.assertRegex(stamp, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+            self.assertIn(str(side), out)   # surfaced in the stdout summary
+
+        def test_sidecar_hashes_match_the_written_artifacts(self):
+            cap = self.dir / "c.md"
+            self._run_raw(["--capture", str(cap), "--",
+                            sys.executable, "-c", "print('hello body')"])
+            meta = self._sidecar(cap)
+            self.assertEqual(meta["capture_sha256"], sha256_file(cap))
+            self.assertEqual(meta["body_sha256"], sha256_text("hello body"))
+
+        def test_editing_the_capture_invalidates_capture_sha256(self):
+            """The point of the hash: a plausible later edit is still detectable."""
+            cap = self.dir / "c.md"
+            self._run_raw(["--capture", str(cap), "--",
+                            sys.executable, "-c", "print('x')"])
+            meta = self._sidecar(cap)
+            cap.write_text(cap.read_text(encoding="utf-8").replace(
+                "- Exit code: 0", "- Exit code: 0 "), encoding="utf-8")
+            self.assertNotEqual(meta["capture_sha256"], sha256_file(cap))
+
+        def test_sidecar_records_real_nonzero_exit(self):
+            cap = self.dir / "c.md"
+            code, _ = self._run_raw(["--capture", str(cap), "--",
+                                      sys.executable, "-c", "raise SystemExit(7)"])
+            self.assertEqual(code, 7)
+            self.assertEqual(self._sidecar(cap)["exit_code"], 7)
+
+        def test_sidecar_records_124_on_timeout(self):
+            cap = self.dir / "c.md"
+            code, _ = self._run_raw([
+                "--capture", str(cap), "--timeout", "2", "--",
+                sys.executable, "-c", "import time; time.sleep(30)"])
+            self.assertEqual(code, 124)
+            self.assertEqual(self._sidecar(cap)["exit_code"], 124)
+
+        def test_no_sidecar_when_only_log_requested(self):
+            code, _ = self._run([], [sys.executable, "-c", "print('x')"])
+            self.assertEqual(code, 0)
+            self.assertFalse(Path(sidecar_path_for(self.log)).exists())
 
         def test_capture_records_real_nonzero_exit(self):
             cap = self.dir / "evidence" / "runtime" / "m1-fail.md"

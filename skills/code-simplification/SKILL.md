@@ -1,13 +1,17 @@
 ---
 name: code-simplification
-description: Simplifies code for clarity. Use when refactoring code for clarity without changing behavior. Use when code works but is harder to read, maintain, or extend than it should be. Use when reviewing code that has accumulated unnecessary complexity. Squad-internal execution contract loaded by agents via their Methodology Dependencies table.
+description: "Simplifies code for clarity. Use when refactoring code for clarity without changing behavior. Use when code works but is harder to read, maintain, or extend than it should be. Use when reviewing code that has accumulated unnecessary complexity. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator applies the Worker Execution Contract itself in the main session — no delegation."
 ---
 
 # Code Simplification
 
 > Inspired by the [Claude Code Simplifier plugin](https://github.com/anthropics/claude-plugins-official/blob/main/plugins/code-simplifier/agents/code-simplifier.md). Adapted here as a model-agnostic, process-driven skill for any AI coding agent.
 
-Simplify code by reducing complexity while preserving exact behavior. The goal is not fewer lines — it's code that is easier to read, understand, modify, and debug. Every simplification must pass a simple test: **"Would a new team member understand this faster than the original?"**
+Reduce complexity while preserving exact behavior — not fewer lines, but code easier to read, understand, modify, and debug. Test: would a new team member understand this faster than the original?
+
+## Direct invocation
+
+A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no editing tests to pass, no unobserved claims (`base-persona.md`, Evidence Integrity). Over three files, or shared behaviour: route via `/bg` to a lane.
 
 ## Worker Execution Contract
 
@@ -15,15 +19,15 @@ This is the operational spine. Follow it as written.
 
 ### The Five Principles
 
-1. **Preserve behavior exactly.** Change how the code expresses itself, never what it does. Ask before every change: Does this produce the same output for every input? Does this maintain the same error behavior? Does this preserve the same side effects and ordering? Do all existing tests still pass without modification? If unsure, don't make the change.
-2. **Follow project conventions.** Match the codebase (CLAUDE.md, neighboring code) for imports, declaration style, naming, error handling, and type annotation depth. Simplification that breaks project consistency is not simplification — it's churn.
-3. **Prefer clarity over cleverness.** Explicit code beats compact code when the compact version requires a mental pause to parse.
-4. **Maintain balance.** Avoid the over-simplification traps: inlining too aggressively (removing a helper that gave a concept a name); combining unrelated logic into one complex function; removing abstractions that exist for extensibility or testability; optimizing for line count instead of comprehension.
-5. **Scope to what changed.** Default to simplifying recently modified code; no drive-by refactors of unrelated code unless explicitly asked.
+1. **Preserve behavior exactly.** Same output, same error behavior, same side effects and ordering, for every input. All existing tests pass unmodified. Unsure → don't change it.
+2. **Follow project conventions.** Match the codebase (CLAUDE.md, neighboring code): imports, declarations, naming, error handling, type-annotation depth. Breaking consistency is churn, not simplification.
+3. **Prefer clarity over cleverness.** Explicit beats compact when the compact version needs a mental pause to parse.
+4. **Maintain balance.** NEVER: inline too aggressively (removing a helper that named a concept); merge unrelated logic into one function; remove abstractions built for extensibility or testability; optimize for line count over comprehension.
+5. **Scope to what changed.** Simplify recently modified code only — no drive-by refactors of unrelated code unless explicitly asked.
 
 ### Chesterton's Fence
 
-Understand why code exists — check git blame — before removing or changing it. If you can't answer why it was written this way, don't simplify it; read more context first.
+Check git blame before removing or changing code. Can't answer why it exists → don't simplify it; read more context first.
 
 ### Simplification Signals
 
@@ -37,7 +41,8 @@ Scan for these patterns — each one is a concrete signal, not a vague smell:
 | Long functions (50+ lines) | Multiple responsibilities | Split into focused functions with descriptive names |
 | Nested ternaries | Requires mental stack to parse | Replace with if/else chains, switch, or lookup objects |
 | Boolean parameter flags | `doThing(true, false, true)` | Replace with options objects or separate functions |
-| Repeated conditionals | Same `if` check in multiple places | Extract to a well-named predicate function |
+| Repeated conditionals | Same `if` check in multiple places | Extract to a well-named predicate function, or a lookup table where the branches are data |
+| Long parameter lists (5+ params) | Call sites are positional guesswork | Group the related parameters into a structured object |
 
 **Naming and readability:**
 
@@ -48,22 +53,29 @@ Scan for these patterns — each one is a concrete signal, not a vague smell:
 | Misleading names | Function named `get` that also mutates state | Rename to reflect actual behavior |
 | Comments explaining "what" | `// increment counter` above `count++` | Delete the comment — the code is clear enough |
 | Comments explaining "why" | `// Retry because the API is flaky under load` | Keep these — they carry intent the code can't express |
+| Imperative loop doing a map/filter/reduce | Intent buried in accumulator bookkeeping | Replace with the declarative equivalent — **only** where clarity genuinely improves; a `reduce` nobody can read is not a simplification |
 
 **Redundancy:**
 
 | Pattern | Signal | Simplification |
 |---------|--------|----------------|
 | Duplicated logic | Same 5+ lines in multiple places | Extract to a shared function |
-| Dead code | Unreachable branches, unused variables, commented-out blocks | Remove (after confirming it's truly dead) |
+| Dead code | Unreachable branches, unused variables, unused imports, whole unreferenced files, commented-out blocks | Remove — after confirming nothing references it |
+| Settled feature flags | Flag guarding a feature confirmed shipped or killed | Remove the flag and collapse the branch that can no longer be taken |
+| Leftover debug logging | Trace/`console` calls on a production path | Remove |
+| Resolved TODOs | `TODO` with no issue-tracker reference | Remove; keep only TODOs that carry a tracker reference |
+| Magic constants | Same literal appearing in multiple places | Move to a named constant in the module's config |
 | Unnecessary abstractions | Wrapper that adds no value | Inline the wrapper, call the underlying function directly |
 | Over-engineered patterns | Factory-for-a-factory, strategy-with-one-strategy | Replace with the simple direct approach |
 | Redundant type assertions | Casting to a type that's already inferred | Remove the assertion |
 
 ### Rules
 
-- Make **one simplification at a time**; run the test suite after each change. Tests pass → commit (or continue); tests fail → revert and reconsider.
-- Submit refactoring changes separately from feature or bug fix changes — a PR that refactors and adds a feature is two PRs.
-- **The Rule of 500:** if a refactoring would touch more than 500 lines, invest in automation (codemods, sed scripts, AST transforms) rather than making the changes by hand.
+- Establish a green baseline **before** you touch anything: run the suite first. A suite that was already red cannot prove your refactor preserved behavior.
+- One simplification at a time; run the test suite after each. Pass → continue/commit. Fail → revert and reconsider.
+- One *kind* of change per pass and per report — never mix performance work, abstraction extraction, and cleanup in a single pass.
+- Refactoring changes ship separately from feature or bug-fix changes — never combine in one PR.
+- **The Rule of 500:** a refactor touching more than 500 lines uses automation (codemods, sed scripts, AST transforms), never hand-editing.
 
 ### Verification Checklist
 
@@ -81,9 +93,11 @@ After completing a simplification pass:
 
 ### Escalate When
 
-- A simplification only passes by modifying tests → revert it and report to the Orchestrator (manager); behavior likely changed.
-- You can't answer why the code exists (Chesterton's Fence) even after reading context → ask the Orchestrator (manager) before touching it.
-- The needed refactor exceeds the current task's scope or the Rule of 500 → report to the Orchestrator (manager) instead of expanding scope.
+| WHEN | DO |
+|---|---|
+| A simplification only passes by modifying tests | Revert it; report to the Orchestrator (manager) — behavior likely changed |
+| Can't answer why the code exists (Chesterton's Fence) even after reading context | Ask the Orchestrator (manager) before touching it |
+| The needed refactor exceeds the task's scope or the Rule of 500 | Report to the Orchestrator (manager) instead of expanding scope |
 
 ## Deep Dive
 

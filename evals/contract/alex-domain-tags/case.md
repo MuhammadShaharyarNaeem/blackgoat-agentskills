@@ -55,7 +55,7 @@ handing you.
 
 Save the plan to that path when you're done.
 '@
-claude -p $promptText --permission-mode acceptEdits
+claude -p $promptText --permission-mode acceptEdits --allowedTools "Bash"
 ```
 
 ## Pass Criteria (checked by `grade.ps1 -TargetDir <temp copy root>`)

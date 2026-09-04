@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "bash",
+    "-c",
+    "flagctl disable checkout-rewrite --env staging && curl -sS -o /dev/null -w \"%{http_code}\n\" https://staging.example.internal/healthz"
+  ],
+  "cwd": "/srv/checkout-rewrite",
+  "host": "build-agent-03",
+  "pid": 40118,
+  "started": "2026-08-28T09:14:02Z",
+  "finished": "2026-08-28T09:14:49Z",
+  "exit_code": 0,
+  "body_sha256": "49e6bf86981de657ffda31466c6cc8724b2852391cf36aa60f205d70367c564d",
+  "capture_sha256": "faa87a83700ec9adc89ae6b3a6b40cfe9795357451faed98834aa8a84bf947ba",
+  "tool": "run_quiet.py",
+  "schema": "run-quiet-capture/1"
+}

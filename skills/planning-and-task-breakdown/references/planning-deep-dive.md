@@ -264,7 +264,7 @@ Once the build Orchestrator finishes a milestone, it appends `[x]` to that headi
 
 ## Plans Model Effects, Not Artifacts — Rationale and More Example Pairs
 
-Supporting the Step 4 principle and its four corollaries.
+Supporting the Step 4 principle and its five corollaries.
 
 ### Corollary 1 — acceptance criteria
 
@@ -291,15 +291,23 @@ An in-process test host executes real code and produces a real green result, whi
 
 The planning consequence is narrow and load-bearing: a criterion written at the in-process boundary produces a `RUNTIME PROBE:` line that names an in-process client, and the plan-time lint rejects it before any code exists. Writing the criterion at the observable boundary in the first place is what keeps the probe writable.
 
+### Corollary 5 — criteria outside the change's control
+
+A criterion is unusable when its truth depends on something the change does not own, and each of the three recurring forms fails a correct implementation:
+
+- **Diff shape.** Exact insertion/deletion counts, "insertions only", and "zero modified lines" are frequently *mechanically unsatisfiable*: appending to a list whose last element lacks a trailing separator necessarily rewrites that line, so a correct implementation fails its own gate. This is why the Verification checklist demands every enum/list-append criterion be checked against the base file's actual trailing-separator state.
+- **A moving external ref.** A criterion whose truth flips when a shared base branch advances is not a criterion about the change at all — it grades the repository's traffic. Pinning the immutable snapshot id (the commit the work was actually done against) removes the moving part.
+- **A value another party allocates.** An enum ordinal, id, port, or reserved slot promised in a plan is unreserved until re-read at implementation time; freezing it into a criterion as a constant turns another team's routine allocation into this task's failure. Constrain the observable effect instead, and where a mechanical shape genuinely is the proof, state the exact deviation it must produce.
+
 ## Transaction Boundaries Inside a Task — Rationale
 
-Supporting the Step 4 rule "A task that interleaves durable state changes with an external effect declares its transaction boundaries, not just its step order":
+Supporting Step 4's WHEN-table row: a task that interleaves durable state changes with an external effect declares its transaction boundaries, not just its step order.
 
 An ordered list of steps is not a specification. Given "check balance → call supplier → post entry", one implementer wraps the whole sequence in a single transaction, another commits between steps, and only one of them is correct. This is a named instance of the two-implementers test, called out separately because the ordering notation actively hides it: the arrow between two steps says nothing about whether a commit sits on it. Naming the shared transaction, the commit points, the compensating action, and the crash-recovery path removes the ambiguity the arrows create.
 
 ## Negative-Half Proof for Gates — Rationale
 
-Supporting the Step 4 rule "A task that authors a gate must also specify how that gate is proven to fail":
+Supporting Step 4's WHEN-table row: a task that authors a gate must also specify how that gate is proven to fail.
 
 A check script, contract checker, scanner, or state-matrix assertion is trusted only once it has been observed rejecting a deliberate violation. Omit the negative half and a hollow gate is indistinguishable from a real one — both are green, and the plan has bought a green light rather than a check.
 

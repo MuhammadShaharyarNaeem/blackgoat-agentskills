@@ -34,7 +34,8 @@ if (-not (Test-Path $requirementsPath)) {
 }
 Write-Output '[1] PASSED: requirements.md exists'
 
-$content = Get-Content -Path $requirementsPath -Raw
+$content = Get-Content -Path $requirementsPath -Raw -Encoding UTF8
+$content = $content -replace "`r`n", "`n"
 
 # [2] Vision section present
 if ($content -match '(?m)^##\s+Vision\s*$') {

@@ -100,8 +100,8 @@ if (-not (Test-Path $repoBlackgoat)) {
 # --- [1] run sanity: the invocation produced a handoff at all ----------------
 $handoffText = ''
 if (Test-Path $handoffPath) {
-    $rawHandoff = Get-Content -Path $handoffPath -Raw
-    if ($null -ne $rawHandoff) { $handoffText = $rawHandoff }
+    $rawHandoff = Get-Content -Path $handoffPath -Raw -Encoding UTF8
+    if ($null -ne $rawHandoff) { $handoffText = $rawHandoff -replace "`r`n", "`n" }
 }
 if ([string]::IsNullOrWhiteSpace($handoffText)) {
     Add-Failure 1 "handoff.txt is missing or empty at $handoffPath - the claude invocation did not run or its stdout was not piped; criteria 4-5 below will cascade and say nothing about the persona"
@@ -129,8 +129,9 @@ if (-not (Test-Path $targetBlackgoat)) {
 if (-not (Test-Path $targetMax)) {
     Add-Failure 3 "agents/max.md is missing from the working copy at $targetMax"
 } else {
-    $maxText = Get-Content -Path $targetMax -Raw
+    $maxText = Get-Content -Path $targetMax -Raw -Encoding UTF8
     if ($null -eq $maxText) { $maxText = '' }
+    $maxText = $maxText -replace "`r`n", "`n"
     if ($maxText -match [regex]::Escape($appendedSentence)) {
         Add-Pass 3 "agents/max.md carries the approved item-1 line ('$appendedSentence...')"
     } else {

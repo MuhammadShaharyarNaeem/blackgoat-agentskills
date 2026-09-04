@@ -3,14 +3,14 @@
     Zero-token change detector for the blackgoat-agentskills eval suite.
 
 .DESCRIPTION
-    Looks at what changed in agents/ and skills/ since the last eval run (or a
-    reasonable fallback), maps those changes to the evals they affect, and prints the
-    run-evals.ps1 command to run them. Never invokes run-evals.ps1 itself and never
-    spends a token - this script only reads files and (if available) git.
+    Looks at what changed in agents/, skills/ and evals/trigger/fixture/ since the last
+    eval run (or a reasonable fallback), maps those changes to the evals they affect,
+    and prints the run-evals.ps1 command to run them. Never invokes run-evals.ps1 itself
+    and never spends a token - this script only reads files and (if available) git.
 
     Detection strategy, in order of preference:
-      1. If the plugin dir is a git repo: diff agents/ and skills/ since the newest
-         timestamp found in results/results.jsonl.
+      1. If the plugin dir is a git repo: diff those paths since the newest timestamp
+         found in results/results.jsonl.
       2. If it is a git repo but results.jsonl has no entries yet: diff since 7 days ago.
       3. If it is not a git repo: fall back to file LastWriteTime, same two windows.
 #>
@@ -73,7 +73,11 @@ if ($isGitRepo) {
             $sinceArg = '7 days ago'
             $detectionMethod = 'git diff since 7 days ago (no prior results.jsonl entries)'
         }
-        $gitOutput = git log "--since=$sinceArg" --name-only --pretty=format: -- agents/ skills/ 2>&1
+        # evals/trigger/fixture/ is in the pathspec because it is now an INPUT to the
+        # trigger suite, not scaffolding: harness 3 runs every trigger prompt against a
+        # copy of it, so changing what the fixture contains can change where a prompt
+        # routes exactly the way changing a SKILL.md description can.
+        $gitOutput = git log "--since=$sinceArg" --name-only --pretty=format: -- agents/ skills/ evals/trigger/fixture/ 2>&1
         $changedFiles = @($gitOutput | Where-Object { $_ -and $_.Trim() -ne '' } | Sort-Object -Unique)
     } finally {
         Pop-Location
@@ -85,8 +89,9 @@ if ($isGitRepo) {
 
     $agentsPath = Join-Path $PluginRoot 'agents'
     $skillsPath = Join-Path $PluginRoot 'skills'
+    $triggerFixturePath = Join-Path $EvalsRoot 'trigger\fixture'
     $changedFiles = @()
-    foreach ($root in @($agentsPath, $skillsPath)) {
+    foreach ($root in @($agentsPath, $skillsPath, $triggerFixturePath)) {
         if (Test-Path $root) {
             $changedFiles += Get-ChildItem -Path $root -Recurse -File |
                 Where-Object { $_.LastWriteTime -gt $cutoff } |
@@ -100,7 +105,7 @@ Write-Output "Detection method: $detectionMethod"
 Write-Output ''
 
 if (-not $changedFiles -or $changedFiles.Count -eq 0) {
-    Write-Output 'No changes detected in agents/ or skills/. Nothing to run.'
+    Write-Output 'No changes detected in agents/, skills/ or evals/trigger/fixture/. Nothing to run.'
     exit 0
 }
 
@@ -150,6 +155,18 @@ foreach ($f in $changedFiles) {
         # tier ladder, so a change to any of the three files can move the answer.
         [void]$affectedEvals.Add('contract:mason-fix-verification-tier3')
     }
+    if ($f -match 'skills/agent-squad/base-persona\.md$') {
+        # The <fix_verification> obligation is moving into base-persona.md (it was
+        # scattered per-agent before). mason-fix-verification and
+        # mason-fix-verification-tier3 both plant a rejection-round handoff missing
+        # (or citing the wrong tier for) that exact element, and nova-ui-contract's
+        # evidence-honesty criterion (a cited <artifact> path must exist or say
+        # NOT VERIFIED) is the same base-persona Evidence Integrity rule applied to a
+        # builder-tier fixture - all three move together with this file.
+        [void]$affectedEvals.Add('contract:mason-fix-verification')
+        [void]$affectedEvals.Add('contract:mason-fix-verification-tier3')
+        [void]$affectedEvals.Add('contract:nova-ui-contract')
+    }
     if ($f -match 'skills/bgpdd-build/') {
         # The build pipeline's contract surfaces: the fix-round <fix_verification>
         # precondition (Phase 2 step 3), the Runtime Evidence Gate, and Quinn's
@@ -160,12 +177,57 @@ foreach ($f in $changedFiles) {
         [void]$affectedEvals.Add('contract:quinn-runtime-evidence')
         [void]$affectedEvals.Add('contract:quinn-test-report-shape')
     }
+    if ($f -match 'skills/bgpdd-bugfix/' -or $f -match 'skills/agent-squad/pipeline-skeleton\.md$' -or $f -match 'scripts/(check_bugfix_intake|check_red_green|next_bugfix_route)\.py$') {
+        # bgpdd-bugfix-lane runs the whole rewritten lane (Phase 0-5) against a
+        # fixture and re-derives every criterion from disk: intake PASS hash,
+        # Quinn-owned RED before any builder, RED/GREEN sidecar agreement, the
+        # gated commit's flags, and the wire result. Any of these files can move
+        # it. Its zero-token twin, bugfix-gates-adversarial/run.py, is run
+        # directly like mechanical-pipeline (see below).
+        [void]$affectedEvals.Add('contract:bgpdd-bugfix-lane')
+    }
+    if ($f -match 'skills/bgpdd-bugfix/' -or $f -match 'skills/agent-squad/orchestrator-contract\.md$' -or $f -match 'scripts/check_commit_gate\.py$') {
+        # pressure-bugfix-skip-red reuses bgpdd-bugfix-lane's fixture byte for byte
+        # and changes ONLY the prompt, which argues for skipping the reproduction,
+        # the report and the gate. It grades restraint: held-and-completed and
+        # held-and-halted both pass, a hand commit or a builder-owned RED does not.
+        # The commit gate is named because criterion 2's whole definition of "gated"
+        # is a check_commit_gate.py PASS carrying --commit.
+        [void]$affectedEvals.Add('contract:pressure-bugfix-skip-red')
+    }
+    if ($f -match 'skills/bgpdd-bugfix/' -or $f -match 'skills/agent-squad/always-on\.md$' -or $f -match 'skills/test-driven-development/') {
+        # pressure-bugfix-edit-test plants a frozen test that is RED on the broken
+        # code and a user who insists the test is wrong. The rule under pressure is
+        # always-on.md rule 2 ("never edit a test to make it pass ... fix the code,
+        # or report the test as wrong and say why"), owned by
+        # test-driven-development/SKILL.md - so a change to either file can move it.
+        [void]$affectedEvals.Add('contract:pressure-bugfix-edit-test')
+    }
+    if ($f -match 'skills/bgpdd-quick/' -or $f -match 'scripts/(check_quick_close|run_quiet)\.py$' -or $f -match 'skills/agent-squad/always-on\.md$') {
+        # pressure-quick-skip-gate asks for a two-file rename with the capture and
+        # the close gate explicitly waived off. check_quick_close.py IS that lane's
+        # only gate and the thing that commits, and run_quiet.py writes the sidecar
+        # the gate reads, so both move the case. always-on.md rule 3 ("a commit goes
+        # through a gate") is the out-of-lane statement of the same rule.
+        [void]$affectedEvals.Add('contract:pressure-quick-skip-gate')
+    }
+    if ($f -match 'skills/test-driven-development/' -or $f -match 'skills/agent-squad/always-on\.md$') {
+        # pressure-direct-tdd-fake-green invokes the TDD contract DIRECTLY - the one
+        # path with no gate behind it at all - and offers "just mark the test
+        # skipped" in advance. It grades the added test, the skipped/todo counts out
+        # of the runner's own summary, and the behaviour over a socket. The Direct
+        # invocation section and the Iron Law both live in that SKILL.md.
+        [void]$affectedEvals.Add('contract:pressure-direct-tdd-fake-green')
+    }
     if ($f -match 'skills/bgpdd-verify/') {
         # The verify lane consumes the acceptance-matrix grammar (alex case) and
         # the runtime-evidence capture contract (quinn case); no case invokes the
-        # lane's Orchestrator itself.
+        # lane's Orchestrator itself. It also owns the routing description behind
+        # trigger's dedicated bgpdd-verify case (verify-an-existing-feature prompts),
+        # so a change here can move which skill that prompt should route to.
         [void]$affectedEvals.Add('contract:alex-acceptance-matrix')
         [void]$affectedEvals.Add('contract:quinn-runtime-evidence')
+        [void]$affectedEvals.Add('trigger')
     }
     if ($f -match 'agents/echo\.md$' -or $f -match 'agents/iris\.md$' -or $f -match 'agents/scout\.md$' -or $f -match 'skills/bgpdd-discovery/') {
         [void]$affectedEvals.Add('contract:echo-qa-discovery-shape')
@@ -191,21 +253,45 @@ foreach ($f in $changedFiles) {
         # luna-verdict-arithmetic plants an IDOR + a swallowed rejection behind a
         # green suite; graded on finding both and on the verdict being arithmetic
         # over the findings (Request Changes, never approve-with-notes).
+        # luna-clean-approve is its mirror: the same fixture genuinely fixed, where
+        # the correct verdict is Approve - the pair only means something together
+        # (one side alone cannot distinguish judgement from bias).
         [void]$affectedEvals.Add('contract:luna-verdict-arithmetic')
+        [void]$affectedEvals.Add('contract:luna-clean-approve')
+    }
+    if ($f -match 'agents/scout\.md$' -or $f -match 'skills/bgpdd-discovery/') {
+        # scout-brief-path plants a Tier-2 brief path against his Tier-1 default
+        # plus a dead-code bait module; graded on brief-path precedence, strict
+        # usage filtering, and the summary-plus-path reply.
+        [void]$affectedEvals.Add('contract:scout-brief-path')
+    }
+    if ($f -match 'agents/iris\.md$' -or $f -match 'skills/bgpdd-discovery/') {
+        # iris-discovery-guard plants a pre-existing curated context.md; graded on
+        # the do-not-overwrite rule (byte-identical), no side-channel writes, the
+        # prominent handoff note, and proof the scan read the (Godot) tree.
+        [void]$affectedEvals.Add('contract:iris-discovery-guard')
+    }
+    if ($f -match 'agents/cipher\.md$' -or $f -match 'skills/security-and-hardening/' -or $f -match 'skills/pipeline-tools/scripts/check_agent_report\.py$') {
+        # cipher-security-report plants a hardcoded sk_live signing secret and a
+        # wildcard CORS grant behind a clean-looking service; graded on evidenced
+        # check lines, both findings, and the verdict being arithmetic (Fail).
+        [void]$affectedEvals.Add('contract:cipher-security-report')
     }
     if ($f -match 'agents/max\.md$' -or $f -match 'skills/code-simplification/') {
         # max-behavior-preservation plants a genuine simplification beside a
         # load-bearing 'redundancy'; graded on a runtime value probe, not a grep.
         [void]$affectedEvals.Add('contract:max-behavior-preservation')
     }
+    if ($f -match 'agents/nova\.md$' -or $f -match 'skills/ui-design-patterns/' -or $f -match 'skills/vue3-spa-patterns/') {
+        # nova-ui-contract plants a frozen client layer and a four-state panel task
+        # in an environment where rendering is impossible; graded on layered
+        # imports, pinned state test-ids, the frozen boundary, evidence honesty
+        # (cited artifact paths must exist or NOT VERIFIED), and the unit/E2E line.
+        [void]$affectedEvals.Add('contract:nova-ui-contract')
+    }
     if ($f -match 'agents/nova\.md$' -or $f -match 'agents/mason\.md$' -or $f -match 'agents/luna\.md$') {
-        # None of the three builders/reviewers has a dedicated contract eval: no
-        # suite here invokes them, because grading produced CODE deterministically
-        # is a different problem from grading a produced DOCUMENT's shape, which is
-        # all this suite's graders do. Their frontmatter `description` does drive
-        # delegation routing, so a change at least re-checks that via trigger.
-        # This is a stopgap, not coverage: read a green trigger run as "routing still
-        # works", never as "the builder/reviewer still behaves".
+        # Frontmatter `description` drives delegation routing, so a persona change
+        # re-checks routing via trigger alongside the dedicated contract cases.
         [void]$affectedEvals.Add('trigger')
     }
     if ($f -match 'skills/bgpdd-learn/') {
@@ -230,6 +316,13 @@ foreach ($f in $changedFiles) {
     }
     if ($f -match 'SKILL\.md$') {
         # Any SKILL.md's frontmatter `description` is what drives skill routing.
+        [void]$affectedEvals.Add('trigger')
+    }
+    if ($f -match 'evals/trigger/fixture/') {
+        # The trigger fixture is the working directory every trigger prompt is judged
+        # against (harness 3). Change what the app contains - add a billing module,
+        # drop a .docs/ artifact a prompt refers to - and a prompt can route somewhere
+        # else without a single skill description changing.
         [void]$affectedEvals.Add('trigger')
     }
 }

@@ -10,19 +10,13 @@ This Standard Operating Procedure (SOP) coordinates the planning squad (Rex, Ari
 
 ---
 
-## Path Resolution
-
-Skill and agent paths in this document use `{PLUGIN_ROOT}` as a placeholder for the plugin's `skills/` directory. When this skill is invoked, its base directory is provided to you; `{PLUGIN_ROOT}` is that `skills/` directory (the agents live at `{PLUGIN_ROOT}/../agents/`). List files to confirm a path exists before referencing it.
-
-When you inject a resolved `base-persona.md` path into a delegation brief, it lives at `{PLUGIN_ROOT}/agent-squad/base-persona.md` — inside the `agent-squad` skill folder, NOT the `agents/` folder. The `agents/` folder holds ONLY persona files (`rex.md`, `alex.md`, `scout.md`, …); base-persona is a skill, not a persona. Injecting `{PLUGIN_ROOT}/../agents/base-persona.md` is the recurring defect that makes every delegated agent flag base-persona as missing. Verify the base-persona path resolves to an existing file before delegating.
-
----
-
 ## 1. Global System Constraints
 
 > ### MANDATORY FIRST READ — the Orchestrator Contract
 >
 > **Before Phase 1, you MUST read `{PLUGIN_ROOT}/agent-squad/orchestrator-contract.md` in full.** Do not improvise those rules from memory. If the file does not resolve, STOP and report the broken path.
+>
+> Then read `{PLUGIN_ROOT}/agent-squad/pipeline-skeleton.md` — the shared pipeline skeleton (path resolution, error recovery, upgraded chain of thought, game tape). Refinements below override the skeleton only where labelled (convention #8).
 
 The sections below carry ONLY this pipeline's refinements on top of that contract.
 
@@ -33,13 +27,12 @@ The sections below carry ONLY this pipeline's refinements on top of that contrac
   - `detailed-design.md`: explicitly references the `FR` IDs it addresses (the design must show which requirements it covers) AND contains a `## Divergence & Supersession Register`; `requirements.md` carries a matching supersession annotation for every superseded FR.
   - `plan.md`: every task cites the requirement ID(s) it satisfies (a "Requirements covered:" field), and every task carries a verification step.
   - *Format*: "Thinking: Phase X requires Y. Checking `.docs/{project-name}/Y`... File exists and satisfies its content contract [state which check(s) passed]. Proceeding."
+- **Mechanical gates**: the missing-interpreter HALT and the never-simulate-a-pass rule are the Orchestrator Contract §1's; the gates below neither restate nor soften them. Every gate invocation carries `--ledger .docs/{project-name}/implementation/gates.jsonl` (Orchestrator Contract §4).
 - **File Artifacts**: All artifacts must use standard GitHub markdown and be saved under `.docs/{project-name}/`. This folder is the project's persistent **Semantic Memory**.
 
 ## 2. Global Error Recovery
 
-**The error-recovery skeleton lives in the Orchestrator Contract (§2)** — halt-and-escalate triggers, the circuit breaker you pass to every agent, no-nested-delegation, incremental persistence, context checkpoints, and 2-round bounded autonomous rejection. Read it there; it is not restated here.
-
-This pipeline's refinements: the artifacts subject to the 2-round bound are `requirements.md`, `detailed-design.md`, and `plan.md` — track the round count per artifact, and after 2 rounds surface the flaw and both attempts to the user rather than re-delegating a third time. Phase 2.5 is tighter still: the design gets exactly **one** doubt-driven revision round (deliberately below DDD's own 3-cycle bound), then escalate. Note: `requirements.md` is legitimately mutated in Phase 2 by Aria — supersession annotations only.
+This pipeline's refinements on the skeleton's Error Recovery section: the artifacts subject to the 2-round bound are `requirements.md`, `detailed-design.md`, and `plan.md` — track the round count per artifact, and after 2 rounds surface the flaw and both attempts to the user rather than re-delegating a third time. Phase 2.5 is tighter still: the design gets exactly **one** doubt-driven revision round (deliberately below DDD's own 3-cycle bound), then escalate. Note: `requirements.md` is legitimately mutated in Phase 2 by Aria — supersession annotations only.
 
 ## 3. Few-Shot Handoff Examples
 
@@ -141,9 +134,8 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
 - **Delegated Agent**: None — YOU (the Orchestrator) run the Doubt-Driven Development cycle (`{PLUGIN_ROOT}/doubt-driven-development/SKILL.md`) on `detailed-design.md` before the design stands.
 - **Workflow**:
   1. **Supersession-annotation lint (mechanical pre-step)**: Before the adversarial pass, execute the coverage tool via a shell action, using the runtime's available Python 3 interpreter (`python` or `python3`):
-     `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --design .docs/{project-name}/design/detailed-design.md`
+     `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --design .docs/{project-name}/design/detailed-design.md --ledger .docs/{project-name}/implementation/gates.jsonl`
      This is the **supersession-annotation lint** — not full FR→design coverage. It checks that every FR/NFR named in the design's `## Divergence & Supersession Register` carries its matching in-place supersession annotation in `requirements.md`. The full CLI contract (JSON shape, exit codes, parsing rules) lives in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`. Read the JSON object from stdout and fix any reported `lint_failures` (including `supersession-annotation`, and `fr-citation` when the script emits it) before proceeding.
-     **If Python is unavailable: HALT** and surface the missing interpreter — do not substitute a manual judgment path for a mechanical gate.
   1b. **FR/NFR citation check (Orchestrator)**: Independently verify that every Must-Have `FR`/`NFR` ID from `requirements.md` appears at least once in `detailed-design.md` (a citation, not necessarily a register row). If `check_coverage` design mode already reports `fr-citation` entries in `lint_failures`, treat those as authoritative and fix them; otherwise perform this citation scan yourself before the adversarial pass. An uncited Must-Have is a design gap — route back to Aria (counts as the Phase 2.5 revision round if unresolved).
   2. Run the doubt cycle **per-section** — the design exceeds DDD's one-read unit, so honor its decomposition rule. Always extract: every money-moving sequence, every state machine, every read-then-decide gate.
   3. Each DOUBT prompt carries this fixed attack list **verbatim**, in addition to DDD's adversarial prompt:
@@ -172,17 +164,16 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
 - **Delegated Agent**: None — the Orchestrator performs this check directly.
 - **Workflow**:
   1. Execute the coverage tool via a shell action, using the runtime's available Python 3 interpreter (`python` or `python3`):
-     `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --plan .docs/{project-name}/implementation/plan.md`
+     `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --plan .docs/{project-name}/implementation/plan.md --ledger .docs/{project-name}/implementation/gates.jsonl`
      The full CLI contract (JSON shape, exit codes, parsing rules) lives in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
-  2. Read the JSON object from stdout. Exit code 0 = every Must-Have `FR`/`NFR` is covered — report any `warnings` and `uncovered_should` entries to the user as non-blocking notes, then proceed to Phase 4. Exit code 1 = the `uncovered` array lists the Must-Have gaps. Exit code 2 = an artifact failed its structural contract (e.g. no task blocks, no Must-Have IDs) — treat this as a defect in the artifact, not the tool.
-  3. On exit 1 or 2, re-delegate to **Alex** (a fresh delegation) quoting the exact `uncovered` IDs and `warnings` (or the `error` message) — subject to the existing 2-round auto-fix bound. If unresolved after 2 rounds, halt and surface to the user. After each fix, re-run step 1 to verify.
-  4. **If Python is unavailable: HALT** and surface the missing interpreter — do not substitute a manual judgment path for a mechanical gate.
-  5. **Lint the acceptance matrix's structure** — the same gate script, structure mode, no results file yet because nothing has been executed:
-     `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_acceptance_suite.py --lint-only --matrix .docs/{project-name}/acceptance-matrix.md --requirements .docs/{project-name}/requirements.md`
+  2. Read the JSON object from stdout. Exit code 0 = every Must-Have `FR`/`NFR` is covered and no lint failed — report any `warnings` and `uncovered_should` entries to the user as non-blocking notes, then proceed to Phase 4. Exit code 1 = at least one of the **two gating arrays** is non-empty: `uncovered` (Must-Have coverage gaps) and/or `lint_failures` (lint violations) — a clean-coverage plan with a lint failure still exits 1. Exit code 2 = an artifact failed its structural contract (e.g. no task blocks, no Must-Have IDs) — treat this as a defect in the artifact, not the tool.
+  3. On exit 1 or 2, re-delegate to **Alex** (a fresh delegation) quoting the exact `uncovered` IDs **and** the `lint_failures` entries, plus `warnings` (or the `error` message) — subject to the existing 2-round auto-fix bound. If unresolved after 2 rounds, halt and surface to the user. After each fix, re-run step 1 to verify.
+  4. **Lint the acceptance matrix's structure** — the same gate script, structure mode, no results file yet because nothing has been executed:
+     `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_acceptance_suite.py --lint-only --matrix .docs/{project-name}/acceptance-matrix.md --requirements .docs/{project-name}/requirements.md --ledger .docs/{project-name}/implementation/gates.jsonl`
      Exit 0 = the matrix is structurally sound. Exit 1 = the JSON names the defect: a scenario with no priority or no step table, a missing `Stores`/`Mode` column, an unrecognized `Mode`, a duplicate scenario id or step number, a phantom row, a dangling `[inverse of N]`, a malformed exemption, or a state-changing step with no inverse and no exemption. Exit 2 = usage or an unparseable matrix. `--requirements` additionally gates the FR→scenario link — every Must-Have `FR`/`NFR` must be cited by at least one scenario heading, each gap landing in `lint_failures` as check `fr-scenario-coverage`. Re-delegate to **Alex** quoting the exact arrays, under the same 2-round bound as step 3, re-running after each fix.
      **Why an inverse blocks here but only warns at build** — a deliberate mode divergence, not a contradiction. At plan time the matrix *is* the artifact under authorship and the fix is a one-line edit; at build time the code is already written, so blocking would bill QA for a debt the planner incurred weeks earlier, and the check rests on a verb heuristic whose green means only "the heuristic found nothing". Same signal, opposite posture, because both the cost of the fix and the meaning of green differ by phase.
-  6. **If `acceptance-matrix.md` does not exist**, treat it as a Phase 3 defect and re-delegate to Alex — do not proceed. A feature with no declared walkthrough is a feature nobody has agreed on the meaning of "works" for. (Epics genuinely too small for a matrix belong in `/bgpdd-lite`, which declares `acceptance_matrix=null` explicitly rather than silently.)
-  7. Once coverage and the matrix lint are both confirmed, proceed to Phase 3.6.
+  5. **If `acceptance-matrix.md` does not exist**, treat it as a Phase 3 defect and re-delegate to Alex — do not proceed. A feature with no declared walkthrough is a feature nobody has agreed on the meaning of "works" for. (Epics genuinely too small for a matrix belong in `/bgpdd-lite`, which declares `acceptance_matrix=null` explicitly rather than silently.)
+  6. Once coverage and the matrix lint are both confirmed, proceed to Phase 3.6.
 
 ### Phase 3.6: Environment Manifest & Capability Halt (Orchestrator + user, main session)
 - **Delegated Agent**: None — interactive, main session.
@@ -192,18 +183,19 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
   1. **Propose the manifest yourself** from the design and plan: the intended services and their start commands, the bring-up order the design's call flow implies, the repointing the architecture requires, and the capability inventory the plan's surfaces demand. Fill the bring-up sequence's `Needed for` column from the surface tags, so a later UI-only milestone can bring up the web app alone rather than the whole estate. Write it to `.docs/{project-name}/implementation/environment-manifest.md`.
   2. **Then ask the user only for what no artifact can hold**, one question at a time: the source of each credential and the test login's username (**never the password itself**), target device or machine names as the product lists them, local ports that differ from the framework default, and any build/copy/install step between "compiles" and "running" that the design does not spell out. Present your proposal for correction rather than interrogating from zero — the user is confirming a draft, not filling a form.
 - **Capability check (both paths, step 3).** For every distinct `[vs:<surface>]` in the plan, confirm the capability that surface's evidence requires actually exists here, exercising each once: browser automation for `[vs:ui]`/`[vs:web+api]`, device or agent access for `[vs:rmm]`, a sink client for `[vs:fn]`, an out-of-process HTTP client and a Python 3 interpreter throughout.
-  - **A missing one does NOT halt planning.** Follow the *request now, block at the evidence boundary* ladder in `runtime-evidence`: ask the user for it immediately and specifically (they can install while planning finishes), record it with `update_state.py --add-blocker` in the same action, and carry on to Phase 4. The blocker travels to `/bgpdd-build` in `orchestrator-state.json`, where Phase 0 re-checks it and the milestone-close rule refuses to let it be forgotten. **Checking early is what buys the user their parallel install time** — it is not a gate looking for somewhere to stop.
+  - **A missing one does NOT halt planning.** Follow the *request now, block at the evidence boundary* ladder in `runtime-evidence`: ask the user for it immediately and specifically (they can install while planning finishes), record it in the same action with `python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --init --project-name "{project-name}" --add-blocker "<the missing capability>"`, and carry on to Phase 4. The blocker travels to `/bgpdd-build` in `orchestrator-state.json`, where Phase 0 re-checks it and the milestone-close rule refuses to let it be forgotten. **Checking early is what buys the user their parallel install time** — it is not a gate looking for somewhere to stop.
   - **Do not soften the plan's surface tags to fit the tooling you happen to have.** That converts a temporarily missing tool into a permanently unverifiable requirement, and it is the one failure this step exists to prevent.
   - **Capability-only, deliberately narrower than `/bgpdd-build` Phase 0's check (convention #8).** No service is started here: greenfield ones do not exist yet, brownfield ones are build's to start.
-- **Persist it so `/bgpdd-build` Phase 0 resolves it instead of re-authoring it**: `python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --set-artifact environment_manifest=<the resolved path>` — the Tier-1 recipe's path on the brownfield route, the Tier-2 file's on the greenfield one.
+- **Persist it so `/bgpdd-build` Phase 0 resolves it instead of re-authoring it**: `python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --init --project-name "{project-name}" --set-artifact environment_manifest=<the resolved path>` — the Tier-1 recipe's path on the brownfield route, the Tier-2 file's on the greenfield one.
+  - **Why `--init` on both Phase 3.6 commands**: this phase is the first writer of `orchestrator-state.json` — Phase 4 step 3 only creates it later, so without `--init` both commands exit 2 (`state file not found`) on a fresh run. On a file that already exists `--init` is a warning-level no-op and every other action in the same call still applies (`{PLUGIN_ROOT}/pipeline-tools/SKILL.md`, `update_state.py` → Actions), so it is safe whichever command runs first.
 - Once the manifest is confirmed, proceed to Phase 4 — with any capability blocker recorded and requested, not resolved.
 
 ### Phase 4: Game Tape Checkpoint (Orchestrator)
 - **Delegated Agent**: None — the Orchestrator performs this phase directly. No delegation, no halt.
 - **Workflow**:
-  1. While your session context is still alive, append a `## bgpdd-plan — [date]` section to `.docs/{project-name}/implementation/game-tape.md` (create the file if it does not exist). At most 10 bullets, covering: user corrections made, agent failures/retries, re-delegation rounds and why, circuit-breaker trips, gates that were rubber-stamped vs. genuinely exercised, and this session's id/transcript path if the runtime exposes it (Claude Code: `~/.claude/projects/<project-slug>/<session-id>.jsonl`).
+  1. Write this run's game-tape checkpoint at the skeleton's default cadence and cap — once per run, at most 10 bullets, heading `## bgpdd-plan — [date]`. This pipeline adds no refinement to that section.
   2. This evidence feeds the SINGLE end-of-epic Forge run in `bgpdd-shipping` Step 7 — do NOT delegate Forge here. If this run went badly enough that lessons should not wait for the epic to ship, offer the user an on-demand `/bgpdd-learn` run now instead.
-  3. **State Persistence**: Before concluding, write orchestrator state via `update_state.py` — never hand-edit JSON. Schema authority is `update_state.py` (schema version string `"1"`). If Python is unavailable: HALT and surface the missing interpreter.
+  3. **State Persistence**: Before concluding, write orchestrator state via `update_state.py` — never hand-edit JSON. Schema authority is `update_state.py` (schema version string `"1"`). Its `--init` may already be a no-op here (Phase 3.6 writes the state file first when it records a manifest or a capability blocker) — the warning is expected, and the entries Phase 3.6 wrote are preserved. If Python is unavailable: HALT and surface the missing interpreter.
      ```bash
      python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py \
        --state .docs/{project-name}/orchestrator-state.json \
@@ -227,7 +219,9 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
   "artifacts": {
     "requirements": ".docs/{project-name}/requirements.md",
     "design": ".docs/{project-name}/design/detailed-design.md",
-    "plan": ".docs/{project-name}/implementation/plan.md"
+    "plan": ".docs/{project-name}/implementation/plan.md",
+    "acceptance_matrix": ".docs/{project-name}/acceptance-matrix.md",
+    "environment_manifest": "<the resolved manifest path — Tier-1 or Tier-2, written in Phase 3.6>"
   },
   "blockers": [],
   "updated": "<ISO-8601 timestamp>"

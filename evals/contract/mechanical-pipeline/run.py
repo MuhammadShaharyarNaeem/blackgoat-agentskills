@@ -19,6 +19,7 @@ Usage:
 Exit 0 only if every step below passes. Prints a PASS/FAIL table and cleans
 up its temp directory unconditionally (even on failure).
 """
+import hashlib
 import itertools
 import json
 import os
@@ -177,6 +178,43 @@ def set_mtime(path, t=None):
     return t
 
 
+# A 1x1 transparent PNG. --require-rendered-evidence demands a NON-EMPTY file
+# carrying its format's magic bytes, so a zero-byte placeholder named .png no
+# longer satisfies the gate -- an empty file depicts nothing.
+PNG_1PX = bytes.fromhex(
+    "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+    "1f15c4890000000a49444154789c6360000002000100fdff03fa0000000"
+    "049454e44ae426082".replace(" ", ""))
+
+
+def write_sidecar(capture_path, exit_code=0):
+    """Mirror `run_quiet.py --capture`'s machine-owned provenance sidecar.
+
+    check_runtime_evidence.py rejects a capture with no sidecar, one whose
+    capture_sha256 no longer matches, or one whose probe exited non-zero.
+    These fixtures are written directly rather than produced by a real probe,
+    so the sidecar is written the same way run_quiet.py writes it -- schema
+    and hash included -- and the composition being asserted stays honest.
+    """
+    capture_path = Path(capture_path)
+    meta = {
+        "argv": ["curl", "-sS", "-i", "http://localhost:5142/api/contacts"],
+        "cwd": str(capture_path.parent),
+        "host": "eval-fixture",
+        "pid": 0,
+        "started": "2026-01-01T00:00:00Z",
+        "finished": "2026-01-01T00:00:01Z",
+        "exit_code": int(exit_code),
+        "body_sha256": hashlib.sha256(b"").hexdigest(),
+        "capture_sha256": hashlib.sha256(capture_path.read_bytes()).hexdigest(),
+        "tool": "run_quiet.py",
+        "schema": 1,
+    }
+    side = capture_path.with_name(capture_path.name + ".meta.json")
+    side.write_text(json.dumps(meta, indent=2) + chr(10), encoding="utf-8")
+    return side
+
+
 results = []
 
 
@@ -323,8 +361,14 @@ def run_lifecycle(repo):
                "" if ok else json.dumps(data))
 
     # --- Step 4: blocker added, review flips to Approve, blocker still gates
-    blocker_text = f"{MILESTONE2_TITLE}: validation finding open"
-    proc = run_py(UPDATE_STATE, ["--state", state_path, "--add-blocker", blocker_text])
+    # Scoped via --blocker-milestone so it lands in check_commit_gate's
+    # `blocking` (structured milestone-field match), not `unscoped_blockers`
+    # -- the blockers-ledger schema moved scoping from a substring guess
+    # against freeform text to an explicit field (see update_state.py /
+    # check_commit_gate.py blocker-schema work).
+    blocker_text = "validation finding open"
+    proc = run_py(UPDATE_STATE, ["--state", state_path, "--add-blocker", blocker_text,
+                                  "--blocker-milestone", MILESTONE2_TITLE])
     add_blocker_ok = proc.returncode == 0
 
     with review_path.open("a", encoding="utf-8") as f:
@@ -424,7 +468,8 @@ def run_lifecycle(repo):
     # --require-rendered-evidence even if the file exists on disk).
     evidence_file = repo / "evidence" / "review" / "m3.png"
     evidence_file.parent.mkdir(parents=True, exist_ok=True)
-    evidence_file.write_bytes(b"")
+    evidence_file.write_bytes(PNG_1PX)
+    set_mtime(evidence_file)  # must be no older than the newest changed file
 
     with review_path.open("a", encoding="utf-8") as f:
         f.write("\nRendered evidence: evidence\\review\\m3.png\n")
@@ -476,6 +521,7 @@ def run_lifecycle(repo):
         CAPTURE_TEMPLATE.format(milestone=MILESTONE2_HEADING, body=ENVELOPE_BODY),
         encoding="utf-8")
     set_mtime(good_capture)
+    set_mtime(write_sidecar(good_capture))
 
     good_report = impl_dir / "test-report.md"
     good_report.write_text(
@@ -507,6 +553,7 @@ def run_lifecycle(repo):
         CAPTURE_TEMPLATE.format(milestone=MILESTONE2_HEADING, body=BARE_BODY),
         encoding="utf-8")
     set_mtime(bare_capture)
+    set_mtime(write_sidecar(bare_capture))
 
     bare_report = impl_dir / "test-report-bare.md"
     bare_report.write_text(

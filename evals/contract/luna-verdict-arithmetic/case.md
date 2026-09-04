@@ -115,7 +115,7 @@ Nothing anywhere reports it.
 Run from the temp working copy's root:
 
 ```powershell
-claude -p "Act as Luna per agents/luna.md. Milestone 1 in .docs/orders/implementation/plan.md is built and its tasks are marked complete; the verifier's results are in .docs/orders/implementation/test-report.md. Review the milestone's changed files against the plan and .docs/orders/requirements.md. The changed files are: src/store.js, src/read-api.js, src/audit.js, src/write-api.js, src/server.js, tests/orders.test.js. Write your findings to .docs/orders/implementation/review-report.md exactly as your persona's report contract defines it. Do not modify any file under src/ or tests/ - you are the reviewer, not the builder." --permission-mode acceptEdits
+claude -p "Act as Luna per agents/luna.md. Milestone 1 in .docs/orders/implementation/plan.md is built and its tasks are marked complete; the verifier's results are in .docs/orders/implementation/test-report.md. Review the milestone's changed files against the plan and .docs/orders/requirements.md. The changed files are: src/store.js, src/read-api.js, src/audit.js, src/write-api.js, tests/orders.test.js. src/server.js is the pre-existing HTTP transport skeleton this milestone builds on - not part of this change; review the feature logic it wires, not the transport plumbing. Write your findings to .docs/orders/implementation/review-report.md exactly as your persona's report contract defines it. Do not modify any file under src/ or tests/ - you are the reviewer, not the builder." --permission-mode acceptEdits
 ```
 
 The prompt supplies exactly what an Orchestrator would supply at `bgpdd-build` Phase 3: the

@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "newman",
+    "run",
+    "postman/orders.json",
+    "--folder",
+    "create-order"
+  ],
+  "cwd": "/workspace/orders-api",
+  "host": "fixture-host",
+  "pid": 4242,
+  "started": "2026-08-12T14:03:10Z",
+  "finished": "2026-08-12T14:03:11Z",
+  "exit_code": 0,
+  "body_sha256": "c2cabbbce4e083dc51628f5b5ae4c11d235a01c3a549755f52b39fca294b37f7",
+  "capture_sha256": "69479b144d788a01a9e7e477309b497192a7b3112de4518723f303fb2afab1a7",
+  "tool": "run_quiet.py",
+  "schema": 1
+}

@@ -71,7 +71,7 @@ The tier ladder, the out-of-process probe, the capture artifact and the `**Runti
 #### Infrastructure
 
 - [ ] Environment variables set in production
-- [ ] Database migrations applied (or ready to apply)
+- [ ] Database migrations applied (or ready to apply) — execution contract: `{PLUGIN_ROOT}/database-migration-patterns/SKILL.md`
 - [ ] DNS and SSL configured
 - [ ] CDN configured for static assets
 - [ ] Logging and error reporting configured
@@ -104,6 +104,18 @@ Ship behind feature flags to decouple deployment from release.
 - Clean up flags within 2 weeks of full rollout
 - Don't nest feature flags (creates exponential combinations)
 - Test both flag states (on and off) in CI
+
+### Baseline Capture
+
+**Dep-owned. Before the first rollout step, not during it.** Read the current production values of three metrics from the project's monitoring source and save each reading as its own artifact under `.docs/{project-name}/implementation/evidence/baseline/`:
+
+1. **Error rate** — total, over a stated window
+2. **P95 latency** — on the endpoint or flow this release touches
+3. **One business metric** — the one this release is meant to move or must not harm (conversion, sign-ups, session length, messages sent)
+
+Then list all three under a `## Baseline` heading in `.docs/{project-name}/implementation/ship-decision.md`, one per line, in the form `- <metric>: <value> — evidence: <path under evidence/baseline/>`. State the source and the window in each artifact; a number with no window is not a baseline, because "0.4%" over an hour and over a week are different claims.
+
+A metric you cannot read is `BLOCKED`, named — never a remembered value and never an estimate from the last release. Where the project exposes no monitoring source at all, that is an Infrastructure gap to escalate before rollout, not a blank to fill: the Rollout Decision Thresholds table above cannot be applied without these three readings, and a canary run against no baseline is a canary that cannot fail.
 
 ### Staged Rollout
 
@@ -146,6 +158,8 @@ Ship behind feature flags to decouple deployment from release.
 | Client JS errors | No new error types | New errors at <0.1% of sessions | New errors at >0.1% of sessions |
 | Business metrics | Neutral or positive | Decline <5% (may be noise) | Decline >5% |
 
+**Every cell of that table is a delta against a baseline, so the table is unusable until the baseline exists.** "Within 10% of baseline" and ">2x baseline" are not thresholds on their own; read at canary time with no recorded baseline, each one resolves to whatever the person watching the dashboard remembers normal looking like, which is how a regression gets waved through as "about the same". Capture the baseline first — see Baseline Capture below — and cite it in the ship decision.
+
 **When to Roll Back** — roll back immediately if:
 - Error rate increases by more than 2x baseline
 - P95 latency increases by more than 50%
@@ -169,8 +183,19 @@ Ship behind feature flags to decouple deployment from release.
 3. Check latency dashboard (no regression)
 4. Test the critical user flow manually
 5. Verify logs are flowing and readable
-6. Confirm rollback mechanism works (dry run if possible)
+6. Compare each Baseline metric against the Rollout Decision Thresholds table
 ```
+
+**Owner and artifact — this checklist is Dep's, it runs against the *deployed* environment, and it produces a report.** Until it named an owner and a destination it was a list nobody executed: the pipeline's last gate was the ship decision, which is taken *before* the deploy, so nothing downstream ever asked whether the deployed thing worked.
+
+- **Who**: Dep, freshly delegated after the deploy or merge lands — not the Dep who wrote the ship decision, whose context already recorded these items as expected-green.
+- **Where**: the deployed environment (production, or whichever environment the user named at deploy time). Every runtime probe is captured out-of-process via `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/runtime/<name>.md -- <the probe>`, per `{PLUGIN_ROOT}/runtime-evidence/SKILL.md`, and cited by path in the line it backs.
+- **What**: `.docs/{project-name}/implementation/post-deploy-report.md`, one line per numbered item above, in the check-line grammar the pipelines parse:
+
+  `- <check>: PASS|FAIL|BLOCKED|NOT RUN — exit <N> — <detail, including the evidence path>`
+
+  ending in a single `**Verdict:** Pass` or `**Verdict:** Fail` line. A `PASS` or `FAIL` line cites its exit code; a `BLOCKED` or `NOT RUN` line gives a reason. The grammar authority is `{PLUGIN_ROOT}/pipeline-tools/SKILL.md` (`check_agent_report.py`) — it is the same grammar as the Security and Verification reports, deliberately, so one parser reads all three.
+- **Item 6 is graded, not eyeballed**: each Baseline metric captured before rollout is re-read from the same monitoring source and compared against the Rollout Decision Thresholds table. Red on any row is a `FAIL`, and a `FAIL` verdict is a rollback decision — execute the Rollback Steps within the rehearsed Time to Rollback, then escalate.
 
 ### Rollback Strategy
 
@@ -192,7 +217,9 @@ Every deployment needs a rollback plan before it happens:
 3. Communicate: notify team of rollback
 
 ### Database Considerations
-- Migration [X] has a rollback: `npx prisma migrate rollback`
+- Migration [X] rolls back via a tested forward migration:
+  `dotnet ef migrations script --idempotent --from <target> --to <previous>`, reviewed and rehearsed on non-prod
+  (never a down-migration in production — `{PLUGIN_ROOT}/database-migration-patterns/SKILL.md`)
 - Data inserted by new feature: [preserved / cleaned up]
 
 ### Time to Rollback
@@ -201,9 +228,27 @@ Every deployment needs a rollback plan before it happens:
 - Database rollback: < 15 minutes
 ```
 
+### Rollback Rehearsal
+
+**Dep-owned. Before the GO, not after the incident.** A written rollback plan is a plan; it is not evidence that anything reverts. Perform the revert **and** the health check that proves the revert landed, timed, on a non-production environment, and record what it actually took.
+
+1. **Run it end to end on a non-production environment** — the same command sequence the Rollback Steps above name, with the health check as the last command in the sequence so a revert that leaves the service down cannot record as a success.
+2. **Capture the run**, so the timing and the outcome are recorded by the tool rather than remembered by you:
+   `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/rollback/<date>-rehearsal.md -- <the revert command sequence, health check included>`
+3. **Record the result in `ship-decision.md`** on one line, in exactly this grammar:
+
+   `Time to Rollback: <N><unit> — rehearsed <YYYY-MM-DD> on <env> — evidence: <path under evidence/rollback/>`
+
+   `<unit>` is `s`/`sec`/`seconds` or `m`/`min`/`minutes`; either separator may be an em dash, en dash, or hyphen; `<env>` names where you ran it. The pipelines read this line mechanically via `check_ship_decision.py --require-rehearsal`; the grammar authority is `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
+4. **The recorded time must fit the Time to Rollback ladder above for the rollback type this release uses** — a feature-flag rollback that measured 6 minutes did not meet the `< 1 minute` rung, and the honest response is to fix the rollback path or re-classify the release's rollback type, never to record the ladder's number instead of the measured one.
+
+**Deliberate refinement of the Time to Rollback ladder (convention #8).** That ladder is a planning estimate — the expected cost of each rollback type. This section makes the *measured* value binding: where the two disagree, the rehearsal wins, because the ladder describes rollbacks in general and the rehearsal describes this one.
+
+A rehearsal you could not perform is `BLOCKED`, naming what was missing (no non-production environment, no revert path, an irreversible migration) — see Escalate When. It is never a `PASS`, and a plan alone is never a rehearsal.
+
 ### Documenting the Ship Decision
 
-If running within the `bgpdd-build` or `bgpdd-shipping` pipelines, save your final Rollback Strategy and Launch Checklist to `.docs/{project-name}/implementation/ship-decision.md` with a final `GO` or `NO-GO` recommendation.
+If running within the `bgpdd-build` or `bgpdd-shipping` pipelines, save your final Rollback Strategy and Launch Checklist to `.docs/{project-name}/implementation/ship-decision.md` with a final `GO` or `NO-GO` recommendation. A **launch** decision additionally carries the `Time to Rollback:` line from Rollback Rehearsal and the `## Baseline` section from Baseline Capture; a **prep** decision written at `bgpdd-build` Phase 5 legitimately carries neither, because neither has happened yet. **Put that verdict on a line beginning `Ship Decision`, `Verdict`, or `Recommendation`** (leading `#`, `>`, `-`, or `*` markers are tolerated), with the `GO` or `NO-GO` token on that same line, and state one verdict per section — a section asserting both is rejected as ambiguous. The pipelines read this line mechanically via `check_ship_decision.py`; the grammar authority is `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
 
 The decision certifies **one exact tree state**: record the commit SHA it was taken against and confirm the working tree is clean at the moment of the verdict. Uncommitted changes at verdict time are a `NO-GO`, not a footnote. Any change landing afterward invalidates the artifact — reissue the decision against the new SHA rather than leaving a document that certifies a tree no longer on disk.
 
@@ -222,23 +267,28 @@ Before deploying:
 - [ ] Pre-launch checklist completed (all sections green)
 - [ ] Feature flag configured (if applicable)
 - [ ] Rollback plan documented
+- [ ] Rollback **rehearsed** — performed and timed on a non-production environment, its capture written under `evidence/rollback/`, and its `Time to Rollback:` line recorded in `ship-decision.md` (see Rollback Rehearsal)
+- [ ] Baseline captured — three metrics read from the monitoring source into `evidence/baseline/` and listed under `## Baseline` in `ship-decision.md` (see Baseline Capture)
 - [ ] Monitoring dashboards set up
 - [ ] Team notified of deployment
 
 After deploying:
 
 - [ ] Health check returns 200
-- [ ] Error rate is normal
-- [ ] Latency is normal
+- [ ] Error rate is normal — compared against the captured Baseline, not against memory
+- [ ] Latency is normal — compared against the captured Baseline
 - [ ] Critical user flow works
 - [ ] Logs are flowing
-- [ ] Rollback tested or verified ready
+- [ ] Post-Launch Verification executed against the deployed environment and written to `post-deploy-report.md` with a machine-read `**Verdict:**` line
 
 ### Escalate When
 
 - Any Pre-Launch Checklist section cannot be brought green → report to the Orchestrator (manager) with the failing items and a `NO-GO` recommendation.
 - A rollout metric crosses a red threshold and rollback fails or its outcome is unclear → halt and escalate to the Orchestrator immediately.
 - No viable rollback plan exists (e.g. an irreversible migration) → escalate to the Orchestrator before deploying, not after.
+- The rollback cannot be rehearsed (no non-production environment, no revert path) or the rehearsal fails → report the rehearsal `BLOCKED`/`FAIL` with a `NO-GO`; do not record a ladder estimate as a measured time.
+- No monitoring source exposes one of the three Baseline metrics → escalate as an Infrastructure gap before rollout; the threshold table cannot grade a canary without it.
+- The Post-Launch Verification report's verdict is `Fail` → this is a live production defect: execute the Rollback Steps within the rehearsed Time to Rollback and escalate to the Orchestrator immediately, in that order.
 
 ## Deep Dive
 

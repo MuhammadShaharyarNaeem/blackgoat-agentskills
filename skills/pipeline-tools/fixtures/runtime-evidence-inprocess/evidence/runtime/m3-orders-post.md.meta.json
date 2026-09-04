@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "dotnet",
+    "test",
+    "--filter",
+    "Returns_envelope"
+  ],
+  "cwd": "/workspace/orders-api",
+  "host": "fixture-host",
+  "pid": 4242,
+  "started": "2026-08-12T14:03:07Z",
+  "finished": "2026-08-12T14:03:11Z",
+  "exit_code": 0,
+  "body_sha256": "231b1bbd6ba8e8724b463f08a660a3b6fb5640d47d5fe116fd00ee6fd79fa8c4",
+  "capture_sha256": "8e559e666a72d10f07e24847892fbf8645459cf711cd5da65294d72afa0ffad6",
+  "tool": "run_quiet.py",
+  "schema": 1
+}
