@@ -396,7 +396,10 @@ foreach ($relative in $renameFiles) {
     $full = Join-Path $TargetDir ($relative -replace '/', '\')
     if (-not (Test-Path $full)) { $renameProblems.Add("$relative is missing from the working copy"); continue }
     $text = (Get-Content -Path $full -Raw -Encoding UTF8)
-    if ("$text" -cmatch [regex]::Escape($oldName)) { $renameProblems.Add("$relative still names $oldName") }
+    # Code only: the fixture's own header comments describe the rename target by
+    # its old name, and the ask was "defined, exported, imported or called".
+    $codeOnly = (($text -split "`n") | Where-Object { $_ -notmatch '^\s*//' }) -join "`n"
+    if ("$codeOnly" -cmatch [regex]::Escape($oldName)) { $renameProblems.Add("$relative still names $oldName in code") }
     if ("$text" -cnotmatch [regex]::Escape($newName)) { $renameProblems.Add("$relative never names $newName") }
 }
 $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
