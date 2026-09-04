@@ -9,7 +9,11 @@ The squad's skills and personas are written **runtime-neutral** -- they say "del
 
 ## When this applies
 
-Whenever you invoke a `bgpdd-*` pipeline (`/bgpdd-discovery`, `/bgpdd-plan`, `/bgpdd-lite`, `/bgpdd-build`, `/bgpdd-verify`, `/bgpdd-shipping`, `/bgpdd-bugfix`, `/bgpdd-learn`) or delegate to any squad member: Rex, Aria, Alex, Mason, Nova, Luna, Max, Quinn, Echo, Vera, Cipher, Dep, Forge, Iris, Scout.
+Whenever you invoke a `bgpdd-*` pipeline (`/bg`, `/bgpdd-quick`, `/bgpdd-discovery`, `/bgpdd-plan`, `/bgpdd-lite`, `/bgpdd-build`, `/bgpdd-verify`, `/bgpdd-shipping`, `/bgpdd-bugfix`, `/bgpdd-learn`) or delegate to any squad member: Rex, Aria, Alex, Mason, Nova, Luna, Max, Quinn, Echo, Vera, Cipher, Dep, Forge, Iris, Scout.
+
+## Read the always-on index at session start
+
+At the start of every session -- before any lane is chosen, and whether or not one ever is -- **Read** `skills/agent-squad/always-on.md` (under this plugin's install root). It carries the lane index plus the four rules that hold outside any pipeline, and it is the only part of this plugin that applies to an ordinary chat. Claude Code injects it automatically through the `SessionStart` hook in `hooks/hooks.json`; Cursor does not run that hook, so this read is the Cursor-side delivery of the same content. The content lives once, in that one file -- this paragraph is per-runtime packaging only. Do not summarize or restate its rules here; read it.
 
 ## Load the orchestration model first
 

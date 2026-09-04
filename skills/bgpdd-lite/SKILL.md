@@ -135,6 +135,11 @@ This pipeline's only refinement on the skeleton's Error Recovery section: the ar
 }
 ```
   3. Prompt the user to open a fresh chat session and trigger **`/bgpdd-build`** to execute the plan (suggest the `auto` argument — lite work is well-specified by definition). Note: `/bgpdd-shipping` still requires build to complete first — lite changes nothing downstream.
+  4. **Close the branch** (interactive; never delegated — Contract §1) — **only when the user stops here**; continuing to `/bgpdd-build` leaves the branch to build's close. **Deliberate divergence (convention #8) from `bgpdd-shipping` Step 4.5/6.6**: those close an *epic*, this one *branch*; `orchestrator-state.json` survives.
+     - Read the base branch from the repo (`git symbolic-ref refs/remotes/origin/HEAD`, else its default), never guessing.
+     - Offer exactly three: **merge locally**; **publish the branch and open a pull request through the runtime's tooling**; **keep the branch**. Discarding requires typing the branch name.
+     - **After a merge, done is a capture (convention #9)**: `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/post-merge.md -- <the project's test command>`. Non-zero exit → report it; stop.
+     - Worktree branch: offer to remove it after merging.
 
 ## Procedural Memories (Learned Lessons)
 - **[2026-07-20]**: When Phase 0/1 needs codebase ground-truth gathering (fact-finding, reverse-engineering, API/pattern mapping) too large to run inline, delegate it to the squad's **Scout** persona (`{PLUGIN_ROOT}/../agents/scout.md`) — the designated disposable research worker — as the default, rather than the generic built-in `Explore` agent. Scout carries the squad's methodology dependencies; the built-in does not. This keeps lite consistent with `/bgpdd-discovery` and `/bgpdd-plan`, which already route research through Scout. Phase 0/1 stay Orchestrator-owned; this governs only sub-delegated research, and deviating to another researcher requires a stated reason.

@@ -51,6 +51,8 @@ The operational spine — follow it as written. Rationale, worked examples, and 
 **Dependencies:** [Task numbers this depends on, or "None"]
 
 **Estimated scope:** [Small: 1-2 files | Medium: 3-5 files | Large: 5+ files]
+
+**Model tier:** [OPTIONAL — `opus` | `sonnet` | `haiku`. The planner's *recommendation* for the tier this task's builder should run at, based on the judgment the task demands, not its file count.]
 ```
 
 #### Plans model effects, not artifacts
@@ -69,6 +71,8 @@ The operational spine — follow it as written. Rationale, worked examples, and 
 | authors a gate, check script, or scanner | specify its **negative-half proof** in that task's Verification — the violation, the command, the failure it must produce (builder-side counterpart: `test-driven-development`'s negative-half proof rule) |
 
 **Tag legend:** `[UI]` user-facing UI changes, `[API]` backend/service-side changes, `[SEC]` security-sensitive logic (auth, payments), `[EXT]` external APIs, `[BLOCKED]` unclear requirements. `[UI]` and `[API]` are DOMAIN tags — every task carries exactly one of them, with no exception for design, wiring, export, or search tasks (a "which builder touches the files" question always has an answer); `[SEC]`/`[EXT]`/`[BLOCKED]` are overlays that combine freely with either domain. Before finalizing, sweep every `## Task` heading's block and verify its `**Tags:**` line names exactly one domain tag — an untagged task is unroutable and a planning defect. Enforced mechanically by `check_coverage.py`'s plan-mode `domain-tag` lint (task tags AND milestone homogeneity — contract in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`); the coverage gate fails the plan on any violation.
+
+**Model tier is a recommendation, not an assignment.** The planner proposes; the **Orchestrator** decides at dispatch and may override — it alone knows what the run has cost so far and what the milestone turned out to need. The rule the recommendation must not violate is **agent-audit Metric 14 (Model Assignment Fit)**: a verifier never runs below the producer it judges. That metric owns the rule and its rationale; do not restate it here. Omitting the field is legitimate — a task with no tier recommendation is a task the planner had no basis to call. Whatever tier the delegation actually runs at is recorded by `record_run.py --model`, which is mandatory on a delegation record (`{PLUGIN_ROOT}/pipeline-tools/SKILL.md`); the recorded tier is the one that ran, never the one recommended here.
 
 **Scope rule for the four new fields:** Named identifiers, Pattern anchor, Boundary contracts, and Do NOT are mandatory for S/M tasks; proportional for L/XL or judgment-heavy tasks — but Named identifiers and Do NOT are always required.
 

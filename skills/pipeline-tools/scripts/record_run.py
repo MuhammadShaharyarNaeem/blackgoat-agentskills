@@ -23,6 +23,16 @@ Record shape (one JSON object per line):
      "status": "COMPLETE"|"PARTIAL"|"BLOCKED"|"PASS"|"FAIL"|"ERROR"|null,
      "note": str|null}
 
+`--model` is MANDATORY on `--event delegation`. Measured finding: model
+choice left to prose decays -- 17 dispatches in one audited wave silently
+inherited the most expensive tier, and nothing in the run log could tell that
+apart from a deliberate choice, because the field was simply null. A null
+there is not "not measured": the tier is always known at dispatch time, so
+its absence records a decision nobody made (`CLAUDE.md` convention #9 -- a
+restraint rule the Orchestrator skips at the moment it wants to proceed
+becomes a mechanical gate, not louder prose). `--from-json` may supply it.
+Every other event is unchanged: a gate, phase or note record has no model.
+
 Usage:
     python record_run.py --log <path> --pipeline <name> --phase <name> \
         --event <delegation|gate|phase|note> \
@@ -217,7 +227,9 @@ def main(argv):
     parser.add_argument("--event")
     parser.add_argument("--unit")
     parser.add_argument("--agent")
-    parser.add_argument("--model")
+    parser.add_argument("--model",
+                        help="the tier the delegation ran at; REQUIRED for "
+                             "--event delegation (may come via --from-json)")
     parser.add_argument("--duration-s", dest="duration_s")
     parser.add_argument("--tokens-in", dest="tokens_in")
     parser.add_argument("--tokens-out", dest="tokens_out")
@@ -276,6 +288,14 @@ def main(argv):
     fields["event"] = args.event
     fields["note"] = args.note
 
+    # Checked AFTER --from-json is merged: the payload is a legitimate source
+    # for the tier. Only `delegation` is gated -- a gate/phase/note record has
+    # no model to report, and demanding one there would invite a fabrication.
+    if fields["event"] == "delegation" and not fields.get("model"):
+        return fail("--model is required for --event delegation: record the "
+                    "tier the delegation actually ran at (supply --model, or "
+                    "a --from-json payload carrying it)")
+
     record = build_record(fields)
     try:
         append_record(args.log, record)
@@ -306,8 +326,11 @@ def run_self_test():
                     self.log.read_text(encoding="utf-8").splitlines() if l.strip()]
 
         def _base(self, *extra):
+            # --model is mandatory for a delegation record, so it belongs in
+            # the shared base: a test about tokens must not fail on the tier.
             return ["--log", str(self.log), "--pipeline", "bgpdd-build",
-                    "--phase", "Phase 1", "--event", "delegation"] + list(extra)
+                    "--phase", "Phase 1", "--event", "delegation",
+                    "--model", "sonnet"] + list(extra)
 
         def test_append_creates_parents_and_one_line(self):
             self.assertFalse(self.log.parent.exists())
@@ -343,7 +366,8 @@ def run_self_test():
             for phase in ("Phase 1", "Phase 2", "Phase 3"):
                 self.assertEqual(
                     main(["--log", str(self.log), "--pipeline", "bgpdd-build",
-                          "--phase", phase, "--event", "delegation"]), 0)
+                          "--phase", phase, "--event", "delegation",
+                          "--model", "sonnet"]), 0)
             self.assertEqual([r["phase"] for r in self._lines()],
                              ["Phase 1", "Phase 2", "Phase 3"])
 
@@ -368,6 +392,7 @@ def run_self_test():
         def test_from_json_reads_nested_usage(self):
             payload = self.dir / "completion.json"
             payload.write_text(json.dumps({
+                "model": "haiku",
                 "usage": {"input_tokens": 900, "output_tokens": 100,
                           "cache_read_input_tokens": 40000},
             }), encoding="utf-8")
@@ -419,10 +444,12 @@ def run_self_test():
         def test_missing_required_flag_is_exit_2(self):
             self.assertEqual(main(["--log", str(self.log),
                                    "--pipeline", "bgpdd-build",
-                                   "--event", "delegation"]), 2)
+                                   "--event", "delegation",
+                                   "--model", "sonnet"]), 2)
             self.assertEqual(main(["--pipeline", "bgpdd-build",
                                    "--phase", "Phase 1",
-                                   "--event", "delegation"]), 2)
+                                   "--event", "delegation",
+                                   "--model", "sonnet"]), 2)
             self.assertFalse(self.log.exists())
 
         def test_bad_event_and_status_are_exit_2(self):
@@ -450,7 +477,43 @@ def run_self_test():
             self.assertEqual(
                 main(["--log", str(blocker / "run-log.jsonl"),
                       "--pipeline", "bgpdd-build", "--phase", "Phase 1",
-                      "--event", "delegation"]), 2)
+                      "--event", "delegation", "--model", "sonnet"]), 2)
+
+        # ---- --model is mandatory for a delegation record ----------------
+        def test_delegation_without_model_is_exit_2_and_writes_nothing(self):
+            """The measured decay: a null tier is a decision nobody made."""
+            self.assertEqual(
+                main(["--log", str(self.log), "--pipeline", "bgpdd-build",
+                      "--phase", "Phase 1", "--event", "delegation",
+                      "--agent", "mason"]), 2)
+            self.assertFalse(self.log.exists())
+
+        def test_delegation_with_model_is_exit_0(self):
+            self.assertEqual(
+                main(["--log", str(self.log), "--pipeline", "bgpdd-build",
+                      "--phase", "Phase 1", "--event", "delegation",
+                      "--agent", "mason", "--model", "opus"]), 0)
+            self.assertEqual(self._lines()[0]["model"], "opus")
+
+        def test_non_delegation_without_model_is_exit_0(self):
+            """Only delegations are gated -- a gate/phase/note has no tier."""
+            for event in ("gate", "phase", "note"):
+                self.assertEqual(
+                    main(["--log", str(self.log), "--pipeline", "bgpdd-build",
+                          "--phase", "Phase 1", "--event", event]), 0)
+            records = self._lines()
+            self.assertEqual([r["event"] for r in records],
+                             ["gate", "phase", "note"])
+            self.assertTrue(all(r["model"] is None for r in records))
+
+        def test_from_json_may_supply_the_model(self):
+            payload = self.dir / "completion.json"
+            payload.write_text(json.dumps({"model": "haiku"}), encoding="utf-8")
+            self.assertEqual(
+                main(["--log", str(self.log), "--pipeline", "bgpdd-build",
+                      "--phase", "Phase 1", "--event", "delegation",
+                      "--from-json", str(payload)]), 0)
+            self.assertEqual(self._lines()[0]["model"], "haiku")
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(RecordRunTests)
     result = unittest.TextTestRunner(verbosity=1).run(suite)
