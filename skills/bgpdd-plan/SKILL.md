@@ -28,71 +28,29 @@ The sections below carry ONLY this pipeline's refinements on top of that contrac
   - `plan.md`: every task cites the requirement ID(s) it satisfies (a "Requirements covered:" field), and every task carries a verification step.
   - *Format*: "Thinking: Phase X requires Y. Checking `.docs/{project-name}/Y`... File exists and satisfies its content contract [state which check(s) passed]. Proceeding."
 - **Mechanical gates**: the missing-interpreter HALT and the never-simulate-a-pass rule are the Orchestrator Contract §1's; the gates below neither restate nor soften them. Every gate invocation carries `--ledger .docs/{project-name}/implementation/gates.jsonl` (Orchestrator Contract §4).
+- **Run log** (Contract §4's obligation, bound here; CLI contract in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`). Per delegation return — Rex (Phase 1 Step B), each Scout (Phase 2 split), Aria (Phase 2 and her one revision round), Alex (Phase 3 and each coverage-fix round): `python {PLUGIN_ROOT}/pipeline-tools/scripts/record_run.py --log .docs/{project-name}/implementation/run-log.jsonl --pipeline bgpdd-plan --phase "<phase>" --event delegation --agent <name> --model <tier> --unit <the artifact the delegation produced, e.g. requirements.md> …` (`--model` is mandatory on a delegation record — exit 2 without it; name the tier the delegation actually ran at, not the one recommended). Add `--rounds <this artifact's round number>` on a re-delegation, plus `--duration-s`/`--tokens-in`/`--tokens-out` (or `--from-json <the completion payload>`) from the runtime's completion notification and `--status` from the handoff. Into Phase 4's game tape: `python {PLUGIN_ROOT}/pipeline-tools/scripts/summarize_run.py --run-log .docs/{project-name}/implementation/run-log.jsonl --ledger .docs/{project-name}/implementation/gates.jsonl --markdown`.
 - **File Artifacts**: All artifacts must use standard GitHub markdown and be saved under `.docs/{project-name}/`. This folder is the project's persistent **Semantic Memory**.
 
 ## 2. Global Error Recovery
 
 This pipeline's refinements on the skeleton's Error Recovery section: the artifacts subject to the 2-round bound are `requirements.md`, `detailed-design.md`, and `plan.md` — track the round count per artifact, and after 2 rounds surface the flaw and both attempts to the user rather than re-delegating a third time. Phase 2.5 is tighter still: the design gets exactly **one** doubt-driven revision round (deliberately below DDD's own 3-cycle bound), then escalate. Note: `requirements.md` is legitimately mutated in Phase 2 by Aria — supersession annotations only.
 
-## 3. Few-Shot Handoff Examples
-
-When communicating with the user during a phase transition checkpoint, adhere to these examples:
-
-**Good Example (Crisp, action-oriented):**
-> Phase 3 (Planning) is complete. Alex has saved the detailed task list to `.docs/my-app/implementation/plan.md`.
-> **Blockers**: None.
-> **Next Step**: Are you ready to proceed to Phase 4 (Game Tape Checkpoint)?
-
----
-
-## 4. Folder Structure (Semantic Memory) — TWO TIERS
+## 3. Folder Structure (Semantic Memory) — TWO TIERS
 
 This pipeline uses two distinct memory scopes. Do not conflate them.
 
-**Tier 1 — Global project knowledge base** (`.docs/summary/`): built by the **`/bgpdd-discovery`**
-pipeline (Iris, Scout, Echo) at **project scope** and **persisted across enhancement cycles**. This
-skill (`bgpdd-plan`) **consumes** it — it does not produce it; run `/bgpdd-discovery` first for
-brownfield work (see the Pre-Flight Check below). It is indexed by durable feature id (`{feature}`,
-e.g. `slide`) so the next time a feature is touched, its map already exists.
-```text
-.docs/summary/
-├── context.md                     # Project-wide tech-stack context + Target Scope (Iris) — one file
-└── {feature}/                     # Durable per-feature knowledge base (e.g. slide/)
-    ├── overview.md                #   Synthesized cross-API overview (Echo)
-    ├── {api}.md                   #   Per-API feature-fragment maps, one per API (Scout)
-    └── QA/
-        ├── code-workflow.md       #   Mermaid sequence diagrams & execution paths (Echo)
-        └── manual-testing.md      #   Reverse-engineered manual test cases (Echo)
-```
+- **Tier 1 — global project knowledge base** (`.docs/summary/`): built by **`/bgpdd-discovery`** (Iris, Scout, Echo) at **project scope** and **persisted across enhancement cycles**, indexed by durable feature id (`{feature}`, e.g. `slide`). This pipeline **consumes** it and **never writes it** — run `/bgpdd-discovery` first for brownfield work (see the Pre-Flight Check).
+- **Tier 2 — per-enhancement work dir** (`.docs/{project-name}/`): the isolated artifacts for **this** piece of work, produced by Rex/Aria/Alex and scoped to this cycle.
 
-**Tier 2 — Per-enhancement work dir** (`.docs/{project-name}/`): the isolated artifacts for
-**this** piece of work, where `{project-name}` is the current enhancement's work slug (e.g.
-`slide-enhancement`). Produced by Rex/Aria/Alex; scoped to this cycle.
-```text
-.docs/{project-name}/
-├── rough-idea.md          # Initial concept
-├── honing-transcript.md   # Interactive Q&A transcript (Phase 1, main session)
-├── requirements.md        # Finalized specification (Phase 1, Rex synthesis)
-├── acceptance-matrix.md   # Feature-scoped walkthrough scenarios (Phase 3, Alex)
-├── research/              # Technical research & findings (Aria)
-├── design/                # System designs & Mermaid diagrams (Aria)
-│   ├── detailed-design.md
-│   └── design-review.md   # Phase 2.5 findings (Orchestrator)
-├── implementation/        # Checklists (Alex)
-│   ├── plan.md            # Dependency-mapped task list
-│   └── game-tape.md       # Per-phase evidence checkpoints (Orchestrator, Phase 4)
-└── orchestrator-state.json # Handoff state for bgpdd-build (Phase 4)
-```
+The illustrative file-by-file trees for both tiers, and the phase-transition handoff example, live in `references/plan-rationale.md`.
 
 ---
 
-## 5. Detailed Pipeline Phases
-
-> **Brownfield vs Greenfield**: The Pre-Flight Check applies **only when the user is modifying an existing system (Brownfield)**. For a greenfield (new) project, skip directly to Phase 1.
+## 4. Detailed Pipeline Phases
 
 ### Pre-Flight Check: Global Context Verification (Brownfield only)
 - **Delegated Agent**: None — the Orchestrator performs this check directly.
-- **Purpose**: This skill **consumes** the Tier-1 knowledge base but no longer produces it — global discovery (Iris → Scout → Echo) now lives in the standalone **`/bgpdd-discovery`** pipeline. Verify that discovery has already run before planning against an existing system.
+- **Purpose**: verify Tier-1 discovery has already run before planning against an existing system (§3 owns the never-produces rule).
 - **Workflow**:
   1. Determine whether this is brownfield (modifying an existing system) or greenfield (new project). If greenfield, skip this check entirely and go to Phase 1.
   2. **Brownfield**: check that the Tier-1 `.docs/summary/context.md` exists, and — for the feature being enhanced — that `.docs/summary/{feature}/overview.md` exists.
@@ -101,10 +59,10 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
 
 ### Phase 1: Honing & Requirements (HYBRID)
 - **Behavioral spec**: `{PLUGIN_ROOT}/../agents/rex.md` (Rex, the Analyst) + `{PLUGIN_ROOT}/blackgoat-idea-honing/SKILL.md`
-- **Why hybrid**: honing is an interactive, turn-by-turn conversation with the user, and a delegated (fire-and-forget) agent cannot pause to ask the user and resume. So the **live Q&A runs in the main session**, but the **spec authoring is delegated to an isolated Rex** — preserving the isolation you want for the heavy artifact work.
+- **Why hybrid**: the live Q&A runs in the main session (a delegated agent cannot pause to ask the user), the spec authoring is delegated to an isolated Rex. Detail: `references/plan-rationale.md` § Why Phase 1 is hybrid.
 
 - **Step A — Interactive honing (YOU, the main session)**:
-  1. Read Rex's persona (`agents/rex.md`) and the `blackgoat-idea-honing` methodology; adopt them as your behavior for this step.
+  1. Adopt the Behavioral spec above as your behavior for this step.
   2. Save any rough idea the user gave into `.docs/{project-name}/rough-idea.md`. If brownfield, read the Tier-1 knowledge base first — `.docs/summary/context.md` and `.docs/summary/{feature}/overview.md` (drill into `{api}.md` / QA files as needed) — to ground your questions in the real system. (Greenfield: these don't exist; skip.)
   3. Conduct the honing Q&A: ask the user **one targeted question at a time**, probing edge cases deeply, appending each question and answer to `.docs/{project-name}/honing-transcript.md`. Use your runtime's structured multiple-choice question tool (if one exists) for clear multiple-choice decisions; otherwise ask in plain conversation.
   4. Even if the user provides a complete requirements document upfront, still review it for missing edge cases and drive it through the honing checkpoint — do not skip straight to acceptance.
@@ -125,19 +83,19 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
   4. Read Aria's returned handoff.
   5. **Iteration Checkpoint**: After Phase 2.5 completes, present Aria's design to the user **together with the Phase 2.5 gate findings** (`design/design-review.md`), and explicitly offer to bounce back to Phase 1 if research or the review uncovered new questions.
 
-- **Splitting Phase 2 when the design surface is large** (recommended for substantial greenfield builds): Aria doing open-ended external research *and* authoring the full blueprint in one run is the phase most likely to exhaust its context or return thin on exactly the part the user cares most about. When the surface is large — e.g. a complete API contract **plus** costed infrastructure options **plus** a design system — split it:
+- **Splitting Phase 2 when the design surface is large** (recommended for substantial greenfield builds) — e.g. a complete API contract **plus** costed infrastructure options **plus** a design system. Why, and when not to: `references/plan-rationale.md` § Splitting Phase 2. To split:
   1. Spawn one or more **Scout** agents for the *bounded research* questions (the Orchestrator may spawn Scout; Aria may not). Give each Scout a single topic and its own output file under `.docs/{project-name}/research/`. Launch them **concurrently in one message**. Tell each Scout explicitly that it is researching, not designing — no architecture, no component or endpoint design.
   2. Then delegate **Aria** to author `.docs/{project-name}/design/detailed-design.md`, instructing her to read those research files as inputs so the Scout work is consumed, not orphaned.
-  Keep `detailed-design.md` as the single authoritative blueprint Alex decomposes; research files are supporting detail it references. For a small or well-bounded feature, one Aria delegation remains correct — do not split by reflex.
+  `detailed-design.md` stays the single authoritative blueprint Alex decomposes. For a small or well-bounded feature, one Aria delegation remains correct — do not split by reflex.
 
 ### Phase 2.5: Adversarial Design Review (Orchestrator)
 - **Delegated Agent**: None — YOU (the Orchestrator) run the Doubt-Driven Development cycle (`{PLUGIN_ROOT}/doubt-driven-development/SKILL.md`) on `detailed-design.md` before the design stands.
 - **Workflow**:
-  1. **Supersession-annotation lint (mechanical pre-step)**: Before the adversarial pass, execute the coverage tool via a shell action, using the runtime's available Python 3 interpreter (`python` or `python3`):
+  1. **Supersession-annotation lint (mechanical pre-step)**: before the adversarial pass, run:
      `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --design .docs/{project-name}/design/detailed-design.md --ledger .docs/{project-name}/implementation/gates.jsonl`
-     This is the **supersession-annotation lint** — not full FR→design coverage. It checks that every FR/NFR named in the design's `## Divergence & Supersession Register` carries its matching in-place supersession annotation in `requirements.md`. The full CLI contract (JSON shape, exit codes, parsing rules) lives in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`. Read the JSON object from stdout and fix any reported `lint_failures` (including `supersession-annotation`, and `fr-citation` when the script emits it) before proceeding.
+     This is the **supersession-annotation lint**, not full FR→design coverage: every FR/NFR named in the design's `## Divergence & Supersession Register` must carry its matching in-place supersession annotation in `requirements.md`. Read the JSON from stdout and fix every reported `lint_failures` entry (`supersession-annotation`, and `fr-citation` when emitted) before proceeding. CLI contract: `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
   1b. **FR/NFR citation check (Orchestrator)**: Independently verify that every Must-Have `FR`/`NFR` ID from `requirements.md` appears at least once in `detailed-design.md` (a citation, not necessarily a register row). If `check_coverage` design mode already reports `fr-citation` entries in `lint_failures`, treat those as authoritative and fix them; otherwise perform this citation scan yourself before the adversarial pass. An uncited Must-Have is a design gap — route back to Aria (counts as the Phase 2.5 revision round if unresolved).
-  2. Run the doubt cycle **per-section** — the design exceeds DDD's one-read unit, so honor its decomposition rule. Always extract: every money-moving sequence, every state machine, every read-then-decide gate.
+  2. Run the doubt cycle **per-section** (the design exceeds DDD's one-read unit, so its decomposition rule applies). Always extract: every money-moving sequence, every state machine, every read-then-decide gate.
   3. Each DOUBT prompt carries this fixed attack list **verbatim**, in addition to DDD's adversarial prompt:
      1. **Crash windows** — for each sequence that moves money and calls an external system, enumerate "process dies after step N" for every N; each must name a recovery mechanism (sweeper / reconciliation / idempotent retry).
      2. **Reversals** — every journal entry / money movement has a defined reversal or an explicit "irreversible, because…".
@@ -147,47 +105,47 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
      6. **Config knobs** — every brief "must be configurable" maps to a named options key referenced by the algorithm that uses it (not a literal).
   4. Write the findings to `.docs/{project-name}/design/design-review.md`.
   5. Send the findings to **Aria** as ONE revision round (see §2 — this bound is deliberately tighter than DDD's 3-cycle bound). Unresolved Blockers escalate to the user at the Iteration Checkpoint.
-  6. **Verify the fixes, not just the design.** One revision round does not mean one verification: when Aria returns the revised design, check each Blocker's fix is actually present, AND re-read the clauses the fix touched for regressions. A fix round produces a new artifact, not a patch — verbatim requirement clauses a fix rewrites (auth posture, endpoint bindings, identifier bindings) are the highest-regression-risk surface in this pipeline, and an observed run regressed a verbatim FR clause and mis-bound three endpoint ids inside the very round that fixed something else. This pass restores the re-loop that tightening the bound to one round removed; it is NOT a new adversarial cycle and does NOT count against that bound. Skip it and the gate's own output is the only text in the pipeline that nothing reviews.
+  6. **Verify the fixes, not just the design.** One revision round does not mean one verification: when Aria returns the revised design, check each Blocker's fix is actually present, AND re-read the clauses the fix touched for regressions — a fix round produces a new artifact, not a patch. This pass is NOT a new adversarial cycle and does NOT count against the one-round bound. Why it exists, and the observed regression behind it: `references/plan-rationale.md` § Verify the fixes.
 
 ### Phase 3: Planning (Alex)
 - **Delegated Agent**: **Alex** (Strategist)
 - **Workflow**:
   1. Delegate to the **Alex** agent. He reads his own methodology dependencies on-demand.
   2. Instruct Alex to read `.docs/{project-name}/requirements.md`, `.docs/{project-name}/honing-transcript.md`, and `.docs/{project-name}/design/detailed-design.md`, and convert the blueprint into micro-tasks ordered to satisfy dependencies.
-  2b. **Inject the discovery knowledge base (brownfield only).** If `.docs/summary/` exists for this feature, inject the resolved paths of `.docs/summary/{feature}/overview.md`, `.docs/summary/{feature}/QA/code-workflow.md`, and `.docs/summary/{feature}/QA/manual-testing.md` into his brief. Without these he plans from requirements plus design alone and cannot see how the feature behaves **today** — and `manual-testing.md` in particular is the reverse-engineered baseline his Baseline Reconciliation duty operates on. On a greenfield project these do not exist; say so explicitly in the brief rather than leaving him to infer it from a missing path. Mirrors Rex's Context Hydration in `bgpdd-plan` Phase 1.
+  2b. **Inject the discovery knowledge base (brownfield only).** If `.docs/summary/` exists for this feature, inject the resolved paths of `.docs/summary/{feature}/overview.md`, `.docs/summary/{feature}/QA/code-workflow.md`, and `.docs/summary/{feature}/QA/manual-testing.md` into his brief. `manual-testing.md` is the reverse-engineered baseline his Baseline Reconciliation duty operates on. On a greenfield project these do not exist; say so explicitly in the brief rather than leaving him to infer it from a missing path. Why it matters: `references/plan-rationale.md` § Injecting the discovery knowledge base.
      - This is a **read-only** injection. `.docs/summary/` is Tier 1 and this pipeline never writes it (see Path Model).
   3. **CRITICAL PATHING**: Instruct Alex that he MUST save the checklist exactly to `.docs/{project-name}/implementation/plan.md` (NOT the root `.docs/{project-name}/` folder), using his planning methodology's format. Every milestone heading carries both its `[UI]`/`[API]` domain tag **and** its `[vs:<surface>]` verification-surface tag, and every `### Checkpoint:` carries a conforming `RUNTIME PROBE:` line — a missing surface tag halts `bgpdd-build` before Phase 1, so it is cheaper to catch here.
-  3b. **Second artifact, different scope**: Alex MUST also save the feature acceptance matrix to `.docs/{project-name}/acceptance-matrix.md` (the project root, NOT `implementation/`), derived from `requirements.md` and never from the task list he just wrote. The plan is per-milestone; the matrix is per-feature — milestone evidence proves each brick, only the matrix proves the wall stands. Every state-changing step declares its inverse or carries a written `[no inverse: <reason>]` exemption.
+  3b. **Second artifact, different scope**: Alex MUST also save the feature acceptance matrix to `.docs/{project-name}/acceptance-matrix.md` (the project root, NOT `implementation/`), derived from `requirements.md` and never from the task list he just wrote. The plan is per-milestone; the matrix is per-feature (why: `references/plan-rationale.md` § Plan versus matrix). Every state-changing step declares its inverse or carries a written `[no inverse: <reason>]` exemption.
   4. Read Alex's returned handoff.
 
 ### Phase 3.5: Coverage & Acceptance Lint Gate (Orchestrator)
 - **Delegated Agent**: None — the Orchestrator performs this check directly.
 - **Workflow**:
-  1. Execute the coverage tool via a shell action, using the runtime's available Python 3 interpreter (`python` or `python3`):
+  1. Run:
      `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --plan .docs/{project-name}/implementation/plan.md --ledger .docs/{project-name}/implementation/gates.jsonl`
      The full CLI contract (JSON shape, exit codes, parsing rules) lives in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
-  2. Read the JSON object from stdout. Exit code 0 = every Must-Have `FR`/`NFR` is covered and no lint failed — report any `warnings` and `uncovered_should` entries to the user as non-blocking notes, then proceed to Phase 4. Exit code 1 = at least one of the **two gating arrays** is non-empty: `uncovered` (Must-Have coverage gaps) and/or `lint_failures` (lint violations) — a clean-coverage plan with a lint failure still exits 1. Exit code 2 = an artifact failed its structural contract (e.g. no task blocks, no Must-Have IDs) — treat this as a defect in the artifact, not the tool.
+  2. Read the JSON object from stdout. Exit 0 = every Must-Have `FR`/`NFR` covered and no lint failed — report `warnings` and `uncovered_should` as non-blocking notes, then proceed. Exit 1 = one of the **two gating arrays** is non-empty, `uncovered` and/or `lint_failures` (a clean-coverage plan with a lint failure still exits 1). Exit 2 = the artifact failed its structural contract — a defect in the artifact, not the tool.
   3. On exit 1 or 2, re-delegate to **Alex** (a fresh delegation) quoting the exact `uncovered` IDs **and** the `lint_failures` entries, plus `warnings` (or the `error` message) — subject to the existing 2-round auto-fix bound. If unresolved after 2 rounds, halt and surface to the user. After each fix, re-run step 1 to verify.
   4. **Lint the acceptance matrix's structure** — the same gate script, structure mode, no results file yet because nothing has been executed:
      `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_acceptance_suite.py --lint-only --matrix .docs/{project-name}/acceptance-matrix.md --requirements .docs/{project-name}/requirements.md --ledger .docs/{project-name}/implementation/gates.jsonl`
-     Exit 0 = the matrix is structurally sound. Exit 1 = the JSON names the defect: a scenario with no priority or no step table, a missing `Stores`/`Mode` column, an unrecognized `Mode`, a duplicate scenario id or step number, a phantom row, a dangling `[inverse of N]`, a malformed exemption, or a state-changing step with no inverse and no exemption. Exit 2 = usage or an unparseable matrix. `--requirements` additionally gates the FR→scenario link — every Must-Have `FR`/`NFR` must be cited by at least one scenario heading, each gap landing in `lint_failures` as check `fr-scenario-coverage`. Re-delegate to **Alex** quoting the exact arrays, under the same 2-round bound as step 3, re-running after each fix.
-     **Why an inverse blocks here but only warns at build** — a deliberate mode divergence, not a contradiction. At plan time the matrix *is* the artifact under authorship and the fix is a one-line edit; at build time the code is already written, so blocking would bill QA for a debt the planner incurred weeks earlier, and the check rests on a verb heuristic whose green means only "the heuristic found nothing". Same signal, opposite posture, because both the cost of the fix and the meaning of green differ by phase.
-  5. **If `acceptance-matrix.md` does not exist**, treat it as a Phase 3 defect and re-delegate to Alex — do not proceed. A feature with no declared walkthrough is a feature nobody has agreed on the meaning of "works" for. (Epics genuinely too small for a matrix belong in `/bgpdd-lite`, which declares `acceptance_matrix=null` explicitly rather than silently.)
+     Exit 0 = structurally sound. Exit 1 = the JSON names the defect (the enumerated defect classes are `check_acceptance_suite.py`'s, in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`). Exit 2 = usage or an unparseable matrix. `--requirements` additionally gates the FR→scenario link — every Must-Have `FR`/`NFR` cited by at least one scenario heading, each gap landing in `lint_failures` as `fr-scenario-coverage`. Re-delegate to **Alex** quoting the exact arrays, under the same 2-round bound as step 3, re-running after each fix.
+     **A missing inverse blocks here but only warns at build — a deliberate mode divergence (convention #8), not a contradiction.** Reasoning: `references/plan-rationale.md` § Why an inverse blocks at plan time.
+  5. **If `acceptance-matrix.md` does not exist**, treat it as a Phase 3 defect and re-delegate to Alex — do not proceed. (Epics genuinely too small for a matrix belong in `/bgpdd-lite`, which declares `acceptance_matrix=null` explicitly rather than silently.)
   6. Once coverage and the matrix lint are both confirmed, proceed to Phase 3.6.
 
 ### Phase 3.6: Environment Manifest & Capability Halt (Orchestrator + user, main session)
 - **Delegated Agent**: None — interactive, main session.
 - **Format authority**: the **Environment Manifest** section of `{PLUGIN_ROOT}/runtime-evidence/SKILL.md` — its blocks, unchanged.
-- **Brownfield: resolve, do not re-author.** If `.docs/summary/{feature}/QA/runtime-environment.md` exists (written by `/bgpdd-discovery` Phase 4b), that Tier-1 recipe is authoritative. Read it, confirm it still covers the surfaces this plan tagged, and skip to step 3 — re-deriving a recipe that already exists is exactly the waste it was written to end. Record any new service or step this feature introduces as a **delta** in the Tier-2 file, naming what it adds.
-- **Greenfield: derive first, ask second.** Nothing exists to discover, but by this phase you are not guessing either — Aria's design names the services and Alex's plan carries every `[vs:<surface>]` tag and `RUNTIME PROBE:` line. Use them:
+- **Brownfield: resolve, do not re-author.** If `.docs/summary/{feature}/QA/runtime-environment.md` exists (written by `/bgpdd-discovery` Phase 4b), that Tier-1 recipe is authoritative. Read it, confirm it still covers the surfaces this plan tagged, and skip to step 3. Record any new service or step this feature introduces as a **delta** in the Tier-2 file, naming what it adds.
+- **Greenfield: derive first, ask second.** Aria's design names the services and Alex's plan carries every `[vs:<surface>]` tag and `RUNTIME PROBE:` line. Use them:
   1. **Propose the manifest yourself** from the design and plan: the intended services and their start commands, the bring-up order the design's call flow implies, the repointing the architecture requires, and the capability inventory the plan's surfaces demand. Fill the bring-up sequence's `Needed for` column from the surface tags, so a later UI-only milestone can bring up the web app alone rather than the whole estate. Write it to `.docs/{project-name}/implementation/environment-manifest.md`.
-  2. **Then ask the user only for what no artifact can hold**, one question at a time: the source of each credential and the test login's username (**never the password itself**), target device or machine names as the product lists them, local ports that differ from the framework default, and any build/copy/install step between "compiles" and "running" that the design does not spell out. Present your proposal for correction rather than interrogating from zero — the user is confirming a draft, not filling a form.
+  2. **Then ask the user only for what no artifact can hold**, one question at a time: the source of each credential and the test login's username (**never the password itself**), target device or machine names as the product lists them, local ports that differ from the framework default, and any build/copy/install step between "compiles" and "running" that the design does not spell out. Present the proposal for correction; the user is confirming a draft, not filling a form.
 - **Capability check (both paths, step 3).** For every distinct `[vs:<surface>]` in the plan, confirm the capability that surface's evidence requires actually exists here, exercising each once: browser automation for `[vs:ui]`/`[vs:web+api]`, device or agent access for `[vs:rmm]`, a sink client for `[vs:fn]`, an out-of-process HTTP client and a Python 3 interpreter throughout.
-  - **A missing one does NOT halt planning.** Follow the *request now, block at the evidence boundary* ladder in `runtime-evidence`: ask the user for it immediately and specifically (they can install while planning finishes), record it in the same action with `python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --init --project-name "{project-name}" --add-blocker "<the missing capability>"`, and carry on to Phase 4. The blocker travels to `/bgpdd-build` in `orchestrator-state.json`, where Phase 0 re-checks it and the milestone-close rule refuses to let it be forgotten. **Checking early is what buys the user their parallel install time** — it is not a gate looking for somewhere to stop.
-  - **Do not soften the plan's surface tags to fit the tooling you happen to have.** That converts a temporarily missing tool into a permanently unverifiable requirement, and it is the one failure this step exists to prevent.
+  - **A missing one does NOT halt planning.** Follow the *request now, block at the evidence boundary* ladder in `runtime-evidence`: ask the user for it immediately and specifically (they can install while planning finishes), record it in the same action with `python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --init --project-name "{project-name}" --set-pipeline bgpdd-plan --add-blocker "<the missing capability>"`, and carry on to Phase 4. The blocker travels to `/bgpdd-build` in `orchestrator-state.json`, where Phase 0 re-checks it and the milestone-close rule refuses to let it be forgotten. **Checking early is what buys the user their parallel install time**, not a gate looking for somewhere to stop.
+  - **Do not soften the plan's surface tags to fit the tooling you happen to have** — that converts a temporarily missing tool into a permanently unverifiable requirement.
   - **Capability-only, deliberately narrower than `/bgpdd-build` Phase 0's check (convention #8).** No service is started here: greenfield ones do not exist yet, brownfield ones are build's to start.
-- **Persist it so `/bgpdd-build` Phase 0 resolves it instead of re-authoring it**: `python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --init --project-name "{project-name}" --set-artifact environment_manifest=<the resolved path>` — the Tier-1 recipe's path on the brownfield route, the Tier-2 file's on the greenfield one.
-  - **Why `--init` on both Phase 3.6 commands**: this phase is the first writer of `orchestrator-state.json` — Phase 4 step 3 only creates it later, so without `--init` both commands exit 2 (`state file not found`) on a fresh run. On a file that already exists `--init` is a warning-level no-op and every other action in the same call still applies (`{PLUGIN_ROOT}/pipeline-tools/SKILL.md`, `update_state.py` → Actions), so it is safe whichever command runs first.
+- **Persist it so `/bgpdd-build` Phase 0 resolves it instead of re-authoring it**: `python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --init --project-name "{project-name}" --set-pipeline bgpdd-plan --set-artifact environment_manifest=<the resolved path>` — the Tier-1 recipe's path on the brownfield route, the Tier-2 file's on the greenfield one.
+  - **`--init` and `--set-pipeline bgpdd-plan` are BOTH mandatory on BOTH commands.** This phase is the first writer of `orchestrator-state.json`, so without `--init` each command exits 2 (`state file not found`) on a fresh run; and `--init` alone writes `pipeline: ""`, which `/bgpdd-build`'s hydration whitelist rejects with no named route. Either omission hands build an unenterable state file if the run is interrupted before Phase 4. Both are idempotent no-ops on a file that already exists. Full semantics: `references/plan-rationale.md` § Phase 3.6's state writes.
 - Once the manifest is confirmed, proceed to Phase 4 — with any capability blocker recorded and requested, not resolved.
 
 ### Phase 4: Game Tape Checkpoint (Orchestrator)
@@ -207,24 +165,5 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
        --set-artifact plan=.docs/{project-name}/implementation/plan.md \
        --set-artifact acceptance_matrix=.docs/{project-name}/acceptance-matrix.md
      ```
-     Field notes: `feature` is the Tier-1 durable feature id from `.docs/summary/{feature}/` (`null` for greenfield). `pipeline` is the last pipeline that wrote the state. `milestone_cursor` and `branch` stay `null` until `bgpdd-build` owns them. Downstream pipelines hydrate from the resulting shape (documentation only — do not recreate by hand):
-```json
-{
-  "schema": "1",
-  "project_name": "slide-enhancement",
-  "feature": "slide",
-  "pipeline": "bgpdd-plan",
-  "branch": null,
-  "milestone_cursor": null,
-  "artifacts": {
-    "requirements": ".docs/{project-name}/requirements.md",
-    "design": ".docs/{project-name}/design/detailed-design.md",
-    "plan": ".docs/{project-name}/implementation/plan.md",
-    "acceptance_matrix": ".docs/{project-name}/acceptance-matrix.md",
-    "environment_manifest": "<the resolved manifest path — Tier-1 or Tier-2, written in Phase 3.6>"
-  },
-  "blockers": [],
-  "updated": "<ISO-8601 timestamp>"
-}
-```
+     Field notes: `feature` is the Tier-1 durable feature id from `.docs/summary/{feature}/` (`null` for greenfield). `pipeline` is the last pipeline that wrote the state. `milestone_cursor` and `branch` stay `null` until `bgpdd-build` owns them. The resulting state shape is documented in `references/plan-rationale.md` § The `orchestrator-state.json` shape — documentation only; never hand-write that JSON.
   4. Prompt the user to open a new chat session and trigger `/bgpdd-build` to execute the code.

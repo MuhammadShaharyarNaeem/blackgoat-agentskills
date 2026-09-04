@@ -8,17 +8,15 @@ trigger: /bgpdd-learn
 
 Every working session generates lessons — user corrections, agent failures, friction that repeats — and most of them evaporate when the session ends. This skill captures them on demand and routes each one to the layer where it belongs: the project's rules file, an agent persona, or a methodology skill. The Orchestrator gathers evidence in the main session, then delegates analysis and routing to Forge in Learning Triage mode. Nothing is applied without explicit user approval.
 
-## Path Resolution
-
-Skill and agent paths in this document use `{PLUGIN_ROOT}` as a placeholder for the plugin's `skills/` directory. When this skill is invoked, its base directory is provided to you; `{PLUGIN_ROOT}` is that `skills/` directory (the agents live at `{PLUGIN_ROOT}/../agents/`). List files to confirm a path exists before referencing it.
-
-`base-persona.md` resolves at `{PLUGIN_ROOT}/agent-squad/base-persona.md`, never under `{PLUGIN_ROOT}/../agents/` — the injection rule and its rationale live in the Orchestrator Contract §1 (Delegation Discipline). Verify the path resolves before delegating.
-
 ## Global System Constraints
 
 > ### MANDATORY FIRST READ — the Orchestrator Contract
 >
 > **Before Step 1, you MUST read `{PLUGIN_ROOT}/agent-squad/orchestrator-contract.md` in full.** Do not improvise those rules from memory. If the file does not resolve, STOP and report the broken path.
+>
+> Then read `{PLUGIN_ROOT}/agent-squad/pipeline-skeleton.md` — the shared pipeline skeleton (path resolution, error recovery, upgraded chain of thought, game tape). Refinements below override the skeleton only where labelled (convention #8).
+
+**No game tape of its own — a deliberate divergence (convention #8) from the skeleton's Game Tape section.** This skill *reads* the accumulated tapes as Step 1 evidence; it does not append to them. Writing a `## bgpdd-learn` entry would put the run that analyses the tape inside the tape, and every lesson it lands is already recorded by the Step 5 apply diff and the user's approval. The skeleton's other sections apply unchanged.
 
 ## Orchestrator Execution Contract
 
