@@ -3,6 +3,32 @@
 All notable changes to the `blackgoat-agentskills` plugin are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [2.6.0] — 2026-09-07
+
+The daily-driver and coverage release: the quick lane gets cheaper and stack-aware, every methodology carries a Quick card for inline use, and five new skills cover the work that happens between features and in production.
+
+### Migration notes
+- **Quick lane defaults come from `detect_stack.py`.** Phase 0 now proposes the check command and the frozen test globs from the detected stack; you confirm or replace the command, never the lane silently. `check_quick_close.py --frozen` accepts globs; metacharacter-free values behave exactly as before.
+- **`check_coverage.py --design` gains `adr-citation`.** A Divergence & Supersession Register row that cites a known FR/NFR must also cite the ADR that authorised it (`ADR-NNNN` or an `adr/NNNN-` path). Design documents written under 2.5.0 with register rows fail this lint until an ADR is written and cited.
+- **`check_openapi_diff.py` is bound into build's commit gate for `[API]` milestones with an OpenAPI document and into shipping Step 3.** A breaking change needs `--allow-breaking "<reason>"`, recorded in the chained ledger.
+- **New persona dependency rows are all conditional**; no agent's Always wake-up load changed.
+
+### Added
+- **Quick lane usability**: the mandatory read is trimmed to the contract's Runtime Neutrality and §3 plus the skeleton (labelled refinement; roughly 3,500 fewer words per run); stack-driven `suggested_check_commands` and `test_path_globs` in `detect_stack.py` (18 → 26 self-tests); glob-aware `--frozen` in `check_quick_close.py` (39 → 46); the driver prints the suggested command and the detected globs (52 → 59); the "test went red while I changed it stays in quick, a pre-existing defect is bugfix" rule in quick and `/bg`; quick's escalation seeds the bug report from the note.
+- **Quick cards** in the eight directly-invocable methodology skills (≤ 150 words) and four stack skills (≤ 100): the five contract rules that matter at ≤ 3 files, each citing its section, plus the inline mapping (note = brief, capture = artifact, Result bullet = handoff).
+- **New skills**: `dependency-upgrade-patterns`, `feature-flag-patterns`, `jobs-and-messaging-patterns`, `observability-and-diagnosis`, `api-contract-evolution`, each with a Worker Execution Contract, Quick card, Direct invocation, references, conditional persona rows, and a contract eval case.
+- **`check_openapi_diff.py`** (38 self-tests): removed paths, operations, status codes and fields; type changes; new required request fields; enum narrowing; `$ref` resolved one level; JSON or the JSON-compatible YAML subset (everything else refused, never guessed). `evals/contract/openapi-diff-adversarial` (25 zero-LLM steps) registered in the harness.
+- **Architecture decision records**: `blackgoat-research/references/adr-template.md`; every ≥ 2-option design decision gets an ADR; register rows cite it; `check_coverage.py` `adr-citation` lint (126 → 132 self-tests).
+- **Data-privacy checklist** in Cipher's check-line grammar; Cipher's dependency row and security-and-hardening pointer.
+- **Doubt-driven development** gains three job-semantics attacks (duplicate delivery, out-of-order delivery, crash between effect and ack).
+- **Eval cases** (authored, self-checked on held and caved trees, not yet run): `quick-lane`, `dependency-upgrade-contract`, `jobs-idempotency-contract`. Harness pre-flight also checks port 5193.
+
+### Changed
+- README skill catalog lists 43 skills; bug-report template notes pre-fill from a quick note or from telemetry.
+
+### Checked, not added
+- Accessibility is already a Nova-side contract in `ui-design-patterns` plus Vera's shipping depth; CI YAML authoring is covered by `cloud-deploy-patterns`; race/concurrency *diagnosis* is partial (prevention and adversarial review exist, no diagnostic method) — a candidate for a later skill.
+
 ## [2.5.0] — 2026-09-07
 
 The hardening release. Restraint moves from "the model should not" to "the model cannot": a PreToolUse hook denies the actions the gates exist to catch, a driver emits the next mandatory action instead of the Orchestrator recalling it, every agent handoff is validated by a script, and the gate ledger is a hash chain.
