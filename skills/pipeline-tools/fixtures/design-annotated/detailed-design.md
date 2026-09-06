@@ -23,5 +23,5 @@ Every FR/NFR in `requirements.md` that this design supersedes or materially rein
 
 | # | Requirement | What this design does | Why | Annotated |
 |---|---|---|---|---|
-| **SUP-01** | **FR-2** | A signed download link replaces the scheduled email entirely. | The mail relay is not provisioned in any stage, and a link is auditable. | ✅ FR-2 |
-| **SUP-02** | **NFR-1** | The link is signed with a rotating server-side key, not a shared secret. | A shared secret cannot be rotated without invalidating every issued link. | ✅ NFR-1 |
+| **SUP-01** | **FR-2** | A signed download link replaces the scheduled email entirely. | The mail relay is not provisioned in any stage, and a link is auditable (ADR-0001). | ✅ FR-2 |
+| **SUP-02** | **NFR-1** | The link is signed with a rotating server-side key, not a shared secret. | A shared secret cannot be rotated without invalidating every issued link (ADR-0002). | ✅ NFR-1 |
