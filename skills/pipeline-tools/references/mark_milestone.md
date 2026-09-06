@@ -24,3 +24,16 @@ Line endings and BOM survive; the diff is one character. Two headings matching t
 ## Deliberate divergence (convention #8)
 
 `check_commit_gate.py --require-ledger-gates` re-hashes every input the named gate recorded, so a stale PASS is caught. `mark_milestone.py --require-gates` checks the **verdict only**. The tighter check belongs at the commit, which is the moment the restraint is least convenient; here the commit has already happened and the ledger entry it produced is the thing being recorded. Duplicating the re-hash would make the marker refuse work the gate already let through, for no new signal.
+
+## `--require-game-tape` — the cadence gate
+
+`bgpdd-build` Phase 6 fires each time a milestone closes, and "write the checkpoint" is a restraint rule asked of the Orchestrator at the exact moment it wants to move to the next milestone — the shape convention #9 says must become a mechanical gate. The two scripts that perform the closing write both carry the flag with a byte-identical implementation: this one, and `update_state.py` on the `--set-cursor` move. Either alone would leave a path around it.
+
+The five checks and their codes are documented once, in `../SKILL.md` under `update_state.py`. Two of them are worth the note here:
+
+- **The epic-summary heading does not count.** `## bgpdd-build — epic summary — <date>` is the roll-up, written once; accepting it would let one section close every milestone in the plan.
+- **Fences are blanked before the heading and bullet scan.** A checkpoint pasted inside a fenced example — the way this file's own templates are written — is a template, not a record. The fenced-block *count* is taken from the raw text, because that block is the pasted output the gate is asking for.
+
+## The chain, and what `--require-gates` now checks
+
+The verdict-only divergence below is unchanged. What is new is that the ledger's hash chain is verified before any verdict is read, and a break is `ledger_chain_broken`. That is **not** a divergence from the commit gate — an intact chain is a precondition for reading anything out of the file, not a stricter reading of what is in it.

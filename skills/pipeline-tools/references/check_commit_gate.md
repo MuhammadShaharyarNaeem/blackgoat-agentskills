@@ -37,3 +37,17 @@ With `--commit`, the gate first asks whether any declared `--changed-files` path
 **`--require-ledger-gates`** is the closure on gate-ordering: it is not enough that a sibling gate exists, it must have RUN, PASSED, and passed over the same bytes. For each named gate the LATEST ledger entry whose `gate` matches and whose `milestone` is this one or null must record `PASS` **and** every input it hashed must still hash the same on disk (`ledger_stale` otherwise). Without the re-hash, a gate run before the last three commits would still vouch for them.
 
 **Forwarding by capability probe.** `--ledger` and `--allow-missing-sidecar` forward to `check_runtime_evidence.py` only when that script's source declares them, so an older sibling in the same directory degrades rather than crashing. `--allow-missing-sidecar` without `--require-runtime-evidence` is exit 2, the same anti-typo rule every other forwarded flag follows.
+
+## The ledger chain is a precondition, not a term
+
+`--require-ledger-gates` verifies the ledger's hash chain **before** it looks at a single verdict, and returns one `ledger_chain_broken` problem instead of a per-gate list. The ordering is the point: naming which gate recorded a PASS is meaningless when the file the PASS was read out of has been edited. The route on that code is `check_ledger.py --ledger <path>` — which names the line — and then the user. There is no flag to proceed over it, deliberately: a broken chain is either a real tamper or a tool in this family that appended without chaining, and both are things somebody has to look at.
+
+## `--require-run-log` / `--require-agents` — did the delegation happen?
+
+The gate's original terms all read the *products* of the build: a review report, a state file, a diff, a capture. Every one of them can exist without the delegation that was supposed to produce it, because the Orchestrator writes the report path into the brief and reads the result back. The observed hole: a milestone whose Quinn or Luna round was skipped outright leaves a green `review-report.md` and an **empty run log**, and the gate passed on the report alone.
+
+`record_run.py` already refuses to write a delegation record without `--model`, which makes the run log a usable witness: a delegation record with a null model was hand-written, and a hand-written record is not evidence a delegation occurred. So the gate asks for a record per named agent, scoped to this milestone's `unit`, with a model on it.
+
+**Scoping is exact on `unit`, and that is deliberately tighter than `--require-ledger-gates`'s "this milestone or unscoped"** (convention #8). A gate ledger line legitimately covers a whole epic — `check_coverage.py` runs once. A *delegation* with no unit does not say which milestone it built, and accepting it would let one recorded Luna round vouch for every milestone in the plan.
+
+**What it does not prove.** That the agent did good work, or that the model tier was right (`record_run.py`'s own `verifier_below_producer` check owns that), or that the record was written at the time it claims. It proves the Orchestrator ran the phase and recorded it, which is exactly the step that was being skipped.

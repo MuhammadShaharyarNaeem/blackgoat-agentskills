@@ -1,6 +1,6 @@
 ---
 name: pipeline-tools
-description: "Deterministic stdlib-Python CLIs for the PDD pipeline gates. check_coverage.py gates Must-Have FR/NFR coverage; check_commit_gate.py runs the commit gate and can commit; check_agent_report.py gates Cipher and Vera reports; check_runtime_evidence.py gates runtime captures; check_bugfix_intake.py, check_red_green.py and next_bugfix_route.py gate the bug report, RED/GREEN pair and route; check_acceptance_suite.py gates the acceptance matrix; check_ship_decision.py gates GO/NO-GO; check_blockers.py gates the blockers ledger; next_milestone.py and mark_milestone.py read and write milestone completion; update_state.py writes orchestrator-state.json; run_quiet.py writes logs and captures; record_run.py and summarize_run.py roll up run telemetry; detect_stack.py reports stacks; check_quick_close.py closes a bgpdd-quick change; review_package.py packages the diff Luna reviews; check_dependency_tables.py and check_frontmatter.py are the static lints. Squad-internal: run by the Orchestrator, never delegated."
+description: "Deterministic stdlib-Python CLIs for the PDD pipeline gates. Gates: check_coverage (FR/NFR), check_commit_gate (commits), check_agent_report (Cipher/Vera), check_runtime_evidence (captures), check_bugfix_intake, check_red_green, next_bugfix_route, check_quick_close, check_acceptance_suite, check_ship_decision, check_blockers, check_handoff, check_always_on, check_tier1_provenance, check_runtime_recipe, check_ledger (hash chain). Writers: update_state, mark_milestone, next_milestone, run_quiet (logs + captures), record_run, summarize_run, review_package. Detectors: detect_stack. Lints: check_dependency_tables, check_frontmatter. pipeline_driver emits the next mandatory action; guard_action enforces four restraints as a PreToolUse hook. Squad-internal: run by the Orchestrator, never delegated."
 ---
 
 # pipeline-tools
@@ -18,12 +18,41 @@ The pipeline gates — `bgpdd-plan` Phase 3.5, `bgpdd-lite` Phase 2.5, `bgpdd-bu
 Every gate in this family accepts `--ledger <path>` and appends **exactly one JSON line per run, on every exit path** (creating parent directories):
 
 ```json
-{"ts": "<ISO-8601 UTC>", "gate": "<script basename>", "argv": ["..."], "milestone": "<--milestone value or null>", "inputs": {"<path as given; a cited capture is keyed by its resolved path relative to the cwd>": "<sha256 hex or null>"}, "verdict": "PASS|FAIL|ERROR", "exit": 0}
+{"ts": "<ISO-8601 UTC>", "gate": "<script basename>", "argv": ["..."], "milestone": "<--milestone value or null>", "inputs": {"<path as given; a cited capture is keyed by its resolved path relative to the cwd>": "<sha256 hex or null>"}, "verdict": "PASS|FAIL|ERROR", "exit": 0, "prev": "<sha256 of the previous line, or \"genesis\">", "self": "<sha256 of this record without `self`>"}
 ```
 
-`inputs` carries every file path argument the script read. `verdict` maps exit 0/1/2 to PASS/FAIL/ERROR. Writing the ledger is **best-effort**: a ledger that cannot be written never changes the gate's own verdict — it is an audit trail for LATER gates, not a term in this one. `update_state.py --resolve-blocker` additionally records `"action": "resolve-blocker"` and `"evidence": "<text>"`. The CLI still cannot judge whether "trust me" is real evidence; the ledger makes the claim durable and attributable instead of gone the moment the array shrinks.
+`inputs` carries every file path argument the script read. `verdict` maps exit 0/1/2 to PASS/FAIL/ERROR. Writing the ledger is **best-effort**: a ledger that cannot be written never changes the gate's own verdict — it is an audit trail for LATER gates, not a term in this one. `update_state.py --resolve-blocker` additionally records `"action": "resolve-blocker"` and `"evidence": "<text>"`. The CLI still cannot judge whether "trust me" is real evidence; the ledger makes the claim durable and attributable instead of gone the moment the array shrinks. `record_run.py --allow-tier-inversion` adds `"tier_inversion_reason"` to the RUN LOG record (not the ledger — that script is not a gate).
 
-Carrying `--ledger`: `check_commit_gate.py`, `check_quick_close.py`, `check_agent_report.py`, `check_acceptance_suite.py`, `check_ship_decision.py`, `check_coverage.py`, `check_blockers.py`, `check_runtime_evidence.py`, `check_bugfix_intake.py`, `check_red_green.py`, `next_bugfix_route.py`, `update_state.py`, `mark_milestone.py`. `next_milestone.py` and `summarize_run.py` READ the ledger but never write it; `next_bugfix_route.py` both reads and writes it (it refuses to route without a recorded intake PASS). `record_run.py` carries no `--ledger` flag at all — it is not a gate; it writes the other durable record, the run log, described below. The pipelines pass `--ledger .docs/{project-name}/implementation/gates.jsonl` on every gate invocation (Orchestrator Contract §4).
+### The chain: `prev` and `self`
+
+The ledger is the evidence four gates read a verdict out of, and until it was chained it was a text file anybody could retype. Every record therefore carries two hashes, written by the same byte-identical helper in all fourteen gates:
+
+- **`prev`** — sha256 of the **previous line's bytes**, stripped of its terminator and surrounding whitespace (so a CRLF ledger written on Windows chains identically to the same file read on POSIX). `"genesis"` when the ledger is missing or holds no non-blank line yet.
+- **`self`** — sha256 of this record **serialized canonically without its own `self`**: `json.dumps(record_without_self, sort_keys=True, separators=(",", ":"))`, UTF-8. Key order in the written line is therefore not content; the line's own bytes still feed the next record's `prev`.
+
+Both are computed at write time, after any `extra` fields are merged, so every field in the record is covered.
+
+**What this buys, and the limit that stays.** A single record edited, inserted or removed after the fact is now visible: the edited line fails its own `self`, and an inserted or removed one fails the following line's `prev`. What it does **not** buy — deliberately, and this limit is accepted rather than papered over — is protection against a forger who rewrites the **entire tail** consistently, recomputing every `prev` and `self` from the edit point onward. There is no external anchor (no signature, no notary), so the chain detects tampering that is *local*, not tampering that is *thorough*. Truncating trailing records is undetectable for the same reason. The change is that casual edits stop being free, not that the ledger becomes unforgeable.
+
+**Migration.** A record written before this contract carries neither field. Such **legacy records are tolerated only before the first chained record** — a pre-chain ledger migrates forward by simply being appended to. Once a chained record exists, an unchained one after it is a refusal (`legacy-after-chained`): reverting to unchained is exactly what deleting the chain looks like. **Any gate that appends to a shared ledger must therefore chain**; a new gate that copies the old unchained `append_ledger` will break every chained ledger it touches.
+
+### `check_ledger.py` — the chain verifier
+
+Documented here rather than in its own section because it is not a pipeline gate: it verifies the artifact this section describes.
+
+```bash
+python check_ledger.py --ledger <path>
+python check_ledger.py --self-test
+```
+
+- Walks the chain and reports the **first** broken link. `--ledger` is the **subject under test, not an append target** — unlike every other script in this family it writes nothing (convention #8, a deliberate divergence from "every gate carries `--ledger`"): appending its own record would extend the chain it is reporting on.
+- **JSON keys** — `ledger`, `pass`, `records`, `chained_records`, `legacy_records`, `problem` (`{problem: "chain_broken", line, reason, detail}` or null), `error`.
+- **Reasons** — `unparseable`, `legacy-after-chained`, `incomplete-chain-fields` (only one of `prev`/`self`), `self-mismatch` (the line was edited), `prev-mismatch` (a record was inserted, removed or edited before this line), `unreadable`.
+- **Exit codes** — **0** intact (an empty ledger and an all-legacy ledger included); **1** `chain_broken`; **2** missing `--ledger` or a ledger file that does not exist.
+- **Self-test** — **21** cases, including the five the contract names (intact, edited middle, inserted, legacy-then-chained, chained-then-legacy), one asserting the accepted tail-truncation limit so it cannot regress into a silent claim, and two **drift guards** over the sibling scripts: the helper block must be byte-identical in every file that carries it, and each of the fourteen chained gates must actually set `prev`/`self` before it writes. A gate that appends unchained is what turns a shared ledger into `legacy-after-chained`.
+- **Who else checks it** — `check_commit_gate.py --require-ledger-gates`, `check_ship_decision.py --require-ledger-gates` and `mark_milestone.py --require-gates` verify the chain of the ledger they read *before* looking at any verdict, and fail with `ledger_chain_broken`. A PASS read out of a tampered ledger is not a weaker PASS; it is no PASS.
+
+Carrying `--ledger` (and therefore chaining): `check_commit_gate.py`, `check_quick_close.py`, `check_agent_report.py`, `check_acceptance_suite.py`, `check_ship_decision.py`, `check_coverage.py`, `check_blockers.py`, `check_runtime_evidence.py`, `check_bugfix_intake.py`, `check_red_green.py`, `next_bugfix_route.py`, `update_state.py`, `mark_milestone.py`. `next_milestone.py` and `summarize_run.py` READ the ledger but never write it; `next_bugfix_route.py` both reads and writes it (it refuses to route without a recorded intake PASS). `record_run.py` carries no `--ledger` flag at all — it is not a gate; it writes the other durable record, the run log, described below. The pipelines pass `--ledger .docs/{project-name}/implementation/gates.jsonl` on every gate invocation (Orchestrator Contract §4).
 
 ## The capture sidecar, and why the body witnesses it
 
@@ -73,6 +102,7 @@ python check_commit_gate.py --review-report <path> --state <path> \
     [--require-rendered-evidence] [--verify-tree] \
     [--max-changed-files <N> [--waiver <path>]] \
     [--ledger <path>] [--require-ledger-gates <name>[,<name>...]] \
+    [--require-run-log <path> --require-agents <name>[,<name>...]] \
     [--require-runtime-evidence --runtime-report <path> \
      [--surface <key>] [--require-key <name>]... [--expect-status <N>] \
      [--forbid-host <pattern>]... [--require-build-marker <value>] \
@@ -81,14 +111,15 @@ python check_commit_gate.py --review-report <path> --state <path> \
 python check_commit_gate.py --self-test
 ```
 
-- **Flags** — `--repo` defaults to `.`. Every runtime-evidence assertion flag forwards to `check_runtime_evidence.py`; any of them passed *without* `--require-runtime-evidence` is exit 2, never a silent no-op. `--ledger` and `--allow-missing-sidecar` forward when the child script declares them. `--require-ledger-gates` requires `--ledger` (else exit 2) and demands that each named gate's latest ledger entry for this milestone record `PASS` **and** still hash the same inputs.
+- **Flags** — `--repo` defaults to `.`. Every runtime-evidence assertion flag forwards to `check_runtime_evidence.py`; any of them passed *without* `--require-runtime-evidence` is exit 2, never a silent no-op. `--ledger` and `--allow-missing-sidecar` forward when the child script declares them. `--require-ledger-gates` requires `--ledger` (else exit 2) and demands that the ledger's hash chain be **intact** and that each named gate's latest ledger entry for this milestone record `PASS` **and** still hash the same inputs. The chain check short-circuits: naming which gate recorded a PASS is pointless when the file it was read from is not trustworthy.
 - **`--max-changed-files <N>`** (the `bgpdd-bugfix` fix-size bound; lane default `5`) — counts the **declared** `--changed-files` paths, the same list the staleness check already validates exist; pairing it with `--verify-tree` is what makes that count equal the real diff. `N < 1` is exit 2. Unset, the bound is not applied (`size_ok: true`, `max_changed_files: null`) and behaviour is unchanged. **`--waiver <path>`** (exit 2 without `--max-changed-files`) waives an overrun when that file carries a `## Size waiver` heading (level 2–4, outside a fence) whose body is non-empty and not a placeholder — **in either shape**: every line individually a stand-in, or one `<...>` span wrapped across several lines (the shape the shipped `rca-template.md` writes, asserted to fail by `test_the_shipped_rca_template_waiver_fails`). **Deliberately hand-typed, unlike every other evidence path in this family (convention #8)**: exceeding the bound is the *user's* decision and no script can verify a judgement call, so the gate buys durability and attributability — the decision written into `rca.md` and hashed into the ledger record — not verification.
+- **`--require-run-log <path> --require-agents <name>[,<name>...]`** — the two flags are inseparable (either alone is exit 2). Each named agent must carry at least one `record_run.py` **delegation** record in that run log scoped to this `--milestone`, with a non-null `model`. The gate already refuses to commit over an unapproved review; what it could not see is whether the review *happened* — a milestone whose Quinn or Luna round was skipped outright leaves a green report and an empty run log, and the gate passed on the report alone (convention #9: the Orchestrator Contract §4 "record the delegation" rule became a file the gate reads). `record_run.py` refuses to write a delegation without a model, so a record missing one was hand-written and is not evidence a delegation occurred. **Scoping is EXACT on the record's `unit` — deliberately tighter than `--require-ledger-gates`, which also accepts an unscoped entry (convention #8)**: a gate ledger line legitimately covers a whole epic, but a delegation with no unit does not say which milestone it built. Build's invocation names `quinn,luna` plus the milestone's builder.
 - **Section boundaries** — ANY heading of level 2–6 closes a `## Review:` section. **Migration**: a `**Verdict:**` line must appear BEFORE any subheading inside its review section, or the section reads as no-verdict and fails closed.
-- **JSON keys** — `milestone`, `review_report`, `state_file`, `review_found`, `verdict`, `ambiguous_review_section`, `stale`, `blocking`, `unscoped_blockers`, `other_milestone_blockers`, `ignored_unscoped_ids`, `rendered_evidence`, `rendered_evidence_ok`, `undeclared_changes`, `tree_verified`, `max_changed_files`, `changed_file_count`, `size_waiver` (`{path, present, section_found, body_nonempty, satisfied}`), `size_ok`, `already_committed`, `runtime_evidence`, `runtime_evidence_ok`, `ledger`, `require_ledger_gates`, `ledger_gate_problems`, `ledger_gates_ok`, `warnings`, `committed`, `result`, `error`. **Problem codes**: `ledger_gate_problems` entries carry `ledger_missing`, `ledger_failed` or `ledger_stale`.
+- **JSON keys** — `milestone`, `review_report`, `state_file`, `review_found`, `verdict`, `ambiguous_review_section`, `stale`, `blocking`, `unscoped_blockers`, `other_milestone_blockers`, `ignored_unscoped_ids`, `rendered_evidence`, `rendered_evidence_ok`, `undeclared_changes`, `tree_verified`, `max_changed_files`, `changed_file_count`, `size_waiver` (`{path, present, section_found, body_nonempty, satisfied}`), `size_ok`, `already_committed`, `runtime_evidence`, `runtime_evidence_ok`, `ledger`, `require_ledger_gates`, `ledger_gate_problems`, `ledger_gates_ok`, `run_log`, `require_agents`, `run_log_problems`, `run_log_ok`, `warnings`, `committed`, `result`, `error`. **Problem codes**: `ledger_gate_problems` entries carry `ledger_chain_broken`, `ledger_missing`, `ledger_failed` or `ledger_stale`; `run_log_problems` entries carry `run_log_missing`, `run_log_agent_missing` or `run_log_model_missing`.
 - **`already_committed`** — with `--commit`, if no declared `--changed-files` path differs from HEAD, the change was committed outside this gate (a builder committing its own fix, a hand commit). That is exit **1**, not a no-op: the commit must be the gate's. Reset the outside commit, keeping the tree, and re-run.
 - **Blockers precondition** — same normalization and exact-equality scoping as `check_blockers.py` (helper duplicated). Scoped-to-this-milestone (`blocking`) or unscoped (`unscoped_blockers`) block; `--ignore-unscoped` skips unscoped and names them in `ignored_unscoped_ids`; `other_milestone_blockers` never block; `Info` never blocks (fixed floor, deliberately not caller-tunable at the last checkpoint).
-- **Exit codes** — **0** gate passed (and committed, with `--commit`); **1** gate failed (`verdict` not `Approve`, `ambiguous_review_section`, `stale`, non-empty `blocking`, unignored `unscoped_blockers`, `rendered_evidence_ok: false`, `runtime_evidence_ok: false`, `ledger_gates_ok: false`, `size_ok: false`, `tree_verified: false`, or `already_committed: true`); **2** usage error (including `--waiver` without `--max-changed-files`, or `--max-changed-files 0`), a `--changed-files` path that does not exist (`changed_file_missing`), unreadable artifact, invalid state JSON, git failure, or a structural failure from the delegated runtime gate.
-- **Self-test** — **76** cases, including `test_pipeline_value_never_changes_the_verdict`: the verdict JSON is **byte-identical** across every `pipeline` value and with the field absent, and the report never echoes it. `bgpdd-bugfix`'s feature route shares the epic's state file and never stamps its own `pipeline`, so it cites this test rather than asserting the property in prose (convention #9). Depth (delegation rationale, parsing rules, the ledger-gate essay): `references/check_commit_gate.md`.
+- **Exit codes** — **0** gate passed (and committed, with `--commit`); **1** gate failed (`verdict` not `Approve`, `ambiguous_review_section`, `stale`, non-empty `blocking`, unignored `unscoped_blockers`, `rendered_evidence_ok: false`, `runtime_evidence_ok: false`, `ledger_gates_ok: false`, `run_log_ok: false`, `size_ok: false`, `tree_verified: false`, or `already_committed: true`); **2** usage error (including `--waiver` without `--max-changed-files`, `--max-changed-files 0`, `--require-agents` without `--require-run-log`, or `--require-run-log` without `--require-agents`), a `--changed-files` path that does not exist (`changed_file_missing`), unreadable artifact, invalid state JSON, git failure, or a structural failure from the delegated runtime gate.
+- **Self-test** — **94** cases, including `test_pipeline_value_never_changes_the_verdict`: the verdict JSON is **byte-identical** across every `pipeline` value and with the field absent, and the report never echoes it. `bgpdd-bugfix`'s feature route shares the epic's state file and never stamps its own `pipeline`, so it cites this test rather than asserting the property in prose (convention #9). Depth (delegation rationale, parsing rules, the ledger-gate essay): `references/check_commit_gate.md`.
 
 ## check_quick_close.py
 
@@ -229,6 +260,27 @@ python next_bugfix_route.py --self-test
 - **Exit codes and result values** — **0** `FAST` / `FULL` / `PLAN`; **1** `INCOMPLETE` (the RCA cannot be routed as written — fill the named fields; mirrors `next_milestone.py`'s `MIXED`) or `BLOCKED` (`red_command_mismatch` / `red_sidecar_missing` — the RED does not back the report); **2** missing `--report`/`--rca`/`--ledger`, `red_required`, `--max-changed-files < 1`, an unreadable `rca.md`, `intake_unbacked`, or an unavailable/disagreeing intake gate.
 - **Self-test** — **52** cases, including two interleaved bugs in one ledger, an intake PASS whose hash no longer matches, a later FAIL superseding an earlier PASS, a fenced RCA that routes nothing, the full `--red` set (mismatch, missing sidecar, argv-less sidecar, `` `see chat` `` refused here, steps-only unchecked), and the quoting set (single-quoted JSON body, double-quoted header, Windows path, plus reordering/case/different-URL all still mismatching).
 
+## pipeline_driver.py
+
+Emits the **one next mandatory action** for a `bgpdd-bugfix` or `bgpdd-quick` lane. Every other tool here answers "is this artifact good enough?"; this one answers "where am I, and what is the single next step?" — a question phase order used to answer from prose the Orchestrator recalled (CLAUDE.md convention #9). It reads the lane root's artifacts and the gate ledger, derives the current phase, and prints the next action with its exact flags. **The Orchestrator executes; the driver decides.** Like `next_milestone.py` it is a READER: it grants no verdict, so it never writes the ledger.
+
+```bash
+python pipeline_driver.py --root <lane root> [--lane bugfix|quick|auto] \
+    [--json] [--ledger <path>] [--milestone "<slug>"]
+python pipeline_driver.py --self-test
+```
+
+- **Flags** — `--root` required. `--lane` defaults to `auto`: `note.md` present → quick, else `bug-report.md` → bugfix, else exit 2 (both present → quick, with a warning). `--ledger` defaults to `<root>/gates.jsonl` and is **read only**. `--milestone` overrides slug derivation and is **required on the bugfix feature route**, whose root basename (`implementation`) names the epic and never the bug. `--json` emits the machine report; without it a compact human block is printed.
+- **Phase derivation, bugfix** — **0** Intake until `bug-report.md` exists AND `check_bugfix_intake.py` has a `PASS` whose recorded hash still matches the report; **1** RED until a sidecar-backed capture under `evidence/red/` records a non-zero exit in *both* the sidecar and the capture body; **2** RCA/route until `rca.md` exists AND `next_bugfix_route.py` is `PASS`; **3** Fix until `run-log.jsonl` holds an `event: delegation` record for `mason` or `nova`; **4** GREEN until a sidecar-backed exit-0 capture exists AND `check_red_green.py` is `PASS` (plus `check_runtime_evidence.py` on `- Runtime observable: yes`); **5** Review/Close until `review-package.md` exists, `review-report.md` carries a `## Review:` section whose title holds the slug as a whole token with a `**Verdict:**` line, AND `check_commit_gate.py` is `PASS` **with `--commit` in its recorded argv**; then **6** Complete.
+- **Phase derivation, quick** — **0** Scope until `note.md` carries three real `- What:` / `- Where:` / `- How verified:` lines; **1** Change-and-Prove until `evidence/check.md` + sidecar exist at exit 0 (Phases 1 and 2 are **fused deliberately**: an edit leaves no artifact, so the capture is the only observable either has); **3** Close until `check_quick_close.py` is `PASS` with `--commit`; then **4** Complete.
+- **Route detection (bugfix)** — by folder shape, not file presence, because Phase 0 has not created the standalone state yet: a root basename of `implementation` is the **feature** route and `{state-file}` is the epic's own `orchestrator-state.json` one level up (absent → exit 2, mirroring the spine's Phase 0 HALT); anything else is **standalone** with the state inside the root.
+- **JSON keys** — `root`, `lane`, `route`, `state_file`, `milestone`, `milestone_source`, `ledger`, `phase`, `phase_name`, `next_action`, `required_gate`, `required_gates`, `gate_status`, `blocked_by`, `artifacts_present`, `artifacts_missing`, `warnings`, `error`, `exit`.
+- **`required_gate` is set only when running that gate IS the next action** — when the next action is to author an artifact or delegate an agent it is `null`. `gate_status` is `PASS|FAIL|MISSING|null`; a `PASS` whose recorded input hashes no longer match disk is reported as `FAIL` (the enum stays four-valued; `blocked_by` names the edited file). Staleness is deliberately **not** applied to the closing gate — a commit that already happened cannot be un-happened by a later edit, so that case warns and still exits 3.
+- **`blocked_by` codes** — `gate_not_run <gate>`, `gate_not_passed <gate>`, plus the capture codes copied minimally from `check_red_green.py`: `capture_missing`, `not_a_capture`, `sidecar_missing`, `sidecar_hash_mismatch`, `sidecar_no_exit_code`, `capture_header_missing`, `sidecar_body_disagrees`, `red_exit_zero`, `capture_exit_nonzero`.
+- **Exit codes** — **0** a next action was emitted; **1** BLOCKED, and the invariant is `exit 1` **iff** `blocked_by` is non-empty (a required gate that has never run counts, deliberately: the lane cannot advance, so a caller wiring this into a hook gets a stop — the exact command is still printed); **2** root unreadable, no lane detected, or a feature root with no epic state; **3** lane complete (the closing gate `PASS`ed with `--commit`), with the close steps in `next_action`.
+- **Not derived** — whether a gate *would* pass (it reads verdicts, never re-runs a gate), `--changed-files` (no artifact records them, so the emitted commands carry `<the builder's paths>` verbatim; every other flag is exact), and the commit message. `next_bugfix_route.py` records no `route` in its ledger line, so the Phase 3 warning names the re-run command instead of guessing FAST vs FULL.
+- **Self-test** — **52** cases across four suites: every phase boundary for both lanes, feature vs standalone roots, FAIL and stale records blocking, a report edited after intake PASS, a RED that exited 0, runtime-observable requiring the runtime gate, the deliberate skip (a builder delegation recorded while the route gate never ran), and both lanes complete at exit 3. Depth (phase tables, the exit-code design, what the other lanes would need): `references/pipeline_driver.md`.
+
 ## check_acceptance_suite.py
 
 Gates the **feature-scoped** walkthrough, one scope up from every other gate here: per-milestone evidence proves each brick, nothing else proves the wall stands. Execution mode gates Alex's `acceptance-matrix.md` against Quinn's `acceptance-results.md`; structure mode (`--lint-only`) gates that the matrix is well-formed at plan time, before any code exists. Run at `bgpdd-build` Phase 5 before Dep writes the prep ship-decision, at `bgpdd-verify` Phase 3, and again at `bgpdd-shipping` Stage 1 as regression.
@@ -259,16 +311,17 @@ python check_acceptance_suite.py --self-test
 Makes Dep's `ship-decision.md` GO/NO-GO machine-verifiable: an unambiguous labeled `GO` or `NO-GO`, a Rollback heading, a post-deploy checklist section. Two opt-in flags convert the two assertions a heading match never proved: `--require-rehearsal` (the rollback was performed, not planned) and `--require-baseline` (the threshold table has numbers to grade against). Used shape-only at `bgpdd-build` Phase 5 step 6 and `bgpdd-shipping` Step 0.4 (a prep decision legitimately predates a rehearsal and a baseline), and with `--require-go --require-rehearsal --require-baseline` at `bgpdd-shipping` Step 3.
 
 ```bash
-python check_ship_decision.py --report <path> [--require-go] [--require-rehearsal] [--require-baseline] [--repo <dir>] [--max-rehearsal-age-days <N>] [--ledger <path>]
+python check_ship_decision.py --report <path> [--require-go] [--require-rehearsal] [--require-baseline] [--repo <dir>] [--max-rehearsal-age-days <N>] [--ledger <path>] [--require-ledger-gates <name>[,<name>...]] [--milestone "<title>"]
 python check_ship_decision.py --self-test
 ```
 
 - **Flags** — `--require-go` fails on `NO-GO`. `--require-rehearsal` demands one grammar-conforming `Time to Rollback:` line whose cited capture resolves under `evidence/rollback/`, is non-empty, has `## Captured output`, and has a `run_quiet` `.meta.json` sidecar with matching `capture_sha256`, agreeing with the capture's own header lines (the shared contract above), and `exit_code` 0. `--require-baseline` demands a `## Baseline`/`### Baseline` section with ≥3 `- <metric>: <value>` lines each citing an existing path under `evidence/baseline/`. `--repo` defaults to `.`. `--max-rehearsal-age-days` defaults to 30.
+- **`--require-ledger-gates <names>`** (requires `--ledger`, else exit 2) — the ledger's chain must be intact and each named gate's LATEST entry must be `PASS` over inputs that still hash. **Deliberately looser than `check_commit_gate.py`'s flag of the same name (convention #8)**: the commit gate is per-milestone and accepts only entries scoped to that milestone or unscoped, while the ship decision is **epic-scoped**, so with no `--milestone` EVERY entry for the named gate is a candidate whatever milestone it carries. That is the point of the flag — `check_coverage.py` and `check_acceptance_suite.py` run once for the epic and record `milestone: null`, and binding an epic verdict to a per-milestone lookup is the deadlock the audit found. `--milestone <title>` narrows it back to the commit gate's rule (that milestone or unscoped) and is also recorded in this run's own ledger line.
 - **Rehearsal grammar** — `Time to Rollback: <N><unit> — rehearsed <YYYY-MM-DD> on <env> — evidence: <path>`; leading `#`/`>`/`-`/`*` tolerated; separators em dash, en dash or hyphen; unit ∈ `s|sec|secs|second|seconds|m|min|mins|minute|minutes` (normalized to `time_s`); the last matching line file-wide wins; fences stripped. Producer: `shipping-and-launch` → Rollback Rehearsal.
-- **JSON keys** — `report_file`, `pass`, `verdict`, `require_go`, `has_rollback`, `has_checklist`, `checkbox_count`, `require_rehearsal`, `rehearsal` (`{present, time_s, rehearsed_on, env, evidence, sidecar_ok, body_agrees, age_days}`), `require_baseline`, `baseline` (`{present, metrics[{name,value,evidence,resolved}], evidenced_count}`), `max_rehearsal_age_days`, `problems` (`{code: [detail]}`), `failures`, `error`.
-- **Problem codes** — `rehearsal_missing`, `rehearsal_unevidenced`, `rehearsal_stale`, `rehearsal_failed_exit`, `sidecar_body_disagrees`, `capture_header_missing`, `baseline_missing`, `baseline_unevidenced`. The last two rehearsal-capture codes are the shared sidecar contract above, named identically across the four gates that read a sidecar: a rehearsal that FAILED and had its `exit_code` flipped to 0 is otherwise indistinguishable from one that proved the rollback works.
+- **JSON keys** — `report_file`, `milestone`, `ledger`, `require_ledger_gates`, `ledger_gate_problems`, `ledger_gates_ok`, `pass`, `verdict`, `require_go`, `has_rollback`, `has_checklist`, `checkbox_count`, `require_rehearsal`, `rehearsal` (`{present, time_s, rehearsed_on, env, evidence, sidecar_ok, body_agrees, age_days}`), `require_baseline`, `baseline` (`{present, metrics[{name,value,evidence,resolved}], evidenced_count}`), `max_rehearsal_age_days`, `problems` (`{code: [detail]}`), `failures`, `error`.
+- **Problem codes** — `rehearsal_missing`, `rehearsal_unevidenced`, `rehearsal_stale`, `rehearsal_failed_exit`, `sidecar_body_disagrees`, `capture_header_missing`, `baseline_missing`, `baseline_unevidenced`, plus `ledger_chain_broken`, `ledger_missing`, `ledger_failed` and `ledger_stale` from `--require-ledger-gates`. The two rehearsal-capture codes are the shared sidecar contract above, named identically across the four gates that read a sidecar: a rehearsal that FAILED and had its `exit_code` flipped to 0 is otherwise indistinguishable from one that proved the rollback works.
 - **Exit codes** — **0** structurally valid (and `GO` / rehearsed / baselined under the flags); **1** a gate failed; **2** usage error, missing/unreadable report, or structural non-conformance.
-- **Self-test** — **53** cases. Depth (verdict grammar, last-section-wins, the rehearsal and baseline essays, fixtures): `references/check_ship_decision.md`.
+- **Self-test** — **63** cases. Depth (verdict grammar, last-section-wins, the rehearsal and baseline essays, fixtures): `references/check_ship_decision.md`.
 
 ## check_blockers.py
 
@@ -305,7 +358,7 @@ The write side of the `[x]` completion convention `next_milestone.py` reads. Unt
 
 ```bash
 python mark_milestone.py --plan <path> --milestone "<title>" --ledger <path> \
-    [--repo <dir>] [--require-commit] \
+    [--repo <dir>] [--require-commit] [--require-game-tape <path>] \
     [--require-gates <name>[,<name>...] | --require-gates none]
 python mark_milestone.py --self-test
 ```
@@ -313,10 +366,11 @@ python mark_milestone.py --self-test
 - **Gate backing is ON BY DEFAULT, and the default is real.** With no `--require-gates` flag the gate set is `check_commit_gate.py`, which requires `--ledger` — so a bare `--plan --milestone` invocation is **exit 2**, not a silent pass. It used to be opt-in while the help text called it the default: `mark_milestone.py --plan p --milestone M2` appended the `[x]` and exited 0 with nothing behind it, which is the exact hand-edit this script replaced.
 - **The opt-out is explicit: `--require-gates none`** (also `off`/`no`/`-`). A docs-only milestone or a spike legitimately has no gate behind it; that decision is now one somebody makes and the ledger's `argv` records, never one a forgotten flag makes silently. `--require-gates ""` still means *the default set* — deliberately not the same as `none`.
 - **Flags** — `--require-commit` (still opt-in, for the same pre-repo case) demands that HEAD's history carry a commit naming the milestone (`git log --fixed-strings --grep="<title>"`). `--require-gates <names>` demands that each named gate's LATEST ledger entry for this milestone record `PASS`. The title match is case-insensitive and **whole-token**: `Milestone 1` never marks `Milestone 10`. Line endings and BOM survive; the diff is one character.
-- **Problem codes** (exit **1**, in `problems`) — `milestone_not_found`, `ambiguous_milestone`, `already_complete`, `no_commit`, `ledger_missing`, `ledger_failed`.
+- **`--require-game-tape <path>`** — the shared Phase 6 cadence gate (identical implementation in `update_state.py`); see **The game-tape gate** under `update_state.py` below for its five checks and codes.
+- **Problem codes** (exit **1**, in `problems`) — `milestone_not_found`, `ambiguous_milestone`, `already_complete`, `no_commit`, `ledger_chain_broken`, `ledger_missing`, `ledger_failed`, plus the five game-tape codes.
 - **Exit codes** — **0** the marker was appended; **1** a refusal above; **2** missing `--plan`/`--milestone`, an unreadable plan, no milestone headings, a gate requirement (default or named) without `--ledger`, or a git failure.
-- **Deliberate divergence (convention #8)** from `check_commit_gate.py --require-ledger-gates`, which re-hashes inputs: this checks the VERDICT only.
-- **Self-test** — **24** cases. Depth: `references/mark_milestone.md`.
+- **Deliberate divergence (convention #8)** from `check_commit_gate.py --require-ledger-gates`, which re-hashes inputs: this checks the VERDICT only. The ledger's hash **chain** is checked here too, and that is not a divergence — an intact chain is a precondition for reading any verdict out of the file at all.
+- **Self-test** — **36** cases. Depth: `references/mark_milestone.md`.
 
 ## update_state.py
 
@@ -330,7 +384,8 @@ python update_state.py --state <path> \
     [--set-artifact <name>=<path>] \
     [--add-blocker "<text>" [--blocker-milestone <title>] [--blocker-capability <name>] \
         [--blocker-severity Critical|Important|Info] [--blocker-source <name>] [--blocker-evidence <text>]] \
-    [--resolve-blocker "<id-or-text-or-substring>" --evidence "<text>"] [--ledger <path>]
+    [--resolve-blocker "<id-or-text-or-substring>" --evidence "<text>"] [--ledger <path>] \
+    [--milestone "<title>" --require-game-tape <path>]
 python update_state.py --self-test
 ```
 
@@ -340,8 +395,9 @@ python update_state.py --self-test
 - **`--set-artifact <name>=<path>`** (repeatable): merges into `artifacts`; the literal value `null` stores JSON `null`. A spec with no `=` is a usage error.
 - **`--add-blocker "<text>"`** (repeatable): appends a structured entry (schema in `check_blockers.py` above) with auto id `B-<n>`, one past the highest currently present — a documented limitation: a resolved top id can be reused. The `--blocker-*` companions apply to **every** `--add-blocker` in the invocation; any of them given without `--add-blocker` is a usage error. Legacy entries are never rewritten.
 - **`--resolve-blocker "<target>" --evidence "<text>"`**: matches an exact id, then exact text (removing all entries sharing it), then a unique substring (ambiguous → exit 2 with `candidates`). **`--evidence` is required and must be non-empty** — omitting it is a usage error, not a silent no-op. A target matching nothing warns and changes nothing. Every removal appends `<ts>\t<id>\t<full entry>\t<evidence>` to `blockers-resolved.log` beside the state file, and the ledger record gains `resolved_ids` and `resolved_entries`. Pipelines pass `--ledger` on this action.
-- **Exit codes** — **0** the action(s) applied and the file was written; **2** usage/structural failure (missing `--state`, no action, `--init` without `--project-name`, `--resolve-blocker` without non-empty `--evidence`, an ambiguous resolve target, a `--blocker-*` companion without `--add-blocker`, a bad `--set-artifact` spec, a state file that is not a JSON object, or a missing state file without `--init`).
-- **Self-test** — **29** cases. Depth (atomicity, the blocker-ledger rule this mechanizes, the schema migration): `references/update_state.md`.
+- **The game-tape gate — `--milestone "<title>" --require-game-tape <path>`** (shared byte-for-byte with `mark_milestone.py`). `bgpdd-build` Phase 6 fires **each time a milestone closes**, and the closing write is the moment the Orchestrator most wants to move on — so the cadence is enforced by the two scripts that perform that write, not by prose (convention #9). With fences blanked (a checkpoint inside a fence is a template), the gate demands: a `## bgpdd-build — <milestone> — <date>` heading matching the milestone by whole token — full title or its leading identifier, the same two tokens the commit gate matches a review heading on, and the **epic-summary heading does not count**; last matching section wins; **3–6 bullets**; **at least one fenced block** ("no pasted output, no claim"); and either a `summarize_run` mention or a table row (the pasted telemetry block). **Codes**: `game-tape-missing`, `no-section`, `bullet-count`, `no-pasted-output`, `no-telemetry`. In `update_state.py` it is **active only on a `--set-cursor`/`--set-pipeline` write with `--milestone`** — the write that closes a milestone; any other action (a blocker add, an artifact set) warns on stderr and proceeds, because a gate that fires when nothing closed teaches nothing. `--require-game-tape` without `--milestone` is exit 2. `--milestone` also becomes this run's ledger `milestone` value, overriding the `--set-cursor` fallback.
+- **Exit codes** — **0** the action(s) applied and the file was written; **1** the game-tape gate refused and **nothing was written**; **2** usage/structural failure (missing `--state`, no action, `--init` without `--project-name`, `--resolve-blocker` without non-empty `--evidence`, an ambiguous resolve target, a `--blocker-*` companion without `--add-blocker`, a bad `--set-artifact` spec, a state file that is not a JSON object, or a missing state file without `--init`, or `--require-game-tape` without `--milestone`).
+- **Self-test** — **44** cases. Depth (atomicity, the blocker-ledger rule this mechanizes, the schema migration): `references/update_state.md`.
 
 ## run_quiet.py
 
@@ -368,7 +424,8 @@ Appends one run-telemetry record per delegation completion and per state persist
 python record_run.py --log <path> --pipeline <name> --phase <name> --event <delegation|gate|phase|note> \
     [--unit "<title>"] [--agent <name>] [--model <tier>] [--duration-s <float>] \
     [--tokens-in <int>] [--tokens-out <int>] [--tokens-total <int>] [--rounds <int>] \
-    [--status <STATUS>] [--note "<text>"] [--from-json <file>]
+    [--status <STATUS>] [--note "<text>"] [--from-json <file>] \
+    [--allow-tier-inversion "<reason>"]
 python record_run.py --self-test
 ```
 
@@ -376,8 +433,9 @@ python record_run.py --self-test
 - **Record** — `{"ts", "pipeline", "phase", "unit", "agent", "model", "event", "duration_s", "tokens_in", "tokens_out", "tokens_total", "rounds", "status", "note"}`.
 - **`--model` is mandatory on a delegation record.** Measured finding: model choice left to prose decays — 17 dispatches in one audited wave silently inherited the most expensive tier, and the run log could not tell that apart from a deliberate choice because the field was simply null. A null there is **not** "not measured": the tier is always known at dispatch, so its absence records a decision nobody made (convention #9 — a restraint rule skipped at the moment the Orchestrator wants to proceed becomes a gate, not louder prose). Checked **after** `--from-json` merges, so a payload carrying `model` satisfies it. `gate`/`phase`/`note` events are unchanged — demanding a tier there would invite a fabrication.
 - **Unknown is `null`, never `0`** (Evidence Integrity). An explicit `0` is preserved. `tokens_total` is derived only when both halves are known.
-- **Exit codes** — **0** appended; **2** usage error (including a delegation with no model), a bad/unreadable `--from-json`, or an unwritable log. There is no exit 1. Unlike the best-effort ledger, a failed write is exit 2 — the record IS the artifact.
-- **Self-test** — **19** cases. Depth (`--from-json` mapping table, the deliberately unmapped fields): `references/record_run.md`.
+- **A verifier never runs below the producer it judges.** On `--event delegation` with `--agent` ∈ `quinn|luna|vera|cipher`, the script reads back the log's most recent **producer** delegation (`mason|nova|max`) in the **same `--unit`** and refuses (**exit 1**, `verifier_below_producer`, nothing written) when this verifier's tier is lower. Tier order `haiku < sonnet < opus`, matched on the tier name appearing anywhere in the model string (`claude-opus-4-1` resolves to `opus`); a value naming no tier or two resolves to **unknown and is never compared** — refusing on a guess is worse than not refusing. Nothing to compare against is not a refusal either: a verifier that runs before any producer in its unit (the bugfix lane's pre-fix RED capture) passes. **`--allow-tier-inversion "<reason>"`** overrides it and writes `"tier_inversion_reason": "<reason>"` onto the record; an empty reason is exit 2 — an inversion nobody justified in writing is the one this check exists to stop. This is the agent-audit's model-assignment-fit heuristic converted from a finding into a refusal (convention #9).
+- **Exit codes** — **0** appended; **1** `verifier_below_producer`; **2** usage error (including a delegation with no model, or `--allow-tier-inversion` with a blank reason), a bad/unreadable `--from-json`, or an unwritable log. Unlike the best-effort ledger, a failed write is exit 2 — the record IS the artifact.
+- **Self-test** — **31** cases. Depth (`--from-json` mapping table, the deliberately unmapped fields): `references/record_run.md`.
 
 ## summarize_run.py
 
@@ -421,6 +479,22 @@ python check_frontmatter.py --self-test
 - **Exit codes** — **0** `result: PASS` (warnings do not gate); **1** at least one error; **2** usage error (missing or non-directory `root`), or a root carrying neither `agents/` nor `skills/`.
 - **Self-test** — **9** cases. Depth: `references/check_frontmatter.md`.
 
+## guard_action.py
+
+The only script here the model does not choose to invoke. Registered as a `PreToolUse` hook (`hooks/hooks.json`), the runtime runs it BEFORE a tool call and the call does not happen if it denies — converting four restraints from "should not" to "cannot" (convention #9). Depth: `references/guard_action.md`.
+
+```bash
+guard_action.py [--format claude|cursor] [--window-hours N] < hook.json
+guard_action.py --explain [--cwd DIR]
+guard_action.py --self-test
+```
+
+- **Rules** — `commit_through_the_gate` (Bash running `git commit|merge|cherry-pick|revert` while any lane is active → names that lane's gate; gates commit from their own subprocess, so a gate is never blocked); `frozen_tests_during_a_fix` (a write to an **existing** test path while a bugfix lane has no commit-gate PASS yet; a new path is allowed); `no_delegation_before_intake` (`Task`/`Agent` while a fresh `bug-report.md` lacks a `check_bugfix_intake.py` PASS); `gate_artifacts_are_written_by_tools` (a write to `gates.jsonl`, `orchestrator-state.json`, `run-log.jsonl` or a `*.meta.json` sidecar — always, lane or no lane).
+- **Active lane** — read from the tree, never from prose: a state file with a non-empty `pipeline`, a bug report, or an unclosed quick note, each inside a 12-hour freshness window. `--explain` prints the rules and what is detected for the cwd.
+- **Output** — a deny is `hookSpecificOutput.permissionDecision` on stdout with exit 0 (not exit 2: the Windows launcher swallows exit codes). An allow prints nothing; an explicit `"allow"` would short-circuit the user's own permission prompt.
+- **Fails open** — any internal error, missing interpreter or unparseable payload allows and notes it on stderr. Every deny is a positive identification, never an inability to decide. Known limit: a quoted mention such as `echo "git commit"` is over-blocked; a Bash redirection into a gate artifact is not a tool-path write and is not caught.
+- **Self-test** — 42 cases, including BOM-prefixed stdin from PowerShell (a real fail-open this caught).
+
 ## detect_stack.py
 
 Walks a repository tree and reports evidence-backed technology stacks — `dotnet`, `vue3` (vue2 excluded even when other weak evidence is present), `react`, `angular`, `node`, `python`, `godot`, `powershell`, `docker`, `aws`, `azure`, `github-actions`, `playwright`, and the db stacks (`postgres`/`sqlserver`/`mysql`/`sqlite`) — so a stack-specific methodology skill's dependency-table row has a mechanical floor instead of resting solely on Iris's prose. It never guesses: a stack appears only with at least one relative evidence path (capped at 5).
@@ -435,3 +509,67 @@ python detect_stack.py --self-test
 - **`--markdown`** prints a `## Stacks (detected)` block for `.docs/summary/context.md` (`bgpdd-discovery` Phase 1).
 - **Exit codes** — **0** on a readable repo (an empty repo returns `stacks: []` plus a warning); **2** a missing or unreadable `--repo`.
 - **Self-test** — **18** cases. Depth (vue3-vs-vue2 suppression, the confidence rule, db/cloud detection surfaces): `references/detect_stack.md`.
+
+## check_handoff.py
+
+Parses the `<handoff>` block an agent returns and asserts it against that persona's contract — `base-persona.md` § Output Format plus the persona's inline "Base Persona Override". Nothing parsed this interface before: a handoff missing `<changed_files>`, naming a path never written, or claiming `PASS` beside a `NOT VERIFIED` marker read exactly like a good one. Required elements per persona: mason/max → `<changed_files>`; dep/quinn/nova → `<changed_files>` + `<artifact>`; forge → `<changed_skills>`; everyone else → `<artifact>`. `<status>` and `<blockers>` always. `agents/blackgoat.md` is not a persona here (convention #7) and is a usage error.
+
+```bash
+python check_handoff.py --handoff <file> --persona <name> --repo <dir> \
+    [--since <ref>] [--fix-round] [--require consumers] [--milestone "<t>"] [--ledger <path>]
+cat handoff.txt | python check_handoff.py --persona mason --repo .
+python check_handoff.py --self-test
+```
+
+- **Flags** — `--persona` required; `--handoff` defaults to stdin; `--repo` defaults to `.`. `--fix-round` additionally requires `<fix_verification>` (base-persona: "already complete" exempts nothing). `--require consumers` promotes the standing-optional `<consumers>` element (mason/nova) to required. `--since <ref>` turns on the diff-subset check.
+- **Checks** — a well-formed `<handoff>…</handoff>` outside fenced code (fenced templates are blanked first); every required element present and non-empty; every `<changed_files>`/`<artifact>`/`<changed_skills>` path exists under `--repo` and does not escape it; `<changed_files>` ⊆ `git diff --name-only <ref>` + untracked, when `--since` is given; `<status>` in `COMPLETE`/`PARTIAL`/`BLOCKED`; `<consumers>` lines in `path::symbol` grammar; and two honesty rules — an upper-case `PASS`/`GREEN` token beside a `NOT VERIFIED`/`BLOCKED` marker in the same element, and `<status>BLOCKED</status>` with `<blockers>None</blockers>`.
+- **Codes** — `handoff_missing`, `element_missing`, `path_missing`, `changed_files_not_in_diff`, `status_invalid`, `consumers_grammar`, `honesty_contradiction`.
+- **JSON keys** — `result`, `persona`, `required_elements`, `present_elements`, `status`, `changed_files`, `artifacts`, `findings` (`{code, detail, …}`), `warnings`, `error`.
+- **Exit codes** — **0** PASS; **1** at least one finding; **2** usage, an unreadable handoff, an unknown persona, a bad `--repo`, or a `--since` ref git cannot resolve (an unperformable check is never a pass).
+- **Self-test** — **26** cases including the adversarial four (a fenced fake handoff, a path that does not exist, `<changed_files>` naming an untouched file, an empty element). Depth: `references/check_handoff.md`.
+
+## check_always_on.py
+
+Lints `skills/agent-squad/always-on.md`, the session-start index. It is injected rather than opened, so its two drifts are silent: a lane on disk with no row is invisible to every ordinary chat, and an owner pointer whose file was renamed reads exactly like a live one.
+
+```bash
+python check_always_on.py [--index <path>] [--plugin-root <dir>] [--max-words N] [--ledger <path>]
+python check_always_on.py --self-test
+```
+
+- **Flags** — both paths default from the script's own location, so bare `python check_always_on.py` is the CI invocation. `--max-words` defaults to 20.
+- **Checks** — every `skills/bg` or `skills/bgpdd-*` folder carrying a `SKILL.md` has a table row; every row names a lane that exists, once; every table cell is ≤ `--max-words` words; every cited path resolves (a token containing `/`, or a bare `*.py` resolved under `skills/pipeline-tools/scripts/`; lane commands and `{placeholder}` paths are not path claims); `## Outside any lane` carries four numbered rules, each naming an `Owner:` file that exists.
+- **Codes** — `lane_missing_row`, `lane_row_orphan`, `cell_too_long`, `path_missing`, `rule_count`, `rule_owner_missing`, `section_missing`.
+- **Exit codes** — **0** PASS; **1** at least one finding; **2** the index or `--plugin-root` is unreadable, or the root has no `skills/`.
+- **Self-test** — **18** cases, the last of which runs the gate against the real shipped `always-on.md`. Depth: `references/check_always_on.md`.
+
+## check_tier1_provenance.py
+
+Enforces the Tier-1 provenance stamp `bgpdd-discovery/SKILL.md` § 1 promises downstream — the gate that section explicitly says does not exist yet. Every Tier-1 root artifact (`context.md`, `{feature}/overview.md`) must carry, in its header, a date and a 40-hex commit sha per in-scope repo, and each sha must resolve in that repo. Drift against current HEAD is reported and **never** fails, per the same section.
+
+```bash
+python check_tier1_provenance.py --summary-root .docs/summary [--feature <id>] \
+    --repo [<name>=]<path> [--repo ...] [--warn-on-drift] [--ledger <path>]
+python check_tier1_provenance.py --self-test
+```
+
+- **Flags** — `--repo` repeats once per repo on a multi-repo Target Scope; `name=path` keys the sha, a bare path keys on the directory name. `--feature` scopes to one `overview.md` (the Phase 4 invocation); without it every feature directory under the root is checked, plus `context.md` always. `--warn-on-drift` adds stderr warnings only — it can never change the exit code.
+- **Stamp grammar** — the header is everything above the first `## ` heading; it must hold a `YYYY-MM-DD` date and, per in-scope repo, a line with a 40-hex sha. With two or more repos in scope that line must also carry the repo's name; with one, a bare sha line suffices.
+- **Codes** — `artifact_missing`, `stamp_missing`, `date_missing`, `sha_missing`, `sha_unknown`. A sha that resolves to nothing is a fabricated stamp, not an old one, and fails.
+- **Exit codes** — **0** PASS (drift included); **1** at least one finding; **2** a bad `--summary-root`, no or malformed `--repo`, or git unusable.
+- **Self-test** — **16** cases against real temp git repos (skipped, never faked, when git is absent). Depth: `references/check_tier1_provenance.md`.
+
+## check_runtime_recipe.py
+
+Gates `runtime-environment.md`, the one Tier-1 artifact a later pipeline needs to start anything. `bgpdd-discovery/SKILL.md` § 1: it must name at least one service start command and at least one readiness check, because "a recipe with neither is a heading". Block authority stays with `runtime-evidence/SKILL.md` § The Environment Manifest; this gate only asserts the six blocks are present and that two of them are filled.
+
+```bash
+python check_runtime_recipe.py --recipe <path> [--milestone "<title>"] [--ledger <path>]
+python check_runtime_recipe.py --self-test
+```
+
+- **Checks** — the six manifest blocks (Bring-up sequence, Services, Repointing map, Forbidden hosts, Test identities & fixtures, Capabilities) present as a heading or a `Label:`; ≥1 non-placeholder start command and ≥1 non-placeholder readiness check, read from a Services-shaped table column or a `Start command:` / `Readiness check:` line. `TBD`, `TODO`, `-`, `n/a` and `_TODO: pending_` are placeholders, not values.
+- **The sanctioned skip** — a `Skipped — user-approved: <reason>` line exits 0 before any other check (em dash, en dash or hyphen). The reason is required: an unreasoned skip is the "indistinguishable from an omission" case § 1 closes. A bare `Skipped.` buys nothing.
+- **Codes** — `recipe_missing`, `block_missing`, `start_command_missing`, `readiness_check_missing`, `skip_unreasoned`.
+- **Exit codes** — **0** PASS; **1** any finding, a missing recipe included (at the step that runs this gate the file was just supposed to be written, so its absence is the result, not a caller mistake); **2** `--recipe` omitted or not a readable file.
+- **Self-test** — **16** cases. Depth: `references/check_runtime_recipe.md`.

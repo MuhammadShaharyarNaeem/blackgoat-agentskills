@@ -24,3 +24,11 @@ Two consequences worth stating:
 ## `--ledger` on a state writer
 
 `update_state.py` is not a gate, so its ledger record is not a verdict anyone gates on — it is the durable half of a blocker resolution. `--resolve-blocker` additionally records `"action": "resolve-blocker"` and `"evidence": "<text>"` in the ledger line. The CLI still cannot judge whether "trust me" is real evidence; the ledger makes the claim durable and attributable instead of gone the moment the array shrinks. Pipelines therefore pass `--ledger` on `--resolve-blocker` calls and nowhere else — nothing else here makes a claim that outlives the file it writes.
+
+## The game-tape gate on a state writer
+
+`update_state.py` is not a gate, and this is the one place it refuses. The justification is narrow and worth stating: the `--set-cursor` write is the moment a milestone stops being the current one, and `bgpdd-build` Phase 6's checkpoint is evidence *about that milestone* which is cheapest to write while it is still in context and worthless once it is not. So the gate is scoped to exactly that write — `--set-cursor` or `--set-pipeline`, with `--milestone` — and to nothing else. A `--add-blocker` or `--set-artifact` call with the flag warns on stderr and proceeds: a gate that fires when nothing closed is noise, and noise is how a real gate gets waived by habit.
+
+`--require-game-tape` without `--milestone` is exit 2, not a skip. The refusal exits **1** and writes nothing at all — not a partial state with the cursor moved.
+
+`--milestone` also becomes this run's ledger `milestone` value, replacing the previous `--set-cursor`-derived fallback. That fallback recorded the milestone being moved *to*; `--milestone` names the one being closed, which is what the record is about.
