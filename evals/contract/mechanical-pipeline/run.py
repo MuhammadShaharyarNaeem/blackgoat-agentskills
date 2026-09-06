@@ -46,6 +46,10 @@ RUN_QUIET = SCRIPTS / "run_quiet.py"
 CHECK_RUNTIME_EVIDENCE = SCRIPTS / "check_runtime_evidence.py"
 CHECK_ACCEPTANCE_SUITE = SCRIPTS / "check_acceptance_suite.py"
 CHECK_AGENT_REPORT = SCRIPTS / "check_agent_report.py"
+CHECK_HANDOFF = SCRIPTS / "check_handoff.py"
+CHECK_ALWAYS_ON = SCRIPTS / "check_always_on.py"
+CHECK_TIER1_PROVENANCE = SCRIPTS / "check_tier1_provenance.py"
+CHECK_RUNTIME_RECIPE = SCRIPTS / "check_runtime_recipe.py"
 
 # The shared record writer lives in evals/, two levels up from this file. Shared,
 # not copied into each case, because the record shape has to match the one
@@ -773,6 +777,169 @@ def run_lifecycle(repo):
               and data.get("capture_problems") == []
               and data.get("allow_uncaptured") is False)
         record("12b. check_agent_report: the same checks, really captured -> exit 0", ok,
+               "" if ok else json.dumps(data))
+
+    # --- Steps 13-16: the H3 interface gates, composed against this repo ----
+    # Each ships its own --self-test against synthetic fixtures. What is new
+    # here is the composition: the same real git repo the milestone lifecycle
+    # above built, the same on-disk artifacts, and the exit code AND naming
+    # JSON field asserted on both an honest and a fabricated input.
+
+    # 13: check_handoff.py against a real diff. `src/pristine.py` is committed
+    # FIRST and never touched again, so it exists on disk while being provably
+    # outside the `--since head` window; `src/contacts.py` is written after,
+    # so the window is non-empty and precisely known.
+    pristine = repo / "src" / "pristine.py"
+    pristine.parent.mkdir(parents=True, exist_ok=True)
+    pristine.write_text("# committed, then never touched\n", encoding="utf-8")
+    run_git(["add", "src/pristine.py"], repo)
+    run_git(["commit", "-qm", "handoff-step baseline"], repo)
+    head = run_git(["rev-parse", "HEAD"], repo).stdout.strip()
+    touched = repo / "src" / "contacts.py"
+    touched.write_text("# added after HEAD\n", encoding="utf-8")
+
+    handoff_dir = impl_dir / "handoffs"
+    handoff_dir.mkdir(parents=True, exist_ok=True)
+
+    honest_handoff = handoff_dir / "mason-m2.md"
+    honest_handoff.write_text(
+        "<handoff><status>COMPLETE</status>"
+        "<changed_files>src/contacts.py</changed_files>"
+        "<blockers>None</blockers></handoff>\n", encoding="utf-8")
+    proc = run_py(CHECK_HANDOFF, ["--handoff", honest_handoff, "--persona", "mason",
+                                  "--repo", repo, "--since", head])
+    data = parse_json(proc, "13a. check_handoff: builder handoff matching the real diff -> exit 0")
+    if data is not None:
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and data.get("findings") == []
+              and data.get("changed_files") == ["src/contacts.py"])
+        record("13a. check_handoff: builder handoff matching the real diff -> exit 0", ok,
+               "" if ok else json.dumps(data))
+
+    # 13b: the same handoff, plus a path that exists on disk but that git does
+    # NOT report as changed since `head`. Existence alone must not satisfy the
+    # subset check -- that is the whole difference between "a file is there"
+    # and "this agent changed it".
+    inflated = handoff_dir / "mason-m2-inflated.md"
+    inflated.write_text(
+        "<handoff><status>COMPLETE</status>"
+        "<changed_files>src/contacts.py, src/pristine.py"
+        "</changed_files><blockers>None</blockers></handoff>\n", encoding="utf-8")
+    proc = run_py(CHECK_HANDOFF, ["--handoff", inflated, "--persona", "mason",
+                                  "--repo", repo, "--since", head])
+    data = parse_json(proc, "13b. check_handoff: a changed_files entry git never saw -> exit 1")
+    if data is not None:
+        codes = sorted({f.get("code") for f in (data.get("findings") or [])})
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and codes == ["changed_files_not_in_diff"])
+        record("13b. check_handoff: a changed_files entry git never saw -> exit 1", ok,
+               "" if ok else json.dumps(data))
+
+    # 13c: a handoff that exists ONLY inside a fence. The adversarial case the
+    # gate was written for: a template shown in prose reads as a report.
+    fenced = handoff_dir / "mason-fenced.md"
+    fenced.write_text(
+        "I will report like this when I am done:\n\n```\n"
+        "<handoff><status>COMPLETE</status>"
+        "<changed_files>src/contacts.py</changed_files>"
+        "<blockers>None</blockers></handoff>\n```\n", encoding="utf-8")
+    proc = run_py(CHECK_HANDOFF, ["--handoff", fenced, "--persona", "mason",
+                                  "--repo", repo])
+    data = parse_json(proc, "13c. check_handoff: a fenced template is not a handoff -> exit 1")
+    if data is not None:
+        codes = sorted({f.get("code") for f in (data.get("findings") or [])})
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and codes == ["handoff_missing"])
+        record("13c. check_handoff: a fenced template is not a handoff -> exit 1", ok,
+               "" if ok else json.dumps(data))
+
+    # 14: check_always_on.py against the REAL plugin tree, not a fixture --
+    # the shipped index has to be true of the shipped lanes.
+    proc = run_py(CHECK_ALWAYS_ON, [])
+    data = parse_json(proc, "14. check_always_on: the shipped index matches the shipped lanes -> exit 0")
+    if data is not None:
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and data.get("findings") == []
+              and sorted(data.get("lanes_in_table") or [])
+                  == sorted(data.get("lanes_on_disk") or []))
+        record("14. check_always_on: the shipped index matches the shipped lanes -> exit 0", ok,
+               "" if ok else json.dumps(data))
+
+    # 15: check_tier1_provenance.py against a Tier-1 tree in this same repo,
+    # stamped with a sha this repo really contains -- and then with one it
+    # does not, which is the fabricated-stamp case.
+    summary = repo / ".docs" / "summary"
+    (summary / "contacts").mkdir(parents=True, exist_ok=True)
+    stamp = f"# Context\n\n> Provenance — 2026-08-12\n> `{head}`\n\n## Stacks (detected)\n\nnone\n"
+    (summary / "context.md").write_text(stamp, encoding="utf-8")
+    (summary / "contacts" / "overview.md").write_text(
+        f"# Contacts — overview\n\n> Provenance — 2026-08-12\n> `{head}`\n\n"
+        "## Owning services\n\napi\n", encoding="utf-8")
+    proc = run_py(CHECK_TIER1_PROVENANCE, ["--summary-root", summary,
+                                           "--feature", "contacts",
+                                           "--repo", f"proj={repo}"])
+    data = parse_json(proc, "15a. check_tier1_provenance: both artifacts stamped with a real sha -> exit 0")
+    if data is not None:
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and data.get("findings") == [] and data.get("drift") == [])
+        record("15a. check_tier1_provenance: both artifacts stamped with a real sha -> exit 0", ok,
+               "" if ok else json.dumps(data))
+
+    (summary / "contacts" / "overview.md").write_text(
+        "# Contacts — overview\n\n> Provenance — 2026-08-12\n> `"
+        + "0" * 40 + "`\n\n## Owning services\n\napi\n", encoding="utf-8")
+    proc = run_py(CHECK_TIER1_PROVENANCE, ["--summary-root", summary,
+                                           "--feature", "contacts",
+                                           "--repo", f"proj={repo}"])
+    data = parse_json(proc, "15b. check_tier1_provenance: a sha this repo never had -> exit 1")
+    if data is not None:
+        codes = sorted({f.get("code") for f in (data.get("findings") or [])})
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and codes == ["sha_unknown"])
+        record("15b. check_tier1_provenance: a sha this repo never had -> exit 1", ok,
+               "" if ok else json.dumps(data))
+
+    # 16: check_runtime_recipe.py -- a filled manifest, then the same file with
+    # its only start command and readiness check replaced by placeholders. The
+    # blocks are identical in both; only the facts differ.
+    qa_dir = summary / "contacts" / "QA"
+    qa_dir.mkdir(parents=True, exist_ok=True)
+    recipe = qa_dir / "runtime-environment.md"
+    FILLED_RECIPE = (
+        "# Runtime Environment — contacts\n\n"
+        "## Bring-up sequence\n\n1. Start the API. Needed for: api.\n\n"
+        "## Services\n\n"
+        "| Service | Start command | Local base URL | Readiness check |\n"
+        "|---|---|---|---|\n"
+        "| api | `dotnet run --project src/Api` | http://localhost:5142 | "
+        "`curl -sS http://localhost:5142/health` |\n\n"
+        "## Repointing map\n\n| Key | Service | Ships as | Local |\n|---|---|---|---|\n"
+        "| Api:BaseUrl | web | https://dev.example | http://localhost:5142 |\n\n"
+        "## Forbidden hosts\n\n- `dev.example`\n\n"
+        "## Test identities & fixtures\n\n- login `qa@example.test`, password from the vault\n\n"
+        "## Capabilities\n\n- out-of-process HTTP client\n")
+    recipe.write_text(FILLED_RECIPE, encoding="utf-8")
+    proc = run_py(CHECK_RUNTIME_RECIPE, ["--recipe", recipe])
+    data = parse_json(proc, "16a. check_runtime_recipe: a filled manifest -> exit 0")
+    if data is not None:
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and data.get("blocks_missing") == []
+              and len(data.get("start_commands") or []) == 1
+              and len(data.get("readiness_checks") or []) == 1)
+        record("16a. check_runtime_recipe: a filled manifest -> exit 0", ok,
+               "" if ok else json.dumps(data))
+
+    hollow = FILLED_RECIPE.replace("`dotnet run --project src/Api`", "TBD")
+    hollow = hollow.replace("`curl -sS http://localhost:5142/health`", "TODO")
+    recipe.write_text(hollow, encoding="utf-8")
+    proc = run_py(CHECK_RUNTIME_RECIPE, ["--recipe", recipe])
+    data = parse_json(proc, "16b. check_runtime_recipe: every block present, both facts TBD -> exit 1")
+    if data is not None:
+        codes = sorted({f.get("code") for f in (data.get("findings") or [])})
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and data.get("blocks_missing") == []
+              and codes == ["readiness_check_missing", "start_command_missing"])
+        record("16b. check_runtime_recipe: every block present, both facts TBD -> exit 1", ok,
                "" if ok else json.dumps(data))
 
 
