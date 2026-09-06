@@ -427,6 +427,21 @@ The plugin's failure doctrine is *halt and surface* — never guess, never silen
 
 ---
 
+## Enforcement Hooks: "should not" → "cannot"
+
+Every gate in this plugin verifies *after* the fact, and the decision to run one is the model's. `hooks/hooks.json` closes that hole for four restraints by registering a **`PreToolUse` hook** — `skills/pipeline-tools/scripts/guard_action.py` — which the runtime invokes before a tool call and which can refuse it outright. The refusal reason is fed back to Claude, so a block reads as "run this gate instead", not as a crash.
+
+| It blocks | When | Instead |
+|---|---|---|
+| `git commit` / `merge` / `cherry-pick` / `revert` via the Bash tool | any lane is active | run that lane's gate (`check_commit_gate.py --commit`, or `check_quick_close.py --commit` for `/bgpdd-quick`) — the gates commit from their own subprocess, so they are never blocked |
+| editing an **existing** test file | a bugfix lane has not reached its commit gate | fix the code; Quinn owns tests in that lane. Adding a *new* test file is allowed |
+| spawning a subagent | a fresh `bug-report.md` has no `check_bugfix_intake.py` PASS | run the intake gate |
+| hand-editing `gates.jsonl`, `orchestrator-state.json`, `run-log.jsonl`, `*.meta.json` | **always** | use the pipeline-tools script that owns that artifact |
+
+The active lane is detected from artifacts in the working tree (a state file's `pipeline`, a bug report, a quick note, each with a 12-hour freshness window) — never from prose or a model assertion. `python skills/pipeline-tools/scripts/guard_action.py --explain` prints the rules and what it currently detects; `--self-test` runs 42 cases. **It fails open by design**: any internal error, a missing python, or an unparseable payload allows the call, because a guard that bricks a session gets deleted and a deleted guard enforces nothing. Every block is therefore a positive identification, never an inability to decide — and the guard raises the cost of the wrong action rather than making the repo tamper-proof. Under Cursor only the commit rule is mechanically enforceable (`hooks/hooks-cursor.json`, a template); see `rules/cursor-runtime.mdc`.
+
+---
+
 ## MCP Servers
 
 The plugin's `.mcp.json` wires up four MCP servers used by the testing, review, and shipping agents:

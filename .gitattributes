@@ -5,4 +5,6 @@
 # whole tree.
 hooks/run-hook.cmd text eol=lf
 hooks/session-start text eol=lf
+hooks/guard-action text eol=lf
 hooks/hooks.json text eol=lf
+hooks/hooks-cursor.json text eol=lf
