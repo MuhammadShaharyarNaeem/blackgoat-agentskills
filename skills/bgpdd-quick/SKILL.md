@@ -59,7 +59,7 @@ Four phases; do not skip or reorder.
    ```bash
    python {PLUGIN_ROOT}/pipeline-tools/scripts/detect_stack.py --repo . --json
    ```
-   Offer its first `suggested_check_commands` entry as the `How verified` default — the user confirms or replaces it, never you silently. `test_path_globs` goes to Phase 3's `--frozen`. A detected stack with a `skills` entry contributes **only** its `## Quick card` (e.g. `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md § Quick card`).
+   Offer its first `suggested_check_commands` entry as the `How verified` default — the user confirms or replaces it, never you silently. `test_path_globs` goes to Phase 3's `--frozen`. A detected stack with a `skills` entry contributes **only** its `## Quick card` — when that skill has one; a stack skill without a card contributes nothing here (its full contract is a lane-time read) (e.g. `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md § Quick card`).
 4. **Write `{quick-root}/note.md`** — three labelled lines, no placeholders:
    - `- What:` the one sentence.
    - `- Where:` every file you will touch, comma-separated, **≤ 3**. Phase 3 requires it to equal what changed.
