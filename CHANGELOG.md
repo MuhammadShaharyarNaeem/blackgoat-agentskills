@@ -3,6 +3,37 @@
 All notable changes to the `blackgoat-agentskills` plugin are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [2.5.0] — 2026-09-07
+
+The hardening release. Restraint moves from "the model should not" to "the model cannot": a PreToolUse hook denies the actions the gates exist to catch, a driver emits the next mandatory action instead of the Orchestrator recalling it, every agent handoff is validated by a script, and the gate ledger is a hash chain.
+
+### Migration notes — read before upgrading a project with in-flight `.docs/` artifacts
+
+- **The ledger is chained.** Every record now carries `prev` and `self`. Existing ledgers keep working: legacy records are tolerated before the first chained one, and a chained ledger may never revert to unchained. `check_commit_gate.py --require-ledger-gates` and `mark_milestone.py --require-gates` verify the chain first and fail with `ledger_chain_broken`; a ledger someone edited by hand will not pass again. Accepted limit: a tail rewritten consistently is undetectable; a single edited or inserted record is now visible.
+- **Hooks are active in Claude Code.** `guard_action.py` denies `git commit|merge|cherry-pick|revert` from the shell while a lane is active (the gates commit through their own subprocess and are unaffected), edits to existing test files during a bugfix before its commit gate passes, delegation while a bug report lacks an intake PASS, and any direct write to `gates.jsonl`, `orchestrator-state.json`, `run-log.jsonl` or a `*.meta.json`. A lane counts as active from its artifacts within a 12-hour window. Outside a lane nothing changes. Cursor cannot enforce these; the rules are stated in its runtime contract.
+- **Build's commit gate and bugfix's Phase 5 gate require the run log**: `--require-run-log … --require-agents quinn,luna,<builder>` fails the commit when any named agent has no delegation record with a model for that unit. A milestone whose delegations were never recorded under 2.4.0 cannot be committed under 2.5.0 until `record_run.py` lines are added for them.
+- **Milestone closure requires the game tape**: `mark_milestone.py --require-game-tape` and `update_state.py --require-game-tape` refuse the write when the milestone's section is missing, has fewer than 3 or more than 6 bullets, has no fenced output, or no telemetry line.
+- **Shipping's ship decision binds coverage and acceptance**: `check_ship_decision.py --require-ledger-gates check_coverage.py,check_acceptance_suite.py` (lite epics omit the acceptance suite). Run Step 3.5's coverage gate first if the ledger has no coverage PASS.
+- **`record_run.py` refuses a verifier recorded below its producer's tier** in the same unit unless `--allow-tier-inversion "<reason>"` is recorded.
+- **Discovery's Tier-1 stamp has a grammar**: `check_tier1_provenance.py` requires a date and a 40-hex sha per repo in the header of `context.md` and each `<feature>/overview.md`, and the sha must resolve. Existing Tier-1 files without a stamp fail with `stamp_missing`; add the header line.
+
+### Added
+- `guard_action.py` (42 self-tests) and three `PreToolUse` entries in `hooks/hooks.json`; proven end to end with a headless session that was denied a hand commit inside an active lane and allowed one outside.
+- `pipeline_driver.py` (52): the next mandatory action for the bugfix and quick lanes, exit 1 when the current phase's gate has not passed, exit 3 on completion; wired into both spines ("phase transitions are emitted, not recalled").
+- `check_handoff.py` (26): required elements per persona, path existence, changed files within the diff, status enum, consumers grammar, PASS beside NOT VERIFIED; orchestrator-contract §1 validates every handoff before acting on it.
+- `check_ledger.py` (21): chain verifier; drift guards assert every writer chains byte-identically.
+- `check_always_on.py` (18), `check_tier1_provenance.py` (16), `check_runtime_recipe.py` (16); discovery Phase 1, 4 and 4b wired.
+- `check_ship_decision.py --require-ledger-gates`; `--require-game-tape` on `mark_milestone.py` and `update_state.py`; `check_commit_gate.py --require-run-log/--require-agents`; `record_run.py --allow-tier-inversion`.
+- CI: ubuntu + windows matrix running both lints, every pipeline-tools self-test, both zero-LLM cases, `check_always_on.py`, the harness self-test and a parse of every PowerShell file.
+- `mechanical-pipeline` steps 13–16 (28/28).
+
+### Changed
+- `--ledger` on the `--add-blocker` calls in shipping Step 3, build Phase 0 and plan.
+- `pipeline-tools/SKILL.md` description names every script in 802 chars; sections for all seven new scripts.
+
+### Not adopted
+- LangGraph. It replaces the Claude Code host; the driver plus hooks give the deterministic control flow it would have provided, inside the runtime the plugin already lives in. If headless pipeline runs are ever needed, the Agent SDK with `pipeline_driver.py` is the path.
+
 ## [2.4.0] — 2026-09-07
 
 The audit release. A 21-metric fan-out audit of 2.3.0 found six Blocker metrics; every one is closed here, and two of the fixes change gate contracts.
