@@ -30,6 +30,7 @@ The bullets below carry ONLY this skill's refinements.
 
 - **Strict Delegation — this skill's agents**: **Quinn** (Phases 1, 4), **Mason** and/or **Nova** (Phase 3), **Luna** (Phase 5). Phases 0, 2 and the close of 5 are yours, in the main session. You MUST NOT write the fix, the captures, or the review yourself.
 - **Artifact verification at every phase transition** (Contract §4): confirm every file a handoff cites exists on disk before acting on it.
+- **Phase transitions are emitted, not recalled (convention #9):** before starting any phase run `python {PLUGIN_ROOT}/pipeline-tools/scripts/pipeline_driver.py --root {bugfix-root} --lane bugfix --milestone "{bug-slug}" --json`; do the `next_action` it prints; exit 1 means a gate for the current phase has not passed — run that gate, never the next phase. (Exit 3 = the lane is closed; exit 2 = the root or route is mis-resolved.) Contract in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
 - **Bugfix workspace (deliberate divergence, convention #8)**: no epic of its own — no `requirements.md`, no `plan.md`, so `check_coverage.py` has nothing to read and is never run here. Resolve `{bugfix-root}` **and** `{state-file}` once, in Phase 0, and name both in every brief (a subagent cannot ask you where to write):
   - `{bugfix-root}` = `.docs/{project-name}/implementation/` when the bug belongs to a feature whose epic is **still in flight** (the **feature route**), else `.docs/bugfix/{bug-slug}/` (the **standalone route**) — refining `base-persona.md`'s `.docs/{project-name}/` model and `runtime-evidence`'s capture path for a run with no project folder. Every artifact the phases name lives there, plus `game-tape.md`, `gates.jsonl`, `run-log.jsonl`.
   - **"In flight" is two mechanical tests, both required**: `.docs/{project-name}/orchestrator-state.json` exists, **and** the `branch` it names still exists and is unmerged (`git rev-parse --verify <branch>` succeeds; `git branch --merged <the default branch>` does not list it). A bug in a **shipped** epic takes the **standalone** route even though `implementation/` is still on disk — `bgpdd-shipping` Step 6.6 deletes the state and Step 4.5's branch is merged, so folder presence alone outlives the epic and was the wrong test. This is what makes the branch rule below well-defined: there is no in-flight branch to ride once the epic has shipped.
@@ -50,6 +51,7 @@ The bullets below carry ONLY this skill's refinements.
 Six phases, 0 through 5. Do not skip or reorder them.
 
 ### Phase 0: Intake (Orchestrator, main session — no delegation)
+**Driver:** `pipeline_driver.py --root {bugfix-root} --lane bugfix` must report `phase: 0`.
 1. Pick `{bug-slug}`; resolve `{bugfix-root}` and `{state-file}` (§1), running §1's two in-flight tests before you commit to a route. **The branch depends on the route**: standalone → pick and create a fix branch; feature → **read `branch` from `{state-file}` and check that branch out**, creating nothing (§1). Reuse all four in every brief.
 2. **Write the bug report with the user** into `{bugfix-root}/bug-report.md`, filling in every section of `{PLUGIN_ROOT}/bgpdd-bugfix/references/bug-report-template.md` — which owns the section list and the `- Surface: api | ui | both` / `- Runtime observable: yes | no` enums both later phases read. Ask for what is missing; never fill a field from inference. **The `- Command:` line is an exit-code oracle** (non-zero while the bug is present, zero once fixed — Phase 1 step 3 says how to write one when the correct behaviour is itself an error status); Quinn runs it verbatim and Phase 2's gate compares.
 3. **Gate**: `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_bugfix_intake.py --report {bugfix-root}/bug-report.md --milestone "{bug-slug}" --ledger {bugfix-root}/gates.jsonl`
@@ -61,6 +63,7 @@ Six phases, 0 through 5. Do not skip or reorder them.
    Phase 5's commit gate reads the `blockers` ledger this guarantees. Append every BLOCKED verification and unresolved Critical/Important finding as it arises: `--add-blocker "<text>" --blocker-milestone "{bug-slug}" --blocker-source <who raised it>`; removal requires `--evidence`. **`--blocker-milestone` is mandatory on both routes** — on a shared epic file, scoping is what stops a bugfix blocker from freezing unrelated milestones. The reverse holds too: the epic's own **unscoped** blockers *do* block this commit, by `check_commit_gate.py`'s fail-safe rule, and `--ignore-unscoped` is the sanctioned override (Phase 5 step 5).
 
 ### Phase 1: Reproduce — RED (Quinn)
+**Driver:** the driver must report `phase: 1`.
 **Quinn, not the builder, produces the RED evidence** — **deliberately reversing this skill's own prior rule** (convention #8): `quinn.md` §1's narrowing only *exempts* her from RED-before-implementation; it does not forbid this.
 1. Brief her with `bug-report.md`'s resolved path, `{bugfix-root}`, and the reproduction command **copied verbatim** — never paraphrased, re-quoted or "tidied". Phase 2's gate compares the RED sidecar's `argv` against the report's `- Command:` exactly, so a rewritten command blocks the route.
 2. **The RED run is captured to disk, not narrated**:
@@ -72,6 +75,7 @@ Six phases, 0 through 5. Do not skip or reorder them.
 6. Verify the capture and its sidecar exist.
 
 ### Phase 2: Isolate — RCA and route (Orchestrator, main session — no delegation)
+**Driver:** the driver must report `phase: 2`.
 Reading and searching is not writing application code (Contract §3); write or edit none here.
 1. Trace the execution path and isolate the failure's mechanism. Load `{PLUGIN_ROOT}/debugging-and-error-recovery/SKILL.md` on demand when the trace stalls.
 2. **On `- Regression: yes`**, bisect between the last-known-good reference and the failing one before hypothesising — the report already names the boundary.
@@ -82,6 +86,7 @@ Reading and searching is not writing application code (Contract §3); write or e
 6. **`FAST` vs `FULL` differ ONLY in user check-ins.** FAST: proceed phase to phase without pausing. FULL: pause for the user after this phase and again before the commit. **Neither route ever skips RED, GREEN, Luna, or the commit gate.** On FULL, state the root cause to the user now.
 
 ### Phase 3: Fix (Mason and/or Nova)
+**Driver:** the driver must report `phase: 3`.
 **Mason** (`api`), **Nova** (`ui`), or **both** when the report says `- Surface: both`.
 1. **Route by the report's surface field**, not by impression. **`both` is delegated, not refused** — deliberately reversing this skill's own prior HALT (convention #8): one shared RED exists, so two builders partition by surface against a single reproduction and one shared GREEN closes both. Partition every write surface before launching concurrently, or serialize (Contract §1).
 2. **Brief each builder** with the root cause exactly as `rca.md` states it, `rca.md`'s path, the RED capture's path, `{bugfix-root}`, and its surface's share of the fix.
@@ -92,6 +97,7 @@ Reading and searching is not writing application code (Contract §3); write or e
 7. Read the `<handoff>`; verify every `<changed_files>` path exists.
 
 ### Phase 4: Verify — GREEN (Quinn)
+**Driver:** the driver must report `phase: 4`.
 **Quinn** — a continuation of her Phase 1 delegation where the runtime supports it (Contract §1: same role, same unit), fresh otherwise.
 1. Brief her with the RED capture path, the builder's `<changed_files>`, and `{bugfix-root}`.
 2. **She re-runs the SAME command** the RED sidecar records, captured to `{bugfix-root}/evidence/green/{bug-slug}.md` — or, when the bug is runtime-observable, to `{bugfix-root}/evidence/runtime/{bug-slug}-green.md` with `--capture-field "Milestone={bug-slug}" --capture-field "Surface=<api|ui>" --capture-field "Transport=out-of-process HTTP"`, so the one capture serves both gates below (step 7 reads those fields). That single-capture path is open only when the command is itself an allowlisted client call (plain `curl …`); when the oracle is a shell wrapper (Phase 1 step 3) she takes the GREEN with the wrapper for step 6 **and** a separate plain `curl -sS -i` capture under `{bugfix-root}/evidence/runtime/` for step 7 — two captures, two gates.
@@ -105,6 +111,7 @@ Reading and searching is not writing application code (Contract §3); write or e
 8. **Red on her run** → return to the **same spawned builder** as a delta-only follow-up carrying her exact failing output (Contract §1), then re-verify. Bounded by §1's 2-round rule.
 
 ### Phase 5: Review & Close (Luna, then Orchestrator)
+**Driver:** the driver must report `phase: 5`; after step 5's gate it reports `phase: 6` at exit 3.
 **Luna** — always a fresh delegation (Contract §1, independent-verification exemption); `code-review-and-quality` owns her axes, format and severity labels.
 1. **Generate the review package before briefing her** — a reviewer handed only a path list reads the amended tree, where a fix is indistinguishable from the status quo and a deletion is invisible: `python {PLUGIN_ROOT}/pipeline-tools/scripts/review_package.py --repo . --base HEAD --head WORKTREE --changed-files <the builder's paths> --out {bugfix-root}/review-package.md --ledger {bugfix-root}/gates.jsonl --milestone "{bug-slug}"` (`--head WORKTREE` because the fix is uncommitted until step 5; exit 2 = git failed or the diff is empty — fix the range, never delegate without the artifact; regenerate on every remediation round so step 3's *current diff* is an artifact too). Then brief her with that package path, the builder's `<changed_files>` and `<consumers>`, the root cause, **the RED path she must confirm was not modified**, Quinn's evidence, and `{bugfix-root}/review-report.md` as her report path — where she **appends a `## Review: {bug-slug}` section**, never overwrites. Two reasons, both mechanical: on the feature route that file holds the epic's milestone reviews, and step 5's gate matches the heading's leading identifier as a whole token against `--milestone "{bug-slug}"`, reading the latest such section. Grammar and the append rule belong to `{PLUGIN_ROOT}/code-review-and-quality/SKILL.md` § *The Review Report* — its declared single ownership: one `## Review:` section per review, never an overwrite; the heading carries the unit's leading identifier verbatim; the `**Verdict:**` line sits immediately under the heading. `luna.md`'s Delivery Rules defer there, and so does this bullet — it fixes only the path and the `{bug-slug}` token.
 2. Require her **Impact Analysis** directive explicitly (`luna.md` owns it): per consumer, whether the fix is safe for it.

@@ -32,6 +32,7 @@ The bullets below carry ONLY this skill's refinements.
 - **Methodology on demand, inline.** Load one from `{PLUGIN_ROOT}/<skill>/SKILL.md`; follow its Worker Execution Contract yourself: `test-driven-development` (new behaviour with a test), `debugging-and-error-recovery` (something broken), `code-simplification` (a refactor). None fits → wrong lane.
 - **Workspace**: `{quick-root}` = `.docs/quick/{YYYY-MM-DD}-{slug}/` — refining `base-persona.md`'s `.docs/{project-name}/` model (convention #8): no epic to live under. Holds `note.md`, `evidence/check.md` (+ sidecar), `gates.jsonl`; the gate carries `--ledger {quick-root}/gates.jsonl --milestone "{slug}"`.
 - **No `orchestrator-state.json`, no `run-log.jsonl` — deliberate divergence from Contract §4 (convention #8).** State is an inter-pipeline handoff and this lane closes in one session; the run log records *delegations*, and this lane never delegates — §4's obligation has nothing to record. `gates.jsonl` plus the commit is the record.
+- **Phase transitions are emitted, not recalled (convention #9):** before starting any phase run `python {PLUGIN_ROOT}/pipeline-tools/scripts/pipeline_driver.py --root {quick-root} --lane quick --json`; do the `next_action` it prints; exit 1 means a gate for the current phase has not passed — run that gate, never the next phase. (Exit 3 = the change is closed and committed.) Contract in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
 - **Autonomous, by Contract §1's own exception.** Phase 0's note is the single user checkpoint; Phases 1–3 need no confirmation; escalations and blocked gates return to the user.
 - **Game tape — deliberate divergence from the skeleton's cadence, cap and location (convention #8)**: **one bullet** under `## Result` in `{quick-root}/note.md`, not a `game-tape.md` — what the gate said, plus what surprised you.
 - **Round bound: 1 (convention #8, deliberately tighter than `bgpdd-bugfix`'s 2).** One blocked close is a fix-and-re-run; a second means the change was never quick — escalate.
@@ -43,6 +44,7 @@ The bullets below carry ONLY this skill's refinements.
 Four phases; do not skip or reorder.
 
 ### Phase 0: Scope (main session)
+**Driver:** `pipeline_driver.py --root {quick-root} --lane quick` must report `phase: 0`.
 1. State the intent in **one sentence** with the user; pick `{slug}` and resolve `{quick-root}` (§1).
 2. **Escalate before writing anything** — HALT and name the lane, never start it. Route by what the change *is*, not how long it feels.
 
@@ -59,11 +61,13 @@ Four phases; do not skip or reorder.
 4. Read the methodology skill you will apply (§1).
 
 ### Phase 1: Change (main session)
+**Driver:** the driver must report `phase: 1`.
 1. Edit only the files the `Where` line names.
 2. **Never edit an existing test to make it pass.** A wrong test is a defect with a reproduction — `/bgpdd-bugfix`. Phase 3's `--frozen` list enforces this.
 3. Wider than the note → back to Phase 0.
 
 ### Phase 2: Prove (main session)
+**Driver:** the driver still reports `phase: 1` here — it fuses Change and Prove, because an edit leaves no artifact of its own and this capture is the only observable either phase has.
 Run the `How verified` command **through the capture wrapper**, never bare:
 
 ```bash
@@ -73,6 +77,7 @@ python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture {quick-root}/
 Exit 0 required; non-zero → fix and re-run (one round, §1). Phase 3 reads the `check.md.meta.json` sidecar — a hand-written `check.md` has none, and fails closed.
 
 ### Phase 3: Close (the gate)
+**Driver:** the driver must report `phase: 3`; after the gate it reports `phase: 4` at exit 3.
 ```bash
 python {PLUGIN_ROOT}/pipeline-tools/scripts/check_quick_close.py \
     --note {quick-root}/note.md --capture {quick-root}/evidence/check.md \
