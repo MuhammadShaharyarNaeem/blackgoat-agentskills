@@ -1,0 +1,12 @@
+{
+  "name": "settlement-reconcile",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Settlement payment reconciliation consumer (eval fixture)",
+  "main": "src/consumer.js",
+  "scripts": {
+    "start": "node src/consumer.js",
+    "test": "node --test",
+    "replay": "node scripts/replay.js"
+  }
+}
