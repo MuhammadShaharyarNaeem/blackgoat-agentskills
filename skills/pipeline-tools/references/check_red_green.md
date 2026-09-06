@@ -40,6 +40,17 @@ the only part of the pair a gate can believe:
 - **`argv`** → the two runs can be compared as *the same command*, which no
   amount of reading the two capture files can establish.
 
+...with one inversion, added 2026-09: **the sidecar's own fields are the part
+nothing protects.** `capture_sha256` covers the capture FILE, so editing the
+sidecar alone — a RED's `exit_code` 3 → 0, or a GREEN's `finished` pushed past
+the RED's to manufacture the ordering check — left every hash matching and this
+gate green. For those two fields the hash-protected body is the witness and the
+sidecar is the claim under test: `exit_code` must equal the body's
+`- Exit code:` and `finished` must equal its `- Captured:` (the shared agreement
+contract in `../SKILL.md`; codes `sidecar_body_disagrees` and
+`capture_header_missing`). Both of this gate's own terms read those fields,
+which is why the check matters most here.
+
 ## Duplicated, not imported
 
 `check_runtime_evidence.py` already validates sidecars this way. This file
@@ -90,13 +101,19 @@ the argument paths would leave a hole: `check_commit_gate.py
 sidecar whose `exit_code` was edited *after* this gate passed would still satisfy
 the commit gate. With the sidecars recorded, that edit is `ledger_stale`.
 
-## Self-test inventory (24 cases)
+## Self-test inventory (31 cases)
 
 - **Happy paths (2)** — one RED + one GREEN; five green runs under
   `--green-runs 5`.
 - **Provenance (5)** — GREEN with no sidecar; RED with no sidecar; an edited
   capture failing `capture_sha256`; a sidecar that is a JSON array (reads as
   absent); a sidecar whose `exit_code` is the string `"0"`.
+- **Body/sidecar agreement (7)** — a flipped RED `exit_code`; a flipped GREEN
+  `exit_code`; a GREEN `finished` pushed past the RED's (caught before
+  `green_not_newer` can be satisfied); an agreeing pair recording
+  `sidecar_body_agrees`; a 1–2s pre-2.4 render skew still passing; a capture
+  with no header pair at all (`capture_header_missing`); a test transcript that
+  PRINTS `- Exit code: 0` inside the fence supplying nothing.
 - **Pair identity (2)** — mismatched commands; a sidecar with no `argv`.
 - **Ordering (3)** — GREEN older than RED; GREEN at the same instant as RED;
   an unparseable `finished`.
@@ -120,9 +137,12 @@ the commit gate. With the sidecars recorded, that edit is `ledger_stale`.
 - It cannot tell whether the fix is *correct*, only that the same command
   changed from failing to passing. Luna and the full-suite floor cover the rest.
 - **Known and accepted: the sidecar is provenance, not tamper-proofing.** A
-  hand-edited `exit_code` in a sidecar is undetectable here -- `capture_sha256`
-  covers the capture file's bytes, not the sidecar's own. So is a hand-forged
-  ledger PASS carrying the right hashes: `check_commit_gate.py
+  hand-edited `exit_code` or `finished` in a sidecar **is** now detected, by
+  comparing it against the capture's own hash-protected header lines (above) --
+  but that closes one hole, not the class: a forger who edits the sidecar
+  *and* re-renders the capture body *and* recomputes `capture_sha256` produces
+  a self-consistent pair, and nothing here can tell it from a run. So is a
+  hand-forged ledger PASS carrying the right hashes: `check_commit_gate.py
   --require-ledger-gates` re-hashes the recorded inputs but cannot tell who
   wrote the record. The ledger is an **audit trail** -- it makes a skipped or
   stale gate visible and attributable -- not a tamper-proof log, and no gate in

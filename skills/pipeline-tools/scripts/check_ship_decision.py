@@ -22,7 +22,12 @@ Two opt-in flags convert the two assertions a heading match never proved
         assert that anyone ever reverted anything. The decision must carry a
         `Time to Rollback:` line naming a timed, dated, environment-named
         rehearsal and citing the capture that recorded it, and that capture
-        must carry a run_quiet.py provenance sidecar whose probe exited 0.
+        must carry a run_quiet.py provenance sidecar whose probe exited 0 and
+        which AGREES with the capture's own header lines (`exit_code` =
+        `- Exit code:`, `finished` = `- Captured:`) -- the hash protects the
+        capture file and nothing protects the sidecar, so flipping a failed
+        rehearsal's exit_code to 0 passed every other check here
+        (`sidecar_body_disagrees` / `capture_header_missing`).
   --require-baseline   the rollout threshold table in
         `shipping-and-launch/SKILL.md` is expressed entirely in deltas
         ("within 10% of baseline", ">2x baseline"), so without a captured
@@ -190,6 +195,89 @@ def resolve_path(candidate, report_path, repo):
     return p if p.is_file() else None
 
 
+# --- body-vs-sidecar agreement (duplicated from check_runtime_evidence.py) --
+# `capture_sha256` protects the capture FILE's bytes; NOTHING protects the
+# sidecar's own fields. So the hash-checked body is the witness and the sidecar
+# is the claim under test: flipping a rehearsal sidecar's `exit_code` from 1 to
+# 0 leaves every hash intact, and a rehearsal that FAILED then reads as one
+# that proved the rollback works. `- Captured:` is compared against `finished`,
+# which is what run_quiet.py now stamps it FROM; the window is one-sided (never
+# EARLIER than `finished`) and two seconds wide solely so a capture from the
+# pre-2.4 build path, which re-stamped the header while rendering, is not
+# accused of forgery.
+CAPTURED_SKEW_SECONDS = 2
+SIDECAR_TIMESTAMP_FMT = "%Y-%m-%dT%H:%M:%SZ"
+BODY_EXIT_CODE_RE = re.compile(
+    r"(?im)^[^\S\n]*-[^\S\n]*Exit[^\S\n]+code[^\S\n]*:[^\S\n]*(-?\d+)[^\S\n]*$")
+BODY_CAPTURED_RE = re.compile(
+    r"(?im)^[^\S\n]*-[^\S\n]*Captured[^\S\n]*:[^\S\n]*(\S+)[^\S\n]*$")
+
+
+def capture_header(text):
+    """The capture's header: before `## Captured output`, fences blanked.
+
+    Both cuts matter. A rehearsal transcript routinely contains a line like
+    `- Exit code: 1`, and a preamble may fence an example header block; either
+    would otherwise supply the value meant to witness the sidecar.
+    """
+    m = CAPTURED_OUTPUT_RE.search(text)
+    return strip_fenced_blocks(text[:m.start()] if m else text)
+
+
+def parse_utc_stamp(raw):
+    """A `%Y-%m-%dT%H:%M:%SZ` string as a naive UTC datetime, or None."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        return datetime.strptime(raw.strip(), SIDECAR_TIMESTAMP_FMT)
+    except ValueError:
+        return None
+
+
+def sidecar_body_disagreement(text, meta):
+    """(problem-code, detail) when the capture's header and sidecar disagree."""
+    head = capture_header(text)
+    exit_m = BODY_EXIT_CODE_RE.search(head)
+    cap_m = BODY_CAPTURED_RE.search(head)
+    if exit_m is None or cap_m is None:
+        return ("capture_header_missing",
+                "the cited rehearsal capture carries no readable "
+                "'- Exit code:' and '- Captured:' header pair, so the "
+                "sidecar's exit_code and finished stamp cannot be checked "
+                "against anything — a capture predating run_quiet.py's header "
+                "contract must be re-taken with `run_quiet.py --capture`")
+    body_exit = int(exit_m.group(1))
+    side_exit = meta.get("exit_code")
+    if isinstance(side_exit, int) and side_exit != body_exit:
+        return ("sidecar_body_disagrees",
+                f"the sidecar records exit_code {side_exit} but the capture's "
+                f"own hash-protected body records '- Exit code: {body_exit}' — "
+                "the sidecar was edited after the rehearsal (the capture "
+                "file's hash still matches, because only the sidecar was "
+                "touched)")
+    body_dt = parse_utc_stamp(cap_m.group(1))
+    if body_dt is None:
+        return ("capture_header_missing",
+                f"the capture's '- Captured: {cap_m.group(1)}' is not an "
+                f"ISO-8601 UTC instant ({SIDECAR_TIMESTAMP_FMT})")
+    side_dt = parse_utc_stamp(meta.get("finished"))
+    if side_dt is None:
+        return ("sidecar_body_disagrees",
+                "the sidecar records no parseable 'finished' instant to check "
+                f"against the capture's '- Captured: {cap_m.group(1)}'")
+    skew = (body_dt - side_dt).total_seconds()
+    if not 0 <= skew <= CAPTURED_SKEW_SECONDS:
+        return ("sidecar_body_disagrees",
+                f"the sidecar records finished {meta.get('finished')!r} but the "
+                f"capture's own hash-protected body records '- Captured: "
+                f"{cap_m.group(1)}' ({skew:+.0f}s apart; allowed 0.."
+                f"{CAPTURED_SKEW_SECONDS}s) — run_quiet.py stamps "
+                "'- Captured:' FROM 'finished', so a pair this far apart was "
+                "not written by it: either the sidecar's timestamp was edited "
+                "or the capture was authored by hand")
+    return None, None
+
+
 def load_sidecar(path):
     """(meta dict or None, reason-when-None). Malformed reads as absent.
 
@@ -285,7 +373,8 @@ def parse_rehearsal(text):
 def check_rehearsal(text, report_path, repo, max_age_days, today):
     """(rehearsal dict, [(code, detail), ...]) for the --require-rehearsal half."""
     res = {"present": False, "time_s": None, "rehearsed_on": None, "env": None,
-           "evidence": None, "sidecar_ok": None, "age_days": None}
+           "evidence": None, "sidecar_ok": None, "body_agrees": None,
+           "age_days": None}
     parsed = parse_rehearsal(text)
     if parsed is None:
         return res, [("rehearsal_missing",
@@ -365,6 +454,15 @@ def check_rehearsal(text, report_path, repo, max_age_days, today):
             f"the capture's sha256 ({actual}) does not match the sidecar's "
             f"capture_sha256 ({declared}) — the artifact was edited after it was "
             "recorded, so its contents are authored, not observed"))
+        return res, problems
+
+    # The hash above protects the capture file, not the sidecar. Compare the
+    # two BEFORE trusting the exit code below.
+    code, detail = sidecar_body_disagreement(capture, meta)
+    res["body_agrees"] = code is None
+    if code:
+        res["sidecar_ok"] = False
+        problems.append((code, detail))
         return res, problems
 
     exit_code = meta.get("exit_code")
@@ -692,13 +790,29 @@ Verdict: NO-GO
 
         def _capture(self, rel="evidence/rollback/2026-09-02-rehearsal.md",
                      body="## Captured output\n\n```\nreverted; health 200\n```\n",
-                     sidecar=True, exit_code=0, sidecar_hash=None):
-            """A run_quiet.py-shaped capture plus its provenance sidecar."""
+                     sidecar=True, exit_code=0, sidecar_hash=None,
+                     finished="2026-09-02T09:00:00Z", body_exit=None,
+                     body_captured=None, header=True):
+            """A run_quiet.py-shaped capture plus its provenance sidecar.
+
+            The header lines are part of that shape: run_quiet writes the same
+            exit code and instant into both records. `body_exit` /
+            `body_captured` / `header` override ONLY the capture's header,
+            which is how a fixture forges a sidecar whose hash still matches.
+            """
             p = self.dir / rel
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text("# Rollback rehearsal\n\n" + body, encoding="utf-8")
+            head = "# Rollback rehearsal\n\n"
+            if header:
+                head += (
+                    "- Probe command: `git revert --no-edit HEAD`\n"
+                    "- Captured: {0}\n- Exit code: {1}\n\n".format(
+                        body_captured if body_captured is not None else finished,
+                        exit_code if body_exit is None else body_exit))
+            p.write_text(head + body, encoding="utf-8")
             if sidecar:
                 meta = {"argv": ["git", "revert", "--no-edit", "HEAD"],
+                        "started": finished, "finished": finished,
                         "exit_code": exit_code, "tool": "run_quiet.py",
                         "capture_sha256": sidecar_hash or sha256_file(p)}
                 Path(str(p) + SIDECAR_SUFFIX).write_text(
@@ -891,6 +1005,54 @@ Verdict: NO-GO
             self.assertFalse(report["pass"])
             self.assertIn("rehearsal_failed_exit", report["problems"])
             self.assertFalse(report["rehearsal"]["sidecar_ok"])
+
+        # ---- the sidecar is the mutable half: it must agree with the body ----
+
+        def test_flipped_sidecar_exit_code_is_caught_by_the_body(self):
+            """The attack: a rehearsal that FAILED, sidecar flipped to 0."""
+            self._capture(exit_code=0, body_exit=1)
+            self._write(rehearsal_line())
+            report = self._run(require_rehearsal=True)
+            self.assertFalse(report["pass"])
+            self.assertIn("sidecar_body_disagrees", report["problems"])
+            self.assertNotIn("rehearsal_unevidenced", report["problems"])
+            self.assertFalse(report["rehearsal"]["body_agrees"])
+
+        def test_edited_sidecar_timestamp_is_caught_by_the_body(self):
+            self._capture(body_captured="2026-09-02T08:00:00Z")
+            self._write(rehearsal_line())
+            report = self._run(require_rehearsal=True)
+            self.assertFalse(report["pass"])
+            self.assertIn("sidecar_body_disagrees", report["problems"])
+
+        def test_agreeing_pair_records_agreement(self):
+            self._capture()
+            self._write(rehearsal_line())
+            report = self._run(require_rehearsal=True)
+            self.assertTrue(report["rehearsal"]["body_agrees"])
+            self.assertTrue(report["rehearsal"]["sidecar_ok"])
+
+        def test_one_second_render_skew_still_passes(self):
+            """The pre-2.4 build path stamped `Captured` just after `finished`."""
+            self._capture(body_captured="2026-09-02T09:00:01Z")
+            self._write(rehearsal_line())
+            report = self._run(require_rehearsal=True)
+            self.assertTrue(report["rehearsal"]["body_agrees"])
+
+        def test_capture_without_header_lines_fails_closed(self):
+            self._capture(header=False)
+            self._write(rehearsal_line())
+            report = self._run(require_rehearsal=True)
+            self.assertFalse(report["pass"])
+            self.assertIn("capture_header_missing", report["problems"])
+
+        def test_header_lines_inside_the_captured_output_supply_nothing(self):
+            """A rehearsal transcript that PRINTS `- Exit code: 1` is not a header."""
+            self._capture(body="## Captured output\n\n```\n- Exit code: 1\n"
+                                "- Captured: 1999-01-01T00:00:00Z\n```\n")
+            self._write(rehearsal_line())
+            report = self._run(require_rehearsal=True)
+            self.assertTrue(report["rehearsal"]["body_agrees"], report["problems"])
 
         def test_rehearsal_non_integer_exit_fails(self):
             self._capture(exit_code="0")

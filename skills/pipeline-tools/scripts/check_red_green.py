@@ -13,6 +13,13 @@ Given one RED capture and one or more GREEN captures, all produced by
   * every capture carries its `<capture>.meta.json` provenance sidecar, whose
     `capture_sha256` still matches the capture FILE's bytes -- a hand-typed
     capture has no sidecar and an edited one fails the hash
+  * every sidecar AGREES with its capture's own header lines: `exit_code`
+    equals `- Exit code:` and `finished` equals `- Captured:`. The hash
+    protects the capture file and NOTHING protects the sidecar, so editing the
+    sidecar alone -- a RED's exit_code 3 -> 0, or a GREEN's `finished` pushed
+    past the RED's to manufacture the ordering below -- passed every other
+    check here (`sidecar_body_disagrees`; a capture with no header pair at all
+    is `capture_header_missing` and must be re-taken)
   * the sidecars record the IDENTICAL child `argv` -- the same command was
     run before and after the fix
   * the RED sidecar's `exit_code` is NON-zero (the failure was observed)
@@ -140,6 +147,95 @@ def parse_finished(meta):
                       f"an ISO-8601 UTC instant ({TIMESTAMP_FMT})")
 
 
+# --- body-vs-sidecar agreement (duplicated from check_runtime_evidence.py) --
+# `capture_sha256` protects the capture FILE's bytes; NOTHING protects the
+# sidecar's own fields. So the hash-checked body is the witness and the sidecar
+# is the claim under test: flipping a RED sidecar's `exit_code` 3 -> 0, or
+# pushing a GREEN's `finished` past the RED's to manufacture the ordering this
+# gate checks, leaves every hash intact -- and did, until this comparison
+# existed. `- Captured:` is compared against `finished`, which is what
+# run_quiet.py now stamps it FROM; the window is one-sided (never EARLIER than
+# `finished`) and two seconds wide solely so a capture from the pre-2.4 build
+# path, which re-stamped the header while rendering, is not accused of forgery.
+CAPTURED_SKEW_SECONDS = 2
+BODY_EXIT_CODE_RE = re.compile(
+    r"(?im)^[^\S\n]*-[^\S\n]*Exit[^\S\n]+code[^\S\n]*:[^\S\n]*(-?\d+)[^\S\n]*$")
+BODY_CAPTURED_RE = re.compile(
+    r"(?im)^[^\S\n]*-[^\S\n]*Captured[^\S\n]*:[^\S\n]*(\S+)[^\S\n]*$")
+FENCE_LINE_RE = re.compile(r"^[^\S\n]*(`{3,}|~{3,})")
+
+
+def capture_header(text):
+    """The capture's header region: before `## Captured output`, fences blanked.
+
+    Both cuts matter. A probe's own output routinely contains a line like
+    `- Exit code: 3` (this gate's captures are test-runner transcripts), and a
+    capture's prose preamble may fence an example header block; either would
+    otherwise supply the value that is supposed to witness the sidecar.
+    """
+    m = CAPTURED_HEADING_RE.search(text)
+    head = text[:m.start()] if m else text
+    out, fence = [], None
+    for line in head.split("\n"):
+        fm = FENCE_LINE_RE.match(line)
+        if fence is None:
+            if fm:
+                fence = fm.group(1)
+                out.append("")
+                continue
+            out.append(line)
+        else:
+            if fm and fm.group(1)[0] == fence[0] and len(fm.group(1)) >= len(fence):
+                fence = None
+            out.append("")
+    return "\n".join(out)
+
+
+def sidecar_body_disagreement(text, meta):
+    """(problem-code, detail) when the capture's header and sidecar disagree."""
+    head = capture_header(text)
+    exit_m = BODY_EXIT_CODE_RE.search(head)
+    cap_m = BODY_CAPTURED_RE.search(head)
+    if exit_m is None or cap_m is None:
+        return ("capture_header_missing",
+                "the capture carries no readable '- Exit code:' and "
+                "'- Captured:' header pair, so the sidecar's exit_code and "
+                "finished stamp cannot be checked against anything -- a "
+                "capture predating run_quiet.py's header contract must be "
+                "re-taken with `run_quiet.py --capture`")
+    body_exit = int(exit_m.group(1))
+    side_exit = meta.get("exit_code")
+    if isinstance(side_exit, int) and side_exit != body_exit:
+        return ("sidecar_body_disagrees",
+                f"the sidecar records exit_code {side_exit} but the capture's "
+                f"own hash-protected body records '- Exit code: {body_exit}' — "
+                "the sidecar was edited after the run (the capture file's hash "
+                "still matches, because only the sidecar was touched)")
+    try:
+        body_dt = datetime.strptime(cap_m.group(1), TIMESTAMP_FMT)
+    except ValueError:
+        return ("capture_header_missing",
+                f"the capture's '- Captured: {cap_m.group(1)}' is not an "
+                f"ISO-8601 UTC instant ({TIMESTAMP_FMT})")
+    side_dt, reason = parse_finished(meta)
+    if side_dt is None:
+        return ("sidecar_body_disagrees",
+                f"{reason} to check against the capture's '- Captured: "
+                f"{cap_m.group(1)}'")
+    skew = (body_dt - side_dt).total_seconds()
+    if not 0 <= skew <= CAPTURED_SKEW_SECONDS:
+        return ("sidecar_body_disagrees",
+                f"the sidecar records finished {meta.get('finished')!r} but the "
+                f"capture's own hash-protected body records '- Captured: "
+                f"{cap_m.group(1)}' ({skew:+.0f}s apart; allowed 0.."
+                f"{CAPTURED_SKEW_SECONDS}s) — run_quiet.py stamps "
+                "'- Captured:' FROM 'finished', so a pair this far apart was "
+                "not written by it: either the sidecar's timestamp was edited "
+                "(which is how a GREEN is made to look newer than the RED it "
+                "is ordered against) or the capture was authored by hand")
+    return None, None
+
+
 def evaluate_capture(path, role):
     """Per-capture result dict. Empty `problems` => structurally usable.
 
@@ -148,7 +244,8 @@ def evaluate_capture(path, role):
     res = {
         "path": str(path), "role": role, "exists": False,
         "is_capture": None, "sidecar": None, "sidecar_present": None,
-        "sidecar_capture_sha256_ok": None, "exit_code": None,
+        "sidecar_capture_sha256_ok": None, "sidecar_body_agrees": None,
+        "exit_code": None,
         "argv": None, "finished": None,
         "problems": [], "problem_codes": [],
     }
@@ -190,6 +287,13 @@ def evaluate_capture(path, role):
              f"the capture file's sha256 ({actual}) does not match the "
              f"sidecar's capture_sha256 ({declared}) — the artifact was edited "
              "after it was recorded, so its contents are authored, not observed")
+
+    # The hash above protects the capture file, not the sidecar. Compare the
+    # two BEFORE trusting the exit code or the ordering stamp below.
+    code, detail = sidecar_body_disagreement(text, meta)
+    res["sidecar_body_agrees"] = code is None
+    if code:
+        fail(code, detail)
 
     exit_code = meta.get("exit_code")
     if not isinstance(exit_code, int):
@@ -363,13 +467,15 @@ def run_self_test():
     import tempfile
     import unittest
 
-    def capture_text(cmd, exit_code, body):
+    def capture_text(cmd, exit_code, body, captured):
+        """run_quiet.py's shape: the header records the SAME exit code and
+        instant the sidecar does, so a fixture pair agrees by construction."""
         return (
             "# Runtime capture\n\n"
             "- Milestone: coupon-500\n"
             "- Transport: test runner\n"
             f"- Probe command: `{' '.join(cmd)}` [probe-exempt: test runner]\n"
-            "- Captured: 2026-09-03T10:00:00Z\n"
+            f"- Captured: {captured}\n"
             f"- Exit code: {exit_code}\n\n"
             "## Captured output\n\n```\n" + body + "\n```\n")
 
@@ -382,14 +488,20 @@ def run_self_test():
             shutil.rmtree(self.dir, ignore_errors=True)
 
         def _write(self, name, exit_code, finished, cmd=None, body=None,
-                   sidecar=True, argv=None, hash_ok=True, extra_meta=None):
-            """Write a capture (+ its machine-owned sidecar) like run_quiet."""
+                   sidecar=True, argv=None, hash_ok=True, extra_meta=None,
+                   body_exit=None, body_captured=None):
+            """Write a capture (+ its machine-owned sidecar) like run_quiet.
+
+            `body_exit` / `body_captured` override ONLY the header lines, which
+            is how a fixture forges a sidecar whose hash still matches.
+            """
             cmd = cmd or self.cmd
             cap = self.dir / "evidence" / name
             cap.parent.mkdir(parents=True, exist_ok=True)
             cap.write_text(capture_text(
-                cmd, exit_code,
-                body if body is not None else ("FAILED" if exit_code else "OK")),
+                cmd, exit_code if body_exit is None else body_exit,
+                body if body is not None else ("FAILED" if exit_code else "OK"),
+                finished if body_captured is None else body_captured),
                 encoding="utf-8")
             if sidecar:
                 meta = {
@@ -471,6 +583,76 @@ def run_self_test():
             r = self._run(red, [green])
             self.assertEqual(r["result"], "FAIL")
             self.assertIn("sidecar_hash_mismatch", r["problem_codes"])
+
+        # ---- the sidecar is the mutable half: it must agree with the body ----
+
+        def test_flipped_red_sidecar_exit_code_is_caught_by_the_body(self):
+            """The attack: a RED that actually passed, sidecar flipped to 1."""
+            red = self._write("red.md", 1, "2026-09-03T10:00:00Z", body_exit=0)
+            green = self._write("green.md", 0, "2026-09-03T11:00:00Z")
+            r = self._run(red, [green])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("sidecar_body_disagrees", r["problem_codes"])
+            self.assertNotIn("sidecar_hash_mismatch", r["problem_codes"])
+            self.assertFalse(r["red_result"]["sidecar_body_agrees"])
+
+        def test_flipped_green_sidecar_exit_code_is_caught_by_the_body(self):
+            red = self._write("red.md", 1, "2026-09-03T10:00:00Z")
+            green = self._write("green.md", 0, "2026-09-03T11:00:00Z",
+                                 body_exit=1)
+            r = self._run(red, [green])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("sidecar_body_disagrees", r["problem_codes"])
+
+        def test_edited_green_timestamp_is_caught_by_the_body(self):
+            """Pushing `finished` past the RED's is how ordering is forged."""
+            red = self._write("red.md", 1, "2026-09-03T12:00:00Z")
+            green = self._write("green.md", 0, "2026-09-03T13:00:00Z",
+                                 body_captured="2026-09-03T09:00:00Z")
+            r = self._run(red, [green])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("sidecar_body_disagrees", r["problem_codes"])
+            self.assertNotIn("green_not_newer", r["problem_codes"])
+
+        def test_agreeing_pair_passes_and_records_agreement(self):
+            red, green = self._pair()
+            r = self._run(red, [green])
+            self.assertEqual(r["result"], "PASS", r["problems"])
+            self.assertTrue(r["red_result"]["sidecar_body_agrees"])
+            self.assertTrue(r["green_results"][0]["sidecar_body_agrees"])
+
+        def test_one_second_render_skew_still_passes(self):
+            """The pre-2.4 build path stamped `Captured` just after `finished`."""
+            red = self._write("red.md", 1, "2026-09-03T10:00:00Z",
+                               body_captured="2026-09-03T10:00:01Z")
+            green = self._write("green.md", 0, "2026-09-03T11:00:00Z",
+                                 body_captured="2026-09-03T11:00:02Z")
+            r = self._run(red, [green])
+            self.assertEqual(r["result"], "PASS", r["problems"])
+
+        def test_capture_without_header_lines_fails_closed(self):
+            red = self._write("red.md", 1, "2026-09-03T10:00:00Z")
+            green = self.dir / "evidence" / "legacy-green.md"
+            green.write_text(
+                "# Runtime capture\n\n- Milestone: coupon-500\n\n"
+                "## Captured output\n\n```\nOK\n```\n", encoding="utf-8")
+            sidecar_path_for(green).write_text(json.dumps({
+                "argv": self.cmd, "exit_code": 0,
+                "started": "2026-09-03T11:00:00Z",
+                "finished": "2026-09-03T11:00:00Z",
+                "capture_sha256": sha256_file(green),
+                "tool": "run_quiet.py", "schema": 1}), encoding="utf-8")
+            r = self._run(red, [str(green)])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("capture_header_missing", r["problem_codes"])
+
+        def test_header_lines_inside_the_captured_output_supply_nothing(self):
+            """A test transcript that PRINTS `- Exit code: 0` is not a header."""
+            red = self._write("red.md", 1, "2026-09-03T10:00:00Z",
+                               body="- Exit code: 0\n- Captured: 1999-01-01T00:00:00Z")
+            green = self._write("green.md", 0, "2026-09-03T11:00:00Z")
+            r = self._run(red, [green])
+            self.assertEqual(r["result"], "PASS", r["problems"])
 
         def test_mismatched_commands_fail(self):
             red = self._write("red.md", 1, "2026-09-03T10:00:00Z")

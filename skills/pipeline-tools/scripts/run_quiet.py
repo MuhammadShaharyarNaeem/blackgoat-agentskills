@@ -29,6 +29,20 @@ The sidecar is what makes a hand-typed capture detectable downstream --
 check_runtime_evidence.py requires it, re-hashes the capture file against
 `capture_sha256`, and rejects a capture whose probe exited non-zero.
 
+The capture BODY and the sidecar are deliberately redundant: `- Exit code:`
+equals the sidecar's `exit_code`, and `- Captured:` equals the sidecar's
+`finished` EXACTLY (this file stamps the header line from that same instant --
+it used to call `now()` again while rendering, which left the two honestly
+but unpredictably a second apart). The redundancy is the point. `capture_sha256`
+protects the capture file's bytes and NOTHING protects the sidecar's own
+fields, so the body is the witness and the sidecar is the claim: flipping a
+sidecar's `exit_code` from 3 to 0, or pushing its `finished` forward to defeat
+a downstream freshness check, leaves every hash intact and is invisible until
+the two are compared. Every gate that reads a sidecar's `exit_code` or
+`finished` now performs that comparison (`sidecar_body_disagrees`), and
+`assert_capture_agrees()` below re-checks it here at write time, so this tool
+can never be the thing that emits a disagreeing pair.
+
 Pure standard library. Cross-platform (Windows/POSIX).
 """
 import argparse
@@ -203,8 +217,14 @@ def fence_for(text):
     return "`" * max(3, longest + 1)
 
 
-def build_capture(fields, cmd, exit_code, duration, output, log_path, timed_out):
-    """Render the capture artifact. `fields` is an ordered list of (name, value)."""
+def build_capture(fields, cmd, exit_code, duration, output, log_path, timed_out,
+                   captured_at):
+    """Render the capture artifact. `fields` is an ordered list of (name, value).
+
+    `captured_at` is the sidecar's `finished` instant, not a fresh `now()`:
+    the two records must be comparable downstream, and re-stamping here made
+    them differ by however long the write took.
+    """
     title = next((v for n, v in fields if n.lower() == "title"), None)
     body = [f"# Runtime capture: {title}" if title else "# Runtime capture", ""]
     for name, value in fields:
@@ -212,7 +232,7 @@ def build_capture(fields, cmd, exit_code, duration, output, log_path, timed_out)
             continue
         body.append(f"- {name}: {value}")
     body.append(f"- Probe command: `{' '.join(cmd)}`")
-    body.append(f"- Captured: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}")
+    body.append(f"- Captured: {captured_at}")
     body.append(f"- Exit code: {exit_code}")
     body.append(f"- Duration: {duration:.2f}s")
     if log_path:
@@ -274,6 +294,43 @@ def build_sidecar(capture_path, cmd, exit_code, output, started, finished, pid):
         "tool": "run_quiet.py",
         "schema": SIDECAR_SCHEMA,
     }
+
+
+# The header lines the downstream agreement check reads. Searched in the
+# capture's HEAD only (everything before `## Captured output`), so a probe
+# whose own output contains `- Exit code: 3` cannot supply either value.
+CAPTURED_HEADING_RE = re.compile(
+    r"(?im)^##[^\S\n]+Captured[^\S\n]+output[^\S\n]*$")
+BODY_EXIT_CODE_RE = re.compile(
+    r"(?im)^[^\S\n]*-[^\S\n]*Exit[^\S\n]+code[^\S\n]*:[^\S\n]*(-?\d+)[^\S\n]*$")
+BODY_CAPTURED_RE = re.compile(
+    r"(?im)^[^\S\n]*-[^\S\n]*Captured[^\S\n]*:[^\S\n]*(\S+)[^\S\n]*$")
+
+
+def assert_capture_agrees(capture_text, meta):
+    """Raise RunQuietError unless the body's header agrees with the sidecar.
+
+    A self-check, not a gate: every downstream gate makes this comparison, so
+    this tool must never be the source of a pair that fails it.
+    """
+    head = capture_text
+    m = CAPTURED_HEADING_RE.search(capture_text)
+    if m:
+        head = capture_text[:m.start()]
+    exit_m = BODY_EXIT_CODE_RE.search(head)
+    cap_m = BODY_CAPTURED_RE.search(head)
+    if exit_m is None or cap_m is None:
+        raise RunQuietError(
+            "internal: the rendered capture is missing a '- Exit code:' or "
+            "'- Captured:' header line")
+    if int(exit_m.group(1)) != int(meta["exit_code"]):
+        raise RunQuietError(
+            f"internal: capture body records exit code {exit_m.group(1)} but "
+            f"the sidecar records {meta['exit_code']}")
+    if cap_m.group(1) != meta["finished"]:
+        raise RunQuietError(
+            f"internal: capture body records 'Captured: {cap_m.group(1)}' but "
+            f"the sidecar records 'finished': {meta['finished']}")
 
 
 def write_sidecar(capture_path, meta):
@@ -362,13 +419,21 @@ def execute(log_path, context, tail_n, timeout, cmd,
         write_log(log_path, output)
     sidecar = None
     if capture_path:
-        write_capture(capture_path, build_capture(
-            capture_fields, cmd, exit_code, duration, output, log_path, timed_out))
+        # ONE exit code feeds both records (run_child already reports 124 for
+        # a timeout), and ONE instant -- `finished` -- feeds both timestamps.
+        capture_text = build_capture(
+            capture_fields, cmd, exit_code, duration, output, log_path,
+            timed_out, finished)
+        write_capture(capture_path, capture_text)
         # Sidecar LAST: capture_sha256 is over the finished file's bytes, so
         # it can only be computed once the capture is fully written and closed.
-        sidecar = write_sidecar(capture_path, build_sidecar(
-            capture_path, cmd, 124 if timed_out else exit_code, output,
-            started, finished, pid))
+        meta = build_sidecar(capture_path, cmd, exit_code, output,
+                              started, finished, pid)
+        # The pair this tool emits must satisfy the same agreement every gate
+        # downstream checks; a disagreement written here would be
+        # indistinguishable from a tampered sidecar.
+        assert_capture_agrees(capture_text, meta)
+        sidecar = write_sidecar(capture_path, meta)
 
     lines = output.splitlines()
     report = [format_header(cmd, exit_code, duration, log_path or capture_path,
@@ -598,6 +663,68 @@ def run_self_test():
             cap.write_text(cap.read_text(encoding="utf-8").replace(
                 "- Exit code: 0", "- Exit code: 0 "), encoding="utf-8")
             self.assertNotEqual(meta["capture_sha256"], sha256_file(cap))
+
+        # ---- body/sidecar agreement (the flipped-sidecar attack) ----
+
+        def test_body_captured_equals_the_sidecar_finished_exactly(self):
+            """The header line is stamped FROM `finished`, not re-stamped."""
+            cap = self.dir / "c.md"
+            self._run_raw(["--capture", str(cap), "--",
+                            sys.executable, "-c", "print('x')"])
+            meta = self._sidecar(cap)
+            self.assertIn(f"- Captured: {meta['finished']}",
+                          cap.read_text(encoding="utf-8"))
+
+        def test_body_exit_code_equals_the_sidecar_exit_code(self):
+            cap = self.dir / "c.md"
+            self._run_raw(["--capture", str(cap), "--",
+                            sys.executable, "-c", "raise SystemExit(3)"])
+            meta = self._sidecar(cap)
+            self.assertEqual(meta["exit_code"], 3)
+            self.assertIn("- Exit code: 3", cap.read_text(encoding="utf-8"))
+
+        def test_timeout_pair_still_agrees(self):
+            cap = self.dir / "c.md"
+            self._run_raw(["--capture", str(cap), "--timeout", "2", "--",
+                            sys.executable, "-c", "import time; time.sleep(30)"])
+            meta = self._sidecar(cap)
+            text = cap.read_text(encoding="utf-8")
+            self.assertIn("- Exit code: 124", text)
+            self.assertIn(f"- Captured: {meta['finished']}", text)
+            assert_capture_agrees(text, meta)   # raises if it does not
+
+        def test_assert_capture_agrees_rejects_a_flipped_exit_code(self):
+            """The attack the downstream gates gained a code for."""
+            cap = self.dir / "c.md"
+            self._run_raw(["--capture", str(cap), "--",
+                            sys.executable, "-c", "raise SystemExit(3)"])
+            meta = self._sidecar(cap)
+            meta["exit_code"] = 0
+            with self.assertRaises(RunQuietError):
+                assert_capture_agrees(cap.read_text(encoding="utf-8"), meta)
+
+        def test_assert_capture_agrees_rejects_an_edited_timestamp(self):
+            cap = self.dir / "c.md"
+            self._run_raw(["--capture", str(cap), "--",
+                            sys.executable, "-c", "print('x')"])
+            meta = self._sidecar(cap)
+            meta["finished"] = "2099-01-01T00:00:00Z"
+            with self.assertRaises(RunQuietError):
+                assert_capture_agrees(cap.read_text(encoding="utf-8"), meta)
+
+        def test_assert_capture_agrees_ignores_header_lines_in_the_output(self):
+            """A probe that PRINTS `- Exit code: 3` supplies nothing."""
+            cap = self.dir / "c.md"
+            self._run_raw(["--capture", str(cap), "--", sys.executable, "-c",
+                            "print('- Exit code: 3'); print('- Captured: 1999-01-01T00:00:00Z')"])
+            meta = self._sidecar(cap)
+            assert_capture_agrees(cap.read_text(encoding="utf-8"), meta)
+
+        def test_assert_capture_agrees_rejects_a_headerless_capture(self):
+            with self.assertRaises(RunQuietError):
+                assert_capture_agrees(
+                    "# Runtime capture\n\n## Captured output\n\n```\nok\n```\n",
+                    {"exit_code": 0, "finished": "2026-09-04T00:00:00Z"})
 
         def test_sidecar_records_real_nonzero_exit(self):
             cap = self.dir / "c.md"

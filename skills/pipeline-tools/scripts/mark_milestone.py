@@ -9,18 +9,24 @@ it refuses to append the marker unless the completion is backed:
 
   * `--require-commit` — HEAD's history must carry a commit naming the
     milestone (`git log --fixed-strings --grep`);
-  * `--require-gates` (with `--ledger`) — the LATEST ledger entry for each
-    named gate, scoped to this milestone, must record `PASS`.
+  * `--require-gates` — the LATEST ledger entry for each named gate, scoped
+    to this milestone, must record `PASS`. **ON BY DEFAULT** (the default set
+    is `check_commit_gate.py`), and it requires `--ledger`: a bare invocation
+    is exit 2, not a silent pass. It used to be opt-in while the help text
+    called it the default, so the closed default was a documentation claim --
+    `mark_milestone.py --plan p --milestone M2` appended the `[x]` and exited
+    0 with nothing behind it, which is the exact hand-edit this file replaced.
 
-Both are opt-in, because a plan may legitimately be marked up before a repo
-exists (a docs-only milestone, a spike). What is NOT optional is that the
-marker is written by a tool that leaves a ledger record, so a completion is
-always attributable afterwards.
+`--require-commit` stays opt-in because a plan may legitimately be marked up
+before a repo exists (a docs-only milestone, a spike). The gate requirement
+has an EXPLICIT opt-out for the same case -- `--require-gates none` -- so the
+decision to mark an ungated milestone is one somebody makes and the ledger
+records, never one a forgotten flag makes silently.
 
 Usage:
     python mark_milestone.py --plan <path> --milestone "<title>" \
-        [--repo <dir>] [--require-commit] \
-        [--ledger <path>] [--require-gates <name>[,<name>...]]
+        --ledger <path> [--repo <dir>] [--require-commit] \
+        [--require-gates <name>[,<name>...] | --require-gates none]
     python mark_milestone.py --self-test
 
 Pure standard library. See ../SKILL.md for the full contract.
@@ -283,15 +289,41 @@ def build_report(args):
     return report
 
 
+OPT_OUT_TOKENS = ("none", "off", "no", "-")
+
+
 def parse_gate_names(values):
-    """Flatten repeated and/or comma-separated --require-gates values."""
+    """Flatten repeated and/or comma-separated --require-gates values.
+
+    A single opt-out token (`none`) yields the sentinel `["none"]`, which
+    resolve_require_gates() turns into an empty requirement -- deliberately
+    NOT the same as an empty value, which means "the default set".
+    """
     names = []
     for value in values or []:
         for token in value.split(","):
             token = token.strip()
             if token and token not in names:
                 names.append(token)
+    if len(names) == 1 and names[0].lower() in OPT_OUT_TOKENS:
+        return ["none"]
     return names
+
+
+def resolve_require_gates(values):
+    """The gate list this run enforces. Absent flag => the DEFAULT set.
+
+    Three cases, and the middle one is the whole point of this function:
+      * flag absent            -> DEFAULT_REQUIRE_GATES (closed by default)
+      * `--require-gates none` -> [] (an explicit, recorded opt-out)
+      * anything else          -> the named gates (empty value => default set)
+    """
+    if values is None:
+        return list(DEFAULT_REQUIRE_GATES)
+    names = parse_gate_names(values)
+    if names == ["none"]:
+        return []
+    return names or list(DEFAULT_REQUIRE_GATES)
 
 
 def build_parser():
@@ -308,7 +340,8 @@ def build_parser():
     parser.add_argument(
         "--require-gates", action="append", default=None,
         help="comma-separated gate script names whose LATEST ledger entry for "
-             "this milestone must be PASS (default: check_commit_gate.py)")
+             "this milestone must be PASS. ON BY DEFAULT (check_commit_gate.py) "
+             "and requires --ledger; pass `none` to waive it explicitly")
     parser.add_argument("--self-test", action="store_true")
     return parser
 
@@ -319,14 +352,9 @@ def main(argv):
     if args.self_test:
         return run_self_test()
 
-    # `--require-gates` with no value list means the default gate set. Given
-    # without `--ledger` it is a usage error rather than a silent no-op: a
-    # typo'd invocation must not quietly drop the requirement.
-    if args.require_gates is not None:
-        args.require_gates = (parse_gate_names(args.require_gates)
-                              or list(DEFAULT_REQUIRE_GATES))
-    else:
-        args.require_gates = []
+    # Gate backing is ON unless explicitly waived. Absent flag => the default
+    # set; `--require-gates none` => waived and recorded in the ledger argv.
+    args.require_gates = resolve_require_gates(args.require_gates)
 
     def finish(code, verdict):
         """One exit point: EVERY return path records a ledger line."""
@@ -342,9 +370,14 @@ def main(argv):
                                    f"{', '.join(missing)}"}))
         return finish(2, "ERROR")
     if args.require_gates and not args.ledger:
-        print(json.dumps({"result": "ERROR",
-                          "error": "--require-gates requires --ledger (there "
-                                   "is no ledger to read otherwise)"}))
+        print(json.dumps({
+            "result": "ERROR",
+            "require_gates": list(args.require_gates),
+            "error": "--require-gates requires --ledger (there is no ledger to "
+                     "read otherwise). Gate backing is ON BY DEFAULT: pass "
+                     "--ledger <path>, or waive it deliberately with "
+                     "--require-gates none if this milestone legitimately has "
+                     "no gate behind it (a docs-only milestone, a spike)"}))
         return finish(2, "ERROR")
 
     try:
@@ -569,6 +602,45 @@ def run_self_test():
                 "--plan", str(self.plan), "--milestone", "Milestone 2",
                 "--require-gates", "check_commit_gate.py"]), 2)
 
+        # ---- the closed default (it used to be a documentation claim) ----
+
+        def test_bare_invocation_is_exit_2_and_marks_nothing(self):
+            """`--plan --milestone` alone appended the `[x]` and exited 0."""
+            rc = main(["--plan", str(self.plan), "--milestone", "Milestone 2"])
+            self.assertEqual(rc, 2)
+            self.assertNotIn("Persistence [API] [vs:api] [x]",
+                             self.plan.read_text(encoding="utf-8"))
+
+        def test_default_gate_set_applies_without_the_flag(self):
+            ledger = self.dir / "gates.jsonl"
+            base = ["--plan", str(self.plan), "--milestone", "Milestone 2",
+                    "--ledger", str(ledger)]
+            # No ledger PASS yet -> refused, with the ledger_missing problem.
+            self.assertEqual(main(base), 1)
+            self.assertNotIn("Persistence [API] [vs:api] [x]",
+                             self.plan.read_text(encoding="utf-8"))
+            self.ledger = ledger
+            self._write_ledger()
+            self.assertEqual(main(base), 0)
+            self.assertIn("Persistence [API] [vs:api] [x]",
+                          self.plan.read_text(encoding="utf-8"))
+
+        def test_require_gates_none_waives_explicitly_without_a_ledger(self):
+            rc = main(["--plan", str(self.plan), "--milestone", "Milestone 2",
+                       "--require-gates", "none"])
+            self.assertEqual(rc, 0)
+            self.assertIn("Persistence [API] [vs:api] [x]",
+                          self.plan.read_text(encoding="utf-8"))
+
+        def test_resolve_require_gates_three_cases(self):
+            self.assertEqual(resolve_require_gates(None),
+                             list(DEFAULT_REQUIRE_GATES))
+            self.assertEqual(resolve_require_gates([""]),
+                             list(DEFAULT_REQUIRE_GATES))
+            self.assertEqual(resolve_require_gates(["none"]), [])
+            self.assertEqual(resolve_require_gates(["a.py,b.py"]),
+                             ["a.py", "b.py"])
+
         def test_parse_gate_names_splits_a_comma_list(self):
             self.assertEqual(parse_gate_names(["a.py,b.py", "c.py"]),
                              ["a.py", "b.py", "c.py"])
@@ -577,7 +649,8 @@ def run_self_test():
 
         def test_ledger_records_every_exit_path(self):
             ledger = self.dir / "logs" / "gates.jsonl"
-            base = ["--plan", str(self.plan), "--ledger", str(ledger)]
+            base = ["--plan", str(self.plan), "--ledger", str(ledger),
+                    "--require-gates", "none"]
             self.assertEqual(main(base + ["--milestone", "Milestone 2"]), 0)
             self.assertEqual(main(base + ["--milestone", "Milestone 2"]), 1)
             self.assertEqual(main(base), 2)

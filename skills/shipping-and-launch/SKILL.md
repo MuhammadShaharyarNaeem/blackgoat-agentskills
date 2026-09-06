@@ -192,9 +192,9 @@ A metric you cannot read is `BLOCKED`, named — never a remembered value and ne
 - **Where**: the deployed environment (production, or whichever environment the user named at deploy time). Every runtime probe is captured out-of-process via `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/runtime/<name>.md -- <the probe>`, per `{PLUGIN_ROOT}/runtime-evidence/SKILL.md`, and cited by path in the line it backs.
 - **What**: `.docs/{project-name}/implementation/post-deploy-report.md`, one line per numbered item above, in the check-line grammar the pipelines parse:
 
-  `- <check>: PASS|FAIL|BLOCKED|NOT RUN — exit <N> — <detail, including the evidence path>`
+  `- <check>: PASS|FAIL|BLOCKED|NOT RUN — exit <N> — <detail> — capture: evidence/runtime/<file>.md`
 
-  ending in a single `**Verdict:** Pass` or `**Verdict:** Fail` line. A `PASS` or `FAIL` line cites its exit code; a `BLOCKED` or `NOT RUN` line gives a reason. The grammar authority is `{PLUGIN_ROOT}/pipeline-tools/SKILL.md` (`check_agent_report.py`) — it is the same grammar as the Security and Verification reports, deliberately, so one parser reads all three.
+  ending in a single `**Verdict:** Pass` or `**Verdict:** Fail` line. A `PASS` or `FAIL` line cites its exit code **and** the `run_quiet.py --capture` artifact whose sidecar recorded that same exit code — an uncited executed line is refused (`check_uncaptured`), because everything else on it is text a delegate types; a `BLOCKED` or `NOT RUN` line gives a reason and cites nothing. The grammar authority is `{PLUGIN_ROOT}/pipeline-tools/SKILL.md` (`check_agent_report.py`) — it is the same grammar as the Security and Verification reports, deliberately, so one parser reads all three.
 - **Item 6 is graded, not eyeballed**: each Baseline metric captured before rollout is re-read from the same monitoring source and compared against the Rollout Decision Thresholds table. Red on any row is a `FAIL`, and a `FAIL` verdict is a rollback decision — execute the Rollback Steps within the rehearsed Time to Rollback, then escalate.
 
 ### Rollback Strategy
