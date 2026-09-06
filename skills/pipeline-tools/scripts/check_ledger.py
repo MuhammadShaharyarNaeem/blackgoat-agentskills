@@ -420,7 +420,7 @@ def run_self_test():
             chained(self.ledger, "a.py", milestone="M3: Café — ünïcode")
             self.assertTrue(build_report(str(self.ledger))["pass"])
 
-        # ---- drift guard across the family's fourteen copies -----------
+        # ---- drift guard across the family's nineteen copies -----------
 
         CHAINED_GATES = (
             "check_acceptance_suite.py", "check_agent_report.py",
@@ -429,7 +429,13 @@ def run_self_test():
             "check_quick_close.py", "check_red_green.py",
             "check_runtime_evidence.py", "check_ship_decision.py",
             "mark_milestone.py", "next_bugfix_route.py",
-            "review_package.py", "update_state.py")
+            "review_package.py", "update_state.py"
+            "check_openapi_diff.py",
+            "check_always_on.py",
+            "check_handoff.py",
+            "check_tier1_provenance.py",
+            "check_runtime_recipe.py",
+        )
 
         def test_the_chain_helper_is_byte_identical_everywhere(self):
             """One file each, no shared module -- so drift is what to test.
