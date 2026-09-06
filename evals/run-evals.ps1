@@ -136,6 +136,7 @@ $FixturePortsToCheck = 5182, 5183, 5184, 5185, 5186
 $ZeroLlmCases = @(
     @{ Name = 'mechanical-pipeline'; Script = 'contract\mechanical-pipeline\run.py' },
     @{ Name = 'bugfix-gates-adversarial'; Script = 'contract\bugfix-gates-adversarial\run.py' }
+    @{ Name = 'openapi-diff-adversarial'; Script = 'contract\openapi-diff-adversarial\run.py' }
 )
 
 # Bump this string whenever the result-record contract (the set of keys written to
