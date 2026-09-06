@@ -3,6 +3,47 @@
 All notable changes to the `blackgoat-agentskills` plugin are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [2.4.0] — 2026-09-07
+
+The audit release. A 21-metric fan-out audit of 2.3.0 found six Blocker metrics; every one is closed here, and two of the fixes change gate contracts.
+
+### Migration notes — read before upgrading a project with in-flight `.docs/` artifacts
+
+- **Cipher and Vera check lines now cite captures.** `check_agent_report.py` requires every executed `PASS`/`FAIL` line to end with `— capture: evidence/<dir>/<file>.md`, and the cited capture's sidecar must exist, hash-match, and carry the same exit code the line claims (`check_uncaptured`, `check_capture_disagrees`). A report authored under 2.3.0 fails closed; re-run each check through `run_quiet.py --capture` and cite it. `BLOCKED` / `NOT RUN` lines are exempt.
+- **Capture sidecars are cross-checked against the capture body.** `check_runtime_evidence.py`, `check_red_green.py`, `check_quick_close.py` and `check_ship_decision.py` now require the hash-protected body's `- Exit code:` and `- Captured:` lines to agree with the sidecar (`sidecar_body_disagrees`). A capture written by a pre-2.1 `run_quiet.py` without those header lines fails with `capture_header_missing`; re-take it.
+- **`mark_milestone.py --require-gates` needs `--ledger`** and exits 2 without it. A bare invocation used to append `[x]` unchecked.
+- **`bgpdd-bugfix` feature route**: the fix is made on the epic's existing branch, read from the state file; the lane never writes `branch`. It applies only while the epic is in flight (state exists and its branch exists unmerged); a bug in a shipped epic takes the standalone route. Quinn and Luna APPEND their sections to the epic's `test-report.md` and `review-report.md`.
+- **`bgpdd-plan` Phase 3.6** now sets `--set-pipeline bgpdd-plan` on both `--init` calls. A run interrupted between 3.6 and Phase 4 under 2.3.0 left `pipeline: ""`; set it by hand with `update_state.py --set-pipeline bgpdd-plan` before resuming.
+- **Eval harness is version 4.** INFRA runs are auto-classified, retried once, and written to `results-invalid-infra-<date>.jsonl` with `pass: null`; a batch pre-flight probes the CLI and the fixture ports; trigger records carry `skills_invoked`. The live `results.jsonl` holds only flat records; the 160 legacy array-shaped rows moved to `results-legacy-array-shape-2026-08.jsonl`.
+
+### Added
+- `<consumers>` handoff element defined in `agents/mason.md` and `agents/nova.md` (`path::symbol`, when the brief asks) — the bugfix lane required it, nothing defined it.
+- `/bg` state rows for "execute the existing plan" → `bgpdd-build` and "map this codebase" → `bgpdd-discovery`, above the three questions.
+- Per-delegation `record_run.py` lines (mandatory `--model`) in `bgpdd-plan`, `bgpdd-lite`, `bgpdd-verify` and `bgpdd-shipping`, so shipping's whole-epic roll-up is complete.
+- `bgpdd-build` sub-contracts: `references/build-phase0.md`, `build-gate-ladders.md`, `build-phase5-gates.md`, `build-phase6.md`, each fronted by a ≤ 120-word spine stub with a MANDATORY read line naming every HALT it holds.
+- `evals/eval_record.py`; `--record` on both zero-LLM cases, run at the start of every confirmed contract batch. `expected_chain` for two-hop trigger cases.
+- `next_bugfix_route.py` scopes its intake lookup by `--milestone`.
+
+### Changed
+- `agents/cipher.md`, `agents/vera.md`: `model: opus` (they gate opus builders; Metric 14).
+- `agents/luna.md`: report path "unless the brief names another path — the brief wins" (standalone bugfix collision).
+- Persona frontmatter: `phase:` names every lane the agent runs in; `depends-on` complete (aria + scout, echo; alex + echo; luna + quinn).
+- `bgpdd-build` 7,227 → 5,080 words; `bgpdd-plan` 3,994 → 3,455 (`references/plan-rationale.md`); `bgpdd-lite` 2,526 → 2,205 (`references/lite-rationale.md`); `bgpdd-learn` reads the skeleton. Script/flag/path/exit-route inventories set-identical across spine + references.
+- `pipeline-skeleton.md`: Game Tape default is Contract §4's every-state-persistence; inventory lists the three labelled refinements and the two no-tape lanes.
+- `pipeline-tools/SKILL.md` description ≤ 1,024 chars (was 1,169); `already_committed` documented.
+- README skill catalog lists all 38 skills.
+
+### Fixed
+- Bugfix Phase 4 "writes" → "appends" (a truncating write destroyed FR-traced evidence build and shipping gate on).
+- `bgpdd-verify` gate flags copied by eye are pasted into the game tape beside the command (interim, labelled, until an emitter exists).
+- `mechanical-pipeline` fixture: capture and sidecar timestamps disagreed by 223 days (exposed by the new cross-check).
+
+### Known, not fixed
+- Binding `check_coverage.py` / `check_acceptance_suite.py` into build's per-milestone commit gate deadlocks from milestone 2 (their PASS hashes `plan.md`, which `mark_milestone` mutates); the right home is the epic-scoped ship decision, which has no `--require-ledger-gates` yet.
+- Wake-up weight: eight agents above ~2,500 words (Quinn 6,254). Quinn §3/§4 and Luna §2/§4 procedural catalogues still live in the personas; no methodology owner line covers them yet.
+- The launch checklist is stated in four files; both methodology skills cite the authoritative `references/*-checklist.md`.
+- Pressure suite and the 22 unmeasured trigger cases remain unrun (deferred by the user).
+
 ## [2.3.0] — 2026-09-04
 
 The daily-driver wave: the plugin now serves ordinary work, not only epics.

@@ -9,7 +9,7 @@ role: System Architect
 phase: Plan 2 — Architecture; Build 1 — blast-radius advisory (Mode 2 — Scoped Advisory)
 squad: agent-squad
 reports-to: agent-squad
-depends-on: rex
+depends-on: rex, scout, echo # both brownfield only, and both consumed by *reading* their artifacts — scout's research maps, echo's .docs/summary/{feature}/overview.md — never by re-invoking either (see Responsibilities § Inputs first)
 ---
 
 ## Methodology Dependencies

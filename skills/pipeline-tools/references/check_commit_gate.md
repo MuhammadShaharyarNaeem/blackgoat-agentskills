@@ -9,6 +9,11 @@ Depth for the `check_commit_gate.py` section of `../SKILL.md`: the runtime-evide
 **Every assertion flag forwards**, including the OpenAPI pair. That completeness is the point, not a convenience: `bgpdd-build` runs the runtime gate twice — once at Phase 2 where feedback is cheap, and again here — and if the commit-time run accepted a weaker set of assertions than the earlier one, the gate that actually owns the commit would be the more permissive of the two. Same reasoning as `--verify-tree` running here rather than only earlier: **the restraint has to bind at the moment it is least convenient.** Any forwarded flag passed *without* `--require-runtime-evidence` is a usage error (exit 2) rather than a silent no-op, so a typo'd invocation cannot quietly drop an assertion.
 
 `--require-runtime-evidence` without `--runtime-report` is exit 2. With the flag unset, `runtime_evidence` stays `null` and `runtime_evidence_ok` stays `true` — backward compatible.
+
+### `already_committed`
+
+With `--commit`, the gate first asks whether any declared `--changed-files` path still differs from HEAD. If none does, the change was already committed **outside this gate** — a builder committing its own fix, or a hand commit — so the gate fails (`already_committed: true`, exit 1) rather than reporting a vacuous pass over work it never gated. The remedy is in the warning text: reset the outside commit keeping the tree, then re-run. It sits in `../SKILL.md`'s JSON-key list beside `size_ok`; it was absent from both lists until the 2026-09 audit, which is how a key that can single-handedly fail the gate went undocumented.
+
 ### Parsing rules (condensed)
 
 - **Milestone matching**: case-insensitive **word-boundary** match — the full milestone title, OR its leading identifier (the text before the first `:`/`—`), must appear as a whole token (not immediately preceded or followed by an alphanumeric character) against `## Review:` headings in the review report. A bare substring is not enough: `M1` no longer matches a section titled `M10`. The **LAST** matching section wins. Within that section, the **LAST** `**Verdict:**` line wins and must be the exact token `Approve` or `Request Changes`; an unparseable latest line fail-safes to no-verdict rather than falling back to an earlier line.

@@ -19,7 +19,10 @@ least wants to (CLAUDE.md convention #9). Specifically:
 2. **"The check passed, I ran it."** A narrated result is a claim. The sidecar
    is the difference between a capture and a sentence; `sidecar_missing` and
    `sidecar_hash_mismatch` are copied verbatim from `check_red_green.py` for
-   exactly the reason that gate has them.
+   exactly the reason that gate has them — as is
+   `sidecar_body_disagrees`, which covers the one thing the hash does not:
+   the sidecar's own `exit_code` and `finished`, both of which this gate reads
+   and either of which a one-line edit could set.
 3. **"I ran it, then made one more tweak."** `capture_stale`. The single most
    likely honest error in this lane, because the whole lane is fast enough for
    the check and the edit to blur together.
@@ -112,7 +115,7 @@ from `check_commit_gate.py`, `check_red_green.py` and
 intentional differences (freshness comparison, the status-letter filter in the
 frozen check) are the divergences above, both asserted by a named self-test.
 
-## Self-test inventory (33 cases)
+## Self-test inventory (39 cases)
 
 Every case builds a real temp git repo (`git init`, one base commit) so the
 tree, staging and commit checks run against real `git`, not a mock.
@@ -130,6 +133,14 @@ a BOM-prefixed note still parsing.
 non-integer `exit_code`; a capture older than the edit; a capture in the *same
 second* as the edit passing (`test_capture_in_the_same_second_as_the_edit_is_fresh`
 — the freshness divergence above); an unparseable `finished`.
+
+**The sidecar's own fields** — the hash covers the capture FILE, so the six
+agreement cases cover what it cannot: a flipped `exit_code` (a check that
+FAILED, sidecar set to 0) caught by the body; a `finished` pushed past the
+edit's mtime, caught *before* `capture_stale` can be satisfied; an agreeing
+pair recording `capture_body_agrees`; a 1s pre-2.4 render skew still passing;
+a capture with no header pair (`capture_header_missing`); and a command
+transcript that PRINTS `- Exit code: 1` inside the fence supplying nothing.
 
 **The tree** — a declared path that does not exist; a fourth file slipped in
 undeclared; an edited test caught by `--frozen`; a declared test edit caught

@@ -7,7 +7,7 @@ risk: safe
 source: community
 date_added: "2026-06-11"
 role: Builder (Backend)
-phase: Build 1 — Implementation (API)
+phase: Build 1 — Implementation (API); Bugfix — Fix (Phase 3, `api` surface)
 squad: agent-squad
 reports-to: agent-squad
 depends-on: rex, alex, aria
@@ -30,7 +30,7 @@ READ these as file paths under {PLUGIN_ROOT} (NOT Skill-tool invocables). Read e
 | powershell-script-patterns | `{PLUGIN_ROOT}/powershell-script-patterns/SKILL.md` | When authoring or modifying PowerShell scripts |
 | database-migration-patterns | `{PLUGIN_ROOT}/database-migration-patterns/SKILL.md` | When the milestone changes a database schema |
 
-> **Base Persona Override (Builder)**: You inherit `base-persona.md` but override its output boundary. Write directly into the target codebase's source directories (e.g. `src/`, `tests/`) — NEVER application code into `.docs/`. Report completion with `<changed_files>` instead of `<artifact>`: `<handoff><status>COMPLETE</status><changed_files>path/to/file1, path/to/file2</changed_files><blockers>None</blockers></handoff>`. **Fix rounds**: base-persona's `<fix_verification>` rule applies unchanged — the element rides beside `<changed_files>`, not in place of it. A runtime capture you produced still rides as `<artifact>` (§7).
+> **Base Persona Override (Builder)**: You inherit `base-persona.md` but override its output boundary. Write directly into the target codebase's source directories (e.g. `src/`, `tests/`) — NEVER application code into `.docs/`. Report completion with `<changed_files>` instead of `<artifact>`: `<handoff><status>COMPLETE</status><changed_files>path/to/file1, path/to/file2</changed_files><blockers>None</blockers></handoff>`. **Fix rounds**: base-persona's `<fix_verification>` rule applies unchanged — the element rides beside `<changed_files>`, not in place of it. A runtime capture you produced still rides as `<artifact>` (§7). **`<consumers>` — optional and standing**: when the brief asks for it (the `/bgpdd-bugfix` Phase 3 brief does), add a `<consumers>` element beside `<changed_files>` listing the callers of every changed symbol you inspected, one per line, in `path::symbol` grammar — §2's blast-radius trace made readable instead of summarized. Omit it when the brief does not ask; never list a caller you did not actually read.
 
 ---
 

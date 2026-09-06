@@ -40,6 +40,19 @@ this one may be handed an absolute path. Path-key equality would reject honest
 pairs. A hash collision between two different bug reports is not a threat model
 worth code.
 
+**The lookup is scoped by `--milestone`** (fixed 2026-09). It used to take the
+globally latest `check_bugfix_intake.py` record, which is right for one bug at a
+time and wrong the moment two share a ledger: bug A's report is linted, bug B's
+intake lands after it, and A's route then reads B's record, finds a hash that is
+not A's, and reports that A's report *was edited after it passed intake* — a
+false `intake_unbacked` whose message points at the wrong cause. With
+`--milestone`, only records naming that milestone count; the fallback is
+deliberately narrow (records carrying **no** milestone, i.e. an unscoped
+invocation) and never another bug's. A scoped FAIL still blocks, so scoping
+cannot route past one's own failed intake. **Pass the same `--milestone` to the
+intake gate and to the route**, or there is nothing to match and the fallback
+does the work.
+
 `--ledger` is therefore required, not optional — the only gate in this family
 for which the ledger is an *input*.
 
@@ -187,7 +200,7 @@ commit gate still enforces the bound, so the route is decidable without it.
   divergence is scoped to the report and not here). A `## Fix shape` block
   pasted as a template asserts nothing and lands as `INCOMPLETE`.
 
-## Self-test inventory (49 cases)
+## Self-test inventory (52 cases)
 
 - **FAST (2)** — the happy path and its exit 0, including the assertion that the
   printed reasons say the routes differ only in check-ins.
@@ -212,9 +225,12 @@ commit gate still enforces the bound, so the route is decidable without it.
   both ways; PLAN outranks a would-be FAST.
 - **INCOMPLETE (4)** — missing `- Baseline suite:`; no `- Root cause file:`;
   missing `## Fix shape` flags; the exit-1 mapping.
-- **Intake backing, adversarial (5)** — no intake entry; an intake FAIL entry;
+- **Intake backing, adversarial (8)** — no intake entry; an intake FAIL entry;
   a PASS whose hash no longer matches an edited report; a later FAIL superseding
-  an earlier PASS; a PASS recorded under a different path string is accepted.
+  an earlier PASS; a PASS recorded under a different path string is accepted;
+  two interleaved bugs in one ledger (unscoped reads the wrong record and
+  refuses, `--milestone` finds its own); a scoped FAIL for this bug still
+  blocks; a milestone-less PASS still backs a scoped route.
 - **Parsing (3)** — fenced RCA fields route nothing; last mention wins; a
   missing estimate warns but still routes.
 - **Usage + ledger (4)** — missing `--rca` file is exit 2; missing `--ledger` is

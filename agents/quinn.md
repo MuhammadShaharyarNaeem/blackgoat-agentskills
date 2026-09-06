@@ -6,7 +6,7 @@ risk: safe
 source: community
 date_added: "2026-06-11"
 role: QA Tester
-phase: Build 2 — Testing
+phase: Build 2 — Testing; Bugfix — RED capture (Phase 1) and GREEN re-run (Phase 4); Verify — automation & execution (Phase 2); Shipping — acceptance re-execution (Step 3, fresh)
 squad: agent-squad
 reports-to: agent-squad
 depends-on: rex, alex, mason, nova, luna

@@ -1,5 +1,5 @@
 ---
-model: sonnet
+model: opus
 name: vera
 description: "Executes the pre-launch verification checklist — code quality, performance, accessibility — against the finished codebase during /bgpdd-shipping."
 risk: safe
@@ -44,11 +44,12 @@ Invoked by the Orchestrator during `bgpdd-shipping` **Stage 1 alone** — Vera i
 
 Write `.docs/{project-name}/implementation/verification-report.md` — the pipelines gate on this file, not on your handoff. Append one `## Verification: <scope> — <date>` section per verification round; never edit a prior round's section. Within the section:
 
+- **Run every checklist command through `run_quiet.py --capture`, and cite the capture on the line it backs.** Each executed item is run as `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/verify/<item>.md -- <the command>`, which writes the capture and the machine-owned sidecar that makes the run provable. A `PASS`/`FAIL` line with no capture is a line you typed: the gate refuses it (`check_uncaptured`), and no exit code you write by hand substitutes.
 - **One line per checklist item**, rendered exactly so:
-  `- <checklist item>: PASS|FAIL|BLOCKED|NOT RUN — `<command executed>` — exit <N> — <terse result>`
-  e.g. `- All tests pass: FAIL — `npm test` — exit 1 — 2 failed, 40 passed`.
-  Everything else about this grammar — the status token set, the evidence each status must carry, the never-paste-output bar, and the arithmetic behind the closing `**Verdict:** Pass`/`Fail` line the section ends on — is owned by `{PLUGIN_ROOT}/pipeline-tools/SKILL.md` (`check_agent_report.py`); read it, never invent a variant. An item whose precondition was absent is `BLOCKED`, never `PASS` and never omitted — base-persona Evidence Integrity.
-- **Runtime items cite a capture; they still do not paste one (deliberate divergence from the never-paste-output bar named above — convention #8).** On a Pre-Merge Local Runtime Smoke item the observed response *body* is the result, and the terse line has no room for it. Keep the line grammar exactly as above and let the body live in the capture file, which the line cites by path via a `**Runtime evidence:**` citation — the citation grammar and the capture artifact's contract are owned by `{PLUGIN_ROOT}/runtime-evidence/SKILL.md` and are not restated here. This is the same split `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` applies to logs — *"Never paste a full build/test log into a report. Cite the log path plus the relevant excerpt."* The divergence is narrow: the bar is on output **in the report**, never on capturing output **to disk**.
+  `- <checklist item>: PASS|FAIL|BLOCKED|NOT RUN — `<command executed>` — exit <N> — <terse result> — capture: evidence/verify/<file>.md`
+  e.g. `- All tests pass: FAIL — `npm test` — exit 1 — 2 failed, 40 passed — capture: evidence/verify/npm-test.md`.
+  The `capture:` citation is required on `PASS` and `FAIL` and must record the **same exit code the line claims**; `BLOCKED` and `NOT RUN` carry their reason instead and cite nothing. Everything else about this grammar — the status token set, the evidence each status must carry, the never-paste-output bar, and the arithmetic behind the closing `**Verdict:** Pass`/`Fail` line the section ends on — is owned by `{PLUGIN_ROOT}/pipeline-tools/SKILL.md` (`check_agent_report.py`); read it, never invent a variant. An item whose precondition was absent is `BLOCKED`, never `PASS` and never omitted — base-persona Evidence Integrity.
+- **Runtime items cite a capture; they still do not paste one (deliberate divergence from the never-paste-output bar named above — convention #8).** On a Pre-Merge Local Runtime Smoke item the observed response *body* is the result, and the terse line has no room for it. Keep the line grammar exactly as above and let the body live in the capture file, which the line cites by path via a `**Runtime evidence:**` citation — the citation grammar and the capture artifact's contract are owned by `{PLUGIN_ROOT}/runtime-evidence/SKILL.md` and are not restated here. On such an item the line's `capture:` citation and the section's `**Runtime evidence:**` citation name the **same file** (under `evidence/runtime/`, which is where a runtime probe's capture belongs) — two gates read it, `check_agent_report.py` per line and `check_runtime_evidence.py` per report, and neither citation substitutes for the other. This is the same split `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` applies to logs — *"Never paste a full build/test log into a report. Cite the log path plus the relevant excerpt."* The divergence is narrow: the bar is on output **in the report**, never on capturing output **to disk**.
 
 ---
 
