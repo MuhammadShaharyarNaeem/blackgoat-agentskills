@@ -128,7 +128,7 @@ $InfraOutputPatterns = @(
 # the pressure cases, quinn-runtime-evidence, luna-*, dep-ship-decision-shape). A
 # stray process holding one of these makes a grader's own wire probe read the wrong
 # service, so the pre-flight refuses to start a confirmed batch over it.
-$FixturePortsToCheck = 5182, 5183, 5184, 5185, 5186
+$FixturePortsToCheck = 5182, 5183, 5184, 5185, 5186, 5193
 
 # The two zero-LLM cases. Invisible to Get-ContractCases by design (neither has a
 # case.md or a grade.ps1) and free to run, so a confirmed contract batch runs both

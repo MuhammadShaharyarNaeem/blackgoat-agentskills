@@ -10,6 +10,20 @@ date_added: "2026-02-27"
 
 Production patterns for Godot 4.x game development with GDScript, covering architecture, signals, scenes, and optimization.
 
+## Quick card
+
+Derived from the sections below for a ≤ 3-file change; no new rules (convention #8).
+
+1. Clarify goal, constraints and inputs before editing (§ Instructions).
+2. Validate in-engine; reading a script is not verification (§ Instructions).
+3. Pool return: `remove_child()` first, guard pops with `is_instance_valid()` (§ Procedural Memories).
+4. Atomic save: `.tmp` → verify → `.bak` → rename (§ Procedural Memories).
+5. Never hardcode a key; derive from `OS.get_unique_id()` plus salt (§ Procedural Memories).
+
+- Brief → the quick note (What / Where / How verified)
+- Artifact → the capture at `{quick-root}/evidence/check.md`
+- Handoff → the `## Result` bullet in `note.md`
+
 ## Use this skill when
 
 - Building games with Godot 4
@@ -25,6 +39,8 @@ Production patterns for Godot 4.x game development with GDScript, covering archi
 - You need a different domain or tool outside this scope
 
 ## Instructions
+
+For a change of ≤ 3 files outside a pipeline, the Quick card above is the contract; the full contract applies inside a lane. This skill has no `## Worker Execution Contract` heading, so the card's rules cite this section and `## Procedural Memories` instead.
 
 - Clarify goals, constraints, and required inputs.
 - Apply relevant best practices and validate outcomes.

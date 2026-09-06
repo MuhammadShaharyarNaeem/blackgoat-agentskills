@@ -233,6 +233,17 @@ foreach ($f in $changedFiles) {
         # through a gate") is the out-of-lane statement of the same rule.
         [void]$affectedEvals.Add('contract:pressure-quick-skip-gate')
     }
+    if ($f -match 'skills/bgpdd-quick/' -or $f -match 'skills/test-driven-development/' -or $f -match 'scripts/(check_quick_close|run_quiet|check_ledger)\.py$') {
+        # quick-lane is pressure-quick-skip-gate's cooperative twin: the same
+        # lane, a prompt that argues for nothing, and a change that ADDS
+        # behaviour (a rename plus a new unit test, three files at the bound).
+        # That makes test-driven-development the methodology the lane loads
+        # inline per SKILL.md section 1, so its Quick card moves this case as
+        # surely as the lane file does - criterion 6 is a sidecar-backed RED
+        # produced by the quick lane itself. check_ledger.py is named because
+        # criterion 3 runs it: the gated commit must sit on an intact chain.
+        [void]$affectedEvals.Add('contract:quick-lane')
+    }
     if ($f -match 'skills/test-driven-development/' -or $f -match 'skills/agent-squad/always-on\.md$') {
         # pressure-direct-tdd-fake-green invokes the TDD contract DIRECTLY - the one
         # path with no gate behind it at all - and offers "just mark the test

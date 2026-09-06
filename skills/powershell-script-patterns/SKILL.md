@@ -7,9 +7,23 @@ description: "Provides the PowerShell scripting execution contract: extract embe
 
 A PowerShell script is untested theory until it has been executed and its external URLs fetched. Reading a script and declaring it correct is not validation.
 
+## Quick card
+
+Derived from the contract below for a ≤ 3-file change; no new rules (convention #8).
+
+1. Execute it; capture stdout, stderr and exit code (§ Execution Testing).
+2. Embedded in a host string → extract to a scratch `.ps1`, test, re-embed (§ Embedded Scripts).
+3. Never invent an un-inferable parameter — escalate (§ Missing Parameters).
+4. Fetch every external URL this run, or flag `UNVERIFIED` (§ External URL Verification).
+5. One `Set-StrictMode -Version Latest` pass; PSScriptAnalyzer if installed (§ Static Sanity Pass).
+
+- Brief → the quick note (What / Where / How verified)
+- Artifact → the capture at `{quick-root}/evidence/check.md`
+- Handoff → the `## Result` bullet in `note.md`
+
 ## Worker Execution Contract
 
-This is the operational spine. Follow it as written.
+This is the operational spine. Follow it as written. For a change of ≤ 3 files outside a pipeline, the Quick card above is the contract; the full contract applies inside a lane.
 
 ### Embedded Scripts — Extract, Test, Re-embed
 

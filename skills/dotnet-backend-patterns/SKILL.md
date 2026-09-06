@@ -7,9 +7,23 @@ description: "Provides the .NET backend execution contract: solution segregation
 
 Strict solution segregation, exactly two sanctioned API modes, lean EF Core queries, and tests that run against reality — never against mocks.
 
+## Quick card
+
+Derived from the contract below for a ≤ 3-file change; no new rules (convention #8).
+
+1. Stay in the existing layer; `Domain` stays dependency-free (§ Solution Segregation).
+2. Match the declared API mode; never mix (§ API Mode).
+3. Every response is a `BaseResponse<T>`; failures are structured `Error`s (§ Response Pattern).
+4. Read-only queries get `AsNoTracking()` and a DTO projection (§ EF Core & Data Discipline).
+5. A wire or envelope claim needs Tier 3 — escalate (§ Testing Doctrine).
+
+- Brief → the quick note (What / Where / How verified)
+- Artifact → the capture at `{quick-root}/evidence/check.md`
+- Handoff → the `## Result` bullet in `note.md`
+
 ## Worker Execution Contract
 
-This is the operational spine. Follow it as written.
+This is the operational spine. Follow it as written. For a change of ≤ 3 files outside a pipeline, the Quick card above is the contract; the full contract applies inside a lane.
 
 ### Solution Segregation
 

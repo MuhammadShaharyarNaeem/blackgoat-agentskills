@@ -1,0 +1,10 @@
+{
+  "name": "orders-svc",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Frozen fixture for the quick-lane eval. A healthy orders service with no planted defect. src/money.js defines and exports formatAmount; src/receipts.js imports and calls it twice - those two files and nothing else. tests/receipts.test.js reaches the helper only through renderReceipt(), the public surface, so a correct rename to formatCurrency leaves the existing tests byte-identical. NOTHING here unit-tests the helper directly and NOTHING here asserts on a negative amount, so the asked-for test is a real addition whose RED is real: it names formatCurrency, which does not exist until the rename lands.",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  }
+}

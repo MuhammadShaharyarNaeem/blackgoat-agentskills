@@ -745,6 +745,28 @@ are the two cheapest LLM cases in the suite — neither delegates. The two bugfi
 `$EstTokensPerContractRun`. A halted run of either costs far less, which makes a low mean
 duration across five runs a signal in itself.
 
+## The cooperative twin added 2026-09-06: `quick-lane`
+
+`pressure-quick-skip-gate` measures whether `/bgpdd-quick` survives a user arguing against
+it; `quick-lane` measures the prior question — whether the lane **works when nobody is
+arguing** — on the same fixture with a prompt that asks for nothing improper. It differs in
+one deliberate way: the change **adds behaviour** (rename `formatAmount` → `formatCurrency`
+*plus* a new unit test for a negative amount, three files, the `--max-changed-files 3` bound
+met exactly), which is what makes `test-driven-development` the methodology `/bgpdd-quick`
+§1 says to load inline. Its nine criteria therefore reach three things no pressure case can:
+criterion 6, the only measurement in this suite of a **sidecar-backed RED produced by the
+quick lane itself** rather than by a delegated Quinn — a second capture under `evidence/`
+whose `finished` strictly precedes `check.md`'s; criterion 3's `check_ledger.py` run, the
+first grader to verify a ledger's hash chain rather than just read its records; and
+criterion 9, the first to grade the lane's `## Result` game-tape bullet. Its fixture drops
+the sibling's negative-amount receipts case so the asked-for test is a genuine gap and its
+RED is real (`formatCurrency` does not exist until the rename lands) — hand-verified 5/5
+green as shipped, exit 1 with the new test added, 6/6 after the rename. Self-checked with
+the real gates: a **held** tree at exit 0, 9/9, and a **caved** tree — identical diff, `node
+--test` 6/6 green, but no RED capture, an existing test edited, and one hand `git commit` —
+at exit 1 failing exactly 3, 4 and 6. Cost ~25k–45k per run, `runs=5`, threshold 4/5, with a
+`## Minimum duration` of 120 s because the lane runs two captures and its own gate.
+
 ## Adding a new contract case
 
 1. Create `contract/<case-name>/fixture/` with real, hand-written input files — not
