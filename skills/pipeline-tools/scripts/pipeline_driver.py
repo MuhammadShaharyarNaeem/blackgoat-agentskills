@@ -25,7 +25,10 @@ The exit codes carry that refusal, and the invariant is
     must fix it.
 
 This is a READER, like next_milestone.py and summarize_run.py: it grants no
-verdict, so it appends nothing to the ledger. `--ledger` is an input only.
+verdict, so it appends nothing to the ledger. `--ledger` is an input only. The
+one subprocess it runs is `detect_stack.py`, a sibling READER, to name a
+suggested check command in the quick lane's Phase 0 action; it is best-effort,
+and its absence or failure only drops that clause.
 
 Usage:
     python pipeline_driver.py --root <lane root> [--lane bugfix|quick|auto] \
@@ -46,6 +49,7 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -466,6 +470,95 @@ def _script(name):
     return "python %s" % rp(SCRIPTS_DIR / name)
 
 
+def repo_root_for(root):
+    """The repository the lane root sits inside, or None.
+
+    A quick lane root is `<repo>/.docs/quick/<date>-<slug>/`, so the repo is
+    the nearest ancestor holding a `.git` entry; failing that, the parent of
+    the nearest `.docs` ancestor. Both are structural reads of the path, never
+    a guess about the caller's cwd.
+    """
+    try:
+        here = Path(root).resolve()
+    except OSError:
+        return None
+    for candidate in [here] + list(here.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    for candidate in [here] + list(here.parents):
+        if candidate.name == ".docs" and candidate.parent != candidate:
+            return candidate.parent
+    return None
+
+
+_DETECT_CACHE = {}
+
+
+def detect_report(root):
+    """({...}|None, warning) -- detect_stack.py's JSON for the lane's repo.
+
+    Shelled out to rather than imported: this family's convention is one
+    self-contained stdlib file per script, and copying the stack table here
+    would give the quick lane two tables to keep in step. Best-effort by
+    design -- a missing detector, a non-zero exit, unparseable JSON or a repo
+    the path walk cannot find all yield None, and the caller simply drops the
+    clause it would have added. Only an absent detector is worth a warning:
+    that is a broken install, not a repo the table has nothing to say about.
+    Cached per repo so one driver run costs at most one tree walk.
+    """
+    detector = SCRIPTS_DIR / "detect_stack.py"
+    if not detector.is_file():
+        return None, ("detect_stack.py is not beside this script, so no "
+                      "stack defaults could be suggested")
+    repo = repo_root_for(root)
+    if repo is None:
+        return None, None
+    key = str(repo)
+    if key in _DETECT_CACHE:
+        return _DETECT_CACHE[key], None
+    data = None
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(detector), "--repo", key, "--json"],
+            capture_output=True, text=True, timeout=120)
+        if proc.returncode == 0:
+            parsed = json.loads(proc.stdout)
+            if isinstance(parsed, dict):
+                data = parsed
+    except (OSError, ValueError, TypeError, subprocess.SubprocessError):
+        data = None
+    _DETECT_CACHE[key] = data
+    return data, None
+
+
+def _string_list(data, key):
+    values = (data or {}).get(key)
+    if not isinstance(values, list):
+        return []
+    return [v for v in values if isinstance(v, str) and v.strip()]
+
+
+def suggested_check_command(root):
+    """(command, warning) -- detect_stack.py's FIRST suggested check, or None."""
+    data, warning = detect_report(root)
+    commands = _string_list(data, "suggested_check_commands")
+    return (commands[0] if commands else None), warning
+
+
+def suggested_frozen_flags(root):
+    """The `--frozen` flags for the close command, from the detected stack.
+
+    Falls back to `--frozen tests/` when the detector names nothing -- a
+    printed EXAMPLE the caller edits, not a default inside the gate, which
+    deliberately has none (`check_quick_close.py`: the gate must not guess
+    what is frozen).
+    """
+    globs = _string_list(detect_report(root)[0], "test_path_globs")
+    if not globs:
+        return "--frozen tests/"
+    return " ".join("--frozen '%s'" % g for g in globs)
+
+
 def _surface_personas(surface):
     if surface == "ui":
         return "Nova", "nova"
@@ -838,6 +931,15 @@ def build_quick_report(root, ledger, milestone_override):
             detail = ("Complete %s: the line(s) %s are missing or still a "
                       "placeholder." % (rp(note_md),
                                         ", ".join(repr(a) for a in absent)))
+        suggested, detect_warning = suggested_check_command(root)
+        if detect_warning:
+            out["warnings"].append(detect_warning)
+        if suggested and (not note_md.is_file() or "how verified" in absent):
+            detail += (" Detected stack suggests `%s` for 'How verified' "
+                       "(%s --repo . --json for the full set, including the "
+                       "test_path_globs Phase 3 passes as --frozen); confirm "
+                       "or replace it with the user -- never adopt it "
+                       "silently." % (suggested, _script("detect_stack.py")))
         return emit(0, detail)
 
     where = parse_where(fields.get("where", ""))
@@ -863,10 +965,11 @@ def build_quick_report(root, ledger, milestone_override):
 
     # --- Phase 3: close ----------------------------------------------------
     close_cmd = ("%s --note %s --capture %s --changed-files %s --repo . "
-                 '--max-changed-files 3 --frozen tests/ --milestone "%s" '
+                 '--max-changed-files 3 %s --milestone "%s" '
                  '--ledger %s --commit --message "<msg>"'
                  % (_script("check_quick_close.py"), rp(note_md), rp(check_md),
-                    " ".join(where) or "<paths>", slug_label, rp(ledger)))
+                    " ".join(where) or "<paths>", suggested_frozen_flags(root),
+                    slug_label, rp(ledger)))
     close = gate_state(records, "check_quick_close.py", slug,
                        check_inputs=False)
     if not gate_committed(close):
@@ -1490,6 +1593,81 @@ def run_self_test():
             rep, code = self.run_driver()
             self.assertEqual((rep["phase"], code), (0, EXIT_NEXT))
             self.assertIn("how verified", rep["next_action"])
+
+        # -- detect_stack.py defaults in the emitted actions ---------------
+
+        def _in_repo(self, *files):
+            """Re-root this lane under `<repo>/.docs/quick/<slug>/`."""
+            repo = self.dir / "repo"
+            (repo / ".git").mkdir(parents=True, exist_ok=True)
+            for rel, text in files:
+                p = repo / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(text, encoding="utf-8")
+            self.root = repo / ".docs" / "quick" / "2026-09-07-rename-thing"
+            self.root.mkdir(parents=True, exist_ok=True)
+            self.ledger = self.root / "gates.jsonl"
+            _DETECT_CACHE.clear()
+            return repo
+
+        def test_phase0_names_the_detected_stacks_check_command(self):
+            self._in_repo(("package.json",
+                           json.dumps({"dependencies": {"express": "^4.18.0"}})))
+            rep, code = self.run_driver(lane="quick")
+            self.assertEqual((rep["phase"], code), (0, EXIT_NEXT))
+            self.assertIn("`npm test`", rep["next_action"])
+            self.assertIn("never adopt it silently", rep["next_action"])
+
+        def test_phase0_says_nothing_when_no_stack_matches(self):
+            self._in_repo(("README.md", "# nothing detectable\n"))
+            rep, _ = self.run_driver(lane="quick")
+            self.assertNotIn("Detected stack suggests", rep["next_action"])
+            self.assertEqual(rep["warnings"], [])
+
+        def test_phase0_suggestion_is_absent_once_how_verified_is_written(self):
+            self._in_repo(("package.json",
+                           json.dumps({"dependencies": {"express": "^4"}})))
+            self.note(where=None)
+            rep, _ = self.run_driver(lane="quick")
+            self.assertEqual(rep["phase"], 0)
+            self.assertNotIn("Detected stack suggests", rep["next_action"])
+
+        def test_close_command_carries_the_detected_frozen_globs(self):
+            self._in_repo(("package.json",
+                           json.dumps({"dependencies": {"express": "^4"}})))
+            self.note()
+            self.capture("evidence/check.md", 0)
+            rep, code = self.run_driver(lane="quick")
+            self.assertEqual((rep["phase"], code), (3, EXIT_BLOCKED))
+            self.assertIn("--frozen 'tests/**'", rep["next_action"])
+            self.assertIn("--frozen '**/*.spec.*'", rep["next_action"])
+            self.assertNotIn("--frozen tests/ ", rep["next_action"])
+
+        def test_close_command_falls_back_to_tests_when_undetectable(self):
+            self.note()
+            self.capture("evidence/check.md", 0)
+            rep, _ = self.run_driver(lane="quick")
+            self.assertIn("--frozen tests/", rep["next_action"])
+
+        def test_repo_root_for_prefers_the_nearest_git_dir(self):
+            repo = self._in_repo(("README.md", "x\n"))
+            self.assertEqual(repo_root_for(self.root).resolve(),
+                             repo.resolve())
+            inner = repo / "sub"
+            (inner / ".git").mkdir(parents=True)
+            deep = inner / ".docs" / "quick" / "s"
+            deep.mkdir(parents=True)
+            self.assertEqual(repo_root_for(deep).resolve(), inner.resolve())
+            self.assertIsNone(repo_root_for(self.dir / "no" / "such"))
+
+        def test_repo_root_for_falls_back_to_the_docs_parent(self):
+            """No .git anywhere above: the .docs parent is the repo."""
+            base = self.dir / "nogit"
+            deep = base / ".docs" / "quick" / "s"
+            deep.mkdir(parents=True)
+            if any((p / ".git").exists() for p in [deep] + list(deep.parents)):
+                self.skipTest("temp dir sits inside a git repo")
+            self.assertEqual(repo_root_for(deep).resolve(), base.resolve())
 
         def test_placeholder_note_value_counts_as_absent(self):
             self.note(how="TBD")

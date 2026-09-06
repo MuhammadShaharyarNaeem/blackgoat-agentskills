@@ -83,6 +83,37 @@ invisible to `git status`. This lane's gate performs the commit itself, so the
 only way to reach that state is to commit by hand — which also skips the gate
 entirely, and no flag can defend against not being run.
 
+## Why `--frozen` takes globs, and why it still has no default
+
+`--frozen tests/` only works in a repo that keeps its tests in a directory.
+Several stacks the plugin supports do not: a Vue SPA colocates `Foo.spec.ts`
+beside `Foo.vue`, a .NET solution scatters `*.Tests` projects, a Node package
+colocates `*.test.js`. In those repos the operator either froze nothing — and
+the oldest way to turn red green was open again — or froze `src/`, which also
+forbids the change. Neither is a rule anyone keeps. So a `--frozen` value
+carrying `*`, `?` or `[` is now matched as a glob against the repo-relative
+forward-slash path; anything else is still a path or directory prefix, so every
+existing `--frozen tests/` caller is untouched.
+
+The matcher is hand-rolled rather than `fnmatch`, for one reason worth naming:
+`fnmatch`'s `*` crosses `/`, so `tests/*.py` would silently mean
+`tests/**/*.py`. A freeze *wider* than written is the failure mode that gets a
+flag distrusted — the operator narrows the pattern, sees it still catch
+everything, and drops the flag. Segment semantics instead: `**/` is zero or more
+leading segments, a trailing `**` is the rest of the path, `*` and `?` stop at
+`/`, `[...]`/`[!...]` are character classes. Patterns are folded to forward
+slashes and `normcase`d exactly as the candidate paths are, so a Windows-typed
+`tests\**\test_*.py` matches and a case-insensitive platform compares like one.
+
+**There is still no default, and that is the point.** `detect_stack.py` can now
+name the right globs per stack, so the temptation is to bake them in here. A
+gate that guesses what is frozen and guesses wrong produces the same output as a
+change with genuinely no test to protect: a clean pass. That is the
+silent-no-op class convention #9 exists to prevent, and it would be worse here
+than a missing flag — a missing flag is visible in `gates.jsonl` under `argv`,
+a wrong guess is not. The detector proposes, the spine passes the globs
+explicitly, the ledger records exactly which ones fired.
+
 ## Two operational residuals, found in the shipping smoke
 
 1. **A repo that does not gitignore its build detritus blocks itself.** In the
@@ -115,7 +146,7 @@ from `check_commit_gate.py`, `check_red_green.py` and
 intentional differences (freshness comparison, the status-letter filter in the
 frozen check) are the divergences above, both asserted by a named self-test.
 
-## Self-test inventory (39 cases)
+## Self-test inventory (46 cases)
 
 Every case builds a real temp git repo (`git init`, one base commit) so the
 tree, staging and commit checks run against real `git`, not a mock.
@@ -147,6 +178,16 @@ undeclared; an edited test caught by `--frozen`; a declared test edit caught
 anyway; a *staged* frozen edit caught anyway; a newly added test passing
 (`test_a_newly_added_test_passes_the_frozen_check`); a clean run leaving
 `frozen_modified` empty.
+
+**`--frozen` as a glob** — a colocated `src/widget.spec.ts` caught by
+`**/*.spec.ts` where `tests/` sees nothing; `tests/*.py` NOT matching
+`tests/deep/test_b.py` while `tests/**` does (the anti-`fnmatch` case); a
+leading `**/` matching zero segments; a Windows-separator pattern
+(`tests\**\test_*.py`) matching; a NEW file matching a glob still passing; a
+metacharacter-free value still behaving as a prefix; and
+`test_glob_to_regex_unit_cases`, a seventeen-row table over the translator
+itself (`**/*.test.*`, `**/*.Tests/**`, `**/test_*.py`, `**/__tests__/**`,
+`**/*.Tests.ps1`, `?`, `[ab]`, `[!ab]`).
 
 **The size bound** — an overrun whose message names both `/bgpdd-bugfix` and
 `/bgpdd-lite`; `test_the_size_bound_applies_without_the_flag` (the default-on

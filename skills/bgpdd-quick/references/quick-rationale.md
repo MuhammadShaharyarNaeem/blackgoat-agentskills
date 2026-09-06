@@ -21,6 +21,31 @@ already careful and none of the 80% that is not.
 This lane is a deliberate bet: at this size, **one gate that cannot be skipped
 buys more than five gates that get skipped along with the lane.**
 
+## Why this lane reads two contract sections, not the whole contract
+
+Every other pipeline's MANDATORY FIRST READ pulls `orchestrator-contract.md`
+entire. This one reads `## Runtime Neutrality` and `## 3. Role Boundaries` and
+stops — a labelled convention-#8 refinement of that rule, for a reason specific
+to what the file contains.
+
+Of its five numbered sections, §1 governs delegation discipline, §2 the error
+recovery and circuit breaker around delegated work, §4 state hydration and the
+inter-pipeline hand-off, §5 where orchestrator lessons land. This lane delegates
+nothing, hydrates no state and hands off to nobody; §3 is the only section whose
+subject it actually performs — and it performs it by divergence, which the spine
+labels. Runtime Neutrality is universal and cheap.
+
+The cost of reading the rest is not abstract. 3,700 words is several times the
+lane's own spine, loaded before a change that touches at most three files: the
+same overhead-exceeds-the-change arithmetic that made this lane necessary in the
+first place, reappearing inside it. A daily driver that charges a heavy read for
+every use gets skipped, and a skipped lane enforces nothing.
+
+What the trim must not do is let an escalation inherit it. **A lane escalated to
+reads the contract in full** — it is the lane that will delegate, persist state
+and hand off. The spine states that in the same block, so the two rules are
+never read apart.
+
 ## Why the Orchestrator is the worker here
 
 Orchestrator Contract §3 forbids the Orchestrator writing application code, for
@@ -68,6 +93,25 @@ whose gate was never run.
 | Alters behaviour something else depends on | `/bgpdd-lite` | Something downstream has to be checked, and this lane has no traceability to check it with — no FR/NFR ids, no coverage gate. |
 | Fixes a defect that has a reproduction | `/bgpdd-bugfix` | A reproduction means a RED capture is *available*, and a fix proven only by a post-fix green is exactly what `check_red_green.py` exists to reject. Taking it here would launder that. |
 | Adds a capability, or changes a schema or contract | `/bgpdd-plan` | There is a design decision, and no lane where the author is the only reader may make one. |
+
+**The case the table used to leave ambiguous** is the test that goes red *while*
+you are making the change. Read literally, "fixes a defect that has a
+reproduction" catches it: there is a red test, and a red test is a reproduction.
+That reading routes every ordinary debugging loop out of the lane and empties
+it. The line is *when the defect started existing*: red produced by the edit in
+front of you is your own work misbehaving, and
+`debugging-and-error-recovery` is the card for it; red that predates the session
+and has a reproduction is `/bgpdd-bugfix`. The router (`bg/SKILL.md`) states the
+same split, because the question arrives there first.
+
+When the escalation does fire, the note is not thrown away. Its `What` line is
+already an observed-behaviour sentence and its `How verified` line is already a
+single argv-runnable command — exactly the two hardest fields of
+`bug-report.md` to write from a standing start. They cross over as **drafts**,
+`check_bugfix_intake.py` lints them like any other typed text, and nothing else
+carries. This is a convenience, not a shortcut: the gate's judgement is
+unchanged, and a `How verified` that was a build rather than a reproduction
+fails there just as it would have.
 
 Two rules of thumb for the cases the table does not name:
 
@@ -128,6 +172,14 @@ against the oldest way to make a check pass:
   forbade its own use case would simply be dropped by whoever hit it.
 - **Staging the edit first does not help.** Both index and worktree status
   letters are read.
+- **A `--frozen` value with `*`, `?` or `[` in it is a glob**, matched against
+  the repo-relative forward-slash path with `**` support; anything else is
+  still a directory prefix. This is what lets the lane freeze a stack whose
+  tests sit beside the code they cover — `**/*.spec.ts`, `**/*.Tests/**`,
+  `**/*.test.*` — where `tests/` would have frozen nothing at all. Phase 0's
+  `detect_stack.py` run supplies the right set per stack; the gate holds no
+  default of its own, deliberately, because a freeze it guessed and got wrong
+  passes exactly like a change with no test to protect.
 - **A rename whose call sites include a test is genuinely blocked.** That is the
   hard case, and the block is correct as a default: the gate cannot distinguish
   a mechanical symbol rename inside a test from a weakened assertion. Narrow

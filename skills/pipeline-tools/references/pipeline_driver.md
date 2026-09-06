@@ -114,6 +114,31 @@ considered and rejected was an mtime heuristic — "a Where file newer than
 touched by anything at all, and would not change the emitted action anyway.
 There is no phase 2 key in the driver's output for this lane.
 
+### The stack defaults in the quick actions
+
+Phase 0's action names a check command and Phase 3's names `--frozen` globs,
+both taken from `detect_stack.py` run against the repo the lane root sits in
+(nearest `.git` ancestor, else the `.docs` parent). Three decisions in that:
+
+- **Shelled out to, not imported.** The family convention is one self-contained
+  stdlib file per script; importing would break it, and copying the stack table
+  into the driver would leave two tables to keep in step — the exact drift the
+  detector exists to remove. The cost is one subprocess, cached per repo.
+- **Best-effort, never blocking.** A missing detector warns once (a broken
+  install is worth saying); a non-zero exit, unparseable JSON, an unfindable
+  repo or a stack the table has nothing to say about all just drop the clause.
+  The driver's job is to name the next action, and no lane should stall because
+  a *suggestion* could not be computed.
+- **Phase 3's fallback is `--frozen tests/`, and it is an example, not a
+  default.** The gate itself deliberately has none (see
+  `check_quick_close.md`); what the driver prints is a command line the
+  Orchestrator edits before running. Printing nothing there would read as "this
+  flag is optional", which is the opposite of the rule.
+
+The Phase 0 clause appears only while `How verified` is still unwritten, and its
+emitted text says *confirm or replace, never adopt silently* — the driver is the
+surface where that instruction actually gets read.
+
 ## What is deliberately NOT derived
 
 - **Whether a gate would pass.** The driver reads verdicts; it never re-runs a
@@ -146,7 +171,7 @@ thing each that does not exist yet:
   `acceptance-results.md`) and its one gate (`check_acceptance_suite.py`) map
   onto this shape almost directly.
 
-## Self-test inventory — 52 cases
+## Self-test inventory — 59 cases
 
 Four suites, every case in a fresh temp directory.
 
@@ -166,12 +191,16 @@ Four suites, every case in a fresh temp directory.
 - **`BugfixRouteTests` (4)** — standalone state file inside the root; feature
   state file one level up; a feature root with no epic state exiting 2; a slug
   derived from the ledger when `--milestone` is absent.
-- **`QuickTests` (10)** — the missing note; an incomplete note naming the
+- **`QuickTests` (17)** — the missing note; an incomplete note naming the
   missing key; a placeholder value counting as absent; the fused Change/Prove
   action; a failing check capture blocking; the close command's exact flags;
   a close `FAIL`; a close `PASS` without `--commit`; the complete lane at
   exit 3; `--lane auto` picking quick, and warning when both lanes' artifacts
-  are present.
+  are present. Then seven for the stack defaults: Phase 0 naming `npm test` in
+  a Node repo; saying nothing (and warning nothing) when no stack matches; the
+  clause absent once `How verified` is written; Phase 3 carrying the detected
+  globs; Phase 3 falling back to `--frozen tests/`; `repo_root_for` preferring
+  the nearest `.git`; and its `.docs`-parent fallback.
 - **`OutputTests` (5)** — auto-detecting bugfix; every contract key present;
   the human render; the `exit 1` ⟺ `blocked_by` invariant; an explicit
   `--ledger` path honoured.

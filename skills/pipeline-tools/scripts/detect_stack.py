@@ -8,6 +8,14 @@ github-actions, playwright, and the four DB stacks (postgres, sqlserver,
 mysql, sqlite). Used by `bgpdd-discovery` Phase 1 so a stack-specific
 methodology skill's "If the project uses X" dependency-table row has a
 mechanical floor instead of relying solely on the discovery agent's prose.
+
+For each stack it actually detected it also reports `suggested_check_commands`
+and `test_path_globs` from a table in this file, rolled up (deduped, in
+name-sorted stack order) at the report level. `bgpdd-quick` Phase 0 proposes
+the first suggested command as the note's `How verified` default and passes the
+globs to `check_quick_close.py --frozen`. Both are PROPOSALS the user confirms
+or replaces; nothing here is ever run.
+
 Pure standard library.
 
 Usage:
@@ -44,6 +52,58 @@ SKILL_MAP = {
     "sqlserver": "database-migration-patterns",
     "mysql": "database-migration-patterns",
     "sqlite": "database-migration-patterns",
+}
+
+# Per-stack defaults for the bgpdd-quick Phase 0 note: the check command the
+# lane PROPOSES on the `How verified` line (the user confirms or replaces it --
+# never run silently), and the test-path globs the close gate is handed as
+# `--frozen`. Keyed by DETECTED stack name only, so a suggestion is exactly as
+# evidence-backed as the detection under it. Stacks whose test runner is not
+# knowable from the tree (docker, aws, azure, github-actions, the db stacks)
+# are absent on purpose -- a wrong default is worse than none, because a
+# proposal is read faster than it is audited.
+STACK_DEFAULTS = {
+    "dotnet": {
+        "suggested_check_commands": ["dotnet test"],
+        "test_path_globs": ["**/*.Tests/**", "**/*Tests.cs"],
+    },
+    "node": {
+        "suggested_check_commands": ["npm test"],
+        "test_path_globs": ["tests/**", "**/*.test.*", "**/*.spec.*"],
+    },
+    "react": {
+        "suggested_check_commands": ["npm test"],
+        "test_path_globs": ["tests/**", "**/__tests__/**", "**/*.test.*",
+                            "**/*.spec.*"],
+    },
+    "angular": {
+        "suggested_check_commands": ["npm test", "ng test --watch=false"],
+        "test_path_globs": ["**/*.spec.ts"],
+    },
+    "vue3": {
+        "suggested_check_commands": ["npm run test", "npx vitest run"],
+        "test_path_globs": ["**/__tests__/**", "**/*.spec.ts"],
+    },
+    "python": {
+        "suggested_check_commands": ["pytest"],
+        "test_path_globs": ["tests/**", "**/test_*.py"],
+    },
+    "powershell": {
+        "suggested_check_commands": ["Invoke-Pester"],
+        "test_path_globs": ["**/*.Tests.ps1"],
+    },
+    "godot": {
+        # Godot ships no test runner of its own; GUT is the de facto headless
+        # one. Named rather than omitted because a wrong-but-named command is
+        # faster to correct than a blank line, and nothing here runs unconfirmed.
+        "suggested_check_commands": [
+            "godot --headless --path . -s addons/gut/gut_cmdln.gd -gexit"],
+        "test_path_globs": ["test/**", "tests/**", "**/test_*.gd"],
+    },
+    "playwright": {
+        "suggested_check_commands": ["npx playwright test"],
+        "test_path_globs": ["e2e/**", "**/*.spec.ts"],
+    },
 }
 
 EF_PROVIDER_MAP = {
@@ -332,10 +392,14 @@ def build_report(repo, max_depth):
         evidence = dedup(paths)
         if not evidence:
             return
+        defaults = STACK_DEFAULTS.get(name, {})
         stacks.append({
             "name": name,
             "confidence": confidence,
             "evidence": [to_rel(p, repo) for p in evidence[:MAX_EVIDENCE]],
+            "suggested_check_commands": list(
+                defaults.get("suggested_check_commands", [])),
+            "test_path_globs": list(defaults.get("test_path_globs", [])),
         })
 
     dotnet_paths = buckets["csproj"] + buckets["sln"] + buckets["fsproj"] + buckets["global_json"]
@@ -382,11 +446,19 @@ def build_report(repo, max_depth):
 
     skills = sorted({SKILL_MAP[s["name"]] for s in stacks if s["name"] in SKILL_MAP})
 
+    # Roll the per-stack defaults up in `stacks` order (name-sorted), deduped.
+    # The rollup is what gives "the FIRST suggested command" a deterministic
+    # meaning for bgpdd-quick Phase 0 and for pipeline_driver.py.
+    suggested = dedup([c for s in stacks for c in s["suggested_check_commands"]])
+    globs = dedup([g for s in stacks for g in s["test_path_globs"]])
+
     return {
         "result": "OK",
         "repo": str(repo),
         "stacks": stacks,
         "skills": skills,
+        "suggested_check_commands": suggested,
+        "test_path_globs": globs,
         "warnings": warnings,
     }
 
@@ -400,6 +472,22 @@ def render_markdown(result):
         skill_part = f" - skill: `{skill}`" if skill else ""
         evidence = ", ".join(f"`{e}`" for e in stack["evidence"])
         lines.append(f"- **{stack['name']}** ({stack['confidence']}){skill_part} - evidence: {evidence}")
+        if stack["suggested_check_commands"]:
+            cmds = ", ".join(f"`{c}`" for c in stack["suggested_check_commands"])
+            lines.append(f"  - suggested check: {cmds}")
+        if stack["test_path_globs"]:
+            globs = ", ".join(f"`{g}`" for g in stack["test_path_globs"])
+            lines.append(f"  - test paths: {globs}")
+    if result["suggested_check_commands"] or result["test_path_globs"]:
+        lines.append("")
+        lines.append("### Defaults (proposals - confirm or replace, never run silently)")
+        lines.append("")
+        if result["suggested_check_commands"]:
+            cmds = ", ".join(f"`{c}`" for c in result["suggested_check_commands"])
+            lines.append(f"- Suggested check commands: {cmds}")
+        if result["test_path_globs"]:
+            globs = " ".join(f"--frozen '{g}'" for g in result["test_path_globs"])
+            lines.append(f"- Frozen test paths: `{globs}`")
     for warning in result["warnings"]:
         lines.append("")
         lines.append(f"> Warning: {warning}")
@@ -579,6 +667,90 @@ def run_self_test():
             rendered = render_markdown(result)
             self.assertTrue(rendered.startswith("## Stacks (detected)"))
             self.assertIn("godot", rendered)
+
+        # --- suggested_check_commands / test_path_globs --------------------
+
+        def test_node_suggests_npm_test_and_globs(self):
+            self._write("package.json", json.dumps(
+                {"dependencies": {"express": "^4.18.0"}}))
+            result = build_report(self.repo, 6)
+            node = next(s for s in result["stacks"] if s["name"] == "node")
+            self.assertEqual(node["suggested_check_commands"], ["npm test"])
+            self.assertEqual(node["test_path_globs"],
+                             ["tests/**", "**/*.test.*", "**/*.spec.*"])
+            self.assertEqual(result["suggested_check_commands"][0], "npm test")
+
+        def test_dotnet_python_powershell_vue3_defaults(self):
+            for stack, first_cmd in (("dotnet", "dotnet test"),
+                                     ("python", "pytest"),
+                                     ("powershell", "Invoke-Pester"),
+                                     ("vue3", "npm run test")):
+                self.assertEqual(
+                    STACK_DEFAULTS[stack]["suggested_check_commands"][0],
+                    first_cmd)
+            self._write("App/App.csproj", "<Project></Project>")
+            result = build_report(self.repo, 6)
+            dotnet = next(s for s in result["stacks"] if s["name"] == "dotnet")
+            self.assertEqual(dotnet["suggested_check_commands"], ["dotnet test"])
+            self.assertEqual(dotnet["test_path_globs"],
+                             ["**/*.Tests/**", "**/*Tests.cs"])
+
+        def test_defaults_only_for_detected_stacks(self):
+            """A stack with no evidence contributes no suggestion."""
+            self._write("pyproject.toml", "[project]\nname='x'\n")
+            result = build_report(self.repo, 6)
+            self.assertEqual(self._names(result), {"python"})
+            self.assertEqual(result["suggested_check_commands"], ["pytest"])
+            self.assertNotIn("dotnet test", result["suggested_check_commands"])
+
+        def test_rollup_is_deduped_and_in_stack_order(self):
+            self._write("App/App.csproj", "<Project></Project>")
+            self._write("web/package.json", json.dumps(
+                {"dependencies": {"vue": "^3.2.0"}}))
+            self._write("playwright.config.ts", "export default {};")
+            result = build_report(self.repo, 6)
+            rollup = result["suggested_check_commands"]
+            self.assertEqual(rollup[0], "dotnet test")  # stacks sort by name
+            self.assertEqual(len(rollup), len(set(rollup)))
+            globs = result["test_path_globs"]
+            self.assertEqual(len(globs), len(set(globs)))
+            # vue3 and playwright both carry **/*.spec.ts; it appears once.
+            self.assertEqual(globs.count("**/*.spec.ts"), 1)
+
+        def test_stack_without_defaults_carries_empty_lists(self):
+            self._write("docker-compose.yml", "services:\n  db:\n    image: redis\n")
+            result = build_report(self.repo, 6)
+            docker = next(s for s in result["stacks"] if s["name"] == "docker")
+            self.assertEqual(docker["suggested_check_commands"], [])
+            self.assertEqual(docker["test_path_globs"], [])
+            self.assertEqual(result["suggested_check_commands"], [])
+
+        def test_empty_repo_rollup_is_empty(self):
+            result = build_report(self.repo, 6)
+            self.assertEqual(result["suggested_check_commands"], [])
+            self.assertEqual(result["test_path_globs"], [])
+
+        def test_markdown_carries_defaults(self):
+            self._write("package.json", json.dumps(
+                {"dependencies": {"express": "^4.18.0"}}))
+            rendered = render_markdown(build_report(self.repo, 6))
+            self.assertIn("suggested check: `npm test`", rendered)
+            self.assertIn("Suggested check commands: `npm test`", rendered)
+            self.assertIn("--frozen 'tests/**'", rendered)
+            self.assertTrue(rendered.isascii())
+
+        def test_every_defaults_key_is_a_known_stack_name(self):
+            """No table row can name a stack the detector never emits."""
+            known = {
+                "dotnet", "vue3", "react", "angular", "node", "python",
+                "godot", "powershell", "docker", "aws", "azure",
+                "github-actions", "playwright", "postgres", "sqlserver",
+                "mysql", "sqlite",
+            }
+            self.assertTrue(set(STACK_DEFAULTS) <= known)
+            for name, spec in STACK_DEFAULTS.items():
+                self.assertTrue(spec["suggested_check_commands"], name)
+                self.assertTrue(spec["test_path_globs"], name)
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(DetectStackTests)
     result = unittest.TextTestRunner(verbosity=1).run(suite)

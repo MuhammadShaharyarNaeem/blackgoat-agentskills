@@ -34,8 +34,15 @@ Given the note, the capture and the declared file list, it verifies, in order:
   * `changed_file_missing` -- every declared path exists on disk
   * `undeclared_tree_changes` -- the working tree holds nothing dirty beyond
     the declared files and `.docs/`
-  * `frozen_path_modified` -- no `--frozen` path (typically `tests/`) appears
-    in the working tree's diff as a MODIFIED tracked file. This is the
+  * `frozen_path_modified` -- no `--frozen` path appears in the working tree's
+    diff as a MODIFIED tracked file. A `--frozen` value is a path/directory
+    prefix (`tests/`) unless it carries a glob metacharacter, in which case it
+    is matched as a repo-relative forward-slash glob with `**` support
+    (`**/*.spec.ts`, `**/*.Tests/**`) -- so a stack whose tests sit beside the
+    code they cover can be frozen too. `--frozen` has NO default: the gate
+    must not guess what is frozen, because a guessed freeze that misses is
+    indistinguishable from a passing check. The caller (bgpdd-quick Phase 3,
+    handed `detect_stack.py`'s `test_path_globs`) states it. This is the
     mechanical form of the lane's "never edit an existing test to make it
     pass" rule; a newly ADDED test is not an edit and passes, which is what
     keeps the rule from forbidding the lane's own use case.
@@ -460,8 +467,90 @@ def check_undeclared_tree(entries, declared):
     return undeclared
 
 
+GLOB_META_RE = re.compile(r"[*?\[]")
+
+
+def glob_to_regex(pattern):
+    """Compile a repo-relative forward-slash glob to an anchored regex.
+
+    Path-segment semantics, so a glob can name a test layout rather than a
+    directory prefix:
+
+      * `**/` matches zero or more leading segments (`**/*.spec.ts` matches
+        `a.spec.ts` AND `src/x/a.spec.ts`)
+      * a trailing/bare `**` matches the rest of the path, separators included
+      * `*` and `?` stop at `/` -- `tests/*.py` is not `tests/a/b.py`
+      * `[...]` is a character class, `[!...]` its negation
+
+    fnmatch is deliberately NOT used: its `*` crosses `/`, which would make
+    `tests/*.py` silently mean `tests/**/*.py`.
+    """
+    out = []
+    i, n = 0, len(pattern)
+    while i < n:
+        c = pattern[i]
+        if c == "*":
+            if pattern[i:i + 3] == "**/":
+                out.append(r"(?:[^/]+/)*")
+                i += 3
+                continue
+            if pattern[i:i + 2] == "**":
+                out.append(r".*")
+                i += 2
+                continue
+            out.append(r"[^/]*")
+            i += 1
+        elif c == "?":
+            out.append(r"[^/]")
+            i += 1
+        elif c == "[":
+            end = i + 1
+            if end < n and pattern[end] in "!^":
+                end += 1
+            if end < n and pattern[end] == "]":
+                end += 1
+            while end < n and pattern[end] != "]":
+                end += 1
+            if end >= n:                      # unterminated class: literal '['
+                out.append(re.escape("["))
+                i += 1
+                continue
+            body = pattern[i + 1:end]
+            if body[:1] in ("!", "^"):
+                body = "^" + body[1:]
+            out.append("[" + body.replace("\\", "\\\\") + "]")
+            i = end + 1
+        else:
+            out.append(re.escape(c))
+            i += 1
+    return re.compile("^" + "".join(out) + "$")
+
+
+def normalize_frozen_pattern(raw, repo):
+    """Comparison form for a --frozen GLOB: forward slashes, case-folded.
+
+    A glob is not a path, so it never goes through `normalize_repo_path`
+    (which resolves against the filesystem and would mangle `*`). It is
+    normalized the same two ways the candidate paths are -- backslashes to
+    forward slashes so a Windows-typed `tests\\**` still matches, and
+    `os.path.normcase` so a case-insensitive platform compares like one.
+    `normcase` re-introduces backslashes on Windows, so they are stripped out
+    again afterwards -- exactly as `normalize_repo_path` does.
+    """
+    text = str(raw).replace("\\", "/")
+    while text.startswith("./"):
+        text = text[2:]
+    return os.path.normcase(text).replace("\\", "/")
+
+
 def check_frozen(entries, frozen, repo):
-    """Frozen paths (or paths under a frozen directory) that were EDITED.
+    """Frozen paths, prefixes or GLOBS that were EDITED.
+
+    A `--frozen` value with no glob metacharacter (`*`, `?`, `[`) is a path or
+    directory prefix, as before -- `tests/` still freezes the whole test root.
+    A value with one is matched as a glob against the repo-relative,
+    forward-slash path (`**/*.spec.ts`, `**/*.Tests/**`), so a lane can freeze
+    the test LAYOUT its stack actually uses rather than only a directory.
 
     Only tracked modifications count (`is_tracked_change`): the rule this
     enforces is "never edit an existing test to make it pass", and a brand new
@@ -470,13 +559,17 @@ def check_frozen(entries, frozen, repo):
     """
     hits = []
     for raw in frozen:
-        norm = normalize_repo_path(raw, repo).rstrip("/")
-        prefix = norm + "/"
+        if GLOB_META_RE.search(str(raw)):
+            matcher = glob_to_regex(normalize_frozen_pattern(raw, repo)).match
+        else:
+            norm = normalize_repo_path(raw, repo).rstrip("/")
+            prefix = norm + "/"
+            matcher = (lambda cand, norm=norm, prefix=prefix:
+                       cand == norm or cand.startswith(prefix))
         for status, candidate in entries:
             if not is_tracked_change(status):
                 continue
-            cand = candidate.rstrip("/")
-            if cand == norm or cand.startswith(prefix):
+            if matcher(candidate.rstrip("/")):
                 if candidate not in hits:
                     hits.append(candidate)
     return hits
@@ -713,8 +806,11 @@ def build_parser():
                         help="lane size bound (default {0}; no waiver "
                              "exists)".format(DEFAULT_MAX_CHANGED_FILES))
     parser.add_argument("--frozen", action="append", default=[],
-                        help="a path or directory that must NOT appear in the "
-                             "diff (typically tests/); repeatable")
+                        help="a path, directory or GLOB whose existing files "
+                             "must NOT be edited (tests/, **/*.spec.ts, "
+                             "**/*.Tests/**); repeatable. No default: the "
+                             "caller states what is frozen, the gate never "
+                             "guesses")
     parser.add_argument("--milestone", help="the slug, scoping ledger records")
     parser.add_argument("--ledger",
                         help="append one JSON record per run to this path")
@@ -1240,6 +1336,108 @@ def run_self_test():
             r = self._run(note, capture, changed, ["--frozen", "tests"])
             self.assertEqual(r["result"], "PASS", r["problems"])
             self.assertEqual(r["frozen_modified"], [])
+
+        # -- --frozen as a GLOB -------------------------------------------
+
+        def test_glob_catches_a_spec_file_outside_any_test_directory(self):
+            """The case `--frozen tests/` cannot see: a colocated spec."""
+            rel = "src/widget.spec.ts"
+            self._edit(rel, "it('x', () => {});\n")
+            self._git("add", "-A")
+            self._git("commit", "-q", "-m", "add spec")
+            self._edit(rel, "it('x', () => { expect(1).toBe(1); });\n")
+            time.sleep(0.01)
+            note = self._note(where=rel)
+            capture = self._capture()
+            r = self._run(note, capture, [str(self.repo / rel)],
+                          ["--frozen", "tests/", "--frozen", "**/*.spec.ts"])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("frozen_path_modified", r["problem_codes"])
+            self.assertIn("src/widget.spec.ts", r["frozen_modified"])
+
+        def test_glob_star_does_not_cross_a_separator(self):
+            """`tests/*.py` is not `tests/**/*.py` -- fnmatch would say it is."""
+            rel = "tests/deep/test_b.py"
+            self._edit(rel, "def test_b():\n    assert True\n")
+            self._git("add", "-A")
+            self._git("commit", "-q", "-m", "add deep test")
+            self._edit(rel, "def test_b():\n    assert 1\n")
+            time.sleep(0.01)
+            note = self._note(where=rel)
+            capture = self._capture()
+            r = self._run(note, capture, [str(self.repo / rel)],
+                          ["--frozen", "tests/*.py"])
+            self.assertEqual(r["frozen_modified"], [])
+            r2 = self._run(note, capture, [str(self.repo / rel)],
+                           ["--frozen", "tests/**"])
+            self.assertIn("frozen_path_modified", r2["problem_codes"])
+
+        def test_leading_doublestar_matches_zero_segments(self):
+            rel = "a.spec.ts"
+            self._edit(rel, "it('x', () => {});\n")
+            self._git("add", "-A")
+            self._git("commit", "-q", "-m", "add root spec")
+            self._edit(rel, "it('y', () => {});\n")
+            time.sleep(0.01)
+            note = self._note(where=rel)
+            r = self._run(note, self._capture(), [str(self.repo / rel)],
+                          ["--frozen", "**/*.spec.ts"])
+            self.assertIn("frozen_path_modified", r["problem_codes"])
+
+        def test_windows_separators_in_a_glob_still_match(self):
+            rel = "tests/deep/test_b.py"
+            self._edit(rel, "def test_b():\n    assert True\n")
+            self._git("add", "-A")
+            self._git("commit", "-q", "-m", "add deep test")
+            self._edit(rel, "def test_b():\n    assert 1\n")
+            time.sleep(0.01)
+            note = self._note(where=rel)
+            r = self._run(note, self._capture(), [str(self.repo / rel)],
+                          ["--frozen", r"tests\**\test_*.py"])
+            self.assertIn("frozen_path_modified", r["problem_codes"])
+
+        def test_a_new_file_matching_a_glob_still_passes(self):
+            """The add-vs-edit rule is unchanged by glob matching."""
+            rel = "src/new.spec.ts"
+            self._edit(rel, "it('new', () => {});\n")
+            time.sleep(0.01)
+            note = self._note(what="add a spec for the widget", where=rel)
+            r = self._run(note, self._capture(), [str(self.repo / rel)],
+                          ["--frozen", "**/*.spec.ts"])
+            self.assertEqual(r["result"], "PASS", r["problems"])
+            self.assertEqual(r["frozen_modified"], [])
+
+        def test_a_literal_frozen_value_is_still_a_prefix_not_a_glob(self):
+            note, capture, changed = self._happy()
+            r = self._run(note, capture, changed, ["--frozen", "src"])
+            self.assertIn("frozen_path_modified", r["problem_codes"])
+
+        def test_glob_to_regex_unit_cases(self):
+            cases = [
+                ("**/*.test.*", "src/a.test.js", True),
+                ("**/*.test.*", "a.test.js", True),
+                ("**/*.test.*", "src/a.js", False),
+                ("**/*.Tests/**", "app.tests/foo.cs", True),
+                ("**/*.Tests/**", "src/app.tests/deep/foo.cs", True),
+                ("**/*.Tests/**", "src/app/foo.cs", False),
+                ("**/test_*.py", "tests/test_a.py", True),
+                ("**/test_*.py", "tests/a.py", False),
+                ("**/__tests__/**", "src/__tests__/a.ts", True),
+                ("tests/**", "tests/a/b/c.py", True),
+                ("tests/**", "src/tests/a.py", False),
+                ("**/*.Tests.ps1", "build/deploy.tests.ps1", True),
+                ("src/?.py", "src/a.py", True),
+                ("src/?.py", "src/ab.py", False),
+                ("src/[ab].py", "src/a.py", True),
+                ("src/[!ab].py", "src/a.py", False),
+                ("src/[!ab].py", "src/c.py", True),
+            ]
+            for pattern, path, expected in cases:
+                # normalize_frozen_pattern lowercases on Windows; the fixture
+                # paths above are already lowercase where case would matter.
+                rx = glob_to_regex(normalize_frozen_pattern(pattern, "."))
+                self.assertEqual(bool(rx.match(path)), expected,
+                                 "%s vs %s" % (pattern, path))
 
         # -- the size bound ---------------------------------------------
 
