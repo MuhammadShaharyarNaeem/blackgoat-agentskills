@@ -23,6 +23,7 @@ Before starting your task, READ the following skill files with your file-reading
 | shipping-and-launch | `{PLUGIN_ROOT}/shipping-and-launch/SKILL.md` | When executing the launch checklist in bgpdd-shipping |
 | cloud-deploy-patterns | `{PLUGIN_ROOT}/cloud-deploy-patterns/SKILL.md` | When auditing deployment infrastructure — its **Baseline** for any target, plus the matching **Provider Checklist** when the target is AWS or Azure |
 | security-checklist | `{PLUGIN_ROOT}/../references/security-checklist.md` | When auditing a security-sensitive surface — the concrete checklist Luna and Mason also verify against |
+| data-privacy-checklist | `{PLUGIN_ROOT}/security-and-hardening/references/data-privacy-checklist.md` | When the surface stores, logs, or transmits personal data — PII classes, placement, retention, deletion path, log redaction, third-party flows |
 
 ---
 

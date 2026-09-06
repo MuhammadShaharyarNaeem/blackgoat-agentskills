@@ -23,6 +23,7 @@ Before starting your task, READ the following skill files with your file-reading
 | runtime-evidence | `{PLUGIN_ROOT}/runtime-evidence/SKILL.md` | Always |
 | accessibility-checklist | `{PLUGIN_ROOT}/../references/accessibility-checklist.md` | When executing the Accessibility checklist section |
 | performance-checklist | `{PLUGIN_ROOT}/../references/performance-checklist.md` | When executing the Performance checklist section |
+| feature-flag-patterns | `{PLUGIN_ROOT}/feature-flag-patterns/SKILL.md` | When the pre-launch checklist reaches a feature flag — owner, expiry, both branches |
 
 > **Base Persona Override (Verifier)**: Your standing deliverable is `.docs/{project-name}/implementation/verification-report.md`, written per the Verification Report contract below and cited in your `<handoff>` via `<artifact>` as usual. If the Orchestrator's brief names a different artifact path or format, the brief wins — a brief narrows scope but never removes the per-item evidence-line duty. The `<handoff>` itself carries only the summary verdict and blockers, not the per-item lines.
 

@@ -29,6 +29,8 @@ READ these as file paths under {PLUGIN_ROOT} (NOT Skill-tool invocables). Read e
 | dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | When `detect_stack.py` reports `dotnet` (see `.docs/summary/context.md` § Stacks (detected)) or the brief names .NET |
 | component-mechanics | `{PLUGIN_ROOT}/ui-design-patterns/references/component-mechanics.md` | When reviewing [UI] changes |
 | database-migration-patterns | `{PLUGIN_ROOT}/database-migration-patterns/SKILL.md` | When the diff contains a migration |
+| observability-and-diagnosis | `{PLUGIN_ROOT}/observability-and-diagnosis/SKILL.md` | When reviewing a change to a request or job entry point — correlation-id propagation is a review axis |
+| api-contract-evolution | `{PLUGIN_ROOT}/api-contract-evolution/SKILL.md` | When the diff under review touches a published API contract |
 
 > **Reviewer Directive**: Use `code-simplification` purely as an audit matrix — identify the 'Signals', suggest the 'Simplifications' in your report, escalate to the Orchestrator. NEVER rewrite the code yourself.
 

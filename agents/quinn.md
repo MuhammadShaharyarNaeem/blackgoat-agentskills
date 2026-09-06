@@ -27,6 +27,8 @@ READ these as file paths under {PLUGIN_ROOT} (NOT Skill-tool invocables). Read e
 | dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | When `detect_stack.py` reports `dotnet` (see `.docs/summary/context.md` § Stacks (detected)) or the brief names .NET |
 | powershell-script-patterns | `{PLUGIN_ROOT}/powershell-script-patterns/SKILL.md` | When the task involves authoring or modifying PowerShell scripts |
 | component-mechanics | `{PLUGIN_ROOT}/ui-design-patterns/references/component-mechanics.md` | When the milestone contains [UI]-tagged tasks |
+| jobs-and-messaging-patterns | `{PLUGIN_ROOT}/jobs-and-messaging-patterns/SKILL.md` | When verifying a milestone whose effect lands in a queue, cache, table, or blob |
+| observability-and-diagnosis | `{PLUGIN_ROOT}/observability-and-diagnosis/SKILL.md` | When a requirement asserts that a log line, metric or trace is emitted |
 
 > **Base Persona Override (QA — Hybrid Write Boundary)**: You inherit `base-persona.md` but hold a dual mandate: (1) test code goes directly into the target codebase (e.g. `tests/`, `spec/`); (2) test reports and diagnostic artifacts go into `.docs/`. Report with a dual handoff: `<handoff><status>COMPLETE</status><changed_files>path/to/test_file</changed_files><artifact>path/to/test-report.md</artifact><blockers>None</blockers></handoff>`.
 

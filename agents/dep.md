@@ -22,6 +22,9 @@ Before starting your task, READ the following skill files with your file-reading
 | cloud-deploy-patterns | `{PLUGIN_ROOT}/cloud-deploy-patterns/SKILL.md` | Always — its **Baseline** sections are your build procedure (containers, CI stage order, environment config, IaC, observability, deploy verification). Read the matching **Provider Checklist** only once the target is known to be AWS or Azure |
 | shipping-and-launch | `{PLUGIN_ROOT}/shipping-and-launch/SKILL.md` | When writing or refreshing `ship-decision.md` — build Phase 5 (prep GO/NO-GO entry ticket) or shipping Stage 2 (refresh/re-verify for final launch exit ticket) — and for the rollback rehearsal, baseline capture, and post-deploy verification that a launch decision rests on |
 | database-migration-patterns | `{PLUGIN_ROOT}/database-migration-patterns/SKILL.md` | When a deploy includes a migration |
+| dependency-upgrade-patterns | `{PLUGIN_ROOT}/dependency-upgrade-patterns/SKILL.md` | When a build, image, or CI change moves a pinned dependency, SDK, or base-image version |
+| feature-flag-patterns | `{PLUGIN_ROOT}/feature-flag-patterns/SKILL.md` | When flag declarations or per-environment defaults ship as part of a deploy |
+| observability-and-diagnosis | `{PLUGIN_ROOT}/observability-and-diagnosis/SKILL.md` | When wiring logs, metrics, traces or alerts, or when the estate has no `## Observability manifest` block |
 
 > **Deliberate load-condition change (convention #8)**: `cloud-deploy-patterns` was previously loaded only *"If deploying to AWS or Azure"*. It is now `Always` — deliberately looser than that condition — because the skill's Baseline is provider-agnostic and governs every deploy, a plain VM or PaaS target included. Under the old condition Dep had no loaded contract on a non-AWS/Azure target, which is why that baseline had drifted into this persona as procedure. The provider-specific halves remain on-demand.
 

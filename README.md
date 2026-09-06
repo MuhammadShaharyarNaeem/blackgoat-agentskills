@@ -371,6 +371,11 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **agent-squad** — the Orchestrator/delegation model itself; also home of `base-persona.md`, the one shared base persona
 - **bg** — the front door: classifies an everyday ask with three questions and invokes exactly one lane; never does the work itself
 - **bgpdd-quick** — the daily-driver lane: one contained change of ≤ 3 files in the main session, no delegation, a captured check, and `check_quick_close.py` as the only gate (commits the declared files, refuses undeclared tree changes, edited frozen tests, stale captures and size overruns)
+- **dependency-upgrade-patterns** — dependency bumps done safely: upgrade brief from the changelog, audit captured before and after, one package per commit; framework majors route to lite
+- **feature-flag-patterns** — flag lifecycle: owner, expiry and removal task at creation, default-off, kill switch, both branches tested
+- **jobs-and-messaging-patterns** — idempotent handlers, bounded retries, dead-lettering, the outbox pattern, run records; verified by an out-of-process replay capture
+- **observability-and-diagnosis** — correlation ids, an observability manifest per service, alert → runbook → first three reads; incidents feed the bugfix intake from telemetry
+- **api-contract-evolution** — additive-only within a major, named breaking classes, one versioning strategy, deprecations with sunsets; `check_openapi_diff.py` gates base vs head contracts
 - **bgpdd-discovery** — global context discovery (Iris, Scout, Echo)
 - **bgpdd-plan** — design & architecture (Rex, Aria, Alex)
 - **bgpdd-lite** — mid-weight planning for well-specified work (Orchestrator mini-requirements + Alex; hands off to bgpdd-build)
