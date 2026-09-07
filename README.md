@@ -4,7 +4,7 @@
 
 A Claude Code plugin that packages an **agent squad** and a **Prompt-Driven Development (PDD)** workflow into reusable skills and personas. An Orchestrator delegates self-contained tasks to specialized subagents, each of which runs in isolation and returns a structured `<handoff>`. Instead of one agent trying to hold an entire project in context, work is split across a squad of narrow specialists coordinated through slash-command SOPs — with requirement traceability enforced from the first honing question to the final pre-launch gate.
 
-- **Plugin:** `blackgoat-agentskills` v2.1.0 — see [CHANGELOG.md](CHANGELOG.md)
+- **Plugin:** `blackgoat-agentskills` v2.6.1 — see [CHANGELOG.md](CHANGELOG.md)
 - **Author:** shaharyar.naeem (shaharyar.naeem@gorelo.io)
 
 > Note: this repo's `AGENTS.md` is the Google Antigravity runtime contract, not the generic cross-tool "AGENTS.md" coding-agent convention — see [docs/cursor-setup.md](docs/cursor-setup.md).
@@ -151,16 +151,16 @@ Every agent lives in `agents/<name>.md` with frontmatter declaring its `role`, `
 | **Iris** | System Architect (Discovery) — lightweight codebase discovery | haiku | Discovery |
 | **Scout** | Research Scout — disposable deep-dive into one assigned API/repo | sonnet | Discovery (spawned in parallel, one per API group) |
 | **Echo** | Legacy QA Analyst — reverse-engineers existing feature behavior | sonnet | Discovery |
-| **Rex** | Requirements Analyst | sonnet | Plan 1 — Requirements |
+| **Rex** | Requirements Analyst | opus | Plan 1 — Requirements |
 | **Aria** | System Architect | opus | Plan 2 — Architecture; Build advisor on blast-radius escalations |
 | **Alex** | Strategist & Planner | opus | Plan 3 — Planning |
 | **Mason** | Builder (Backend) — `[API]` milestones | opus | Build 1 — Implementation |
 | **Nova** | Builder (UI) — `[UI]` milestones, builds user-facing interfaces from Aria's contracts and the committed design direction; rendered self-verification | opus | Build 1 — Implementation |
-| **Quinn** | QA Tester — build-phase testing | sonnet | Build 2 — Testing |
-| **Luna** | Code Reviewer | sonnet | Build 3 — Code Review |
-| **Max** | Optimizer / Refactorer | opus | Ad hoc, on request — not a bgpdd-build pipeline stage |
-| **Vera** | Launch Verifier — pre-launch checklist verification | sonnet | Shipping — Verification (parallel with Cipher) |
-| **Cipher** | Security Auditor | sonnet | Shipping — Security (parallel with Vera); Build [SEC]-milestone reviews |
+| **Quinn** | QA Tester — build-phase testing | opus | Build 2 — Testing |
+| **Luna** | Code Reviewer | opus | Build 3 — Code Review |
+| **Max** | Optimizer / Refactorer | sonnet | Ad hoc, on request — not a bgpdd-build pipeline stage |
+| **Vera** | Launch Verifier — pre-launch checklist verification | opus | Shipping — Verification (parallel with Cipher) |
+| **Cipher** | Security Auditor | opus | Shipping — Security (parallel with Vera); Build [SEC]-milestone reviews |
 | **Dep** | DevOps Engineer | sonnet | Build 5 — Deployment Prep + epic gate; Shipping rollout |
 | **Forge** | Meta-Engineer / System Coach | opus | End of epic (bgpdd-shipping Step 7); `/bgpdd-learn` on demand — always human-approved |
 
@@ -371,11 +371,6 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **agent-squad** — the Orchestrator/delegation model itself; also home of `base-persona.md`, the one shared base persona
 - **bg** — the front door: classifies an everyday ask with three questions and invokes exactly one lane; never does the work itself
 - **bgpdd-quick** — the daily-driver lane: one contained change of ≤ 3 files in the main session, no delegation, a captured check, and `check_quick_close.py` as the only gate (commits the declared files, refuses undeclared tree changes, edited frozen tests, stale captures and size overruns)
-- **dependency-upgrade-patterns** — dependency bumps done safely: upgrade brief from the changelog, audit captured before and after, one package per commit; framework majors route to lite
-- **feature-flag-patterns** — flag lifecycle: owner, expiry and removal task at creation, default-off, kill switch, both branches tested
-- **jobs-and-messaging-patterns** — idempotent handlers, bounded retries, dead-lettering, the outbox pattern, run records; verified by an out-of-process replay capture
-- **observability-and-diagnosis** — correlation ids, an observability manifest per service, alert → runbook → first three reads; incidents feed the bugfix intake from telemetry
-- **api-contract-evolution** — additive-only within a major, named breaking classes, one versioning strategy, deprecations with sunsets; `check_openapi_diff.py` gates base vs head contracts
 - **bgpdd-discovery** — global context discovery (Iris, Scout, Echo)
 - **bgpdd-plan** — design & architecture (Rex, Aria, Alex)
 - **bgpdd-lite** — mid-weight planning for well-specified work (Orchestrator mini-requirements + Alex; hands off to bgpdd-build)
@@ -395,6 +390,11 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **code-simplification** — behavior-preserving cleanup (Luna, Max)
 - **performance-optimization** — profiling and bottleneck fixes (Luna, Max)
 - **security-and-hardening** — vulnerability hardening (Cipher)
+- **dependency-upgrade-patterns** — dependency bumps done safely: upgrade brief from the changelog, audit captured before and after, one package per commit; framework majors route to lite (Mason, Nova, Max, Dep; conditional)
+- **feature-flag-patterns** — flag lifecycle: owner, expiry and removal task at creation, default-off, kill switch, both branches tested (Alex, Mason, Nova, Dep, Vera; conditional)
+- **jobs-and-messaging-patterns** — idempotent handlers, bounded retries, dead-lettering, the outbox pattern, run records; verified by an out-of-process replay capture (Aria, Mason, Quinn; conditional)
+- **observability-and-diagnosis** — correlation ids, an observability manifest per service, alert → runbook → first three reads; incidents feed the bugfix intake from telemetry (Mason, Quinn, Luna, Dep; conditional)
+- **api-contract-evolution** — additive-only within a major, named breaking classes, one versioning strategy, deprecations with sunsets; `check_openapi_diff.py` gates base vs head contracts (Aria, Alex, Mason, Nova, Luna; conditional)
 - **shipping-and-launch** — pre-launch checklist and rollout (Dep, Launch Squad)
 - **playwright-skill** — real-browser E2E specs, every locator derived from the rendered DOM rather than component source (Quinn)
 - **browser-testing-with-devtools** — DOM inspection, console/network capture, performance profiling and visual verification against real runtime data via the chrome-devtools MCP (Mason, Nova; conditional on that server being configured)
@@ -443,7 +443,7 @@ Every gate in this plugin verifies *after* the fact, and the decision to run one
 | spawning a subagent | a fresh `bug-report.md` has no `check_bugfix_intake.py` PASS | run the intake gate |
 | hand-editing `gates.jsonl`, `orchestrator-state.json`, `run-log.jsonl`, `*.meta.json` | **always** | use the pipeline-tools script that owns that artifact |
 
-The active lane is detected from artifacts in the working tree (a state file's `pipeline`, a bug report, a quick note, each with a 12-hour freshness window) — never from prose or a model assertion. `python skills/pipeline-tools/scripts/guard_action.py --explain` prints the rules and what it currently detects; `--self-test` runs 42 cases. **It fails open by design**: any internal error, a missing python, or an unparseable payload allows the call, because a guard that bricks a session gets deleted and a deleted guard enforces nothing. Every block is therefore a positive identification, never an inability to decide — and the guard raises the cost of the wrong action rather than making the repo tamper-proof. Under Cursor only the commit rule is mechanically enforceable (`hooks/hooks-cursor.json`, a template); see `rules/cursor-runtime.mdc`.
+The active lane is detected from artifacts in the working tree (a state file's `pipeline`, a bug report, a quick note, each with a 12-hour freshness window — `--window-hours`, default 12; a lane abandoned longer than that stops being active) — never from prose or a model assertion. `python skills/pipeline-tools/scripts/guard_action.py --explain` prints the rules and what it currently detects; `--self-test` runs 42 cases. **It fails open by design**: any internal error, a missing python, or an unparseable payload allows the call, because a guard that bricks a session gets deleted and a deleted guard enforces nothing. Every block is therefore a positive identification, never an inability to decide — and the guard raises the cost of the wrong action rather than making the repo tamper-proof. Under Cursor only the commit rule is mechanically enforceable (`hooks/hooks-cursor.json`, a template); see `rules/cursor-runtime.mdc`.
 
 ---
 

@@ -20,6 +20,8 @@ Before starting your task, READ the following skill files with your file-reading
 |-------|------|------|
 | base-persona | `{PLUGIN_ROOT}/agent-squad/base-persona.md` | Always |
 | planning-and-task-breakdown | `{PLUGIN_ROOT}/planning-and-task-breakdown/SKILL.md` | Always |
+| api-contract-evolution | `{PLUGIN_ROOT}/api-contract-evolution/SKILL.md` | When a plan task changes a published API contract |
+| feature-flag-patterns | `{PLUGIN_ROOT}/feature-flag-patterns/SKILL.md` | When a plan task introduces or removes a feature flag |
 
 ---
 

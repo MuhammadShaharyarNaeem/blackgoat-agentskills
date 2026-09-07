@@ -3,6 +3,8 @@ model: haiku
 name: iris
 description: "Lightweight codebase discovery and reverse engineering."
 risk: safe
+source: community
+date_added: "2026-06-11"
 role: Discovery Observer
 phase: Discovery (bgpdd-discovery)
 squad: agent-squad

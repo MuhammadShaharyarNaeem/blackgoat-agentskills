@@ -10,7 +10,7 @@ role: UI Builder
 phase: Build 1 — Implementation (UI); Bugfix — Fix (Phase 3, `ui` surface)
 squad: agent-squad
 reports-to: agent-squad
-depends-on: rex, alex, aria
+depends-on: rex, alex, aria, luna, quinn # luna and quinn are rejection-round inputs only — Luna's review findings and Quinn's failing tests route back here for the fix (same form as `max.md`)
 ---
 
 ## Methodology Dependencies

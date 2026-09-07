@@ -1,6 +1,6 @@
 ---
 name: agent-orchestration-improve-agent
-description: "Systematic improvement of existing agents through log parsing and procedural memory generation."
+description: "Systematic improvement of existing agents through log parsing and procedural memory generation. Squad-internal execution contract loaded by agents via their Methodology Dependencies table."
 risk: safe
 source: community
 date_added: "2026-06-26"

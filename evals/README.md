@@ -64,7 +64,7 @@ Read the console summary, which prints the INFRA count, before reporting a numbe
   substring test — so a `/bg` case judged on prose is positively "mentioned" no matter
   where it went. Diagnostics are diagnostics; the chain is the assertion.
 
-Two `contract/` cases are exceptions to the statistical-N doctrine above.
+Three `contract/` cases are exceptions to the statistical-N doctrine above.
 **`mechanical-pipeline`** is a zero-LLM, deterministic integration case that walks the
 full milestone lifecycle (`next_milestone.py` → `update_state.py` → `check_commit_gate.py`
 across its failure paths → gated commit → `run_quiet.py` → `check_runtime_evidence.py` →
@@ -79,25 +79,37 @@ refused with `check_uncaptured`, against **12b**, the same two checks actually r
 a gate that fails closed on everything. **`bugfix-gates-adversarial`** is its `/bgpdd-bugfix`
 counterpart: it walks intake → RED → route → fix → GREEN → red/green → commit gate through
 the real scripts and asserts the exit code *and* a naming JSON field on each fabricated
-input the lane must refuse. Neither has LLM variance to average out, so both are safe to
-run unconfirmed and are graded on a single run, not `runs=5`. Both are also **invisible to
-`run-evals.ps1`'s case discovery** by design — `Get-ContractCases` discovers a case by the
-presence of both `case.md` and `grade.ps1`, and neither directory has either — so each is
-run directly as `python run.py`.
+input the lane must refuse. **`openapi-diff-adversarial`** is the third: it drives
+`check_openapi_diff.py` over hand-built base/head OpenAPI pairs and asserts the exit code
+and the named breaking class on each — an additive field must pass, a removed field, a
+narrowed enum and a tightened `required` must each be refused by name. None of the three
+has LLM variance to average out, so all are safe to run unconfirmed and are graded on a
+single run, not `runs=5`. All three are also **invisible to `run-evals.ps1`'s case
+discovery** by design — `Get-ContractCases` discovers a case by the presence of both
+`case.md` and `grade.ps1`, and none of the three directories has either — so each is run
+directly as `python run.py`.
 
-Both now take a **`--record`** flag (default OFF) that appends one flat record to
-`results/results.jsonl` carrying `judge: "script"` and `run_index: 1`. Until that landed,
-neither case wrote anything anywhere: they were the only two cases in the suite for which
-"has this ever run, and did it pass?" was unanswerable from disk, which is the exact
-failure mode the rest of the suite exists to prevent. `run-evals.ps1` invokes **both with
-`--record` at the start of every confirmed contract batch** — they are free, and a red
-gate chain is something you want to know before spending the paid cases that invoke those
-same gates. A red step does not abort the batch; it prints loudly.
+All three take a **`--record`** flag (default OFF) that appends one flat record to
+`results/results.jsonl` carrying `judge: "script"`, `run_index: 1` and a
+**`case_sha256`** — the hash of the case's own `run.py`, which for a zero-LLM case *is*
+its definition (fixtures, assertions and grader in one file). Without it, "did the case
+change since this red was recorded?" could only be answered by hashing the file by hand.
+Until `--record` landed, none of the three wrote anything anywhere: they were the only
+cases in the suite for which "has this ever run, and did it pass?" was unanswerable from
+disk, which is the exact failure mode the rest of the suite exists to prevent.
+`run-evals.ps1` invokes **all three with `--record` at the start of every confirmed
+contract batch** — they are free, and a red gate chain is something you want to know
+before spending the paid cases that invoke those same gates. A red step does not abort
+the batch; it prints loudly. `weekly-check.ps1` maps each of the three to the files that
+can move it, so a change to `check_openapi_diff.py` or `skills/api-contract-evolution/`
+surfaces its case rather than nothing.
 
-Default OFF so that iterating on either file does not fill the run log with
-half-finished runs. The record shape lives in **`evals/eval_record.py`**, shared by both
-scripts rather than copy-pasted, and it reads `$HarnessVersion` out of `run-evals.ps1`
-so these rows can never claim a harness version the harness itself has moved past.
+Default OFF so that iterating on one of the files does not fill the run log with
+half-finished runs. The record shape lives in **`evals/eval_record.py`**, shared by all
+three scripts rather than copy-pasted, and it reads `$HarnessVersion` out of
+`run-evals.ps1` so these rows can never claim a harness version the harness itself has
+moved past. `case_sha256` is computed inside `append_script_record` from the case name
+(`contract/<case>/run.py`), so a case's `run.py` needs no change to gain it.
 
 ## Layout
 
@@ -116,6 +128,13 @@ evals/
   results/results-legacy-array-shape-2026-08.jsonl
                           the 160 pre-harness-2 array-shaped lines, moved out of
                           results.jsonl so the live file has exactly one shape
+  results/results-invalid-instrument-<date>.jsonl
+                          runs whose INSTRUMENT was broken, not the plugin: a judge or a
+                          provenance field that makes the row unreadable as evidence.
+                          The 2026-09-01 file holds the 35 harness-1 trigger records
+                          (no harness_version, no plugin_sha, no judge) the 2026-09-07
+                          audit found still readable in the live log as real 2/5 and 3/5
+                          pass rates for trigger-4..7
   results/transcripts/    every run's evidence, pass or fail:
                             <case>-run<N>-<suffix>/          contract: stdout.txt, plus
                                                              handoff.txt and .docs/ when
@@ -171,7 +190,7 @@ Every line `run-evals.ps1` appends to `results/results.jsonl` is one flat, compa
   zero-LLM case's `--record` (the only rows in the file `run-evals.ps1` did not write).
   The field is kept so a harness-2 line (where it could read `"substring"`) stays
   distinguishable. A `judge: "script"` row has no LLM variance and must not be pooled into
-  a pass rate with LLM rows — see the two zero-LLM cases above.
+  a pass rate with LLM rows — see the three zero-LLM cases above.
 - `plugin_sha` — `git rev-parse HEAD` in the plugin root at the moment the harness
   started, or `null` if the plugin isn't a git repo or the lookup failed.
 - `plugin_dirty` — `true` if `git status --porcelain` reported anything at that moment,
@@ -180,14 +199,15 @@ Every line `run-evals.ps1` appends to `results/results.jsonl` is one flat, compa
 - `claude_version` — the trimmed output of `claude --version`, or `null` if it couldn't
   be read.
 - `case_sha256` — SHA-256 of the exact input the run graded against: the `case.md` file
-  for a contract case, or the raw `cases.jsonl` line for a trigger case. Lets you tell
-  whether two runs recorded against the same case name actually graded the same frozen
-  input.
+  for a contract case, the raw `cases.jsonl` line for a trigger case, or the case's own
+  `run.py` for a zero-LLM case (that file *is* the case: fixtures, assertions and grader
+  in one). Lets you tell whether two runs recorded against the same case name actually
+  graded the same frozen input.
 - `harness_version` — the constant in `run-evals.ps1` (currently `"4"`), bumped whenever
   this record shape or its field meanings change. `"4"` marks: mechanical INFRA
   classification with `pass: null` and archive quarantine, `outcome` on contract records,
   `skills_invoked`/`expected_chain` on trigger records, and `judge: "script"` rows from
-  the two zero-LLM cases.
+  the three zero-LLM cases (which since 2.6.1 also carry `case_sha256`).
 
 **`results.jsonl` is now single-shape: flat objects only.** It used to hold two, because
 every line appended before harness 2 is a bare JSON **array** whose *last* element is the
@@ -852,7 +872,7 @@ it changed the measuring device, not the thing measured — and instead flags th
 zero-token checks: `-SelfTest` (the judge, the `expected_chain` rule, and the INFRA
 classifier), plus a `-Suite contract` and `-Suite trigger` dry run, because discovery and
 `cases.jsonl` parsing are the two things `-SelfTest` cannot see. A change to
-`evals/eval_record.py` or either zero-LLM `run.py` flags that case's
+`evals/eval_record.py` or any of the three zero-LLM `run.py` files flags that case's
 `python … run.py --record`. Before this, an edit to the judge matched no pathspec at all:
 `weekly-check.ps1` flagged nothing, so nothing told you to re-run the one check that
 proves the judge still reads correctly.

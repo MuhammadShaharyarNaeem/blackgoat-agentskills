@@ -12,9 +12,22 @@ nothing, read as authority).
 CLAUDE.md convention #9: an index nobody re-reads drifts silently, so the check
 is a command in CI rather than a line asking a reader to look.
 
+A third failure mode the presence checks never saw: a row whose *text* drifts
+from the lane it names. The index's own header says "Each line is that lane's
+own `description` frontmatter, trimmed", and until 2.6.1 nothing compared the
+two -- a row could say anything at all about a lane that exists and every check
+passed. `--require-row-agreement` makes the header's claim checkable:
+"trimmed" means the row is a contiguous substring of the lane's `description:`
+after whitespace normalisation, or is exactly that description's first
+sentence. A trim removes words; it never introduces them, and it never
+paraphrases. Off by default (2.6.1 migration: the shipped rows are summaries,
+not trims); the disagreements are reported as warnings on every run regardless,
+so the drift is visible before it is gating.
+
 Usage:
     python check_always_on.py [--index <path>] [--plugin-root <dir>] \
-        [--max-words N] [--ledger <path>] [--milestone "<title>"]
+        [--max-words N] [--require-row-agreement] \
+        [--ledger <path>] [--milestone "<title>"]
     python check_always_on.py --self-test
 
 Exit 0 PASS, 1 FAIL (findings), 2 ERROR (usage, unreadable index/root).
@@ -45,6 +58,9 @@ SEPARATOR_ROW_RE = re.compile(r"^\s*\|[\s:|-]+\|\s*$")
 NUMBERED_ITEM_RE = re.compile(r"^\s*(\d+)\.\s+(.*)$")
 SCRIPT_TOKEN_RE = re.compile(r"^[\w.-]+\.py$")
 SCRIPTS_REL = Path("skills") / "pipeline-tools" / "scripts"
+DESCRIPTION_RE = re.compile(r"^description:\s*(.+?)\s*$", re.M)
+SENTENCE_END_RE = re.compile(r"(.*?[.!?])(?:\s|$)", re.S)
+WHITESPACE_RE = re.compile(r"\s+")
 
 
 class GateError(Exception):
@@ -142,6 +158,58 @@ def lanes_on_disk(plugin_root):
     return found
 
 
+def normalize_text(value):
+    """Whitespace-normalised text: single spaces, no leading/trailing space."""
+    return WHITESPACE_RE.sub(" ", value or "").strip()
+
+
+def lane_description(plugin_root, lane):
+    """The `description:` frontmatter of `skills/<lane>/SKILL.md`, or None.
+
+    Only the front-matter block is scanned, and only a single-line scalar is
+    read -- every lane in this plugin writes one. Surrounding quotes are
+    stripped so `description: "x"` and `description: x` compare identically.
+    """
+    skill = Path(plugin_root) / "skills" / lane.lstrip("/") / "SKILL.md"
+    try:
+        text = skill.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return None
+    if not text.startswith("---"):
+        return None
+    end = text.find("\n---", 3)
+    block = text[:end] if end != -1 else text
+    match = DESCRIPTION_RE.search(block)
+    if not match:
+        return None
+    value = match.group(1).strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1]
+    value = normalize_text(value)
+    return value or None
+
+
+def first_sentence(text):
+    """The first sentence of `text`, terminator included."""
+    match = SENTENCE_END_RE.match(text)
+    return normalize_text(match.group(1)) if match else normalize_text(text)
+
+
+def row_is_a_trim(row_text, description):
+    """True when `row_text` is a TRIM of `description`, not a paraphrase.
+
+    Two accepted forms, both of which only ever *remove* material:
+      * the row is a contiguous substring of the description; or
+      * the row is exactly the description's first sentence.
+    A row that reorders, rewords, or adds a word is neither.
+    """
+    row = normalize_text(row_text)
+    desc = normalize_text(description)
+    if not row:
+        return False
+    return row in desc or row == first_sentence(desc)
+
+
 def section_lines(lines, heading):
     """The lines between `heading` and the next `## ` heading."""
     out = []
@@ -211,7 +279,8 @@ def resolve_citation(plugin_root, token):
     return "path", candidate if candidate.exists() else None
 
 
-def build_report(index_path, plugin_root, max_words=DEFAULT_MAX_WORDS):
+def build_report(index_path, plugin_root, max_words=DEFAULT_MAX_WORDS,
+                 require_row_agreement=False):
     index = Path(index_path)
     if not index.is_file():
         raise GateError(f"index file not found: {index_path}")
@@ -226,6 +295,7 @@ def build_report(index_path, plugin_root, max_words=DEFAULT_MAX_WORDS):
         "index": str(index_path),
         "plugin_root": str(plugin_root),
         "max_words": max_words,
+        "require_row_agreement": bool(require_row_agreement),
         "lanes_on_disk": sorted(lanes_on_disk(root)),
         "lanes_in_table": [],
         "rule_count": 0,
@@ -238,6 +308,13 @@ def build_report(index_path, plugin_root, max_words=DEFAULT_MAX_WORDS):
         entry = {"code": code, "detail": detail}
         entry.update(extra)
         report["findings"].append(entry)
+
+    def gated_finding(code, detail, **extra):
+        """A finding when the check is armed, a warning when it is not."""
+        entry = {"code": code, "detail": detail}
+        entry.update(extra)
+        (report["findings"] if require_row_agreement
+         else report["warnings"]).append(entry)
 
     # --- the lane table ------------------------------------------------
     lane_lines = section_lines(lines, LANES_HEADING)
@@ -281,6 +358,30 @@ def build_report(index_path, plugin_root, max_words=DEFAULT_MAX_WORDS):
     duplicates = sorted({l for l in table_lanes if table_lanes.count(l) > 1})
     for lane in duplicates:
         finding("lane_row_orphan", f"{lane} has more than one row", lane=lane)
+
+    # --- each row agrees with the lane's own description -----------------
+    # The index claims every row is that lane's `description:` frontmatter,
+    # "trimmed". A trim only removes material; anything else is drift.
+    for cells in rows:
+        lane = cells[0].strip().strip("`").strip()
+        if not lane.startswith("/") or lane not in report["lanes_on_disk"]:
+            continue
+        row_text = normalize_text(cells[1]) if len(cells) > 1 else ""
+        description = lane_description(root, lane)
+        if description is None:
+            gated_finding(
+                "row_text_disagrees",
+                f"{lane}: skills/{lane.lstrip('/')}/SKILL.md has no readable "
+                "`description:` frontmatter to compare the row against",
+                lane=lane, row=row_text)
+            continue
+        if not row_is_a_trim(row_text, description):
+            gated_finding(
+                "row_text_disagrees",
+                f"{lane}: the row is not a trim of the lane's own "
+                "`description:` -- it is neither a contiguous substring of it "
+                "nor its first sentence",
+                lane=lane, row=row_text, description=description)
 
     # --- every cited path resolves --------------------------------------
     for line_no, line in enumerate(lines, start=1):
@@ -339,6 +440,10 @@ def main(argv):
                         help=f"index file (default: <plugin-root>/{DEFAULT_INDEX_REL.as_posix()})")
     parser.add_argument("--max-words", type=int, default=DEFAULT_MAX_WORDS,
                         help=f"maximum words per table cell (default {DEFAULT_MAX_WORDS})")
+    parser.add_argument("--require-row-agreement", action="store_true",
+                        help="gate on each lane row being a trim of that lane's "
+                             "own `description:` frontmatter (default: reported "
+                             "as warnings only)")
     parser.add_argument("--milestone", help="recorded in the ledger line")
     parser.add_argument("--ledger", help="append one JSON record per run to this path")
     parser.add_argument("--self-test", action="store_true")
@@ -355,7 +460,8 @@ def main(argv):
         return code
 
     try:
-        report = build_report(index, args.plugin_root, args.max_words)
+        report = build_report(index, args.plugin_root, args.max_words,
+                              args.require_row_agreement)
     except GateError as exc:
         print(json.dumps({"result": "ERROR", "error": str(exc)}))
         return finish(2, "ERROR")
@@ -492,6 +598,64 @@ def run_self_test():
                 + "\nArtifacts land under `.docs/{project-name}/`.\n",
                 encoding="utf-8")
             self.assertEqual(self.report()["result"], "PASS")
+
+        # --- row/description agreement ----------------------------------
+        def describe(self, lane, description):
+            """Give a fixture lane a real `description:` frontmatter."""
+            (self.skills / lane / "SKILL.md").write_text(
+                f"---\nname: {lane}\ndescription: {description}\n---\n\n# {lane}\n",
+                encoding="utf-8")
+
+        DESC = ("The front door for everyday work: classifies the request and "
+                "invokes exactly one lane. Use when the ask is ordinary.")
+
+        def test_row_that_is_a_substring_of_the_description_passes(self):
+            self.describe("bg", self.DESC)
+            self.describe("bgpdd-quick", "One small contained change.")
+            self.write("| `/bg` | classifies the request and invokes exactly "
+                       "one lane |\n| `/bgpdd-quick` | One small contained "
+                       "change. |\n")
+            r = self.report(require_row_agreement=True)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertEqual(r["warnings"], [])
+
+        def test_row_that_is_the_first_sentence_passes(self):
+            self.describe("bg", self.DESC)
+            self.describe("bgpdd-quick", "One small contained change.")
+            self.write("| `/bg` | The front door for everyday work: classifies "
+                       "the request and invokes exactly one lane. |\n"
+                       "| `/bgpdd-quick` | One small contained change. |\n")
+            r = self.report(require_row_agreement=True, max_words=40)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+
+        def test_paraphrased_row_fails_when_armed(self):
+            self.describe("bg", self.DESC)
+            self.describe("bgpdd-quick", "One small contained change.")
+            self.write("| `/bg` | Front door: routes an ask to the lane below. "
+                       "|\n| `/bgpdd-quick` | One small contained change. |\n")
+            r = self.report(require_row_agreement=True)
+            self.assertEqual(self.codes(r), ["row_text_disagrees"])
+            self.assertEqual(r["findings"][0]["lane"], "/bg")
+            self.assertEqual(r["result"], "FAIL")
+
+        def test_paraphrased_row_is_only_a_warning_when_not_armed(self):
+            self.describe("bg", self.DESC)
+            self.describe("bgpdd-quick", "One small contained change.")
+            self.write("| `/bg` | Front door: routes an ask to the lane below. "
+                       "|\n| `/bgpdd-quick` | One small contained change. |\n")
+            r = self.report()
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertEqual([w["code"] for w in r["warnings"]],
+                             ["row_text_disagrees"])
+            self.assertEqual(r["require_row_agreement"], False)
+
+        def test_lane_with_no_description_frontmatter_disagrees(self):
+            # setUp writes bare "x" SKILL.md files -- no frontmatter at all.
+            self.write("| `/bg` | Front door. |\n| `/bgpdd-quick` | One. |\n")
+            r = self.report(require_row_agreement=True)
+            self.assertEqual(self.codes(r), ["row_text_disagrees"])
+            self.assertEqual(len(r["findings"]), 2)
+            self.assertIn("no readable", r["findings"][0]["detail"])
 
         # --- outside-any-lane rules -------------------------------------
         def test_rule_with_no_owner_fails(self):

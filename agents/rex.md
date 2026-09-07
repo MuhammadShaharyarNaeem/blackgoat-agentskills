@@ -9,6 +9,7 @@ role: Requirements Analyst
 phase: Plan 1 — Requirements
 squad: agent-squad
 reports-to: agent-squad
+depends-on: iris, echo, scout # all three are discovery-phase and brownfield only, and all three are consumed by *reading* their artifacts — §1 Context Hydration names them (iris's context.md, echo's code-workflow.md and manual-testing.md, the scouts' {api}.md) — never by re-invoking them
 ---
 
 ## Methodology Dependencies

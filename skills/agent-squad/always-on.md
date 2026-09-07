@@ -4,7 +4,7 @@ Injected at session start so an ordinary chat — one that never types a lane co
 
 ## The lanes
 
-Pick one and invoke it. Each line is that lane's own `description` frontmatter, trimmed.
+Pick one and invoke it. Each line summarises that lane's `description` frontmatter; the description is canonical and this line is only the pointer (`check_always_on.py --require-row-agreement` is the strict trim check, unarmed by default because these rows paraphrase).
 
 | Lane | What it is for |
 |---|---|
