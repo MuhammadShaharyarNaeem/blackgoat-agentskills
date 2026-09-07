@@ -400,33 +400,41 @@ def detect_lane(root, requested):
 def detect_bugfix_route(root):
     """(route, state_file). Which of the two bugfix workspaces this is.
 
-    bgpdd-bugfix SKILL.md section 1: on the FEATURE route the root is the
-    epic's `implementation/` folder and the state file is the epic's own, ONE
-    LEVEL UP; on the STANDALONE route the root is `.docs/bugfix/{slug}/` and
+    bgpdd-bugfix SKILL.md section 1: on the FEATURE route the root is
+    `.docs/{project}/implementation/bugs/{bug-slug}/` (2.6.1, slug-scoped)
+    and the state file is the epic's own, THREE LEVELS UP; the pre-2.6.1
+    unscoped shape -- the root IS the epic's `implementation/` folder, state
+    file one level up -- is still recognised so an in-flight 2.6.0 bug keeps
+    driving. On the STANDALONE route the root is `.docs/bugfix/{slug}/` and
     the state file is inside it. Phase 0 has not created the standalone state
     yet, so folder shape -- not the file's presence -- decides the route.
     """
     own = root / "orchestrator-state.json"
-    up = root.parent / "orchestrator-state.json"
-    if root.name.lower() == "implementation":
-        if not up.is_file():
-            raise DriverError(
-                "feature-route root %s has no epic orchestrator-state.json at "
-                "%s -- a feature route with no epic state is a mis-resolved "
-                "root (bgpdd-bugfix Phase 0 step 4 says HALT). Use the "
-                "standalone route, or fix the resolution."
-                % (rp(root), rp(up)))
-        return "feature", up
-    return "standalone", own
+    if (root.parent.name.lower() == "bugs"
+            and root.parent.parent.name.lower() == "implementation"):
+        up = root.parent.parent.parent / "orchestrator-state.json"
+    elif root.name.lower() == "implementation":
+        up = root.parent / "orchestrator-state.json"
+    else:
+        return "standalone", own
+    if not up.is_file():
+        raise DriverError(
+            "feature-route root %s has no epic orchestrator-state.json at "
+            "%s -- a feature route with no epic state is a mis-resolved "
+            "root (bgpdd-bugfix Phase 0 step 4 says HALT). Use the "
+            "standalone route, or fix the resolution."
+            % (rp(root), rp(up)))
+    return "feature", up
 
 
 def derive_slug(root, lane, records, override, gate_name):
     """The unit slug used to scope every ledger lookup and evidence path.
 
     Order: an explicit --milestone; the ledger's own record for this lane's
-    first gate; the RED capture's filename; the root's basename. The feature
-    route is why the override exists at all -- there the basename is
-    `implementation`, which names the epic, never the bug.
+    first gate; the RED capture's filename; the root's basename. On the
+    2.6.1 feature route the basename IS the bug slug (`bugs/{bug-slug}/`);
+    the override exists for the pre-2.6.1 shape, where the basename is
+    `implementation` and names the epic, never the bug.
     """
     if override:
         return override, "override"
@@ -1535,6 +1543,33 @@ def run_self_test():
             self.assertEqual(rep["milestone"], "auth-500")
             # the intake gate has not run for this unit yet
             self.assertEqual(code, EXIT_BLOCKED)
+
+        def test_feature_route_slug_scoped_root_state_file_is_three_levels_up(self):
+            """2.6.1 layout: `.docs/{project}/implementation/bugs/{slug}/`.
+            The basename is the slug, so no --milestone override is needed."""
+            epic = self.dir / "proj"
+            root = epic / "implementation" / "bugs" / "auth-500"
+            root.mkdir(parents=True)
+            (epic / "orchestrator-state.json").write_text(
+                json.dumps({"branch": "feat/x"}), encoding="utf-8")
+            (root / "bug-report.md").write_text(REPORT_TMPL.format(
+                slug="auth-500", command="pytest -q", surface="api",
+                runtime="no"), encoding="utf-8")
+            rep, code = self.run_driver(root=root)
+            self.assertEqual(rep["route"], "feature")
+            self.assertTrue(rep["state_file"].endswith(
+                "proj/orchestrator-state.json"))
+            self.assertEqual(rep["milestone"], "auth-500")
+            self.assertEqual(rep["milestone_source"], "root")
+            self.assertEqual(code, EXIT_BLOCKED)
+
+        def test_feature_route_slug_scoped_without_epic_state_exits_2(self):
+            root = self.dir / "proj" / "implementation" / "bugs" / "auth-500"
+            root.mkdir(parents=True)
+            (root / "bug-report.md").write_text("# x\n", encoding="utf-8")
+            with self.assertRaises(DriverError) as ctx:
+                self.run_driver(root=root)
+            self.assertIn("mis-resolved", str(ctx.exception))
 
         def test_feature_route_without_epic_state_exits_2(self):
             impl = self.dir / "proj" / "implementation"

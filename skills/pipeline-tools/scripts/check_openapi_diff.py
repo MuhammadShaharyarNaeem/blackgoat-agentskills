@@ -9,6 +9,37 @@ The claim "this change is backwards compatible" is exactly the claim nobody
 re-derives at the moment they most want to merge. This turns it into a
 command with an exit code.
 
+A PASS OVER AN UNANALYZED SCHEMA IS WORSE THAN A REFUSAL
+--------------------------------------------------------
+The schema walk descends `properties`, `items` and `allOf`. It does NOT
+descend `oneOf`, `anyOf` or `not`, and until 2.6.1 it said nothing about that:
+a response schema wrapped in `oneOf: [...]` with a field removed inside it
+returned exit 0 PASS, `breaking: []`, and no warning of any kind. The document
+was not analyzed and the output said it was compatible.
+
+Any schema node carrying `oneOf`, `anyOf` or `not` (after one level of `$ref`
+resolution) is now `unanalyzable_schema`: exit **2**, naming the JSON path and
+the keyword, never a PASS and never masked by `--allow-breaking` -- a waiver
+waives a diff somebody read, and there is no diff here to read. Deciding
+whether a variant was dropped from a union needs a subtype relation this tool
+does not implement, and guessing at one is how a diff tool starts lying;
+`check_runtime_evidence.py` refuses the same class the same way
+(`schema_skipped_reason`). The fix is to compare those branches by hand and
+waive with `--allow-breaking "<reason>"` on a document the gate CAN read, or
+to restructure the schema so it is analyzable.
+
+NULLABILITY
+-----------
+`nullable: true -> false` on a RESPONSE schema is breaking
+(`nullable_removed`). The same component is nearly always the one accepted in
+requests -- one level of `$ref` resolution reaches it from both -- so a
+nullability flip breaks every caller that sends or round-trips null, and it
+is the same kind of narrowing this gate already refuses under `type_changed`.
+Deliberately conservative and deliberately waivable: exit 1 with a named kind
+and a one-flag waiver, rather than the silent PASS this was. The widening
+(`false -> true`) is `nullable_widened`, additive, and also reported in
+`warnings` because a caller that never handled null now must.
+
 Usage:
     python check_openapi_diff.py --base <openapi.json|yaml> \
         --head <openapi.json|yaml> [--allow-breaking "<reason>"] \
@@ -48,7 +79,12 @@ BREAKING_KINDS = (
     "type_changed",
     "required_request_field_added",
     "enum_narrowed",
+    "nullable_removed",
 )
+
+# Schema keywords this walk does NOT descend. A node carrying one of them is
+# refused (exit 2) rather than reported as compatible -- see the docstring.
+UNANALYZABLE_KEYWORDS = ("oneOf", "anyOf", "not")
 
 
 class GateError(Exception):
@@ -385,24 +421,47 @@ def resolve(schema, doc):
     return schema
 
 
-def flatten(schema, doc, prefix="$", depth=0, out=None):
-    """`{json-path: {type, enum, required}}` for one schema.
+def flatten(schema, doc, prefix="$", depth=0, out=None, notes=None):
+    """`{json-path: {type, enum, required, nullable}}` for one schema.
 
     `required` is None on the root and on array element schemas -- only an
     object's own `required` list can say whether a named property is required.
+
+    `notes` (optional) is a dict with `unanalyzable` and `warnings` lists: the
+    walk records every node it CANNOT read rather than passing over it in
+    silence. See the docstring -- an unanalyzable node is exit 2, and a
+    truncated walk is a warning.
     """
     if out is None:
         out = {}
+
+    def note(key, entry):
+        if notes is not None and entry not in notes[key]:
+            notes[key].append(entry)
+
+    if isinstance(schema, dict) and isinstance(schema.get("$ref"), str):
+        if not isinstance(deref(doc, schema["$ref"]), dict):
+            note("warnings",
+                 f"{prefix}: `$ref` {schema['$ref']!r} does not resolve in "
+                 "this document, so nothing below it was compared")
     s = resolve(schema, doc)
     if not isinstance(s, dict):
         return out
+    for keyword in UNANALYZABLE_KEYWORDS:
+        if keyword in s:
+            note("unanalyzable", {"path": prefix, "keyword": keyword})
     enum = s.get("enum")
     out[prefix] = {
         "type": s.get("type"),
         "enum": tuple(enum) if isinstance(enum, list) else None,
         "required": None,
+        "nullable": s.get("nullable"),
     }
     if depth >= MAX_SCHEMA_DEPTH:
+        note("warnings",
+             f"{prefix}: the schema walk stopped at its depth cap of "
+             f"{MAX_SCHEMA_DEPTH}; anything nested below this path was not "
+             "compared")
         return out
     members = [s]
     all_of = s.get("allOf")
@@ -416,13 +475,39 @@ def flatten(schema, doc, prefix="$", depth=0, out=None):
             required = set(member.get("required") or [])
             for name, sub in props.items():
                 child = f"{prefix}.{name}"
-                flatten(sub, doc, child, depth + 1, out)
+                flatten(sub, doc, child, depth + 1, out, notes)
                 if child in out:
                     out[child]["required"] = name in required
         items = member.get("items")
         if isinstance(items, dict):
-            flatten(items, doc, f"{prefix}[]", depth + 1, out)
+            flatten(items, doc, f"{prefix}[]", depth + 1, out, notes)
     return out
+
+
+def new_notes():
+    """The collector every walk writes into: what it refused, what it warns."""
+    return {"unanalyzable": [], "warnings": []}
+
+
+def flatten_at(where, schema, doc, notes):
+    """`flatten`, with every note tagged by the operation it was found in.
+
+    The walk knows a schema-local JSON path (`$.meta.createdAt`); only the
+    caller knows which operation and media type it belongs to, and an
+    `unanalyzable_schema` that cannot say WHERE is not actionable.
+    """
+    local = new_notes()
+    fields = flatten(schema, doc, notes=local)
+    for entry in local["unanalyzable"]:
+        item = {"where": where, "path": entry["path"],
+                "keyword": entry["keyword"]}
+        if item not in notes["unanalyzable"]:
+            notes["unanalyzable"].append(item)
+    for message in local["warnings"]:
+        tagged = f"{where} {message}"
+        if tagged not in notes["warnings"]:
+            notes["warnings"].append(tagged)
+    return fields
 
 
 def operations(doc):
@@ -494,12 +579,18 @@ def parameters(op, doc):
     return result
 
 
-def param_facets(param, doc):
+def param_facets(param, doc, where=None, notes=None):
     """(type, enum) for a parameter, from its `schema` or its inline fields."""
     schema = param.get("schema")
     schema = resolve(schema, doc) if isinstance(schema, dict) else {}
     if not isinstance(schema, dict):
         schema = {}
+    if notes is not None:
+        for keyword in UNANALYZABLE_KEYWORDS:
+            if keyword in schema or keyword in param:
+                item = {"where": where, "path": "$", "keyword": keyword}
+                if item not in notes["unanalyzable"]:
+                    notes["unanalyzable"].append(item)
     enum = schema.get("enum")
     if enum is None:
         enum = param.get("enum")
@@ -531,9 +622,14 @@ def compare_enum(base_enum, head_enum):
 
 
 def diff_documents(base, head):
-    """(breaking, additive) — two lists of `{kind, path, detail}`."""
+    """(breaking, additive, notes).
+
+    `breaking`/`additive` are lists of `{kind, path, detail}`; `notes` is
+    `{"unanalyzable": [{where, path, keyword}], "warnings": [str]}`.
+    """
     breaking = []
     additive = []
+    notes = new_notes()
 
     def brk(kind, path, detail):
         breaking.append({"kind": kind, "path": path, "detail": detail})
@@ -561,14 +657,14 @@ def diff_documents(base, head):
     for key in sorted(set(base_ops) & set(head_ops)):
         label = f"{key[1]} {key[0]}"
         base_op, head_op = base_ops[key], head_ops[key]
-        _diff_responses(base, head, base_op, head_op, label, brk, add)
-        _diff_request_body(base, head, base_op, head_op, label, brk, add)
-        _diff_parameters(base, head, base_op, head_op, label, brk, add)
+        _diff_responses(base, head, base_op, head_op, label, brk, add, notes)
+        _diff_request_body(base, head, base_op, head_op, label, brk, add, notes)
+        _diff_parameters(base, head, base_op, head_op, label, brk, add, notes)
 
-    return breaking, additive
+    return breaking, additive, notes
 
 
-def _diff_responses(base, head, base_op, head_op, label, brk, add):
+def _diff_responses(base, head, base_op, head_op, label, brk, add, notes):
     base_r, head_r = response_schemas(base_op), response_schemas(head_op)
     base_status = {k[0] for k in base_r}
     head_status = {k[0] for k in head_r}
@@ -581,8 +677,8 @@ def _diff_responses(base, head, base_op, head_op, label, brk, add):
     for key in sorted(set(base_r) & set(head_r)):
         status, media = key
         where = f"{label} {status}" + (f" {media}" if media else "")
-        base_fields = flatten(base_r[key], base)
-        head_fields = flatten(head_r[key], head)
+        base_fields = flatten_at(where, base_r[key], base, notes)
+        head_fields = flatten_at(where, head_r[key], head, notes)
         for name in sorted(set(base_fields) - set(head_fields)):
             brk("response_field_removed", f"{where} {name}",
                 "the response property is absent from the head document "
@@ -592,10 +688,11 @@ def _diff_responses(base, head, base_op, head_op, label, brk, add):
                 "a new response property")
         for name in sorted(set(base_fields) & set(head_fields)):
             _diff_facets(base_fields[name], head_fields[name],
-                         f"{where} {name}", brk, add)
+                         f"{where} {name}", brk, add, notes,
+                         nullability=True)
 
 
-def _diff_request_body(base, head, base_op, head_op, label, brk, add):
+def _diff_request_body(base, head, base_op, head_op, label, brk, add, notes):
     base_body = base_op.get("requestBody") if isinstance(
         base_op.get("requestBody"), dict) else None
     head_body = head_op.get("requestBody") if isinstance(
@@ -607,8 +704,8 @@ def _diff_request_body(base, head, base_op, head_op, label, brk, add):
     base_s, head_s = request_schemas(base_op), request_schemas(head_op)
     for media in sorted(set(base_s) & set(head_s)):
         where = f"{label} requestBody {media}"
-        base_fields = flatten(base_s[media], base)
-        head_fields = flatten(head_s[media], head)
+        base_fields = flatten_at(where, base_s[media], base, notes)
+        head_fields = flatten_at(where, head_s[media], head, notes)
         for name in sorted(set(head_fields) - set(base_fields)):
             if head_fields[name]["required"]:
                 brk("required_request_field_added", f"{where} {name}",
@@ -621,10 +718,10 @@ def _diff_request_body(base, head, base_op, head_op, label, brk, add):
                 brk("required_request_field_added", f"{where} {name}",
                     "an existing request property became required")
             _diff_facets(base_fields[name], head_fields[name],
-                         f"{where} {name}", brk, add)
+                         f"{where} {name}", brk, add, notes)
 
 
-def _diff_parameters(base, head, base_op, head_op, label, brk, add):
+def _diff_parameters(base, head, base_op, head_op, label, brk, add, notes):
     base_p = parameters(base_op, base)
     head_p = parameters(head_op, head)
     for key in sorted(set(head_p) - set(base_p), key=lambda k: (k[0], k[1] or "")):
@@ -640,17 +737,32 @@ def _diff_parameters(base, head, base_op, head_op, label, brk, add):
                 base_p[key].get("required") is not True:
             brk("required_request_field_added", where,
                 "an existing parameter became required")
-        base_type, base_enum = param_facets(base_p[key], base)
-        head_type, head_enum = param_facets(head_p[key], head)
-        _diff_facets({"type": base_type, "enum": base_enum},
-                     {"type": head_type, "enum": head_enum}, where, brk, add)
+        base_type, base_enum = param_facets(base_p[key], base, where, notes)
+        head_type, head_enum = param_facets(head_p[key], head, where, notes)
+        _diff_facets({"type": base_type, "enum": base_enum, "nullable": None},
+                     {"type": head_type, "enum": head_enum, "nullable": None},
+                     where, brk, add, notes)
 
 
-def _diff_facets(base_facet, head_facet, where, brk, add):
+def _diff_facets(base_facet, head_facet, where, brk, add, notes,
+                 nullability=False):
     if base_facet["type"] != head_facet["type"] and (
             base_facet["type"] is not None or head_facet["type"] is not None):
         brk("type_changed", where,
             f"{base_facet['type']!r} -> {head_facet['type']!r}")
+    if nullability:
+        # See NULLABILITY in the docstring: response-schema scope, breaking in
+        # the narrowing direction, warned in the widening one.
+        was, now = base_facet.get("nullable"), head_facet.get("nullable")
+        if was is True and now is False:
+            brk("nullable_removed", where,
+                "nullable: true -> false — a caller that sends or "
+                "round-trips null against this field now fails validation")
+        elif was is not True and now is True:
+            add("nullable_widened", where, "nullable: -> true")
+            notes["warnings"].append(
+                f"{where}: nullable -> true; a caller that never handled "
+                "null on this field now has to")
     verdict = compare_enum(base_facet["enum"], head_facet["enum"])
     if verdict == "narrowed":
         removed = sorted(set(base_facet["enum"] or ()) -
@@ -665,19 +777,42 @@ def _diff_facets(base_facet, head_facet, where, brk, add):
 def build_report(base_path, head_path, allow_breaking=None):
     base = load_document(base_path, "base")
     head = load_document(head_path, "head")
-    breaking, additive = diff_documents(base, head)
-    if breaking:
+    breaking, additive, notes = diff_documents(base, head)
+    unanalyzable = notes["unanalyzable"]
+    warnings = list(notes["warnings"])
+    if unanalyzable:
+        # Never a PASS and never waivable: there is no diff here to waive.
+        result = "ERROR"
+        where = "; ".join(
+            "{0} at {1} (`{2}`)".format(e["where"], e["path"], e["keyword"])
+            for e in unanalyzable)
+        error = (
+            "unanalyzable_schema: this walk does not descend "
+            + "/".join(UNANALYZABLE_KEYWORDS)
+            + ", and these schema node(s) carry one: " + where
+            + ". Reporting a document it did not analyze as compatible is "
+              "worse than refusing it, so this is exit 2 and no verdict. "
+              "Compare those branches by hand, then either restructure the "
+              "schema so the walk can read it or re-run against documents "
+              "the gate can read and record the finding with "
+              "--allow-breaking \"<reason>\".")
+    elif breaking:
         result = "ALLOWED" if allow_breaking else "FAIL"
+        error = None
     else:
         result = "PASS"
+        error = None
     return {
         "base": str(base_path),
         "head": str(head_path),
         "result": result,
         "breaking": breaking,
         "additive": additive,
-        "allowed_by": allow_breaking if breaking and allow_breaking else None,
-        "error": None,
+        "unanalyzable": unanalyzable,
+        "warnings": warnings,
+        "allowed_by": (allow_breaking if breaking and allow_breaking
+                       and not unanalyzable else None),
+        "error": error,
     }
 
 
@@ -708,6 +843,7 @@ def main(argv):
     def fail_usage(message):
         print(json.dumps({"base": args.base, "head": args.head,
                           "result": "ERROR", "breaking": [], "additive": [],
+                          "unanalyzable": [], "warnings": [],
                           "allowed_by": None, "error": message}, indent=2))
         return finish(2, "ERROR")
 
@@ -724,6 +860,9 @@ def main(argv):
         return fail_usage(str(exc))
 
     print(json.dumps(report, indent=2))
+    if report["unanalyzable"]:
+        return finish(2, "ERROR",
+                      {"unanalyzable_schema": report["unanalyzable"]})
     if not report["breaking"]:
         return finish(0, "PASS")
     if report["allowed_by"]:
@@ -1200,6 +1339,179 @@ def run_self_test():
             del head["components"]["schemas"]["Base"]["properties"]["id"]
             report = self.diff(base, head)
             self.assertEqual(self.kinds(report), ["response_field_removed"])
+
+        # -- unanalyzable_schema (audit3 F5) ------------------------------
+
+        def _wrapped(self, keyword, drop_field=True):
+            base = copy.deepcopy(MINIMAL)
+            inner = {"type": "object",
+                     "properties": {"id": {"type": "string"},
+                                    "name": {"type": "string"}}}
+            wrapper = ({"not": inner} if keyword == "not"
+                       else {keyword: [inner]})
+            (base["paths"]["/users"]["get"]["responses"]["200"]["content"]
+             ["application/json"])["schema"] = wrapper
+            head = copy.deepcopy(base)
+            if drop_field:
+                node = (head["paths"]["/users"]["get"]["responses"]["200"]
+                        ["content"]["application/json"]["schema"])
+                target = node["not"] if keyword == "not" else node[keyword][0]
+                del target["properties"]["name"]
+            return base, head
+
+        def test_a_oneof_wrapped_removal_is_refused_not_passed(self):
+            """audit3 F5: this returned exit 0 PASS with breaking: []."""
+            base, head = self._wrapped("oneOf")
+            report = self.diff(base, head)
+            self.assertEqual(report["result"], "ERROR")
+            self.assertEqual(report["breaking"], [])
+            self.assertEqual(len(report["unanalyzable"]), 1)
+            self.assertEqual(report["unanalyzable"][0]["keyword"], "oneOf")
+            self.assertIn("GET /users 200 application/json",
+                          report["unanalyzable"][0]["where"])
+            self.assertEqual(report["unanalyzable"][0]["path"], "$")
+            self.assertIn("unanalyzable_schema", report["error"])
+
+        def test_anyof_and_not_are_refused_too(self):
+            for keyword in ("anyOf", "not"):
+                base, head = self._wrapped(keyword)
+                report = self.diff(base, head)
+                self.assertEqual(report["result"], "ERROR", keyword)
+                self.assertEqual(report["unanalyzable"][0]["keyword"], keyword)
+
+        def test_an_identical_pair_of_unanalyzable_documents_is_still_refused(self):
+            """A no-op diff over a union is still a document not analyzed."""
+            base, _ = self._wrapped("oneOf", drop_field=False)
+            report = self.diff(base, copy.deepcopy(base))
+            self.assertEqual(report["result"], "ERROR")
+
+        def test_allow_breaking_does_not_waive_an_unanalyzable_schema(self):
+            base, head = self._wrapped("oneOf")
+            report = self.diff(base, head, "agreed with the client team")
+            self.assertEqual(report["result"], "ERROR")
+            self.assertIsNone(report["allowed_by"])
+
+        def test_a_oneof_nested_in_a_property_names_its_json_path(self):
+            base = copy.deepcopy(MINIMAL)
+            props = (base["paths"]["/users"]["get"]["responses"]["200"]
+                     ["content"]["application/json"]["schema"]["properties"])
+            props["owner"] = {"anyOf": [{"type": "string"},
+                                        {"type": "integer"}]}
+            report = self.diff(base, copy.deepcopy(base))
+            self.assertEqual(report["result"], "ERROR")
+            self.assertEqual(report["unanalyzable"][0]["path"], "$.owner")
+
+        def test_a_oneof_behind_a_ref_is_seen_after_resolution(self):
+            base = copy.deepcopy(MINIMAL)
+            base["components"] = {"schemas": {"U": {
+                "oneOf": [{"type": "object",
+                           "properties": {"id": {"type": "string"}}}]}}}
+            (base["paths"]["/users"]["get"]["responses"]["200"]["content"]
+             ["application/json"])["schema"] = {"$ref": "#/components/schemas/U"}
+            report = self.diff(base, copy.deepcopy(base))
+            self.assertEqual(report["result"], "ERROR")
+            self.assertEqual(report["unanalyzable"][0]["keyword"], "oneOf")
+
+        def test_a_oneof_on_a_parameter_schema_is_refused(self):
+            base = copy.deepcopy(MINIMAL)
+            base["paths"]["/users"]["get"]["parameters"][0]["schema"] = {
+                "oneOf": [{"type": "integer"}, {"type": "string"}]}
+            report = self.diff(base, copy.deepcopy(base))
+            self.assertEqual(report["result"], "ERROR")
+
+        def test_allof_is_still_analyzed_and_never_refused(self):
+            """The near-miss: allOf IS walked, so it must not be refused."""
+            base = copy.deepcopy(MINIMAL)
+            (base["paths"]["/users"]["get"]["responses"]["200"]["content"]
+             ["application/json"])["schema"] = {"allOf": [
+                 {"type": "object", "properties": {"id": {"type": "string"}}}]}
+            head = copy.deepcopy(base)
+            head["paths"]["/users"]["get"]["responses"]["200"]["content"][
+                "application/json"]["schema"]["allOf"][0]["properties"][
+                    "extra"] = {"type": "string"}
+            report = self.diff(base, head)
+            self.assertEqual(report["result"], "PASS", report["error"])
+            self.assertEqual(report["unanalyzable"], [])
+
+        def test_the_unanalyzable_exit_code_is_two_through_main(self):
+            base, head = self._wrapped("oneOf")
+            ledger = self.dir / "gates.jsonl"
+            code = main(["--base", self.write("b.json", base),
+                         "--head", self.write("h.json", head),
+                         "--ledger", str(ledger)])
+            self.assertEqual(code, 2)
+            record = json.loads(
+                ledger.read_text(encoding="utf-8").splitlines()[-1])
+            self.assertEqual(record["verdict"], "ERROR")
+            self.assertIn("unanalyzable_schema", record)
+
+        # -- nullable_removed (audit3 F5, secondary) ----------------------
+
+        def test_nullable_true_to_false_on_a_response_is_breaking(self):
+            base = copy.deepcopy(MINIMAL)
+            props = (base["paths"]["/users"]["get"]["responses"]["200"]
+                     ["content"]["application/json"]["schema"]["properties"])
+            props["name"]["nullable"] = True
+            head = copy.deepcopy(base)
+            (head["paths"]["/users"]["get"]["responses"]["200"]["content"]
+             ["application/json"]["schema"]["properties"]["name"]
+             )["nullable"] = False
+            report = self.diff(base, head)
+            self.assertEqual(report["result"], "FAIL")
+            self.assertEqual(self.kinds(report), ["nullable_removed"])
+
+        def test_nullable_false_to_true_is_additive_and_warned(self):
+            base = copy.deepcopy(MINIMAL)
+            head = copy.deepcopy(base)
+            (head["paths"]["/users"]["get"]["responses"]["200"]["content"]
+             ["application/json"]["schema"]["properties"]["name"]
+             )["nullable"] = True
+            report = self.diff(base, head)
+            self.assertEqual(report["result"], "PASS")
+            self.assertEqual(self.kinds(report, "additive"),
+                             ["nullable_widened"])
+            self.assertTrue(any("nullable -> true" in w
+                                for w in report["warnings"]))
+
+        def test_nullable_unchanged_reports_nothing(self):
+            base = copy.deepcopy(MINIMAL)
+            (base["paths"]["/users"]["get"]["responses"]["200"]["content"]
+             ["application/json"]["schema"]["properties"]["name"]
+             )["nullable"] = True
+            report = self.diff(base, copy.deepcopy(base))
+            self.assertEqual(report["result"], "PASS")
+            self.assertEqual(report["breaking"], [])
+            self.assertEqual(report["additive"], [])
+
+        def test_nullable_removed_is_waivable_unlike_unanalyzable(self):
+            base = copy.deepcopy(MINIMAL)
+            (base["paths"]["/users"]["get"]["responses"]["200"]["content"]
+             ["application/json"]["schema"]["properties"]["name"]
+             )["nullable"] = True
+            head = copy.deepcopy(base)
+            (head["paths"]["/users"]["get"]["responses"]["200"]["content"]
+             ["application/json"]["schema"]["properties"]["name"]
+             )["nullable"] = False
+            report = self.diff(base, head, "no client ever sent null")
+            self.assertEqual(report["result"], "ALLOWED")
+            self.assertEqual(report["allowed_by"], "no client ever sent null")
+
+        # -- the warnings list --------------------------------------------
+
+        def test_every_report_carries_a_warnings_list(self):
+            report = self.diff(copy.deepcopy(MINIMAL), copy.deepcopy(MINIMAL))
+            self.assertEqual(report["warnings"], [])
+            self.assertEqual(report["unanalyzable"], [])
+
+        def test_an_unresolvable_ref_is_warned_not_silently_skipped(self):
+            base = copy.deepcopy(MINIMAL)
+            (base["paths"]["/users"]["get"]["responses"]["200"]["content"]
+             ["application/json"])["schema"] = {
+                 "$ref": "#/components/schemas/Missing"}
+            report = self.diff(base, copy.deepcopy(base))
+            self.assertTrue(any("does not resolve" in w
+                                for w in report["warnings"]),
+                            report["warnings"])
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(OpenApiDiffTests)
     result = unittest.TextTestRunner(verbosity=1).run(suite)

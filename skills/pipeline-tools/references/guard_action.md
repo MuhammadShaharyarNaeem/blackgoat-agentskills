@@ -195,9 +195,97 @@ Test-path matching is **case-insensitive on directory segments** (`tests`,
 this plugin supports, and separator-agnostic, because a Windows payload arrives
 with backslashes (`test_17`).
 
+## What 2.6.1 changed
+
+Four findings from the 2026-09-07 gate-adversarial audit, all in this file.
+
+**Rules 2 and 4 now see `Bash`.** Both were gated on `tool_name in
+WRITE_TOOLS`, so the docstring's "always, lane or no lane" was false for the
+one guarded tool that can write anything. Confirmed ALLOW with an active
+bugfix lane, against `Edit`'s DENY on the same paths: `echo '{}' >>
+gates.jsonl`, `| tee -a`, `python -c "open(...,'a').write(...)"`,
+`Set-Content`, `sed -i tests/orders.test.js`, `perl -pi`, `mv test.js
+test.js.old`, `git checkout -- tests/`, and `rm gates.jsonl` -- which also
+ended the lane and re-enabled hand commits. `bash_write_targets()` now
+extracts every path a shell command plausibly writes (the construct list is in
+the module docstring under BASH WRITES). It OVER-collects candidates by
+design: `is_gate_artifact()` matches four exact basenames plus the sidecar
+suffix, and rule 2 additionally requires the path to exist, so a `sed` script
+operand or a branch name after `git checkout` costs nothing. For rule 2 a test
+DIRECTORY counts as well as a test file -- a deliberate widening (convention
+#8) over the write-tool branch, which targets one file and for which `tests`
+alone would be meaningless.
+
+**The feature bugfix route is detected.** The 2.6.0 detector scanned
+`.docs/bugfix/*` only, so a bug fixed inside an in-flight epic -- the route
+`bgpdd-bugfix` mandates for exactly that case -- armed rule 1 and nothing
+else: the builder could edit the RED and the Orchestrator could delegate
+before intake. `bugfix_report_dirs()` now walks both routes and both feature
+shapes (`implementation/bug-report.md` and
+`implementation/bugs/<slug>/bug-report.md`), and `bugfix_ledger_for()` falls
+back to the epic's `implementation/gates.jsonl` for a slug folder that has no
+ledger of its own. Rule 3's predicate shares that walk, so the two routes
+cannot drift apart again.
+
+**Closed lanes stop arming rule 1.** The guard denied the local `git merge`
+that `bgpdd-bugfix` Phase 5 and `bgpdd-lite` Phase 3 *instruct*, which is a
+rule teaching people to work around it. A lane is closed once its ledger holds
+a `check_commit_gate.py` PASS carrying `--commit` for the lane's current
+milestone -- the bug slug, or `milestone_cursor`. Scoping it to the milestone
+is what stops it becoming a blanket disarm; an unreadable milestone (a null
+cursor, or the unscoped feature-route folder named `implementation`) is
+treated as NOT closed, and `--explain` prints which lanes are armed and why.
+
+**Verify lanes never armed rule 1 to begin with.** `bgpdd-verify` has no
+commit gate -- Quinn's specs are committed by hand outside the lane -- so
+arming rule 1 named a gate that does not exist and left the lane with no
+commit path. The lane is still detected and rules 2-4 still apply.
+
+Plus `GIT_WRITE_RE` widened to `am|rebase|stash [pop|apply]|notes|tag` beside
+the original four, and a separate match for `gh pr merge`. `git push` and
+`git replace` are deliberately outside it: neither writes local history that a
+gate was supposed to author. `git tag` and `git stash` are in it even though
+their read-only forms (`git tag -l`, `git stash list`) are then over-blocked
+-- an over-block costs one `--explain`, an under-block costs a rewritten
+history.
+
 ## Self-test inventory
 
-**42** cases, `python guard_action.py --self-test`:
+**88** cases, `python guard_action.py --self-test`. The 2.6.0 forty-two below,
+plus forty-six for the changes above:
+
+- **Rule 4 through Bash (16)** — single and `>>` redirection, an fd-prefixed
+  redirect, piped and bare `tee`, the four content cmdlets, the five item
+  cmdlets, `python -c` opening in `w`/`a`/`r+`/`wb` (and ALLOW for a read),
+  ten mutating verbs, renaming the ledger away, all four artifact kinds,
+  case-insensitive and backslashed paths, `sed`/`perl` only with `-i`,
+  `git checkout --` and `git restore`, no lane required — and four ALLOW cases
+  (`cat`, `grep`, running `check_ledger.py`, `ls`) so the branch cannot be a
+  blanket deny on any command that mentions a filename.
+- **Rule 2 through Bash (7)** — seven mutating forms of an existing test path
+  denied; `git checkout -- tests/` and `git restore tests` denied on the
+  directory; a NEW test path allowed; a source path allowed; allowed with no
+  bugfix lane and after the commit gate; four test-RUNNER commands allowed
+  (`npm test`, `pytest tests/`, `dotnet test`, a Playwright run naming the
+  spec) — running a test is not writing one.
+- **The feature route (6)** — rules 2 and 3 armed by
+  `implementation/bug-report.md` and by the slug-scoped shape; the epic-ledger
+  fallback; rule 1 unaffected; the unscoped route reads no slug and is not
+  closed.
+- **Closed lanes (8)** — merge and commit allowed after a slug-scoped
+  `--commit` PASS; a PASS for another milestone, an unscoped PASS, and a PASS
+  without `--commit` all still deny; lite's cursor case; a null cursor still
+  denies; an earlier milestone's commit does not close the epic; a closed lane
+  still arms rule 4.
+- **Verify lanes (3)** — rule 1 not armed; the lane is still detected and rule
+  4 still fires on its ledger; a verify lane beside a build lane still denies.
+- **The widened git surface (4)** — nine denied forms; `gh pr merge` named in
+  its own message; eight read-only `git`/`gh` forms still allowed; the whole
+  surface still lane-scoped.
+- **Extractor and explain (2)** — quoting and segment handling, empty and
+  `None` input; `--explain` reports per-lane arming.
+
+The 2.6.0 forty-two:
 
 - **Rule 1 (11)** — deny in each of the three lane kinds, the quick-lane reason
   naming `check_quick_close.py`; allow with no lane, with a 13-hour-stale lane,
@@ -212,8 +300,10 @@ with backslashes (`test_17`).
   allowed when the report is stale; fires before any ledger exists; a `FAIL`
   intake record does not count as a PASS.
 - **Rule 4 (4)** — all four artifact kinds denied; denied with no lane and for
-  every write tool; ordinary `.json` files untouched; the documented `Bash`
-  redirection limit asserted so it cannot regress silently.
+  every write tool; ordinary `.json` files untouched; and
+  `test_29_bash_may_not_be_used_to_dodge_rule_4`, which asserted the
+  documented `Bash` redirection LIMIT in 2.6.0 and now asserts the DENY that
+  replaced it.
 - **Fail-open (6)** — malformed stdin (six shapes) allows; unknown tool allows;
   missing `tool_input` allows; a `.docs` that is a file yields no lanes; corrupt
   state and ledger do not raise; an empty `pipeline` is not a lane.

@@ -9,9 +9,11 @@ against synthetic fixtures. What that cannot prove is the property the
 pipelines actually depend on: that the gate, invoked as a SUBPROCESS the way
 `build-gate-ladders.md` § 6b and `bgpdd-shipping` Step 3 invoke it, returns the
 documented exit code AND names the documented `kind` on real files on disk,
-and that the ledger line it writes is a link a hand edit breaks --
-`check_openapi_diff.py` is not in `check_ledger.py`'s CHAINED_GATES list, so
-nothing else in the tree asserts that its records chain.
+and that the ledger line it writes is a link a hand edit breaks.
+(Until 2.6.1 `check_openapi_diff.py` was absent from `check_ledger.py`'s
+CHAINED_GATES -- a missing comma had glued its name onto `update_state.py`'s --
+so nothing else in the tree asserted that its records chain. The list is fixed
+and guarded now; these steps stay as the end-to-end half.)
 
 Deliberately needs no `claude -p` -- every step is a subprocess call to a
 deterministic stdlib-Python CLI against fixture files this script writes, so it
@@ -504,6 +506,145 @@ def run_suite(work):
            lambda d: d.get("result") == "ERROR"
            and "anchors" in (d.get("error") or ""),
            "an unsupported YAML construct was not refused by name")
+
+    # --- 26 (2.6.1): a schema the walk cannot read is a REFUSAL -------------
+    # The walk descends properties/items/allOf and not oneOf/anyOf/not, and
+    # said nothing about that: a response wrapped in `oneOf` with a field
+    # removed inside returned exit 0 PASS, breaking: [], no warning. A PASS
+    # over a document the gate did not analyze is worse than a refusal.
+    def wrapped(keyword, drop):
+        doc = copy.deepcopy(BASE)
+        inner = {"type": "object",
+                 "properties": {"id": {"type": "string"},
+                                "customerName": {"type": "string"}}}
+        node = {"not": inner} if keyword == "not" else {keyword: [inner]}
+        (doc["paths"]["/v1/orders"]["get"]["responses"]["200"]["content"]
+         ["application/json"])["schema"] = node
+        if drop:
+            target = (node["not"] if keyword == "not" else node[keyword][0])
+            del target["properties"]["customerName"]
+        return doc
+
+    def wrapped_pair(keyword, tag, extra=()):
+        """Both documents wrapped, so the ONLY difference is inside the union.
+
+        Diffing a wrapped head against the plain BASE would report the wrapper
+        itself as a pile of removals, which is not the case under test.
+        """
+        b = write(f"{tag}-base.json", wrapped(keyword, False))
+        h = write(f"{tag}-head.json", wrapped(keyword, True))
+        return run_gate(CHECK_DIFF, ["--base", b, "--head", h,
+                                     "--milestone", MILESTONE,
+                                     "--ledger", ledger] + list(extra), work)
+
+    proc = wrapped_pair("oneOf", "oneof")
+    expect("26. a `oneOf`-wrapped removed field -> exit 2 (unanalyzable_schema), "
+           "never PASS", proc, 2,
+           lambda d: d.get("result") == "ERROR"
+           and d.get("breaking") == []
+           and len(d.get("unanalyzable") or []) == 1
+           and d["unanalyzable"][0]["keyword"] == "oneOf"
+           and "GET /v1/orders 200 application/json" in d["unanalyzable"][0]["where"]
+           and "unanalyzable_schema" in (d.get("error") or ""),
+           "the union-wrapped removal was not refused by name")
+
+    for keyword, tag, label in (("anyOf", "anyof", "26b"), ("not", "not", "26c")):
+        proc = wrapped_pair(keyword, tag)
+        expect(f"{label}. a `{keyword}`-wrapped removed field -> exit 2 "
+               "(unanalyzable_schema)", proc, 2,
+               lambda d, k=keyword: d.get("result") == "ERROR"
+               and d.get("breaking") == []
+               and (d.get("unanalyzable") or [{}])[0].get("keyword") == k,
+               f"{keyword} was not refused")
+
+    # 26d: the waiver does not clear it. --allow-breaking waives a diff
+    # somebody read, and there is no diff here to read.
+    proc = wrapped_pair("oneOf", "oneof-waived",
+                        ["--allow-breaking", "agreed with the client team"])
+    expect("26d. --allow-breaking does NOT clear an unanalyzable schema -> exit 2",
+           proc, 2,
+           lambda d: d.get("result") == "ERROR" and d.get("allowed_by") is None,
+           "a waiver cleared a schema the gate never analyzed")
+
+    # 26e: the near-miss. allOf IS walked, so it must not be refused -- a rule
+    # that refused every composition keyword would be a different bug.
+    allof_doc = copy.deepcopy(BASE)
+    (allof_doc["paths"]["/v1/orders"]["get"]["responses"]["200"]["content"]
+     ["application/json"])["schema"] = {"allOf": [
+         {"type": "object", "properties": {"id": {"type": "string"}}}]}
+    allof_base = write("allof-base.json", allof_doc)
+    allof_head_doc = copy.deepcopy(allof_doc)
+    (allof_head_doc["paths"]["/v1/orders"]["get"]["responses"]["200"]["content"]
+     ["application/json"]["schema"]["allOf"][0]["properties"]
+     )["currency"] = {"type": "string"}
+    allof_head = write("allof-head.json", allof_head_doc)
+    proc = run_gate(CHECK_DIFF, ["--base", allof_base, "--head", allof_head,
+                                 "--milestone", MILESTONE, "--ledger", ledger],
+                    work)
+    expect("26e. an `allOf` composition is still ANALYZED, not refused -> exit 0",
+           proc, 0,
+           lambda d: d.get("result") == "PASS" and d.get("unanalyzable") == []
+           and kinds(d, "additive") == ["response_field_added"],
+           "allOf was refused, or its additive change was missed")
+
+    # --- 27 (2.6.1): nullable: true -> false on a response ------------------
+    # Passed silently. The same component is nearly always the one accepted in
+    # requests, so the flip breaks every caller that sends or round-trips null.
+    nullable_base_doc = copy.deepcopy(BASE)
+    nullable_base_doc["components"]["schemas"]["Order"]["properties"][
+        "customerName"]["nullable"] = True
+    nullable_base = write("nullable-base.json", nullable_base_doc)
+    nullable_head_doc = copy.deepcopy(nullable_base_doc)
+    nullable_head_doc["components"]["schemas"]["Order"]["properties"][
+        "customerName"]["nullable"] = False
+    nullable_head = write("nullable-head.json", nullable_head_doc)
+    proc = run_gate(CHECK_DIFF, ["--base", nullable_base, "--head", nullable_head,
+                                 "--milestone", MILESTONE, "--ledger", ledger],
+                    work)
+    expect("27. nullable true -> false on a response schema -> exit 1 "
+           "(nullable_removed)", proc, 1,
+           lambda d: kinds(d) == ["nullable_removed"]
+           and "customerName" in d["breaking"][0]["path"],
+           "the nullability narrowing was not reported as breaking")
+
+    # 27b: the widening is additive AND warned -- a caller that never handled
+    # null now has to, which is worth saying without gating on it.
+    proc = run_gate(CHECK_DIFF, ["--base", nullable_head, "--head", nullable_base,
+                                 "--milestone", MILESTONE, "--ledger", ledger],
+                    work)
+    expect("27b. nullable false -> true is additive, and warned -> exit 0",
+           proc, 0,
+           lambda d: d.get("result") == "PASS"
+           and kinds(d, "additive") == ["nullable_widened"]
+           and any("nullable" in w for w in (d.get("warnings") or [])),
+           "the widening was not additive-with-a-warning")
+
+    # 27c: unlike an unanalyzable schema, this one IS waivable -- it is a diff
+    # somebody can read.
+    proc = run_gate(CHECK_DIFF, ["--base", nullable_base, "--head", nullable_head,
+                                 "--milestone", MILESTONE, "--ledger", ledger,
+                                 "--allow-breaking", "no client ever sent null"],
+                    work)
+    expect("27c. nullable_removed is waivable -> exit 0 (ALLOWED)", proc, 0,
+           lambda d: d.get("result") == "ALLOWED"
+           and d.get("allowed_by") == "no client ever sent null",
+           "the waiver did not clear a readable breaking diff")
+
+    # --- 28 (2.6.1): every report carries a warnings list -------------------
+    # There was no `warnings` key in the output at all, so a skipped branch and
+    # an unresolvable $ref were indistinguishable from a clean compare.
+    dangling = copy.deepcopy(BASE)
+    (dangling["paths"]["/v1/orders"]["get"]["responses"]["200"]["content"]
+     ["application/json"])["schema"] = {"$ref": "#/components/schemas/Missing"}
+    dangling_path = write("dangling-ref.json", dangling)
+    proc = run_gate(CHECK_DIFF, ["--base", dangling_path, "--head", dangling_path,
+                                 "--milestone", MILESTONE, "--ledger", ledger],
+                    work)
+    expect("28. an unresolvable `$ref` is WARNED, not silently skipped -> exit 0",
+           proc, 0,
+           lambda d: d.get("result") == "PASS"
+           and any("does not resolve" in w for w in (d.get("warnings") or [])),
+           "a dangling $ref produced no warning")
 
 
 if __name__ == "__main__":

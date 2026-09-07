@@ -29,6 +29,7 @@ import hashlib
 import itertools
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -50,6 +51,9 @@ CHECK_HANDOFF = SCRIPTS / "check_handoff.py"
 CHECK_ALWAYS_ON = SCRIPTS / "check_always_on.py"
 CHECK_TIER1_PROVENANCE = SCRIPTS / "check_tier1_provenance.py"
 CHECK_RUNTIME_RECIPE = SCRIPTS / "check_runtime_recipe.py"
+MARK_MILESTONE = SCRIPTS / "mark_milestone.py"
+RECORD_RUN = SCRIPTS / "record_run.py"
+GUARD_ACTION = SCRIPTS / "guard_action.py"
 
 # The shared record writer lives in evals/, two levels up from this file. Shared,
 # not copied into each case, because the record shape has to match the one
@@ -743,24 +747,31 @@ def run_lifecycle(repo):
                "" if ok else json.dumps(data))
 
     # 12b: the SAME two checks, actually executed through run_quiet.py --capture,
-    # each line citing its own artifact and claiming the exit code the sidecar
-    # recorded. The `exit 1` line is deliberate: a clean `git grep` for secrets
-    # exits 1 (no matches), so the gate must tie a line to its capture by exit-code
-    # EQUALITY rather than by "was it zero".
+    # each line citing its own artifact, claiming the exit code the sidecar
+    # recorded AND naming the command the sidecar recorded. The `exit 1` line is
+    # deliberate: a clean `git grep` for secrets exits 1 (no matches), so the
+    # gate must tie a line to its capture by exit-code EQUALITY rather than by
+    # "was it zero" -- and, since 2.6.1, by the command as well.
+    #
+    # The lines name the real argv (shlex-joined) rather than a plausible
+    # `npm audit` string. That is the point of `capture_command_mismatch`: a
+    # line may only claim the command its capture recorded, and this eval is not
+    # allowed to model a report that lies about it.
     audit_capture = security_dir / "npm-audit.md"
     secrets_capture = security_dir / "secrets-scan.md"
-    run_py(RUN_QUIET, ["--capture", audit_capture, "--",
-                       sys.executable, "-c", "print('0 high, 0 critical')"])
-    run_py(RUN_QUIET, ["--capture", secrets_capture, "--",
-                       sys.executable, "-c", "import sys; print('no matches'); sys.exit(1)"])
+    audit_argv = [sys.executable, "-c", "print('0 high, 0 critical')"]
+    secrets_argv = [sys.executable, "-c",
+                    "import sys; print('no matches'); sys.exit(1)"]
+    run_py(RUN_QUIET, ["--capture", audit_capture, "--"] + audit_argv)
+    run_py(RUN_QUIET, ["--capture", secrets_capture, "--"] + secrets_argv)
 
     EXECUTED_REPORT = (
         "# Security Report\n\n"
         "## Security Audit: proj — 2026-08-12\n\n"
-        "- Dependency audit: PASS — `npm audit --audit-level=high` — exit 0 — 0 high, 0 critical"
-        " — capture: evidence/security/npm-audit.md\n"
-        "- Secrets scan: PASS — `git grep -nE \"(api_key|secret)\"` — exit 1 — 0 matches"
-        " — capture: evidence/security/secrets-scan.md\n\n"
+        "- Dependency audit: PASS — `" + shlex.join(audit_argv) + "` — exit 0"
+        " — 0 high, 0 critical — capture: evidence/security/npm-audit.md\n"
+        "- Secrets scan: PASS — `" + shlex.join(secrets_argv) + "` — exit 1"
+        " — 0 matches — capture: evidence/security/secrets-scan.md\n\n"
         "**Verdict:** Pass\n")
     executed_report_path = impl_dir / "security-report-executed.md"
     executed_report_path.write_text(EXECUTED_REPORT, encoding="utf-8")
@@ -774,10 +785,68 @@ def run_lifecycle(repo):
               and data.get("verdict") == "Pass"
               and data.get("uncaptured") == []
               and data.get("capture_disagrees") == []
+              and data.get("capture_command_mismatches") == []
               and data.get("capture_problems") == []
               and data.get("allow_uncaptured") is False)
         record("12b. check_agent_report: the same checks, really captured -> exit 0", ok,
                "" if ok else json.dumps(data))
+
+    # 12c (2.6.1): ONE real capture cited by three unrelated check lines, each
+    # claiming the exit code that capture recorded. Exit-code equality alone
+    # cleared all three -- every clean scan claims 0 or 1 -- and the report
+    # passed with verdict Pass. The command tie is what refuses it now, and the
+    # first line (which DOES name the captured command) must still clear, so the
+    # step proves the term is per-line rather than a blanket refusal.
+    REUSED_REPORT = (
+        "# Security Report\n\n"
+        "## Security Audit: proj — 2026-09-07\n\n"
+        "- Secrets scan: PASS — `" + shlex.join(secrets_argv) + "` — exit 1"
+        " — 0 matches — capture: evidence/security/secrets-scan.md\n"
+        "- Dependency audit: PASS — `npm audit --production` — exit 1"
+        " — 0 high — capture: evidence/security/secrets-scan.md\n"
+        "- Auth boundary review: PASS — `dotnet test Auth.Tests` — exit 1"
+        " — 12 passed — capture: evidence/security/secrets-scan.md\n\n"
+        "**Verdict:** Pass\n")
+    reused_report_path = impl_dir / "security-report-reused.md"
+    reused_report_path.write_text(REUSED_REPORT, encoding="utf-8")
+
+    proc = run_py(CHECK_AGENT_REPORT, ["--report", reused_report_path,
+                                       "--milestone", MILESTONE2_TITLE,
+                                       "--repo", repo])
+    data = parse_json(
+        proc,
+        "12c. check_agent_report: ONE capture cited by three unrelated lines "
+        "-> exit 1 (capture_command_mismatch)")
+    if data is not None:
+        problems = [p.get("problem") for p in (data.get("capture_problems") or [])]
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and data.get("verdict") == "Pass"
+              and data.get("uncaptured") == []
+              and data.get("capture_disagrees") == []
+              and sorted(data.get("capture_command_mismatches") or [])
+                  == ["Auth boundary review", "Dependency audit"]
+              and set(problems) == {"capture_command_mismatch"})
+        record("12c. check_agent_report: ONE capture cited by three unrelated "
+               "lines -> exit 1 (capture_command_mismatch)", ok,
+               "" if ok else json.dumps(data))
+
+    # 12d (2.6.1): --allow-uncaptured waives the CITATION, never the command
+    # tie. A flag for grading a pre-contract archive must not become a way to
+    # cite somebody else's capture.
+    proc = run_py(CHECK_AGENT_REPORT, ["--report", reused_report_path,
+                                       "--milestone", MILESTONE2_TITLE,
+                                       "--repo", repo, "--allow-uncaptured"])
+    data = parse_json(
+        proc,
+        "12d. check_agent_report: --allow-uncaptured does not waive the "
+        "command tie -> exit 1")
+    if data is not None:
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and data.get("allow_uncaptured") is True
+              and sorted(data.get("capture_command_mismatches") or [])
+                  == ["Auth boundary review", "Dependency audit"])
+        record("12d. check_agent_report: --allow-uncaptured does not waive the "
+               "command tie -> exit 1", ok, "" if ok else json.dumps(data))
 
     # --- Steps 13-16: the H3 interface gates, composed against this repo ----
     # Each ships its own --self-test against synthetic fixtures. What is new
@@ -941,6 +1010,302 @@ def run_lifecycle(repo):
               and codes == ["readiness_check_missing", "start_command_missing"])
         record("16b. check_runtime_recipe: every block present, both facts TBD -> exit 1", ok,
                "" if ok else json.dumps(data))
+
+    # --- Step 17 (2.6.1): check_handoff --advisory --------------------------
+    # bgpdd-learn's Forge propose handoff and bgpdd-build's Aria Mode 2 advisory
+    # both return a RECOMMENDATION and no artifact, and both failed this gate
+    # exit 1 -- so the Orchestrator's mandatory validation was contradicted by
+    # the pipelines twice per epic. The pair below is the point: the SAME
+    # handoff, refused without the flag and accepted with it, and the flag
+    # recorded in the chained ledger line so the waiver is attributable.
+    advisory_handoff = handoff_dir / "forge-propose.md"
+    advisory_handoff.write_text(
+        "<handoff><status>COMPLETE</status>"
+        "<blockers>None</blockers></handoff>\n", encoding="utf-8")
+    proc = run_py(CHECK_HANDOFF, ["--handoff", advisory_handoff,
+                                  "--persona", "forge", "--repo", repo])
+    data = parse_json(proc, "17a. check_handoff: Forge's propose handoff without --advisory -> exit 1")
+    if data is not None:
+        elements = [f.get("element") for f in (data.get("findings") or [])]
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and elements == ["changed_skills"])
+        record("17a. check_handoff: Forge's propose handoff without --advisory -> exit 1",
+               ok, "" if ok else json.dumps(data))
+
+    handoff_ledger = impl_dir / "handoff-gates.jsonl"
+    proc = run_py(CHECK_HANDOFF, ["--handoff", advisory_handoff,
+                                  "--persona", "forge", "--repo", repo,
+                                  "--advisory", "--ledger", handoff_ledger])
+    data = parse_json(proc, "17b. check_handoff --advisory: the same handoff -> exit 0, advisory recorded")
+    if data is not None:
+        records = [json.loads(l) for l in
+                   handoff_ledger.read_text(encoding="utf-8").splitlines() if l.strip()]
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and data.get("advisory") is True
+              and data.get("advisory_waived_elements") == ["changed_skills"]
+              and bool(records) and records[-1].get("advisory") is True
+              and records[-1].get("verdict") == "PASS")
+        record("17b. check_handoff --advisory: the same handoff -> exit 0, advisory recorded",
+               ok, "" if ok else json.dumps(data))
+
+    # 17c: the flag waives the ARTIFACT and nothing else. A builder handoff with
+    # no <changed_files> is still refused with --advisory, because an agent that
+    # wrote code has an artifact whether or not the brief asked for one.
+    proc = run_py(CHECK_HANDOFF, ["--handoff", advisory_handoff,
+                                  "--persona", "mason", "--repo", repo,
+                                  "--advisory"])
+    data = parse_json(proc, "17c. check_handoff --advisory does not waive <changed_files> -> exit 1")
+    if data is not None:
+        elements = [f.get("element") for f in (data.get("findings") or [])]
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and elements == ["changed_files"])
+        record("17c. check_handoff --advisory does not waive <changed_files> -> exit 1",
+               ok, "" if ok else json.dumps(data))
+
+    # --- Step 18 (2.6.1): mark_milestone --reopen ---------------------------
+    # Completion was a one-way door: a shipping finding against a milestone
+    # whose [x] was written had nowhere to go. This runs the real round trip on
+    # the plan this suite has been building -- reopen M2, then read it back out
+    # of the real next_milestone.py.
+    finding = impl_dir / "shipping-finding.md"
+    finding.write_text("p95 regressed 40% under the canary\n", encoding="utf-8")
+    reopen_ledger = impl_dir / "reopen-gates.jsonl"
+    proc = run_py(MARK_MILESTONE, ["--plan", plan_path, "--reopen",
+                                   MILESTONE2_HEADING, "--evidence", finding,
+                                   "--reason", "shipping found a p95 regression",
+                                   "--ledger", reopen_ledger])
+    data = parse_json(proc, "18a. mark_milestone --reopen: removes the [x] -> exit 0")
+    if data is not None:
+        text = plan_path.read_text(encoding="utf-8")
+        records = [json.loads(l) for l in
+                   reopen_ledger.read_text(encoding="utf-8").splitlines() if l.strip()]
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and data.get("reopened") is True
+              and f"## {MILESTONE2_HEADING}\n" in text
+              and f"{MILESTONE2_HEADING} [x]" not in text
+              and "[ ]" not in text
+              and bool(records) and records[-1].get("action") == "reopen"
+              and records[-1].get("reason") == "shipping found a p95 regression")
+        record("18a. mark_milestone --reopen: removes the [x] -> exit 0", ok,
+               "" if ok else json.dumps(data))
+
+    proc = run_py(NEXT_MILESTONE, ["--plan", plan_path, "--state", state_path])
+    data = parse_json(proc, "18b. next_milestone returns the reopened milestone as NEXT")
+    if data is not None:
+        ok = (proc.returncode == 0 and data.get("result") == "NEXT"
+              and data.get("next_milestone", {}).get("title") == MILESTONE2_HEADING)
+        record("18b. next_milestone returns the reopened milestone as NEXT", ok,
+               "" if ok else json.dumps(data))
+
+    # 18c: the three mandatory flags. A reopen is the one write here that
+    # destroys a recorded verdict, so an unevidenced, unreasoned or unrecorded
+    # one is a usage error and the plan is left alone.
+    reopen_refusals = [
+        ("no --evidence", ["--plan", plan_path, "--reopen", MILESTONE3_HEADING,
+                           "--reason", "x", "--ledger", reopen_ledger]),
+        ("empty --reason", ["--plan", plan_path, "--reopen", MILESTONE3_HEADING,
+                            "--evidence", finding, "--reason", "   ",
+                            "--ledger", reopen_ledger]),
+        ("no --ledger", ["--plan", plan_path, "--reopen", MILESTONE3_HEADING,
+                         "--evidence", finding, "--reason", "x"]),
+        ("--evidence that does not exist",
+         ["--plan", plan_path, "--reopen", MILESTONE3_HEADING, "--evidence",
+          impl_dir / "nope.md", "--reason", "x", "--ledger", reopen_ledger]),
+    ]
+    codes = [run_py(MARK_MILESTONE, argv).returncode for _n, argv in reopen_refusals]
+    ok = codes == [2, 2, 2, 2]
+    record("18c. mark_milestone --reopen without evidence/reason/ledger -> exit 2 (x4)",
+           ok, "" if ok else f"exit codes {codes} for "
+                             f"{[n for n, _a in reopen_refusals]}")
+
+    # --- Step 19 (2.6.1): the Tier-1 consumer end ---------------------------
+    # 15a/15b prove the producer half. These two are the consumer half the
+    # audit found had no consumers at all: a stamp dated in the future, and
+    # --verify-current against a repo whose HEAD has moved on.
+    (summary / "contacts" / "overview.md").write_text(
+        f"# Contacts — overview\n\n> Provenance — 2031-01-01\n> `{head}`\n\n"
+        "## Owning services\n\napi\n", encoding="utf-8")
+    proc = run_py(CHECK_TIER1_PROVENANCE, ["--summary-root", summary,
+                                           "--feature", "contacts",
+                                           "--repo", f"proj={repo}"])
+    data = parse_json(proc, "19a. check_tier1_provenance: a stamp dated in the future -> exit 1")
+    if data is not None:
+        codes = sorted({f.get("code") for f in (data.get("findings") or [])})
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and codes == ["stamp_date_future"])
+        record("19a. check_tier1_provenance: a stamp dated in the future -> exit 1",
+               ok, "" if ok else json.dumps(data))
+
+    # Restore an honest stamp, then move HEAD on. Drift is still a warning by
+    # default (bgpdd-discovery section 1) and a finding under --verify-current.
+    (summary / "contacts" / "overview.md").write_text(
+        f"# Contacts — overview\n\n> Provenance — 2026-08-12\n> `{head}`\n\n"
+        "## Owning services\n\napi\n", encoding="utf-8")
+    (repo / "src" / "drifted.py").write_text("# moves HEAD\n", encoding="utf-8")
+    run_git(["add", "src/drifted.py"], repo)
+    run_git(["commit", "-qm", "tier1 drift step"], repo)
+    t1_common = ["--summary-root", summary, "--feature", "contacts",
+                 "--repo", f"proj={repo}"]
+
+    proc = run_py(CHECK_TIER1_PROVENANCE, t1_common)
+    data = parse_json(proc, "19b. check_tier1_provenance: drift alone is still exit 0")
+    if data is not None:
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and len(data.get("drift") or []) >= 1
+              and data.get("findings") == [])
+        record("19b. check_tier1_provenance: drift alone is still exit 0", ok,
+               "" if ok else json.dumps(data))
+
+    proc = run_py(CHECK_TIER1_PROVENANCE, t1_common + ["--verify-current"])
+    data = parse_json(proc, "19c. check_tier1_provenance --verify-current: drift -> exit 1 (tier1_drift)")
+    if data is not None:
+        codes = sorted({f.get("code") for f in (data.get("findings") or [])})
+        drifted = [f for f in (data.get("findings") or [])
+                   if f.get("code") == "tier1_drift"]
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and codes == ["tier1_drift"]
+              and bool(drifted) and drifted[0].get("stamped") == head
+              and drifted[0].get("head") != head)
+        record("19c. check_tier1_provenance --verify-current: drift -> exit 1 (tier1_drift)",
+               ok, "" if ok else json.dumps(data))
+
+    t1_ledger = impl_dir / "tier1-gates.jsonl"
+    proc = run_py(CHECK_TIER1_PROVENANCE, t1_common + [
+        "--verify-current", "--allow-drift", "the commit touched only CI",
+        "--ledger", t1_ledger])
+    data = parse_json(proc, "19d. --allow-drift: exit 0 and the reason in the ledger")
+    if data is not None:
+        records = [json.loads(l) for l in
+                   t1_ledger.read_text(encoding="utf-8").splitlines() if l.strip()]
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and data.get("allow_drift") == "the commit touched only CI"
+              and bool(records)
+              and records[-1].get("allow_drift_reason") == "the commit touched only CI")
+        record("19d. --allow-drift: exit 0 and the reason in the ledger", ok,
+               "" if ok else json.dumps(data))
+
+    empty = run_py(CHECK_TIER1_PROVENANCE,
+                   t1_common + ["--verify-current", "--allow-drift", "   "])
+    orphan = run_py(CHECK_TIER1_PROVENANCE,
+                    t1_common + ["--allow-drift", "no --verify-current"])
+    ok = empty.returncode == 2 and orphan.returncode == 2
+    record("19e. --allow-drift empty, or without --verify-current -> exit 2", ok,
+           "" if ok else f"empty={empty.returncode} orphan={orphan.returncode}")
+
+    # --- Step 20 (2.6.1): record_run refuses an unresolvable tier -----------
+    # An unrecognised --model recorded cleanly with tier: null and silently
+    # deleted the verifier-below-producer check for that delegation. A mistyped
+    # flag must not be able to disable a gate.
+    run_log = impl_dir / "run-log-2611.jsonl"
+    log_common = ["--log", run_log, "--pipeline", "bgpdd-build",
+                  "--phase", "Phase 2", "--event", "delegation",
+                  "--unit", MILESTONE2_TITLE]
+    producer = run_py(RECORD_RUN, log_common + ["--agent", "mason",
+                                                "--model", "claude-opus-4-1"])
+    typo = run_py(RECORD_RUN, log_common + ["--agent", "luna",
+                                            "--model", "gpt-4o"])
+    inversion = run_py(RECORD_RUN, log_common + ["--agent", "luna",
+                                                 "--model", "haiku"])
+    typo_data = None
+    try:
+        typo_data = json.loads(typo.stdout)
+    except ValueError:
+        pass
+    lines = [json.loads(l) for l in
+             run_log.read_text(encoding="utf-8").splitlines() if l.strip()]
+    ok = (producer.returncode == 0 and typo.returncode == 2
+          and typo_data is not None
+          and typo_data.get("problem") == "model_unknown"
+          and inversion.returncode == 1
+          # The producer record is the only one written: the typo wrote
+          # nothing, and the inversion was refused before the write.
+          and [r.get("agent") for r in lines] == ["mason"])
+    record("20. record_run: an unresolvable --model is exit 2 (model_unknown), "
+           "and the inversion check still fires after it", ok,
+           "" if ok else f"producer={producer.returncode} typo={typo.returncode} "
+                         f"inversion={inversion.returncode} log={lines!r}")
+
+    # 20b: dep is a producer, so a verifier below Dep is the same inversion.
+    dep_log = impl_dir / "run-log-dep.jsonl"
+    dep_common = ["--log", dep_log, "--pipeline", "bgpdd-shipping",
+                  "--phase", "Step 2", "--event", "delegation",
+                  "--unit", "Launch"]
+    dep = run_py(RECORD_RUN, dep_common + ["--agent", "dep", "--model", "opus"])
+    below = run_py(RECORD_RUN, dep_common + ["--agent", "vera", "--model", "haiku"])
+    ok = dep.returncode == 0 and below.returncode == 1
+    record("20b. record_run: a verifier below `dep` is an inversion -> exit 1",
+           ok, "" if ok else f"dep={dep.returncode} vera={below.returncode}")
+
+    # --- Step 21 (2.6.1): the guard hook sees Bash ---------------------------
+    # Rules 2 and 4 tested `tool_name in WRITE_TOOLS`, so one `>>` rewrote any
+    # ledger while Edit on the same path was denied. Driven through real stdin,
+    # the way the runtime drives it, so the payload shape is exercised too.
+    guard_root = impl_dir / "guard-scratch"
+    (guard_root / ".docs" / "bugfix" / "login-500").mkdir(parents=True, exist_ok=True)
+    (guard_root / ".docs" / "bugfix" / "login-500" / "bug-report.md").write_text(
+        "# Bug\n", encoding="utf-8")
+    (guard_root / ".docs" / "bugfix" / "login-500" / "gates.jsonl").write_text(
+        json.dumps({"gate": "check_bugfix_intake.py", "verdict": "PASS",
+                    "argv": [], "milestone": "login-500"}) + "\n",
+        encoding="utf-8")
+    (guard_root / "tests").mkdir(parents=True, exist_ok=True)
+    (guard_root / "tests" / "orders.test.js").write_text("t\n", encoding="utf-8")
+
+    def guard(tool, tool_input):
+        payload = json.dumps({"hook_event_name": "PreToolUse",
+                              "tool_name": tool, "tool_input": tool_input,
+                              "cwd": str(guard_root)})
+        proc = subprocess.run([sys.executable, str(GUARD_ACTION)],
+                              input=payload, capture_output=True, text=True,
+                              timeout=120)
+        if not proc.stdout.strip():
+            return None
+        return (json.loads(proc.stdout)["hookSpecificOutput"]
+                ["permissionDecisionReason"])
+
+    ledger_rel = ".docs/bugfix/login-500/gates.jsonl"
+    denied_writes = [
+        "echo '{}' >> " + ledger_rel,
+        "echo '{}' | tee -a " + ledger_rel,
+        "Set-Content " + ledger_rel + " '{}'",
+        "rm " + ledger_rel,
+        "python -c \"open('" + ledger_rel + "','a').write('{}')\"",
+    ]
+    denied_tests = [
+        "sed -i s/a/b/ tests/orders.test.js",
+        "mv tests/orders.test.js tests/orders.test.js.old",
+        "git checkout -- tests/",
+    ]
+    allowed = ["cat " + ledger_rel, "npm test", "git status"]
+    write_reasons = [guard("Bash", {"command": c}) for c in denied_writes]
+    test_reasons = [guard("Bash", {"command": c}) for c in denied_tests]
+    allow_reasons = [guard("Bash", {"command": c}) for c in allowed]
+    ok = (all(r and "gate artifact" in r for r in write_reasons)
+          and all(r and "test path" in r for r in test_reasons)
+          and all(r is None for r in allow_reasons))
+    record("21. guard_action: Bash redirection/tee/cmdlet/rm/python -c into a "
+           "ledger, and sed/mv/git-checkout of a frozen test, all DENY", ok,
+           "" if ok else f"writes={write_reasons} tests={test_reasons} "
+                         f"allowed={allow_reasons}")
+
+    # 21b: the sanctioned close. bgpdd-bugfix Phase 5 ends in a local merge,
+    # which rule 1 denied. A commit-gate --commit PASS for this lane's own
+    # milestone un-arms it; one for a DIFFERENT milestone does not.
+    lane_ledger = guard_root / ".docs" / "bugfix" / "login-500" / "gates.jsonl"
+    before = guard("Bash", {"command": "git merge --no-ff bugfix/login-500"})
+    with lane_ledger.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"gate": "check_commit_gate.py", "verdict": "PASS",
+                             "argv": ["--commit"], "milestone": "other-bug"}) + "\n")
+    wrong = guard("Bash", {"command": "git merge --no-ff bugfix/login-500"})
+    with lane_ledger.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"gate": "check_commit_gate.py", "verdict": "PASS",
+                             "argv": ["--commit"], "milestone": "login-500"}) + "\n")
+    after = guard("Bash", {"command": "git merge --no-ff bugfix/login-500"})
+    ok = (before is not None and wrong is not None and after is None)
+    record("21b. guard_action: the lane's own --commit PASS un-arms rule 1; "
+           "another milestone's does not", ok,
+           "" if ok else f"before={bool(before)} wrong={bool(wrong)} "
+                         f"after={bool(after)}")
 
 
 if __name__ == "__main__":

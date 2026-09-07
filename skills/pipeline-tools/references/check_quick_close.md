@@ -203,3 +203,57 @@ note's and the sidecar's hashes and the verbatim `argv`; FAIL and ERROR records.
 **End to end** — `test_real_run_quiet_capture_passes` drives the real
 `run_quiet.py` to produce the capture and sidecar, proving the composition
 rather than the fixture.
+
+## `capture_command_mismatch`: the capture must be of the DECLARED check (2.6.1)
+
+The 2026-09-07 gate-adversarial audit closed this lane with one legitimate
+tool call and no forgery: a real
+`run_quiet.py --capture … -- cmd /c exit 0` cited by a note whose
+`- How verified:` said `npm test`. Everything this gate checked held — the
+capture existed, was structurally a capture, carried its sidecar, still hashed
+to it, agreed with its own header, exited 0, and was newer than the edit. What
+none of it said was that the capture was a recording of THE DECLARED CHECK.
+
+`next_bugfix_route.py --red` had implemented the missing term since 2.5.0: the
+RED sidecar's `argv` must equal a legitimate tokenization of the report's
+`- Command:`. The quick lane's only gate omitted its sibling's strongest term.
+It is now the same code, in all three of `next_bugfix_route.py`,
+`check_quick_close.py` and `check_agent_report.py`, and
+`test_the_matcher_agrees_with_next_bugfix_route` compares the three functions'
+parsed bodies (docstrings dropped, since each names its own field) so a
+reworded rationale is free and a changed candidate list is not. Three gates
+disagreeing about what "the same command" means would be worse than one gate
+not asking.
+
+**Why token lists and not strings.** The sidecar records what the process
+actually received; the shell already removed the quoting. A note saying
+`curl --fail -X POST http://h/o -d '{}'` produces argv
+`[…, '-d', '{}']`, whose join is `-d {}` and never equals the note's `-d '{}'`.
+A string compare rejected precisely the carefully quoted commands — every
+`-d '{…}'` and every `-H "Content-Type: …"`. Three candidates, tried in order,
+any match passes: `shlex.split(posix=True)`; the same with backslashes doubled
+first, so a Windows path survives posix mode instead of having its separators
+eaten as escapes; and a raw whitespace split, which an unquoted command
+satisfies identically and which a shlex parse error cannot defeat. Nothing
+fuzzier: no case-folding, no reordering, no dropped tokens.
+
+**What it does not cover.** The exit code and the body still disagree freely
+about pass/fail: a capture whose sidecar says `exit_code 0` while the body
+reads `FAIL 3 tests failing` still passes. That is deliberate (the audit's
+recommendation 14) — argv equality plus the exit code is the checkable term,
+and parsing arbitrary test-runner output for a verdict is a losing game that
+would make this gate stack-specific. And the forgeable-sidecar limit is
+unchanged: see `../SKILL.md` § *The unkeyed-sidecar limit*.
+
+## The `frozen_path_modified` escape
+
+The message used to end at "take the change to /bgpdd-bugfix", which is the
+wrong destination for the lane's own most common case. `bgpdd-quick` advertises
+a rename as a use case, and a rename legitimately touches the spec beside the
+code; routing it to a lane that demands a RED capture *proving the test was
+wrong* asks for evidence that does not exist. The message now names the escape
+the lane actually has: **narrow the `--frozen` glob so it still covers the
+tests this change must not touch, and record why in the note's `## Result`
+section.** Only a defect whose test was genuinely wrong goes to
+`/bgpdd-bugfix`. The narrowing is a written act in the note, which is what
+keeps it from being a silent opt-out.

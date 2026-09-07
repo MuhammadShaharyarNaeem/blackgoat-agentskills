@@ -20,16 +20,41 @@ must additionally cite a `run_quiet.py --capture` artifact under `evidence/`:
 
 The cited capture must exist, carry its `<capture>.meta.json` provenance
 sidecar, still hash to that sidecar's `capture_sha256`, agree with its own
-header lines, and record an `exit_code` EQUAL to the one the line claims
-(`check_uncaptured` / `check_capture_disagrees`). `NOT RUN` and `BLOCKED`
-lines are exempt -- there is no run to capture, and their evidence is the
-reason they already carry.
+header lines, record an `exit_code` EQUAL to the one the line claims, and be
+a recording of THE COMMAND THIS LINE NAMES (`check_uncaptured` /
+`check_capture_disagrees` / `capture_command_mismatch`). `NOT RUN` and
+`BLOCKED` lines are exempt -- there is no run to capture, and their evidence
+is the reason they already carry.
+
+ONE CAPTURE DOES NOT BACK EVERY LINE (`capture_command_mismatch`)
+-----------------------------------------------------------------
+The exit-code equality above was described as the term that ties a capture to
+THIS line. It is not: it ties the capture only to lines claiming the SAME exit
+code, and every clean scan claims 0 or 1. A three-line report whose secrets
+scan, `npm audit` and `dotnet test` lines all cited one `exit 1` capture
+passed with verdict Pass.
+
+So the line's own backticked command is compared with the cited sidecar's
+recorded child `argv`, on TOKEN LISTS rather than strings -- the same
+comparison `next_bugfix_route.py --red` and `check_quick_close.py` make, under
+the same three tokenizations (`shlex`; `shlex` with backslashes doubled, so a
+Windows path survives posix mode; a raw whitespace split). ANY match passes
+and nothing fuzzier does: no case-folding, no reordering, no dropped tokens.
+The command is read from the part of the line BEFORE the `capture:` citation,
+so a backticked capture path cannot stand in for it.
 
 MIGRATION: a report authored under 2.3.0 or earlier fails with
 `check_uncaptured`. The fix is to re-run each check through
 `run_quiet.py --capture` and cite the artifact; `--allow-uncaptured` waives
-the CITATION only (never a cited capture that disagrees) and exists for
-grading an archived report from before this contract.
+the CITATION only (never a cited capture that disagrees, and never a
+mismatched command) and exists for grading an archived report from before
+that contract. A report authored under 2.6.0 or earlier whose executed lines
+cite a capture but omit the backticked command -- which the grammar above has
+always required -- now fails `capture_command_mismatch`: add the command, or
+cite the capture that actually recorded this line's claim. There is
+deliberately NO waiver for the command tie (convention #8, tighter than
+`--allow-uncaptured`): a line citing a capture of a different run is the
+exact fabrication this term exists for, and re-running one check is cheap.
 
 Usage:
     python check_agent_report.py --report <path> [--milestone "<title>"] \
@@ -43,6 +68,7 @@ import argparse
 import hashlib
 import json
 import re
+import shlex
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -62,6 +88,9 @@ EXIT_CODE_RE = re.compile(r"\bexit(?:\s+code)?\s+(-?\d+)\b", re.IGNORECASE)
 # separator, so `— capture: evidence/security/npm-audit.md — 0 high` parses.
 CHECK_CAPTURE_RE = re.compile(r"\bcapture:\s*`?([^\s`,;]+)`?", re.IGNORECASE)
 SIDECAR_SUFFIX = ".meta.json"
+# The line's own command, read from the text BEFORE the `capture:` citation so
+# a backticked path can never stand in for it.
+CHECK_COMMAND_RE = re.compile(r"`([^`]+)`")
 
 # Body-vs-sidecar agreement, duplicated from check_runtime_evidence.py per
 # this family's one-file convention. `capture_sha256` protects the capture
@@ -299,6 +328,44 @@ def body_disagreement(text, meta):
     return None
 
 
+def normalize_command(text):
+    """A check line's backticked command: backticks and outer space stripped.
+
+    Byte-identical to next_bugfix_route.py and check_quick_close.py (family
+    convention: one file each, no shared module).
+    """
+    return (text or "").strip().strip("`").strip()
+
+
+def command_token_candidates(command):
+    """Every legitimate tokenization of a declared command string.
+
+    See ONE CAPTURE DOES NOT BACK EVERY LINE in the module docstring.
+    Byte-identical to next_bugfix_route.py and check_quick_close.py.
+    """
+    candidates = []
+    for label, text in (("shlex", command),
+                        ("shlex-escaped", command.replace("\\", "\\\\"))):
+        try:
+            tokens = shlex.split(text, posix=True)
+        except ValueError:
+            continue    # unbalanced quotes: that candidate does not apply
+        if tokens:
+            candidates.append((label, tokens))
+    raw = command.split()
+    if raw:
+        candidates.append(("whitespace", raw))
+    return candidates
+
+
+def command_matches(command, argv):
+    """(matched?, the strategy name that matched, or None)."""
+    for label, tokens in command_token_candidates(command):
+        if tokens == argv:
+            return True, label
+    return False, None
+
+
 def check_capture_problem(rest, claimed_exit, report_path, repo, seen=None):
     """(code, detail) for one executed check line's capture citation.
 
@@ -373,6 +440,35 @@ def check_capture_problem(rest, claimed_exit, report_path, repo, seen=None):
                 f"the line claims exit {claimed_exit} but the cited capture "
                 f"recorded exit_code {side_exit} — the citation points at a "
                 "different run than the one the line reports")
+
+    # The exit code ties the capture only to lines claiming the SAME code.
+    # The command is what ties it to THIS line.
+    argv = meta.get("argv")
+    if not isinstance(argv, list) or not argv:
+        return ("capture_command_mismatch",
+                f"cited capture `{cited}` records no child argv in its "
+                "sidecar, so nothing ties it to this line's command — re-take "
+                "it with `run_quiet.py --capture <path> -- <command>`")
+    argv = [str(a) for a in argv]
+    command_m = CHECK_COMMAND_RE.search((rest or "")[:m.start()])
+    if not command_m:
+        return ("capture_command_mismatch",
+                "the line names no backticked command before its `capture:` "
+                f"citation, so nothing ties capture `{cited}` (argv {argv!r}) "
+                "to this check rather than to any other line in the report. "
+                "The grammar is: `- <name>: PASS — `<command>` — exit <N> — "
+                "<counts> — capture: evidence/<dir>/<file>.md`")
+    declared = normalize_command(command_m.group(1))
+    matched, _strategy = command_matches(declared, argv)
+    if not matched:
+        tried = [toks for _, toks in command_token_candidates(declared)]
+        return ("capture_command_mismatch",
+                f"the line names `{declared}` but cited capture `{cited}` "
+                f"recorded argv {argv!r}, which matches none of that "
+                f"command's tokenizations ({tried!r}) — comparison is on "
+                "token lists, not strings. One capture cannot back three "
+                "unrelated check lines: cite the capture of THIS command, or "
+                "re-run the command through `run_quiet.py --capture`")
     return None, None
 
 
@@ -443,6 +539,7 @@ def build_report(args):
         "unevidenced": [],
         "uncaptured": [],
         "capture_disagrees": [],
+        "capture_command_mismatches": [],
         "capture_problems": [],
         "capture_inputs": [],
         "allow_uncaptured": bool(getattr(args, "allow_uncaptured", False)),
@@ -504,6 +601,8 @@ def build_report(args):
                     {"check": name, "problem": code, "detail": detail})
                 if code == "check_uncaptured":
                     report["uncaptured"].append(name)
+                elif code == "capture_command_mismatch":
+                    report["capture_command_mismatches"].append(name)
                 else:
                     report["capture_disagrees"].append(name)
         elif not re.search(r"\w", rest):
@@ -539,6 +638,13 @@ def build_report(args):
         report["warnings"].append(
             "executed check line(s) whose cited capture does not back them: "
             + ", ".join(report["capture_disagrees"]))
+    if report["capture_command_mismatches"]:
+        report["warnings"].append(
+            "executed check line(s) citing a capture of a DIFFERENT command "
+            "(or naming no command at all): "
+            + ", ".join(report["capture_command_mismatches"])
+            + " — one capture cannot back several unrelated lines; "
+              "--allow-uncaptured does not waive this")
     non_green = report["failed"] + report["blocked"] + report["not_run"]
     if report["verdict"] == "Pass" and non_green:
         report["warnings"].append(
@@ -560,6 +666,8 @@ def build_report(args):
                # check_runtime_evidence.py's --allow-missing-sidecar applies).
                and not (report["uncaptured"] and not report["allow_uncaptured"])
                and not report["capture_disagrees"]
+               # Never waived, by design: see the MIGRATION note.
+               and not report["capture_command_mismatches"]
                and report["critical_findings"] == 0)
     report["result"] = "PASS" if gate_ok else "FAIL"
     return report
@@ -638,11 +746,11 @@ def run_self_test():
         "# Security Report\n\n"
         "## Security Audit: Shipping — 2026-08-11\n\n"
         "- Dependency audit: PASS — `npm audit --audit-level=high` — exit 0 — 0 high, 0 critical — capture: {c0}\n"
-        "- Secrets scan: PASS — `git grep -nE \"(api_key|secret)\"` — exit 1 — 0 matches — capture: {c1}\n\n"
+        "- Secrets scan: PASS — `git grep -n secret` — exit 1 — 0 matches — capture: {c1}\n\n"
         "**Verdict:** Pass\n")
     FAIL_VERDICT_T = (
         "## Security Audit: Shipping\n\n"
-        "- Dependency audit: FAIL — `npm audit` — exit 1 — 2 high, 5 moderate — capture: {c1}\n\n"
+        "- Dependency audit: FAIL — `npm audit` — exit 1 — 2 high, 5 moderate — capture: {ca1}\n\n"
         "**Verdict:** Fail\n")
 
     def capture_text(cmd, exit_code, body, captured):
@@ -661,28 +769,43 @@ def run_self_test():
             self.path = self.dir / "security-report.md"
             # exit 0 and exit 1 captures: several fixture lines claim each.
             self.c0 = self._capture("audit.md", 0)
-            self.c1 = self._capture("grep.md", 1)
+            # `capture_command_mismatch` ties a capture to the line's own
+            # command, so each fixture capture records the command the lines
+            # citing it name. GREP/TEST are the two other commands in play.
+            self.GREP = "git grep -n secret"
+            self.TEST = "npm test"
+            self.c1 = self._capture("grep.md", 1, command=self.GREP)
+            self.ca1 = self._capture("audit-fail.md", 1, command="npm audit")
+            self.ct0 = self._capture("test-pass.md", 0, command=self.TEST)
+            self.ct1 = self._capture("test-fail.md", 1, command=self.TEST)
             self.HAPPY = HAPPY_T.format(c0=self.c0, c1=self.c1)
-            self.FAIL_VERDICT = FAIL_VERDICT_T.format(c1=self.c1)
+            self.FAIL_VERDICT = FAIL_VERDICT_T.format(ca1=self.ca1)
 
         def tearDown(self):
             shutil.rmtree(self.dir, ignore_errors=True)
 
         def _capture(self, name, exit_code, sidecar=True, hash_ok=True,
                      body_exit=None, body_captured=None, sub="security",
-                     header=True):
+                     header=True, command=None):
             """A run_quiet.py-shaped capture + sidecar, cited report-relative.
+
+            `command` is the command the run recorded: it becomes both the
+            capture's `- Probe command:` line and the sidecar's `argv`, so a
+            check line naming the same command satisfies
+            `capture_command_mismatch` by construction and a line naming a
+            different one does not.
 
             `body_*` / `header` override ONLY the capture's header lines,
             which is how a fixture forges a sidecar whose hash still matches.
             """
+            command = command or "npm audit --audit-level=high"
             rel = f"evidence/{sub}/{name}"
             p = self.dir / rel
             p.parent.mkdir(parents=True, exist_ok=True)
             finished = "2026-08-11T09:00:00Z"
             if header:
                 p.write_text(capture_text(
-                    "npm audit --audit-level=high",
+                    command,
                     exit_code if body_exit is None else body_exit,
                     "0 vulnerabilities",
                     finished if body_captured is None else body_captured),
@@ -692,7 +815,7 @@ def run_self_test():
                              "```\n0 vulnerabilities\n```\n", encoding="utf-8")
             if sidecar:
                 p.with_name(p.name + SIDECAR_SUFFIX).write_text(json.dumps({
-                    "argv": ["npm", "audit"], "cwd": str(self.dir),
+                    "argv": shlex.split(command), "cwd": str(self.dir),
                     "started": finished, "finished": finished,
                     "exit_code": exit_code, "body_sha256": "0" * 64,
                     "capture_sha256": (sha256_file(p) if hash_ok
@@ -810,11 +933,139 @@ def run_self_test():
             self.assertEqual(r["result"], "FAIL")
             self.assertIsNone(r["verdict"])
 
+        # -- capture_command_mismatch (audit3 F6) ----------------------
+
+        def test_one_capture_cannot_back_three_unrelated_lines(self):
+            """audit3 F6, verbatim: one `exit 1` capture, three PASS lines."""
+            r = self._run(
+                "## Security Audit: Shipping — 2026-09-07\n\n"
+                f"- Secrets scan: PASS — `{self.GREP}` — exit 1 — 0 matches "
+                f"— capture: {self.c1}\n"
+                f"- Dependency audit: PASS — `npm audit --production` — exit 1 "
+                f"— 0 high — capture: {self.c1}\n"
+                f"- Auth boundary review: PASS — `dotnet test Auth.Tests` — "
+                f"exit 1 — 12 passed — capture: {self.c1}\n\n"
+                "**Verdict:** Pass\n")
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["capture_command_mismatches"],
+                             ["Dependency audit", "Auth boundary review"])
+            self.assertEqual(r["capture_disagrees"], [])
+            self.assertEqual(r["uncaptured"], [])
+
+        def test_the_command_tie_is_not_waived_by_allow_uncaptured(self):
+            text = ("## Security Audit: Shipping\n\n"
+                    f"- Dependency audit: PASS — `npm audit --production` — "
+                    f"exit 1 — 0 high — capture: {self.c1}\n\n"
+                    "**Verdict:** Pass\n")
+            r = self._run(text, allow_uncaptured=True)
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["capture_command_mismatches"],
+                             ["Dependency audit"])
+
+        def test_a_line_with_no_backticked_command_is_untied(self):
+            r = self._run(
+                "## Security Audit: Shipping\n\n"
+                f"- Secrets scan: PASS — exit 1 — 0 matches — "
+                f"capture: {self.c1}\n\n"
+                "**Verdict:** Pass\n")
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["capture_command_mismatches"], ["Secrets scan"])
+            self.assertIn("no backticked command",
+                          r["capture_problems"][0]["detail"])
+
+        def test_a_backticked_capture_path_is_not_the_command(self):
+            """The citation is excluded from the command search by position."""
+            r = self._run(
+                "## Security Audit: Shipping\n\n"
+                f"- Secrets scan: PASS — exit 1 — capture: `{self.c1}`\n\n"
+                "**Verdict:** Pass\n")
+            self.assertEqual(r["capture_command_mismatches"], ["Secrets scan"])
+
+        def test_a_quoted_argument_matches_its_argv(self):
+            """The case a STRING compare rejected: the shell ate the quotes."""
+            cap = self._capture(
+                "grep-e.md", 1, command='git grep -nE "(api_key|secret)"')
+            r = self._run(
+                "## Security Audit: Shipping\n\n"
+                "- Secrets scan: PASS — `git grep -nE \"(api_key|secret)\"` — "
+                f"exit 1 — 0 matches — capture: {cap}\n\n"
+                "**Verdict:** Pass\n")
+            self.assertEqual(r["result"], "PASS", r["capture_problems"])
+
+        def test_a_reordered_or_trimmed_command_is_still_a_mismatch(self):
+            for named in ("npm --audit-level=high audit",  # reordered
+                          "npm audit",                     # a token dropped
+                          "NPM audit --audit-level=high"):  # case-folded
+                r = self._run(
+                    "## Security Audit: Shipping\n\n"
+                    f"- Dependency audit: PASS — `{named}` — exit 0 — 0 high "
+                    f"— capture: {self.c0}\n\n"
+                    "**Verdict:** Pass\n")
+                self.assertEqual(r["capture_command_mismatches"],
+                                 ["Dependency audit"], named)
+
+        def test_a_sidecar_with_no_argv_is_a_command_mismatch(self):
+            cap = self._capture("noargv.md", 0)
+            side = self.dir / (cap + SIDECAR_SUFFIX)
+            meta = json.loads(side.read_text(encoding="utf-8"))
+            del meta["argv"]
+            side.write_text(json.dumps(meta), encoding="utf-8")
+            r = self._run(
+                "## Security Audit: Shipping\n\n"
+                f"- Dependency audit: PASS — `npm audit --audit-level=high` — "
+                f"exit 0 — 0 high — capture: {cap}\n\n"
+                "**Verdict:** Pass\n")
+            self.assertEqual(r["capture_command_mismatches"],
+                             ["Dependency audit"])
+            self.assertIn("records no child argv",
+                          r["capture_problems"][0]["detail"])
+
+        def test_not_run_lines_are_still_exempt_from_the_command_tie(self):
+            r = self._run(
+                "## Security Audit: Shipping\n\n"
+                f"- Secrets scan: PASS — `{self.GREP}` — exit 1 — 0 matches "
+                f"— capture: {self.c1}\n"
+                "- Rate limiting: NOT RUN — no staging environment reachable\n\n"
+                "**Verdict:** Fail\n")
+            self.assertEqual(r["capture_command_mismatches"], [])
+
+        def test_the_matcher_agrees_with_next_bugfix_route(self):
+            """Drift guard: three gates must mean one thing by "same command"."""
+            import ast
+            sibling = Path(__file__).resolve().parent / "next_bugfix_route.py"
+            if not sibling.is_file():
+                self.skipTest("next_bugfix_route.py not found")
+
+            def shapes(path):
+                tree = ast.parse(Path(path).read_text(encoding="utf-8",
+                                                      errors="replace"))
+                out = {}
+                for node in tree.body:
+                    if not isinstance(node, ast.FunctionDef):
+                        continue
+                    if node.name not in ("normalize_command",
+                                         "command_token_candidates",
+                                         "command_matches"):
+                        continue
+                    body = list(node.body)
+                    if (body and isinstance(body[0], ast.Expr)
+                            and isinstance(body[0].value, ast.Constant)
+                            and isinstance(body[0].value.value, str)):
+                        body = body[1:]
+                    out[node.name] = "\n".join(ast.dump(n) for n in body)
+                return out
+
+            mine, theirs = shapes(__file__), shapes(sibling)
+            self.assertEqual(len(mine), 3)
+            self.assertEqual(mine, theirs,
+                             "the command matcher has drifted from "
+                             "next_bugfix_route.py's")
+
         def test_duplicate_check_name_latest_wins(self):
             r = self._run(
                 "## Verification: Shipping\n\n"
-                f"- All tests pass: FAIL — `npm test` — exit 1 — capture: {self.c1}\n"
-                f"- All tests pass: PASS — `npm test` — exit 0 — capture: {self.c0}\n\n"
+                f"- All tests pass: FAIL — `npm test` — exit 1 — capture: {self.ct1}\n"
+                f"- All tests pass: PASS — `npm test` — exit 0 — capture: {self.ct0}\n\n"
                 "**Verdict:** Pass\n")
             self.assertEqual(r["result"], "PASS")
             self.assertEqual(r["checks"], 1)
@@ -961,7 +1212,7 @@ def run_self_test():
             bad = self._capture("flipped.md", 0, body_exit=1)
             r2 = self._run(
                 "## Security Audit: Shipping\n\n"
-                f"- Secrets scan: PASS — exit 0 — capture: {bad}\n\n"
+                f"- Secrets scan: PASS — `git grep -n secret` — exit 0 — capture: {bad}\n\n"
                 "**Verdict:** Pass\n", allow_uncaptured=True)
             self.assertEqual(r2["result"], "FAIL")
             self.assertEqual(r2["capture_disagrees"], ["Secrets scan"])
@@ -969,7 +1220,7 @@ def run_self_test():
         def test_not_run_and_blocked_lines_need_no_capture(self):
             r = self._run(
                 "## Security Audit: Shipping\n\n"
-                f"- Secrets scan: PASS — exit 1 — capture: {self.c1}\n"
+                f"- Secrets scan: PASS — `git grep -n secret` — exit 1 — capture: {self.c1}\n"
                 "- Rate limiting: NOT RUN — no staging environment reachable\n"
                 "- Image scan: BLOCKED — trivy not installed, no network\n\n"
                 "**Verdict:** Fail\n")
@@ -979,7 +1230,7 @@ def run_self_test():
         def test_cited_capture_that_does_not_exist_fails(self):
             r = self._run(
                 "## Security Audit: Shipping\n\n"
-                "- Secrets scan: PASS — exit 1 — capture: evidence/security/gone.md\n\n"
+                "- Secrets scan: PASS — `git grep -n secret` — exit 1 — capture: evidence/security/gone.md\n\n"
                 "**Verdict:** Pass\n")
             self.assertEqual(r["result"], "FAIL")
             self.assertEqual(r["uncaptured"], ["Secrets scan"])
@@ -990,14 +1241,14 @@ def run_self_test():
             p.write_text("## Captured output\n\n```\nok\n```\n", encoding="utf-8")
             r = self._run(
                 "## Security Audit: Shipping\n\n"
-                "- Secrets scan: PASS — exit 1 — capture: notes/scan.md\n\n"
+                "- Secrets scan: PASS — `git grep -n secret` — exit 1 — capture: notes/scan.md\n\n"
                 "**Verdict:** Pass\n")
             self.assertEqual(r["uncaptured"], ["Secrets scan"])
 
         def test_dot_dot_citation_is_refused(self):
             r = self._run(
                 "## Security Audit: Shipping\n\n"
-                "- Secrets scan: PASS — exit 1 — capture: "
+                "- Secrets scan: PASS — `git grep -n secret` — exit 1 — capture: "
                 "../elsewhere/evidence/security/x.md\n\n"
                 "**Verdict:** Pass\n")
             self.assertEqual(r["uncaptured"], ["Secrets scan"])
@@ -1006,7 +1257,7 @@ def run_self_test():
             rel = self._capture("nosidecar.md", 0, sidecar=False)
             r = self._run(
                 "## Security Audit: Shipping\n\n"
-                f"- Secrets scan: PASS — exit 0 — capture: {rel}\n\n"
+                f"- Secrets scan: PASS — `git grep -n secret` — exit 0 — capture: {rel}\n\n"
                 "**Verdict:** Pass\n")
             self.assertEqual(r["result"], "FAIL")
             self.assertEqual(r["capture_disagrees"], ["Secrets scan"])
@@ -1015,7 +1266,7 @@ def run_self_test():
             rel = self._capture("edited.md", 0, hash_ok=False)
             r = self._run(
                 "## Security Audit: Shipping\n\n"
-                f"- Secrets scan: PASS — exit 0 — capture: {rel}\n\n"
+                f"- Secrets scan: PASS — `git grep -n secret` — exit 0 — capture: {rel}\n\n"
                 "**Verdict:** Pass\n")
             self.assertEqual(r["capture_disagrees"], ["Secrets scan"])
 
@@ -1023,7 +1274,7 @@ def run_self_test():
             """One green capture must not back a line claiming another code."""
             r = self._run(
                 "## Security Audit: Shipping\n\n"
-                f"- Secrets scan: PASS — exit 1 — capture: {self.c0}\n\n"
+                f"- Secrets scan: PASS — `git grep -n secret` — exit 1 — capture: {self.c0}\n\n"
                 "**Verdict:** Pass\n")
             self.assertEqual(r["result"], "FAIL")
             self.assertEqual(r["capture_disagrees"], ["Secrets scan"])
@@ -1034,7 +1285,7 @@ def run_self_test():
             rel = self._capture("flip.md", 0, body_exit=1)
             r = self._run(
                 "## Security Audit: Shipping\n\n"
-                f"- Secrets scan: PASS — exit 0 — capture: {rel}\n\n"
+                f"- Secrets scan: PASS — `git grep -n secret` — exit 0 — capture: {rel}\n\n"
                 "**Verdict:** Pass\n")
             self.assertEqual(r["capture_disagrees"], ["Secrets scan"])
 
@@ -1042,7 +1293,7 @@ def run_self_test():
             rel = self._capture("legacy.md", 0, header=False)
             r = self._run(
                 "## Security Audit: Shipping\n\n"
-                f"- Secrets scan: PASS — exit 0 — capture: {rel}\n\n"
+                f"- Secrets scan: PASS — `git grep -n secret` — exit 0 — capture: {rel}\n\n"
                 "**Verdict:** Pass\n")
             self.assertEqual(r["capture_disagrees"], ["Secrets scan"])
 
@@ -1052,14 +1303,14 @@ def run_self_test():
             p.write_text("I ran the scan and it was clean.\n", encoding="utf-8")
             r = self._run(
                 "## Security Audit: Shipping\n\n"
-                "- Secrets scan: PASS — exit 0 — capture: evidence/security/prose.md\n\n"
+                "- Secrets scan: PASS — `git grep -n secret` — exit 0 — capture: evidence/security/prose.md\n\n"
                 "**Verdict:** Pass\n")
             self.assertEqual(r["uncaptured"], ["Secrets scan"])
 
         def test_backticked_citation_parses(self):
             r = self._run(
                 "## Security Audit: Shipping\n\n"
-                f"- Secrets scan: PASS — exit 1 — capture: `{self.c1}`\n\n"
+                f"- Secrets scan: PASS — `git grep -n secret` — exit 1 — capture: `{self.c1}`\n\n"
                 "**Verdict:** Pass\n")
             self.assertEqual(r["result"], "PASS", r["capture_problems"])
 

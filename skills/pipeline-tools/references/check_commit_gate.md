@@ -51,3 +51,39 @@ The gate's original terms all read the *products* of the build: a review report,
 **Scoping is exact on `unit`, and that is deliberately tighter than `--require-ledger-gates`'s "this milestone or unscoped"** (convention #8). A gate ledger line legitimately covers a whole epic — `check_coverage.py` runs once. A *delegation* with no unit does not say which milestone it built, and accepting it would let one recorded Luna round vouch for every milestone in the plan.
 
 **What it does not prove.** That the agent did good work, or that the model tier was right (`record_run.py`'s own `verifier_below_producer` check owns that), or that the record was written at the time it claims. It proves the Orchestrator ran the phase and recorded it, which is exactly the step that was being skipped.
+
+## What `--require-agents` proves, and what it does not (2.6.1)
+
+Documented here and beside the flag because the 2026-09-07 audit found it
+documented nowhere -- while the CAPTURE half of the same forgery is documented
+(`references/check_red_green.md` Scope limits, and `../SKILL.md` The
+unkeyed-sidecar limit). That asymmetry made the run-log half read as a term
+with teeth.
+
+**The run log is AUTHORED, not tool-provenanced.** `record_run.py` writes
+nothing a person cannot type: its records carry no hash of anything observed,
+no capture, and no chain. Contrast `gates.jsonl`, whose entries this gate
+verifies by RE-HASHING every input the recorded run read -- that is what
+`ledger_stale` is, and it does bite: editing a reviewed file after the
+coverage record was written flips the same invocation to exit 1.
+
+So `--require-run-log` + `--require-agents` proves that a delegation record
+EXISTS, is scoped to this milestone, and names a resolvable tier. It does not
+prove the delegation happened. Anyone who fabricates the run log satisfies it,
+and the audit demonstrated exactly that: a scratch repo whose entire evidence
+base was authored passed `--require-rendered-evidence --verify-tree
+--max-changed-files 3 --require-runtime-evidence --require-ledger-gates ...
+--require-run-log ... --require-agents mason,quinn,luna --commit` and
+committed.
+
+**What the flag is still worth**, in the same framing the ledger's own limit
+uses: skipping a Quinn or Luna round becomes an OMISSION somebody has to
+notice rather than an invisible non-event, and faking one becomes a written
+act. Closing it further needs a provenance the runtime does not offer for its
+own dispatches, so no flag here pretends to. The terms with teeth beside it
+are `--require-ledger-gates` (which re-hashes what the recorded gate read) and
+`--require-rendered-evidence`.
+
+Unchanged in 2.6.1: `--require-ledger-gates` still checks the chain first,
+then the latest per-gate verdict scoped to the milestone (or unscoped), then
+re-hashes every recorded input. That behaviour was verified, not modified.

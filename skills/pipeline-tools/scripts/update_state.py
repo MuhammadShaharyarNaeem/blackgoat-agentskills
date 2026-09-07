@@ -135,13 +135,22 @@ def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code,
               file=sys.stderr)
 
 
-# --- the build game-tape gate (--require-game-tape) ------------------------
-# `bgpdd-build` Phase 6 fires each time a milestone closes, and the closing
-# write is the moment the Orchestrator most wants to move on -- so the cadence
-# rule is enforced by the two scripts that perform that write, not by prose
-# (CLAUDE.md convention #9). Byte-identical in mark_milestone.py and
+# --- the lane game-tape gate (--require-game-tape) -------------------------
+# A pipeline's game-tape phase fires each time a milestone closes, and the
+# closing write is the moment the Orchestrator most wants to move on -- so the
+# cadence rule is enforced by the two scripts that perform that write, not by
+# prose (CLAUDE.md convention #9). Byte-identical in mark_milestone.py and
 # update_state.py (family convention: one file each, no shared module).
-GAME_TAPE_HEADING_RE = re.compile(r"^#{2,4}\s*bgpdd-build\s*[\u2014\u2013-]\s*(?P<body>.+?)\s*$")
+#
+# The heading names ITS OWN LANE (`bgpdd-<lane>`). It was hard-coded to
+# `bgpdd-build`, which made the flag unusable from every other lane:
+# `bgpdd-bugfix`'s Phase 5 tape is written under a `## bgpdd-bugfix - `
+# heading and could never satisfy a gate that only looked for one word, so
+# that lane's tape was unenforceable. Build is unchanged -- `bgpdd-build` is
+# one value of `<lane>` -- and the SHAPE requirements below (3-6 bullets, a
+# fenced block, a telemetry line) are identical for every lane.
+GAME_TAPE_HEADING_RE = re.compile(
+    r"^#{2,4}\s*(?P<lane>bgpdd-[a-z]+)\s*[\u2014\u2013-]\s*(?P<body>.+?)\s*$")
 GAME_TAPE_ANY_HEADING_RE = re.compile(r"^#{1,6}\s")
 GAME_TAPE_BULLET_RE = re.compile(r"^\s*[-*+]\s+\S")
 GAME_TAPE_FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
@@ -188,10 +197,12 @@ def check_game_tape(path, milestone):
     Problem codes: `game-tape-missing`, `no-section`, `bullet-count`,
     `no-pasted-output`, `no-telemetry`.
 
-    Deliberately the shape `bgpdd-build` Phase 6 states and nothing more
+    Deliberately the shape a lane's game-tape phase states and nothing more
     (convention #8, and narrower than the skeleton's Game Tape section, which
-    caps at 10 bullets once per RUN): a `## bgpdd-build - <milestone> - <date>`
-    section, 3-6 bullets, at least one fenced block (the verbatim command and
+    caps at 10 bullets once per RUN): a
+    `## bgpdd-<lane> - <milestone> - <date>` section (`bgpdd-build`,
+    `bgpdd-bugfix`, ... -- the lane writing the tape names itself),
+    3-6 bullets, at least one fenced block (the verbatim command and
     its captured output -- "no pasted output, no claim"), and either a
     `summarize_run` mention or a table row (the pasted telemetry block).
     The epic-summary heading is explicitly not a milestone checkpoint.
@@ -199,8 +210,9 @@ def check_game_tape(path, milestone):
     p = Path(path)
     if not p.is_file():
         return [{"problem": "game-tape-missing",
-                 "detail": "no game tape at {0} - Phase 6 fires at the "
-                           "milestone close, not at the end of the run".format(path)}]
+                 "detail": "no game tape at {0} - the lane's game-tape "
+                           "phase fires at the milestone close, not at the "
+                           "end of the run".format(path)}]
     try:
         text = p.read_text(encoding="utf-8-sig", errors="replace")
     except OSError as exc:
@@ -228,10 +240,12 @@ def check_game_tape(path, milestone):
 
     if start is None:
         return [{"problem": "no-section",
-                 "detail": "no '## bgpdd-build - <milestone> - <date>' section "
-                           "in {0} naming {1!r} (an epic-summary heading is not "
-                           "a milestone checkpoint; a heading inside a fenced "
-                           "block is a template)".format(path, milestone)}]
+                 "detail": "no '## bgpdd-<lane> - <milestone> - <date>' section "
+                           "in {0} naming {1!r} (any lane name matches: "
+                           "bgpdd-build, bgpdd-bugfix, ...; an epic-summary "
+                           "heading is not a milestone checkpoint; a heading "
+                           "inside a fenced block is a template)".format(
+                               path, milestone)}]
 
     end = len(blanked)
     for j in range(start + 1, len(blanked)):
@@ -588,8 +602,9 @@ def build_parser():
     parser.add_argument(
         "--require-game-tape", dest="require_game_tape",
         help="refuse a cursor/pipeline write unless game-tape.md carries a "
-             "conforming '## bgpdd-build - <milestone> - <date>' checkpoint "
-             "for --milestone (bgpdd-build Phase 6)")
+             "conforming '## bgpdd-<lane> - <milestone> - <date>' checkpoint "
+             "for --milestone (the lane's game-tape phase; any lane name "
+             "matches, so bugfix's tape satisfies it as build's does)")
     parser.add_argument("--self-test", action="store_true")
     return parser
 
@@ -692,9 +707,10 @@ def run_self_test():
     GT_FENCE = "```"
 
     def gt_section(title="Milestone 2", date="2026-09-07", bullets=4,
-                   fenced=True, telemetry=True, fenced_heading=False):
-        """A Phase 6 checkpoint section, with each requirement switchable."""
-        heading = "## bgpdd-build \u2014 {0} \u2014 {1}".format(title, date)
+                   fenced=True, telemetry=True, fenced_heading=False,
+                   lane="bgpdd-build"):
+        """A game-tape checkpoint section, each requirement switchable."""
+        heading = "## {0} \u2014 {1} \u2014 {2}".format(lane, title, date)
         if fenced_heading:
             return chr(10).join(
                 [GT_FENCE, heading, "- a", "- b", "- c", GT_FENCE]) + chr(10)
@@ -1123,6 +1139,26 @@ def run_self_test():
         def test_game_tape_without_telemetry_blocks(self):
             self.assertEqual(self._gt_codes(self._tape(telemetry=False)),
                              ["no-telemetry"])
+
+        # ---- any lane's tape satisfies it (audit3 Metric 20) ------------
+
+        def test_game_tape_accepts_every_lane_heading(self):
+            for lane in ("bgpdd-build", "bgpdd-bugfix", "bgpdd-quick",
+                         "bgpdd-lite", "bgpdd-verify", "bgpdd-shipping"):
+                self.assertEqual(self._gt_run(self._tape(lane=lane)), 0, lane)
+
+        def test_game_tape_rejects_a_heading_that_names_no_lane(self):
+            for lane in ("bgpdd", "build", "pdd-build", "BGPDD-BUILD"):
+                self.assertEqual(self._gt_codes(self._tape(lane=lane)),
+                                 ["no-section"], lane)
+
+        def test_game_tape_shape_rules_are_identical_for_every_lane(self):
+            self.assertEqual(
+                self._gt_codes(self._tape(lane="bgpdd-bugfix", bullets=2)),
+                ["bullet-count"])
+            self.assertEqual(
+                self._gt_codes(self._tape(lane="bgpdd-quick", telemetry=False)),
+                ["no-telemetry"])
 
         def test_game_tape_last_matching_section_wins(self):
             p = self.dir / "game-tape.md"

@@ -149,3 +149,49 @@ the commit gate. With the sidecars recorded, that edit is `ledger_stale`.
   this family claims otherwise. What it does buy: every one of those forgeries
   is now a deliberate, written act by the Orchestrator rather than an omission
   nobody can see afterwards.
+
+## `--green-runs N` requires N DISTINCT runs (2.6.1)
+
+Until 2.6.1 the flag counted `--green` OCCURRENCES, so the same capture path
+repeated five times satisfied `--green-runs 5`, and so did five byte-identical
+copies (copy the capture and its sidecar together and every hash still
+matches, because copying preserves exactly what the hashes protect). The one
+flag in this gate that speaks about repeated execution proved nothing about
+it: `bgpdd-bugfix` says "4 of 5 green is not fixed", and 1 of 1 was passing as
+5 of 5.
+
+The key is the sidecar's `(started, pid)` pair -- what identifies a PROCESS.
+Two runs of the same command inside one second still differ by pid; one run
+cited twice cannot differ from itself; a copied capture carries its original's
+sidecar, so five copies are one identity.
+
+The capture body's `capture_sha256` was a second required key in the first
+draft of this term and was dropped before release: the adversarial suite's
+own clearing case (five real runs of the probe under `--green-runs 5`) failed
+on a fast machine, because five honest runs of a deterministic command inside
+one second produce byte-identical bodies. A distinctness rule that refuses
+honest evidence is worse than none. The body count is reported
+(`green_distinct_bodies`) and is the fallback identity only when a sidecar
+carries neither `started` nor `pid`; forging N sidecars with N pids is the
+unkeyed-sidecar limit (§ Scope limits), not this term's job. Problem code:
+`green_runs_not_distinct`; `green_distinct_runs` and `green_distinct_bodies`
+report both counts.
+
+**A term about repetition only** (CLAUDE.md convention #8, deliberately
+narrower than `command_mismatch`, which applies to every green): it is skipped
+when `--green-runs` is 1, so the default invocation is unchanged and a single
+green is never asked to be distinct from anything.
+
+The seven cases: five distinct runs pass; one path cited five times fails; five
+byte-identical copies fail (and are asserted NOT to fail the hash, which is
+the point); two distinct pids with one shared body fail; two runs inside one
+second with different pids and bodies pass; a single green is never checked;
+three distinct of five supplied fails `--green-runs 5`.
+
+## The blast radius of the unkeyed sidecar
+
+The scope limit above is a property of the FAMILY, not of this gate, and the
+size of it is now stated in `../SKILL.md` § *The unkeyed-sidecar limit: one
+forger, seven gates* rather than only here. Read that section for the count
+and the list; the framing is unchanged, and so is the conclusion: closing it
+needs a secret the runtime does not have.

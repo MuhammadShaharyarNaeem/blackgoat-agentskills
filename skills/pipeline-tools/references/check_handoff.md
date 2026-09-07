@@ -57,3 +57,48 @@ Two mechanical rules, both chosen to have almost no false-positive surface:
 ## Self-test
 
 `python scripts/check_handoff.py --self-test` runs 26 in-process cases against a temp tree and, where `--since` is exercised, a real temp git repo (skipped rather than faked when git is absent). Beyond the four override shapes passing and failing correctly: a fenced handoff not counting, a real handoff surviving beside a fenced example, a non-existent path, a path escaping the repo, a whitespace-only element, an unclosed `<handoff>`, `<changed_files>` naming an untouched file under `--since`, a subset passing, an unresolvable ref erroring, each status value, consumers grammar both ways, `--fix-round` both ways, both honesty rules, lower-case `passed` beside `NOT VERIFIED` still passing, an unknown persona erroring, an unrecognized element warning without failing, the ledger recording all three exit paths, and the persona table matching `agents/` on disk.
+
+## `--advisory`, and what `<status>` is for (2.6.1)
+
+The 2026-09-07 audit's Metric-1 finding: two sanctioned pipeline steps ask an
+agent for a RECOMMENDATION and no artifact — Forge's propose handoff
+(`bgpdd-learn`, which proposes edits and waits for approval, so nothing is
+written yet) and Aria's Mode 2 blast-radius advisory (`bgpdd-build`). Both
+failed this gate exit 1 in every tag form tried, so the Orchestrator's
+mandatory validation (`orchestrator-contract.md` §…) was contradicted by the
+pipelines twice per epic. A gate the contract requires and the pipeline
+guarantees will fail is a gate that gets skipped.
+
+`--advisory` makes `<artifact>` and `<changed_skills>` optional for that one
+call. Everything else holds: `<status>`, `<blockers>`, the path checks on
+whatever IS declared, the status enum, the `path::symbol` grammar and both
+honesty rules. `<changed_files>` is deliberately NOT waivable — an agent that
+wrote code has an artifact whether or not the brief asked for one, so the
+builder personas are unaffected by the flag.
+
+Two design choices worth stating:
+
+- **It is the caller's flag, not the agent's.** It declares something about
+  the BRIEF that was written, and the brief's author is the Orchestrator. An
+  agent that could set it could waive its own artifact.
+- **The ledger records `advisory: true`**, merged into the record before
+  `prev`/`self` are computed, so the chain covers it. Waiving an artifact is
+  then a written, attributable act rather than a gate that quietly did less.
+  A non-advisory run carries no `advisory` key at all, so the field's presence
+  is itself the signal.
+
+**`<status>` is the DELIVERY state.** `COMPLETE`/`PARTIAL`/`BLOCKED` answers
+"did the agent finish what it was briefed for". Three spine lines spoke of the
+handoff "returning PASS/BLOCKED", which is a verification VERDICT — a
+different claim, about a different subject, and one that belongs in the body
+beside the durable report it judges. `STATUSES` is unchanged; the
+`status_invalid` message now says where the verdict goes instead of only
+listing the three tokens. `BLOCKED` is the one token both vocabularies share,
+and it means the same thing in each.
+
+**`--since` is optional here and required by the pipelines.** It is the only
+term in this gate that git can contradict: without it `<changed_files>` need
+merely exist, with it a file the agent never touched is rejected. Leaving the
+choice to the gated party is what the audit flagged; the CLI keeps the flag
+optional (a handoff can legitimately be checked outside a repo), and the
+pipeline steps pass it — with `--ledger` — every time.

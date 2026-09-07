@@ -17,54 +17,130 @@ is duplicated into either.
 
 THE FOUR RULES
 --------------
-1. `commit_through_the_gate` -- tool `Bash`, a `git commit|merge|cherry-pick|
-   revert` invocation, while a lane is ACTIVE -> DENY, naming the gate that
-   commits for that lane. The gates commit from their own subprocess, not
-   through the model's Bash tool, so this can never block a gate. Outside any
-   lane the call is allowed: `always-on.md` § Outside any lane rule 3 makes a
-   hand commit the user's call.
-2. `frozen_tests_during_a_fix` -- a write tool targeting a test path while a
-   BUGFIX lane is active and its ledger holds no `check_commit_gate.py` PASS
-   -> DENY. A path that does not exist yet is allowed: adding a new test is
-   not editing the RED.
+1. `commit_through_the_gate` -- tool `Bash`, a history-writing `git`
+   invocation (`commit|merge|cherry-pick|revert|rebase|am|notes|tag|stash`) or
+   `gh pr merge`, while a lane is ACTIVE and NOT yet closed -> DENY, naming
+   the gate that commits for that lane. The gates commit from their own
+   subprocess, not through the model's Bash tool, so this can never block a
+   gate. Outside any lane the call is allowed: `always-on.md` § Outside any
+   lane rule 3 makes a hand commit the user's call. Two carve-outs, both read
+   from artifacts (see CLOSED LANES and VERIFY below).
+2. `frozen_tests_during_a_fix` -- a write targeting an EXISTING test path
+   while a BUGFIX lane is active and its ledger holds no
+   `check_commit_gate.py` PASS -> DENY. "A write" is a write TOOL (`Edit`,
+   `Write`, `MultiEdit`, `NotebookEdit`) or a `Bash` command that mutates the
+   path (see BASH WRITES). A path that does not exist yet is allowed: adding
+   a new test is not editing the RED.
 3. `no_delegation_before_intake` -- a delegation tool while a fresh
    `bug-report.md` exists whose ledger lacks a `check_bugfix_intake.py` PASS
    -> DENY.
-4. `gate_artifacts_are_written_by_tools` -- a write tool targeting
-   `gates.jsonl`, `orchestrator-state.json`, `run-log.jsonl` or a
-   `*.meta.json` sidecar -> DENY, always, lane or no lane. These are the
-   evidence the other gates read; a hand edit to any of them makes every
-   verdict downstream unfalsifiable.
+4. `gate_artifacts_are_written_by_tools` -- a write targeting `gates.jsonl`,
+   `orchestrator-state.json`, `run-log.jsonl` or a `*.meta.json` sidecar ->
+   DENY, always, lane or no lane. "A write" again covers write TOOLS and
+   `Bash` (see BASH WRITES). These are the evidence the other gates read; a
+   hand edit to any of them makes every verdict downstream unfalsifiable.
+
+BASH WRITES (rules 2 and 4)
+---------------------------
+Until 2.6.1 rules 2 and 4 tested only `tool_name in WRITE_TOOLS`, so the
+docstring's "always, lane or no lane" was false for the one guarded tool that
+can write anything: `echo '{}' >> gates.jsonl`, `| tee -a`, `Set-Content`,
+`python -c "open(...,'a')"`, `sed -i tests/x.test.js`, `mv test.js test.js.old`
+and `git checkout -- tests/` were all ALLOW while `Edit` on the same path was
+DENY. `bash_write_targets()` now extracts every path a shell command
+plausibly WRITES:
+
+  * redirection -- `>` / `>>` (any leading fd digit), per `;`/`&`/`|`/newline
+    segment;
+  * a write VERB and its operands -- `tee`, `mv`/`move`, `cp`/`copy`,
+    `rm`/`del`/`erase`, `ren`/`rename`, `truncate`, and the PowerShell
+    cmdlets `Set-Content`, `Add-Content`, `Out-File`, `Clear-Content`,
+    `New-Item`, `Move-Item`, `Copy-Item`, `Remove-Item`, `Rename-Item`;
+  * `sed` / `perl` ONLY with an in-place flag (`-i`, `-i.bak`, `-pi`) --
+    without it they write to stdout and mutate nothing;
+  * `python -c` whose code opens a path in a writing mode
+    (`open(<path>, 'w'|'a'|'...+')`);
+  * `git checkout -- <paths>` and `git restore <paths>`, which overwrite a
+    working-tree file from the index.
+
+The extractor deliberately OVER-collects candidates (a `sed` script operand,
+a branch name after `git checkout`) and lets the two narrow predicates decide:
+`is_gate_artifact()` matches four exact basenames plus the sidecar suffix, and
+rule 2 additionally requires the path to EXIST. A candidate that is neither
+costs nothing. Matching is case-insensitive and separator-agnostic, so a
+Windows path written with backslashes and an upper-case `GATES.JSONL` matches.
 
 ACTIVE-LANE DETECTION, AND WHY IT READS THE TREE
 ------------------------------------------------
 A lane is detected from ARTIFACTS ON DISK, never from prose, a session flag or
 a model assertion -- the guard has to be right in a session that never said
-which lane it was in. Three detectors, all relative to the hook's `cwd`, all
+which lane it was in. Four detectors, all relative to the hook's `cwd`, all
 using a 12-hour freshness window (`--window-hours`):
 
   (a) FEATURE  `.docs/*/orchestrator-state.json` whose `pipeline` is a
       non-empty string, where that file OR its sibling
       `implementation/gates.jsonl` was modified inside the window.
-  (b) BUGFIX   `.docs/bugfix/*/bug-report.md` whose directory's `gates.jsonl`
-      was modified inside the window.
-  (c) QUICK    `.docs/quick/*/note.md` modified inside the window, whose
+  (b) BUGFIX (standalone route) `.docs/bugfix/*/bug-report.md` whose
+      directory's `gates.jsonl` was modified inside the window.
+  (c) BUGFIX (feature route) `.docs/*/implementation/bug-report.md` and
+      `.docs/*/implementation/bugs/*/bug-report.md` -- the paths
+      `bgpdd-bugfix` § Route detection mandates for a bug found inside an
+      in-flight epic -- with a fresh `gates.jsonl` beside the report, or, when
+      the report is slug-scoped and has no ledger of its own, the epic's
+      `implementation/gates.jsonl`. Detector (a) may report the same epic as a
+      FEATURE lane; both stand, and the bugfix lane is what arms rules 2
+      and 3. Until this detector existed, a bug fixed on the feature route
+      armed rule 1 only: the builder could edit the RED and the Orchestrator
+      could delegate before intake.
+  (d) QUICK    `.docs/quick/*/note.md` modified inside the window, whose
       directory's `gates.jsonl` holds no `check_quick_close.py` PASS carrying
       `--commit` (i.e. the lane has not closed itself yet).
+
+CLOSED LANES (rule 1's carve-out)
+---------------------------------
+Rule 1 exists to route the commit through the gate -- not to forbid the close
+the pipelines mandate AFTER it. `bgpdd-bugfix` Phase 5 and `bgpdd-lite`
+Phase 3 both end in a local `git merge` of the lane's branch, and the guard
+denied exactly that. A lane is therefore CLOSED, and stops arming rule 1, once
+its own ledger holds a `check_commit_gate.py` PASS whose `argv` carries
+`--commit` for the lane's CURRENT milestone:
+
+  * bugfix -- the bug slug (the lane directory's name);
+  * feature / lite -- `milestone_cursor` from the lane's state file.
+
+The milestone scope is what keeps this from being a blanket disarm: an epic
+that committed M1 still arms rule 1 while the cursor points at M2. When the
+milestone cannot be read (a null cursor, or the unscoped feature-route report
+whose directory name is `implementation` rather than a slug) the lane is
+treated as NOT closed -- fail-closed, and `--explain` says so. Quick keeps its
+own, older predicate: a `check_quick_close.py --commit` PASS removes the lane
+from detection entirely.
+
+VERIFY LANES DO NOT ARM RULE 1
+------------------------------
+A state file whose `pipeline` is `bgpdd-verify` is detected as a lane (so
+`--explain` shows it) but does not arm rule 1. `bgpdd-verify` has no commit
+gate: its only durable output is Quinn's Playwright specs, which are committed
+by hand outside the lane, so arming rule 1 there names a gate that does not
+exist and leaves the lane with no commit path at all. Rules 2, 3 and 4 are
+unaffected -- rule 4 in particular still guards the verify lane's ledger.
 
 Known failure modes, each deliberate rather than overlooked:
 
   * PHASE-0 BUGFIX WINDOW. Between writing `bug-report.md` and running the
-    intake gate, the ledger does not exist, so (b) reports no active lane and
-    rule 1 would allow a hand commit. Rule 3 deliberately does NOT depend on
-    (b): it keys off the report's own mtime, so the restraint that actually
-    matters in that window -- do not delegate yet -- still fires. Accepted:
-    tightening (b) to the report's mtime would make every stale bug folder
-    from last week block commits for an unrelated change.
+    intake gate, the ledger does not exist, so (b)/(c) report no active lane
+    and rule 1 would allow a hand commit. Rule 3 deliberately does NOT depend
+    on (b)/(c): it keys off the report's own mtime, so the restraint that
+    actually matters in that window -- do not delegate yet -- still fires.
+    Accepted: tightening (b) to the report's mtime would make every stale bug
+    folder from last week block commits for an unrelated change.
   * STALE LANE. A lane abandoned more than 12 hours ago stops being active and
     the guard stops blocking. This is the intended trade: the alternative is a
     forgotten `.docs/` folder that bricks committing forever. Touching the
-    ledger (running any gate) re-arms it.
+    ledger (running any gate) re-arms it -- and, symmetrically, `touch`ing or
+    renaming the ledger DISARMS it. Rule 4 now blocks a `Bash` rename or
+    delete of the ledger itself, which was the cheapest form of that
+    disarm; a `touch` of an unprotected sibling still ages the lane out.
   * CLOCK AND CHECKOUT. Freshness is mtime, so a fresh `git checkout`, a
     `git clone`, or a machine whose clock moved can make an old lane look
     active (over-blocking, recoverable by `--explain` + the named gate) or a
@@ -79,9 +155,21 @@ Known failure modes, each deliberate rather than overlooked:
     way, which is the correct direction for a mistake of this kind.
   * QUOTED COMMANDS. Rule 1 matches the command STRING, so
     `echo "git commit"` is denied (over-block) while a commit reached through
-    a shell alias, a script file, or a heredoc is not (under-block). The
-    regex does cover global options (`git -C <dir> commit`), which is the one
-    bypass common enough to matter.
+    a shell alias (`git cm`), a script file, `Start-Process git -ArgumentList
+    commit`, or a `subprocess.run(['git','commit'])` with no whitespace
+    between the tokens is not (under-block). The regex does cover global
+    options (`git -C <dir> commit`), which is the one bypass common enough to
+    matter. `git tag` and `git stash` are in the list even though their
+    read-only forms (`git tag -l`, `git stash list`) are then over-blocked:
+    an over-block costs one `--explain`, an under-block costs a rewritten
+    history.
+  * BASH WRITE EXTRACTION IS HEURISTIC. It reads a command string, not a
+    shell. A path built by variable expansion (`$LEDGER`), reached through a
+    script file, produced by a here-document, or written by an editor spawned
+    from the command is invisible; a directory-level `Remove-Item .docs
+    -Recurse` names no protected basename and is allowed. Every one of those
+    fails OPEN, which is the correct direction: the rule raises the cost of
+    the wrong action, it does not make the tree read-only.
   * NON-TOOL PATHS. Anything that does not travel through a guarded tool call
     -- a terminal the user drives, an MCP server that shells out -- is out of
     reach by construction. This guard raises the cost of the wrong action; it
@@ -94,6 +182,13 @@ this file -- results in ALLOW: exit 0, nothing on stdout, one diagnostic line
 on stderr. A guard that bricks a session would be removed within a day, and a
 removed guard enforces nothing. Every deny in this file is therefore a
 positive identification, never the absence of a reason to allow.
+
+Fail-open is a property of the guard's ERROR handling, not a licence for a
+rule to be silently unarmed: the 2.6.0 state of rules 2 and 4 (no `Bash`
+branch at all) was not a fail-open, it was a rule that did not exist for the
+one tool that mattered. The distinction is why `--explain` prints which rule
+is armed for what, and why the self-test asserts a DENY for every mutating
+verb rather than only for the write tools.
 
 WHY JSON-ON-STDOUT AND NOT EXIT 2
 ---------------------------------
@@ -159,12 +254,49 @@ TEST_FILE_PATTERNS = (
 GATE_ARTIFACT_NAMES = ("gates.jsonl", "orchestrator-state.json", "run-log.jsonl")
 GATE_ARTIFACT_SUFFIX = ".meta.json"
 
+# A pipeline whose lane has no commit gate: it arms every rule EXCEPT rule 1.
+NO_COMMIT_GATE_PIPELINES = ("bgpdd-verify",)
+
 # `git`, any number of global options, then a history-writing subcommand.
+# `stash` captures its `pop`/`apply` tail so the deny message can name it.
 GIT_WRITE_RE = re.compile(
-    r"\bgit\b(?:\s+(?:-[cC]\s+\S+|--\S+|-\w))*\s+(commit|merge|cherry-pick|revert)\b"
+    r"\bgit\b(?:\s+(?:-[cC]\s+\S+|--\S+|-\w))*\s+"
+    r"(stash(?:\s+(?:pop|apply))?|cherry-pick|commit|merge|revert|rebase|am|"
+    r"notes|tag)\b"
 )
+# `gh pr merge` writes the same history through a different binary.
+GH_WRITE_RE = re.compile(r"\bgh\s+pr\s+merge\b")
 HELP_RE = re.compile(r"(?:^|\s)(--help|-h)(?=\s|$)")
 COMMAND_SEPARATORS = re.compile(r"[;&|\n]")
+
+# --- Bash write extraction (rules 2 and 4); see BASH WRITES in the docstring.
+# One shell token: a double-quoted run, a single-quoted run, or a bare run.
+BASH_TOKEN_RE = re.compile(r'"[^"]*"|\'[^\']*\'|\S+')
+# `>` or `>>`, optionally preceded by an fd digit, then the target token.
+BASH_REDIRECT_RE = re.compile(
+    r'\d?>>?\s*("[^"]*"|\'[^\']*\'|[^\s;&|<>"\']+)')
+# Commands whose operands are things they WRITE. Matched on the token's
+# basename, lower-cased, with a Windows executable suffix stripped.
+BASH_WRITE_VERBS = (
+    "tee", "sed", "perl",
+    "mv", "move", "cp", "copy", "rm", "del", "erase", "ren", "rename",
+    "truncate", "shred",
+    "set-content", "add-content", "out-file", "clear-content",
+    "new-item", "move-item", "copy-item", "remove-item", "rename-item",
+)
+# `sed`/`perl` mutate a file only in place; without the flag they write stdout.
+BASH_INPLACE_VERBS = ("sed", "perl")
+INPLACE_FLAG_RE = re.compile(r"^-[A-Za-z]*i")
+EXECUTABLE_SUFFIXES = (".exe", ".cmd", ".bat", ".ps1", ".com")
+PYTHON_TOKEN_RE = re.compile(r"(?:^|[\s/\\])(?:python\d?(?:\.\d+)?|py)(?:\.exe)?(?=\s|$)",
+                             re.IGNORECASE)
+PYTHON_DASH_C_RE = re.compile(r"(?:^|\s)-c(?=\s|$)")
+PY_OPEN_WRITE_RE = re.compile(
+    r"""open\s*\(\s*(?P<q>['"])(?P<p>[^'"]+)(?P=q)\s*,\s*"""
+    r"""(?P<mq>['"])(?P<m>[^'"]*)(?P=mq)""")
+# `git checkout -- <paths>` / `git restore <paths>` overwrite the working tree.
+GIT_RESTORE_RE = re.compile(
+    r"\bgit\b(?:\s+(?:-[cC]\s+\S+|--\S+|-\w))*\s+(checkout|restore)\b(?P<rest>[^;&|\n]*)")
 
 
 class GuardError(Exception):
@@ -217,8 +349,15 @@ def read_ledger(path):
     return records
 
 
-def ledger_has_pass(path, gate_name, require_flag=None):
-    """True when the ledger holds a PASS for `gate_name` (optionally with a flag)."""
+def ledger_has_pass(path, gate_name, require_flag=None, milestone=None):
+    """True when the ledger holds a PASS for `gate_name`.
+
+    `require_flag` additionally demands that flag in the record's `argv`;
+    `milestone` demands an exact match on the record's `milestone` field. A
+    `milestone` of None means "any", so callers that cannot name the lane's
+    milestone must decide for themselves whether that is safe -- the closed-
+    lane predicate below refuses to, and fails closed instead.
+    """
     for record in read_ledger(path):
         if record.get("gate") != gate_name:
             continue
@@ -228,6 +367,8 @@ def ledger_has_pass(path, gate_name, require_flag=None):
             argv = record.get("argv")
             if not isinstance(argv, list) or require_flag not in argv:
                 continue
+        if milestone is not None and record.get("milestone") != milestone:
+            continue
         return True
     return False
 
@@ -239,12 +380,20 @@ def ledger_has_pass(path, gate_name, require_flag=None):
 class Lane(object):
     """One detected lane: what kind, where, and which gate commits for it."""
 
-    def __init__(self, kind, root, ledger, gate, detail=""):
+    def __init__(self, kind, root, ledger, gate, detail="", milestone=None,
+                 arms_commit_rule=True, closed=False):
         self.kind = kind          # "feature" | "bugfix" | "quick"
         self.root = root          # the lane's directory
         self.ledger = ledger      # its gates.jsonl (may not exist)
         self.gate = gate          # the gate that commits for this lane
         self.detail = detail
+        self.milestone = milestone            # the lane's current milestone
+        self.arms_commit_rule = arms_commit_rule   # False for verify lanes
+        self.closed = closed      # its commit gate already committed the close
+
+    def arms_rule_1(self):
+        """True when this lane should still deny a hand `git commit`/`merge`."""
+        return self.arms_commit_rule and not self.closed
 
     def __repr__(self):  # pragma: no cover -- diagnostics only
         return "Lane({0}, {1})".format(self.kind, self.root)
@@ -255,6 +404,63 @@ def _iter_dirs(parent):
         return sorted(p for p in Path(parent).iterdir() if p.is_dir())
     except OSError:
         return []
+
+
+def bug_slug_of(bugdir):
+    """The bug slug a bugfix lane's ledger records as its `--milestone`.
+
+    The lane directory's own name, EXCEPT on the unscoped feature route where
+    that name is `implementation` (the epic's directory, shared with every
+    other artifact). There the slug is unknowable from the path, so this
+    returns None and the closed-lane predicate fails closed.
+    """
+    name = Path(bugdir).name
+    return None if name.lower() == "implementation" else name
+
+
+def bugfix_report_dirs(cwd):
+    """Every directory holding a `bug-report.md`, standalone and feature route.
+
+    Detectors (b) and (c) share this walk so the two routes can never drift
+    apart -- the 2.6.0 hook scanned `.docs/bugfix/*` only, and a bug fixed
+    inside an in-flight epic armed no write rule at all.
+    """
+    docs = Path(cwd) / ".docs"
+    found = []
+
+    def offer(directory):
+        if (directory / "bug-report.md").is_file() and directory not in found:
+            found.append(directory)
+
+    for bugdir in _iter_dirs(docs / "bugfix"):     # (b) standalone route
+        offer(bugdir)
+    for project in _iter_dirs(docs):               # (c) feature route
+        implementation = project / "implementation"
+        if not implementation.is_dir():
+            continue
+        offer(implementation)
+        for slugdir in _iter_dirs(implementation / "bugs"):
+            offer(slugdir)
+    return found
+
+
+def bugfix_ledger_for(bugdir):
+    """The ledger a bugfix lane's verdicts land in.
+
+    Its own `gates.jsonl` when one exists; otherwise, for a slug-scoped
+    feature-route folder, the epic's `implementation/gates.jsonl` one level up
+    (`bgpdd-bugfix` shares the epic's ledger on that route). Falls back to the
+    folder's own path so a caller always has something to test for freshness.
+    """
+    own = Path(bugdir) / "gates.jsonl"
+    if own.is_file():
+        return own
+    parent = Path(bugdir).parent
+    if parent.name.lower() == "bugs":
+        shared = parent.parent / "gates.jsonl"
+        if shared.is_file():
+            return shared
+    return own
 
 
 def detect_lanes(cwd, now=None, window_hours=WINDOW_HOURS_DEFAULT):
@@ -284,25 +490,35 @@ def detect_lanes(cwd, now=None, window_hours=WINDOW_HOURS_DEFAULT):
         if not (_fresh(ledger, now, window_hours)
                 or _fresh(state_path, now, window_hours)):
             continue
+        cursor = state.get("milestone_cursor")
+        milestone = cursor if isinstance(cursor, str) and cursor.strip() else None
+        arms = pipeline.strip() not in NO_COMMIT_GATE_PIPELINES
         lanes.append(Lane(
             "feature", str(project), str(ledger),
             "check_commit_gate.py",
-            "pipeline={0}".format(pipeline.strip()),
+            "pipeline={0}{1}".format(
+                pipeline.strip(),
+                "" if arms else "; no commit gate, rule 1 not armed"),
+            milestone=milestone,
+            arms_commit_rule=arms,
+            closed=lane_is_closed(str(ledger), milestone),
         ))
 
-    # (b) BUGFIX -- .docs/bugfix/*/bug-report.md, ledger fresh.
-    for bugdir in _iter_dirs(docs / "bugfix"):
-        if not (bugdir / "bug-report.md").is_file():
-            continue
-        ledger = bugdir / "gates.jsonl"
+    # (b)+(c) BUGFIX -- standalone and feature route, ledger fresh.
+    for bugdir in bugfix_report_dirs(cwd):
+        ledger = bugfix_ledger_for(bugdir)
         if not _fresh(ledger, now, window_hours):
             continue
+        slug = bug_slug_of(bugdir)
         lanes.append(Lane(
             "bugfix", str(bugdir), str(ledger),
             "check_commit_gate.py",
+            detail="" if slug else "unscoped feature route: no readable slug",
+            milestone=slug,
+            closed=lane_is_closed(str(ledger), slug),
         ))
 
-    # (c) QUICK -- .docs/quick/*/note.md fresh and not yet closed.
+    # (d) QUICK -- .docs/quick/*/note.md fresh and not yet closed.
     for quickdir in _iter_dirs(docs / "quick"):
         note = quickdir / "note.md"
         if not _fresh(note, now, window_hours):
@@ -318,25 +534,41 @@ def detect_lanes(cwd, now=None, window_hours=WINDOW_HOURS_DEFAULT):
     return lanes
 
 
+def lane_is_closed(ledger, milestone):
+    """True when this lane's commit gate already committed its current milestone.
+
+    See CLOSED LANES in the module docstring. `milestone` of None -> False:
+    a lane whose milestone cannot be read is never treated as closed, because
+    "any commit-gate PASS in this ledger" would disarm rule 1 for a whole epic
+    the moment its first milestone landed.
+    """
+    if not milestone:
+        return False
+    return ledger_has_pass(ledger, "check_commit_gate.py", "--commit", milestone)
+
+
 def pending_bugfix_intakes(cwd, now=None, window_hours=WINDOW_HOURS_DEFAULT):
     """Bugfix folders with a fresh report and no intake PASS (rule 3's predicate).
 
     Deliberately keyed on the REPORT's mtime rather than on `detect_lanes`
-    detector (b): before the intake gate runs there is no ledger to be fresh,
-    and that pre-intake window is exactly when rule 3 has to hold.
+    detectors (b)/(c): before the intake gate runs there is no ledger to be
+    fresh, and that pre-intake window is exactly when rule 3 has to hold.
+    Both routes are covered -- the feature route's Phase 0 gate is the same
+    `check_bugfix_intake.py`.
     """
     if now is None:
         now = time.time()
     pending = []
-    for bugdir in _iter_dirs(Path(cwd) / ".docs" / "bugfix"):
+    for bugdir in bugfix_report_dirs(cwd):
         report = bugdir / "bug-report.md"
         if not _fresh(report, now, window_hours):
             continue
-        ledger = bugdir / "gates.jsonl"
+        ledger = bugfix_ledger_for(bugdir)
         if ledger_has_pass(str(ledger), "check_bugfix_intake.py"):
             continue
         pending.append(Lane("bugfix", str(bugdir), str(ledger),
-                            "check_bugfix_intake.py"))
+                            "check_bugfix_intake.py",
+                            milestone=bug_slug_of(bugdir)))
     return pending
 
 
@@ -429,6 +661,20 @@ def is_test_path(path):
     return False
 
 
+def is_frozen_test_target(path):
+    """Rule 2's predicate for a BASH target: a test file OR a test DIRECTORY.
+
+    Deliberately wider than `is_test_path` (convention #8): a write tool
+    targets one file, so `tests` alone is meaningless there, while
+    `git checkout -- tests/` and `rm -rf tests` name the directory and undo
+    every RED in it. The existence check in rule 2 still applies.
+    """
+    if is_test_path(path):
+        return True
+    parts = _segments(path)
+    return bool(parts) and parts[-1].lower() in TEST_DIR_SEGMENTS
+
+
 def is_gate_artifact(path):
     parts = _segments(path)
     if not parts:
@@ -437,6 +683,85 @@ def is_gate_artifact(path):
     if name in GATE_ARTIFACT_NAMES:
         return True
     return name.endswith(GATE_ARTIFACT_SUFFIX)
+
+
+def bash_tokens(text):
+    """Shell-ish tokens with one layer of quoting removed."""
+    return [t[1:-1] if len(t) >= 2 and t[0] == t[-1] and t[0] in "\"'" else t
+            for t in BASH_TOKEN_RE.findall(text or "")]
+
+
+def command_basename(token):
+    """A command token's comparable name: basename, lower, no .exe/.cmd/..."""
+    parts = _segments(token or "")
+    name = (parts[-1] if parts else (token or "")).lower()
+    for suffix in EXECUTABLE_SUFFIXES:
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
+def bash_write_targets(command):
+    """[(verb, path)] for every path this shell command plausibly WRITES.
+
+    See BASH WRITES in the module docstring for the construct list and for
+    why this over-collects candidates on purpose.
+    """
+    targets = []
+
+    def emit(verb, raw):
+        path = (raw or "").strip().strip("\"'").strip()
+        if not path or path == "--":
+            return
+        pair = (verb, path)
+        if pair not in targets:
+            targets.append(pair)
+
+    command = command or ""
+    for segment in COMMAND_SEPARATORS.split(command):
+        if not segment.strip():
+            continue
+        for match in BASH_REDIRECT_RE.finditer(segment):
+            emit("redirect", match.group(1))
+        tokens = bash_tokens(segment)
+        for index, token in enumerate(tokens):
+            verb = command_basename(token)
+            if verb not in BASH_WRITE_VERBS:
+                continue
+            operands = tokens[index + 1:]
+            if verb in BASH_INPLACE_VERBS and not any(
+                    INPLACE_FLAG_RE.match(t) for t in operands):
+                break   # sed/perl without -i writes stdout, not the file
+            for operand in operands:
+                if operand.startswith("-"):
+                    continue
+                emit(verb, operand)
+            break       # the first write verb in a segment owns its operands
+
+    for match in GIT_RESTORE_RE.finditer(command):
+        for operand in bash_tokens(match.group("rest")):
+            if operand.startswith("-"):
+                continue
+            emit("git " + match.group(1), operand)
+
+    if PYTHON_TOKEN_RE.search(command) and PYTHON_DASH_C_RE.search(command):
+        for match in PY_OPEN_WRITE_RE.finditer(command):
+            if set("wa+") & set(match.group("m").lower()):
+                emit("python -c", match.group("p"))
+    return targets
+
+
+def write_targets_of(tool_name, tool_input):
+    """[(source, path)] for whichever guarded tool is about to write.
+
+    `source` is `"tool"` for a write tool's declared path and the shell verb
+    for a Bash construct, so a deny message can name what it matched.
+    """
+    if tool_name in WRITE_TOOLS:
+        return [("tool", path) for path in paths_of(tool_input)]
+    if tool_name in BASH_TOOLS:
+        return bash_write_targets(command_of(tool_input))
+    return []
 
 
 def path_exists(path, cwd):
@@ -450,15 +775,18 @@ def path_exists(path, cwd):
 
 
 def git_write_invocation(command):
-    """The history-writing git subcommand in `command`, or None.
+    """The history-writing invocation in `command`, or None.
 
-    A `--help` / `-h` in the same shell segment is documentation, not a commit.
+    A `--help` / `-h` in the same shell segment is documentation, not a
+    commit. `gh pr merge` is matched by its own regex and reported under that
+    name -- it writes the same history through a different binary.
     """
-    for match in GIT_WRITE_RE.finditer(command):
-        tail = COMMAND_SEPARATORS.split(command[match.start():], 1)[0]
-        if HELP_RE.search(tail):
-            continue
-        return match.group(1)
+    for regex, label in ((GIT_WRITE_RE, None), (GH_WRITE_RE, "gh pr merge")):
+        for match in regex.finditer(command):
+            tail = COMMAND_SEPARATORS.split(command[match.start():], 1)[0]
+            if HELP_RE.search(tail):
+                continue
+            return label or match.group(1)
     return None
 
 
@@ -481,64 +809,79 @@ def decide(tool_name, tool_input, cwd, now=None, window_hours=WINDOW_HOURS_DEFAU
     if now is None:
         now = time.time()
 
+    # Every path this call is about to write, whichever tool it arrived on.
+    targets = write_targets_of(tool_name, tool_input)
+
     # Rule 4 first: it holds with or without a lane, so it needs no detection.
-    if tool_name in WRITE_TOOLS:
-        for path in paths_of(tool_input):
-            if is_gate_artifact(path):
-                return "deny", "gate_artifacts_are_written_by_tools", (
-                    "Blocked: `{0}` is a gate artifact, written only by "
-                    "pipeline-tools scripts. gates.jsonl, "
-                    "orchestrator-state.json, run-log.jsonl and *.meta.json "
-                    "sidecars are the evidence every other gate reads; a hand "
-                    "edit to any of them makes each downstream verdict "
-                    "unfalsifiable. Record the ledger line by running the gate "
-                    "with --ledger, change state with update_state.py, and "
-                    "record runs with record_run.py. If a sidecar disagrees "
-                    "with its capture, re-run the capture through "
-                    "run_quiet.py --capture; do not reconcile it by hand."
-                    .format(path)
-                )
+    for source, path in targets:
+        if is_gate_artifact(path):
+            how = ("" if source == "tool" else
+                   " (matched the shell construct `{0}`)".format(source))
+            return "deny", "gate_artifacts_are_written_by_tools", (
+                "Blocked: `{0}` is a gate artifact, written only by "
+                "pipeline-tools scripts{1}. gates.jsonl, "
+                "orchestrator-state.json, run-log.jsonl and *.meta.json "
+                "sidecars are the evidence every other gate reads; a hand "
+                "edit -- or a redirect, a `tee`, a `Set-Content`, a rename or "
+                "a delete -- to any of them makes each downstream verdict "
+                "unfalsifiable. Record the ledger line by running the gate "
+                "with --ledger, change state with update_state.py, and "
+                "record runs with record_run.py. If a sidecar disagrees "
+                "with its capture, re-run the capture through "
+                "run_quiet.py --capture; do not reconcile it by hand."
+                .format(path, how)
+            )
 
     lanes = detect_lanes(cwd, now=now, window_hours=window_hours)
 
     # Rule 1 -- commit through the gate.
     if tool_name in BASH_TOOLS:
         subcommand = git_write_invocation(command_of(tool_input))
-        if subcommand and lanes:
-            lane = lanes[0]
+        arming = [lane for lane in lanes if lane.arms_rule_1()]
+        if subcommand and arming:
+            lane = arming[0]
+            prefix = "" if subcommand.startswith("gh ") else "git "
             return "deny", "commit_through_the_gate", (
-                "Blocked: `git {0}` by hand while the {1} lane at `{2}` is "
+                "Blocked: `{0}{1}` by hand while the {2} lane at `{3}` is "
                 "active. In this lane the gate makes the commit -- run\n"
-                "  {3} ... --commit --message \"<the commit message>\"\n"
+                "  {4} ... --commit --message \"<the commit message>\"\n"
                 "which commits from its own subprocess (not through the Bash "
                 "tool, so this guard never blocks it) once the verdict, the "
                 "clean-tree check and the size bound have actually passed. "
-                "Committing here by hand skips all three. If that lane is "
-                "finished, close it through its gate; `--explain` lists what "
-                "was detected."
-                .format(subcommand, lane.kind, lane.root, _gate_command(lane.gate))
+                "Committing here by hand skips all three. The sanctioned "
+                "local merge that CLOSES this lane is allowed once that "
+                "gate has recorded a --commit PASS for milestone {5}; "
+                "`--explain` lists what was detected and which rule is armed."
+                .format(prefix, subcommand, lane.kind, lane.root,
+                        _gate_command(lane.gate),
+                        repr(lane.milestone) if lane.milestone
+                        else "(unreadable from this lane's path -- see "
+                             "--explain)")
             )
 
     # Rule 2 -- the builder never edits the RED.
-    if tool_name in WRITE_TOOLS:
-        unfixed = unfixed_bugfix_lanes(lanes)
-        if unfixed:
-            for path in paths_of(tool_input):
-                if not is_test_path(path):
-                    continue
-                if not path_exists(path, cwd):
-                    continue  # a brand-new test file is an addition, not an edit
-                return "deny", "frozen_tests_during_a_fix", (
-                    "Blocked: `{0}` is a test path and the bugfix lane at "
-                    "`{1}` has not reached its commit gate. The builder never "
-                    "edits the RED -- a failing test is a finding about the "
-                    "code, not an obstacle in front of it. Quinn owns tests in "
-                    "this lane (bgpdd-bugfix Phase 3 step 4): fix the code, or "
-                    "report the test as wrong and say why. Adding a NEW test "
-                    "file is allowed -- this fired because the path already "
-                    "exists, so the write is an edit to an existing test."
-                    .format(path, unfixed[0].root)
-                )
+    unfixed = unfixed_bugfix_lanes(lanes)
+    if unfixed and targets:
+        for source, path in targets:
+            frozen = (is_test_path(path) if source == "tool"
+                      else is_frozen_test_target(path))
+            if not frozen:
+                continue
+            if not path_exists(path, cwd):
+                continue  # a brand-new test file is an addition, not an edit
+            how = ("" if source == "tool" else
+                   " (matched the shell construct `{0}`)".format(source))
+            return "deny", "frozen_tests_during_a_fix", (
+                "Blocked: `{0}` is a test path{1} and the bugfix lane at "
+                "`{2}` has not reached its commit gate. The builder never "
+                "edits the RED -- a failing test is a finding about the "
+                "code, not an obstacle in front of it. Quinn owns tests in "
+                "this lane (bgpdd-bugfix Phase 3 step 4): fix the code, or "
+                "report the test as wrong and say why. Adding a NEW test "
+                "file is allowed -- this fired because the path already "
+                "exists, so the write is an edit to an existing test."
+                .format(path, how, unfixed[0].root)
+            )
 
     # Rule 3 -- no delegation before intake.
     if tool_name in DELEGATION_TOOLS:
@@ -632,13 +975,16 @@ def run_explain(args):
     out.append("Rules (each reads an artifact; a deny is always a positive")
     out.append("identification, never the absence of a reason to allow):")
     out.append("  1 commit_through_the_gate           Bash + git commit/merge/"
-               "cherry-pick/revert, any active lane")
-    out.append("  2 frozen_tests_during_a_fix         write to an EXISTING test "
-               "path, active bugfix lane pre-commit-gate")
+               "cherry-pick/revert/rebase/am/notes/tag/stash or gh pr merge, "
+               "any active OPEN lane that has a commit gate")
+    out.append("  2 frozen_tests_during_a_fix         write (tool OR Bash "
+               "mutation) to an EXISTING test path, active bugfix lane "
+               "pre-commit-gate")
     out.append("  3 no_delegation_before_intake       Task/Agent while a fresh "
-               "bug-report.md has no intake PASS")
-    out.append("  4 gate_artifacts_are_written_by_tools  write to gates.jsonl / "
-               "orchestrator-state.json / run-log.jsonl / *.meta.json, always")
+               "bug-report.md has no intake PASS (both routes)")
+    out.append("  4 gate_artifacts_are_written_by_tools  write (tool OR Bash "
+               "mutation) to gates.jsonl / orchestrator-state.json / "
+               "run-log.jsonl / *.meta.json, always")
     out.append("")
     out.append("cwd            : {0}".format(cwd))
     out.append("window (hours) : {0:g}".format(args.window_hours))
@@ -649,16 +995,32 @@ def run_explain(args):
             suffix = " [{0}]".format(lane.detail) if lane.detail else ""
             out.append("  - {0}: {1}{2}".format(lane.kind, lane.root, suffix))
             out.append("      ledger: {0}".format(lane.ledger))
+            out.append("      milestone: {0}".format(
+                lane.milestone if lane.milestone
+                else "(unreadable -- closed-lane check fails closed)"))
             out.append("      commits via: {0} --commit".format(lane.gate))
+            if not lane.arms_commit_rule:
+                out.append("      rule 1: NOT armed (this pipeline has no "
+                           "commit gate)")
+            elif lane.closed:
+                out.append("      rule 1: NOT armed (closed -- the commit gate "
+                           "recorded a --commit PASS for this milestone, so "
+                           "the sanctioned local merge is allowed)")
+            else:
+                out.append("      rule 1: armed")
     else:
         out.append("ACTIVE LANES: none -- rule 1 allows a hand commit "
                    "(the user's call).")
     out.append("")
+    arming = [l for l in lanes if l.arms_rule_1()]
+    out.append("Rule 1 armed for: {0}".format(
+        ", ".join(l.root for l in arming) if arming else "nothing"))
     out.append("Rule 2 armed for: {0}".format(
         ", ".join(l.root for l in unfixed) if unfixed else "nothing"))
     out.append("Rule 3 armed for: {0}".format(
         ", ".join(l.root for l in pending) if pending else "nothing"))
-    out.append("Rule 4 is always armed.")
+    out.append("Rule 4 is always armed, for write tools AND for Bash "
+               "redirection/tee/Set-Content/sed -i/mv/rm/git checkout.")
     print("\n".join(out))
     return 0
 
@@ -718,9 +1080,10 @@ def run_self_test():
             os.utime(str(path), (stamp, stamp))
         return str(path)
 
-    def ledger_line(gate, verdict="PASS", argv=None):
+    def ledger_line(gate, verdict="PASS", argv=None, milestone=None):
         return json.dumps({"gate": gate, "verdict": verdict,
-                           "argv": argv or [], "ts": "2026-09-07T00:00:00Z"}) + "\n"
+                           "argv": argv or [], "milestone": milestone,
+                           "ts": "2026-09-07T00:00:00Z"}) + "\n"
 
     class GuardTest(unittest.TestCase):
 
@@ -731,22 +1094,50 @@ def run_self_test():
         # -- fixtures ---------------------------------------------------
 
         def make_bugfix(self, slug="coupon-500", intake=True, commit=False,
-                        age_hours=0.0):
+                        age_hours=0.0, commit_milestone=None):
             d = Path(self.root) / ".docs" / "bugfix" / slug
             touch(d / "bug-report.md", "# Bug report", age_hours)
             lines = ""
             if intake:
                 lines += ledger_line("check_bugfix_intake.py")
             if commit:
-                lines += ledger_line("check_commit_gate.py", argv=["--commit"])
+                lines += ledger_line("check_commit_gate.py", argv=["--commit"],
+                                     milestone=commit_milestone)
             touch(d / "gates.jsonl", lines or "", age_hours)
             return str(d)
 
-        def make_feature(self, name="demo", pipeline="bgpdd-build", age_hours=0.0):
+        def make_feature(self, name="demo", pipeline="bgpdd-build", age_hours=0.0,
+                         cursor=None, commit_milestone=None):
             d = Path(self.root) / ".docs" / name
             touch(d / "orchestrator-state.json",
-                  json.dumps({"pipeline": pipeline}), age_hours)
-            touch(d / "implementation" / "gates.jsonl", "", age_hours)
+                  json.dumps({"pipeline": pipeline,
+                              "milestone_cursor": cursor}), age_hours)
+            lines = ""
+            if commit_milestone is not None:
+                lines = ledger_line("check_commit_gate.py", argv=["--commit"],
+                                    milestone=commit_milestone)
+            touch(d / "implementation" / "gates.jsonl", lines, age_hours)
+            return str(d)
+
+        def make_feature_bugfix(self, name="demo", slug=None, intake=True,
+                                commit=False, commit_milestone=None,
+                                age_hours=0.0):
+            """The FEATURE route: a bug-report.md under the epic's tree.
+
+            `slug=None` is the unscoped 2.6.0 shape
+            (`implementation/bug-report.md`); a slug is the scoped shape
+            (`implementation/bugs/<slug>/bug-report.md`).
+            """
+            impl = Path(self.root) / ".docs" / name / "implementation"
+            d = impl / "bugs" / slug if slug else impl
+            touch(d / "bug-report.md", "# Bug report", age_hours)
+            lines = ""
+            if intake:
+                lines += ledger_line("check_bugfix_intake.py")
+            if commit:
+                lines += ledger_line("check_commit_gate.py", argv=["--commit"],
+                                     milestone=commit_milestone)
+            touch(d / "gates.jsonl", lines or "", age_hours)
             return str(d)
 
         def make_quick(self, slug="2026-09-07-rename", closed=False, age_hours=0.0):
@@ -939,11 +1330,14 @@ def run_self_test():
                                  "allow", name)
 
         def test_29_bash_may_not_be_used_to_dodge_rule_4(self):
-            # Documented limit, asserted so it cannot regress silently:
-            # rule 4 guards WRITE TOOLS, not shell redirection.
+            # Was the documented LIMIT until 2.6.1: rule 4 tested only write
+            # tools, so one `>>` rewrote any ledger. Now the same call denies.
             path = str(Path(self.root) / ".docs" / "x" / "gates.jsonl")
-            self.assertEqual(
-                self.decide("Bash", {"command": "echo x >> " + path})[0], "allow")
+            d, rule, reason = self.decide(
+                "Bash", {"command": "echo x >> " + path})
+            self.assertEqual((d, rule),
+                             ("deny", "gate_artifacts_are_written_by_tools"))
+            self.assertIn("redirect", reason)
 
         # -- fail-open and payload handling -----------------------------
 
@@ -1084,6 +1478,349 @@ def run_self_test():
             self.assertIn("ACTIVE LANES", text)
             self.assertIn("check_quick_close.py", text)
             self.assertIn("Rule 3 armed for", text)
+
+        # == 2.6.1 ==================================================
+        # -- rule 4 through Bash (audit3 F1) ----------------------------
+
+        def ledger_path(self):
+            return str(Path(self.root) / ".docs" / "x" / "gates.jsonl")
+
+        def assert_rule4(self, command, needle=None):
+            d, rule, reason = self.decide("Bash", {"command": command})
+            self.assertEqual((d, rule),
+                             ("deny", "gate_artifacts_are_written_by_tools"),
+                             command)
+            if needle:
+                self.assertIn(needle, reason, command)
+
+        def test_43_bash_single_redirect_into_a_ledger_denies(self):
+            self.assert_rule4("echo '{}' > " + self.ledger_path())
+
+        def test_44_bash_fd_prefixed_redirect_denies(self):
+            self.assert_rule4("cmd 2>> " + self.ledger_path())
+
+        def test_45_bash_piped_tee_denies(self):
+            self.assert_rule4("echo '{}' | tee -a " + self.ledger_path(), "tee")
+
+        def test_46_bash_bare_tee_denies(self):
+            self.assert_rule4("tee " + self.ledger_path(), "tee")
+
+        def test_47_powershell_content_cmdlets_deny(self):
+            for verb in ("Set-Content", "Add-Content", "Out-File",
+                         "Clear-Content"):
+                self.assert_rule4("{0} {1} '{{}}'".format(
+                    verb, self.ledger_path()), verb.lower())
+
+        def test_48_powershell_item_cmdlets_deny(self):
+            for verb in ("Remove-Item", "Move-Item", "Copy-Item",
+                         "Rename-Item", "New-Item"):
+                self.assert_rule4("{0} {1}".format(verb, self.ledger_path()),
+                                  verb.lower())
+
+        def test_49_python_dash_c_open_write_denies(self):
+            for mode in ("w", "a", "r+", "wb"):
+                self.assert_rule4(
+                    "python -c \"open('{0}','{1}').write('x')\"".format(
+                        self.ledger_path().replace("\\", "/"), mode),
+                    "python -c")
+
+        def test_50_python_dash_c_open_read_is_allowed(self):
+            path = self.ledger_path().replace("\\", "/")
+            self.assertEqual(self.decide("Bash", {
+                "command": "python -c \"print(open('{0}').read())\"".format(path)
+            })[0], "allow")
+            self.assertEqual(self.decide("Bash", {
+                "command": "python -c \"open('{0}','r').read()\"".format(path)
+            })[0], "allow")
+
+        def test_51_mv_cp_rm_del_of_a_ledger_deny(self):
+            for verb in ("mv", "cp", "rm", "del", "erase", "move", "copy",
+                         "ren", "rename", "truncate"):
+                self.assert_rule4("{0} {1} x".format(verb, self.ledger_path()),
+                                  verb)
+
+        def test_52_renaming_the_ledger_away_denies(self):
+            # The cheapest way to disarm every lane rule was to rename its
+            # ledger out of the way; that is now rule 4's business.
+            self.assert_rule4("mv {0} {0}.bak".format(self.ledger_path()))
+
+        def test_53_sidecar_and_state_and_run_log_through_bash_deny(self):
+            base = Path(self.root) / ".docs" / "x"
+            for name in ("orchestrator-state.json", "run-log.jsonl",
+                         "evidence/red/r.md.meta.json"):
+                self.assert_rule4("echo x >> " + str(base / name))
+
+        def test_54_bash_paths_match_case_insensitively_and_either_slash(self):
+            windows = str(Path(self.root) / ".docs" / "x" / "GATES.JSONL")
+            self.assert_rule4("echo x >> " + windows)
+            self.assert_rule4("echo x >> " + windows.replace("/", "\\"))
+
+        def test_55_reading_a_gate_artifact_through_bash_is_allowed(self):
+            for command in ("cat " + self.ledger_path(),
+                            "grep gates.jsonl notes.md",
+                            "python check_ledger.py --ledger "
+                            + self.ledger_path(),
+                            "ls -la .docs/x"):
+                self.assertEqual(self.decide("Bash", {"command": command})[0],
+                                 "allow", command)
+
+        def test_56_sed_without_in_place_is_not_a_write(self):
+            path = self.ledger_path()
+            self.assertEqual(self.decide(
+                "Bash", {"command": "sed s/a/b/ " + path})[0], "allow")
+            self.assert_rule4("sed -i s/a/b/ " + path, "sed")
+            self.assert_rule4("sed -i.bak s/a/b/ " + path, "sed")
+            self.assert_rule4("perl -pi -e s/a/b/ " + path, "perl")
+
+        def test_57_git_checkout_and_restore_of_a_ledger_deny(self):
+            self.assert_rule4("git checkout -- " + self.ledger_path(),
+                              "git checkout")
+            self.assert_rule4("git restore " + self.ledger_path(),
+                              "git restore")
+
+        def test_58_rule_4_through_bash_needs_no_lane(self):
+            self.assertEqual(detect_lanes(self.root), [])
+            self.assert_rule4("echo x >> " + self.ledger_path())
+
+        # -- rule 2 through Bash (audit3 F1) ----------------------------
+
+        def test_59_bash_mutations_of_an_existing_test_deny(self):
+            self.make_bugfix()
+            path = touch(Path(self.root) / "tests" / "orders.test.js", "old")
+            for command in ("sed -i s/a/b/ " + path,
+                            "perl -pi -e s/a/b/ " + path,
+                            "mv {0} {0}.old".format(path),
+                            "rm " + path,
+                            "Remove-Item " + path,
+                            "echo x > " + path,
+                            "cat new | tee " + path):
+                d, rule, _ = self.decide("Bash", {"command": command})
+                self.assertEqual((d, rule),
+                                 ("deny", "frozen_tests_during_a_fix"), command)
+
+        def test_60_git_checkout_of_the_tests_directory_denies(self):
+            self.make_bugfix()
+            touch(Path(self.root) / "tests" / "orders.test.js", "old")
+            for command in ("git checkout -- tests/", "git restore tests"):
+                d, rule, _ = self.decide("Bash", {"command": command})
+                self.assertEqual((d, rule),
+                                 ("deny", "frozen_tests_during_a_fix"), command)
+
+        def test_61_bash_write_to_a_new_test_path_is_allowed(self):
+            self.make_bugfix()
+            path = str(Path(self.root) / "tests" / "brand-new.test.js")
+            self.assertEqual(self.decide(
+                "Bash", {"command": "echo x > " + path})[0], "allow")
+
+        def test_62_bash_write_to_source_is_allowed_during_a_bugfix(self):
+            self.make_bugfix()
+            path = touch(Path(self.root) / "src" / "api.py", "old")
+            self.assertEqual(self.decide(
+                "Bash", {"command": "sed -i s/a/b/ " + path})[0], "allow")
+
+        def test_63_bash_test_mutation_allowed_with_no_bugfix_lane(self):
+            path = touch(Path(self.root) / "tests" / "orders.test.js", "old")
+            self.assertEqual(self.decide(
+                "Bash", {"command": "rm " + path})[0], "allow")
+
+        def test_64_bash_test_mutation_allowed_once_the_commit_gate_passed(self):
+            self.make_bugfix(commit=True)
+            path = touch(Path(self.root) / "tests" / "orders.test.js", "old")
+            self.assertEqual(self.decide(
+                "Bash", {"command": "rm " + path})[0], "allow")
+
+        def test_65_running_the_test_suite_is_not_a_write(self):
+            self.make_bugfix()
+            touch(Path(self.root) / "tests" / "orders.test.js", "old")
+            for command in ("npm test", "pytest tests/", "dotnet test",
+                            "npx playwright test tests/orders.test.js"):
+                self.assertEqual(self.decide("Bash", {"command": command})[0],
+                                 "allow", command)
+
+        # -- the feature bugfix route (audit3 Metric 20) ----------------
+
+        def test_66_feature_route_bug_report_arms_rule_2(self):
+            self.make_feature()
+            self.make_feature_bugfix()
+            path = touch(Path(self.root) / "tests" / "orders.test.js", "old")
+            d, rule, _ = self.decide("Edit", {"file_path": path})
+            self.assertEqual((d, rule), ("deny", "frozen_tests_during_a_fix"))
+
+        def test_67_feature_route_bug_report_arms_rule_3(self):
+            self.make_feature()
+            self.make_feature_bugfix(intake=False)
+            d, rule, reason = self.decide("Task", {"prompt": "go"})
+            self.assertEqual((d, rule), ("deny", "no_delegation_before_intake"))
+            self.assertIn("check_bugfix_intake.py", reason)
+
+        def test_68_slug_scoped_feature_route_arms_rules_2_and_3(self):
+            self.make_feature()
+            self.make_feature_bugfix(slug="coupon-500", intake=False)
+            path = touch(Path(self.root) / "tests" / "orders.test.js", "old")
+            self.assertEqual(self.decide("Edit", {"file_path": path})[1],
+                             "frozen_tests_during_a_fix")
+            self.assertEqual(self.decide("Agent", {"prompt": "go"})[1],
+                             "no_delegation_before_intake")
+
+        def test_69_slug_scoped_route_falls_back_to_the_epic_ledger(self):
+            self.make_feature()
+            impl = Path(self.root) / ".docs" / "demo" / "implementation"
+            touch(impl / "bugs" / "coupon-500" / "bug-report.md", "# Bug")
+            touch(impl / "gates.jsonl",
+                  ledger_line("check_bugfix_intake.py"))
+            kinds = sorted(l.kind for l in detect_lanes(self.root))
+            self.assertIn("bugfix", kinds)
+            self.assertEqual(self.decide("Task", {"prompt": "go"})[0], "allow")
+
+        def test_70_feature_route_still_arms_rule_1(self):
+            self.make_feature()
+            self.make_feature_bugfix()
+            self.assertEqual(self.decide("Bash", {"command": "git commit -m x"})[0],
+                             "deny")
+
+        def test_71_the_unscoped_feature_route_reads_no_slug(self):
+            self.make_feature()
+            self.make_feature_bugfix()
+            bugfix = [l for l in detect_lanes(self.root) if l.kind == "bugfix"]
+            self.assertEqual(len(bugfix), 1)
+            self.assertIsNone(bugfix[0].milestone)
+            self.assertFalse(bugfix[0].closed)
+
+        # -- closed lanes: the sanctioned local merge -------------------
+
+        def test_72_bugfix_merge_allowed_after_a_scoped_commit_gate_pass(self):
+            self.make_bugfix(slug="coupon-500", commit=True,
+                             commit_milestone="coupon-500")
+            for command in ("git merge --no-ff bugfix/coupon-500",
+                            "git commit -m x"):
+                self.assertEqual(self.decide("Bash", {"command": command})[0],
+                                 "allow", command)
+
+        def test_73_a_commit_gate_pass_for_another_milestone_does_not_close(self):
+            self.make_bugfix(slug="coupon-500", commit=True,
+                             commit_milestone="refund-timeout")
+            self.assertEqual(self.decide("Bash", {"command": "git merge x"})[0],
+                             "deny")
+
+        def test_74_an_unscoped_commit_gate_pass_does_not_close_a_lane(self):
+            self.make_bugfix(slug="coupon-500", commit=True,
+                             commit_milestone=None)
+            self.assertEqual(self.decide("Bash", {"command": "git merge x"})[0],
+                             "deny")
+
+        def test_75_a_commit_gate_pass_without_commit_flag_does_not_close(self):
+            d = Path(self.root) / ".docs" / "bugfix" / "coupon-500"
+            touch(d / "bug-report.md", "# Bug report")
+            touch(d / "gates.jsonl",
+                  ledger_line("check_bugfix_intake.py")
+                  + ledger_line("check_commit_gate.py", argv=["--state", "s"],
+                                milestone="coupon-500"))
+            self.assertEqual(self.decide("Bash", {"command": "git merge x"})[0],
+                             "deny")
+
+        def test_76_lite_merge_allowed_after_the_cursor_milestone_committed(self):
+            self.make_feature(pipeline="bgpdd-lite", cursor="M2 - Auth",
+                              commit_milestone="M2 - Auth")
+            self.assertEqual(self.decide("Bash", {"command": "git merge x"})[0],
+                             "allow")
+
+        def test_77_feature_lane_with_a_null_cursor_stays_armed(self):
+            self.make_feature(cursor=None, commit_milestone="M1")
+            self.assertEqual(self.decide("Bash", {"command": "git merge x"})[0],
+                             "deny")
+
+        def test_78_an_earlier_milestone_commit_does_not_close_the_epic(self):
+            self.make_feature(cursor="M2 - Auth", commit_milestone="M1 - Setup")
+            self.assertEqual(self.decide("Bash", {"command": "git commit -m x"})[0],
+                             "deny")
+
+        def test_79_a_closed_lane_still_arms_rule_4(self):
+            root = self.make_bugfix(slug="coupon-500", commit=True,
+                                    commit_milestone="coupon-500")
+            self.assert_rule4("echo x >> " + str(Path(root) / "gates.jsonl"))
+
+        # -- verify lanes have no commit gate (audit3 Metric 20) --------
+
+        def test_80_a_verify_lane_does_not_arm_rule_1(self):
+            self.make_feature(pipeline="bgpdd-verify")
+            for command in ("git commit -m x", "git merge main"):
+                self.assertEqual(self.decide("Bash", {"command": command})[0],
+                                 "allow", command)
+
+        def test_81_a_verify_lane_is_still_detected_and_still_arms_rule_4(self):
+            root = self.make_feature(pipeline="bgpdd-verify")
+            lanes = detect_lanes(self.root)
+            self.assertEqual([l.kind for l in lanes], ["feature"])
+            self.assertFalse(lanes[0].arms_commit_rule)
+            self.assert_rule4("echo x >> " + str(
+                Path(root) / "implementation" / "gates.jsonl"))
+
+        def test_82_a_verify_lane_beside_a_build_lane_still_denies(self):
+            self.make_feature(name="verify-me", pipeline="bgpdd-verify")
+            self.make_feature(name="build-me", pipeline="bgpdd-build")
+            self.assertEqual(self.decide("Bash", {"command": "git commit -m x"})[0],
+                             "deny")
+
+        # -- the widened git surface (audit3 F12) -----------------------
+
+        def test_83_the_widened_git_subcommands_deny(self):
+            self.make_feature()
+            for command in ("git am patch.mbox", "git rebase -i HEAD~2",
+                            "git rebase --continue", "git stash",
+                            "git stash pop", "git stash apply",
+                            "git notes add -m x", "git tag -a v1 -m x",
+                            "gh pr merge 12 --squash"):
+                self.assertEqual(self.decide("Bash", {"command": command})[0],
+                                 "deny", command)
+
+        def test_84_gh_pr_merge_is_named_in_its_own_deny(self):
+            self.make_feature()
+            _d, _rule, reason = self.decide(
+                "Bash", {"command": "gh pr merge 12 --squash"})
+            self.assertIn("gh pr merge", reason)
+            self.assertNotIn("git gh", reason)
+
+        def test_85_read_only_git_and_gh_stay_allowed(self):
+            self.make_feature()
+            for command in ("git status", "git log --oneline", "git show HEAD",
+                            "git rebase --help", "git tag --help",
+                            "gh pr view 12", "gh pr list", "gh pr checks"):
+                self.assertEqual(self.decide("Bash", {"command": command})[0],
+                                 "allow", command)
+
+        def test_86_the_widened_surface_is_still_lane_scoped(self):
+            for command in ("git am patch.mbox", "git stash pop",
+                            "gh pr merge 12"):
+                self.assertEqual(self.decide("Bash", {"command": command})[0],
+                                 "allow", command)
+
+        # -- extractor unit cases --------------------------------------
+
+        def test_87_bash_write_targets_handles_quoting_and_segments(self):
+            self.assertIn(
+                ("redirect", "a b/gates.jsonl"),
+                bash_write_targets('echo x >> "a b/gates.jsonl"'))
+            self.assertIn(
+                ("tee", "one/gates.jsonl"),
+                bash_write_targets("true && echo x | tee one/gates.jsonl"))
+            self.assertEqual(bash_write_targets(""), [])
+            self.assertEqual(bash_write_targets(None), [])
+
+        def test_88_explain_reports_rule_1_arming_per_lane(self):
+            import contextlib
+            import io
+            self.make_feature(pipeline="bgpdd-verify")
+            self.make_bugfix(slug="coupon-500", commit=True,
+                             commit_milestone="coupon-500")
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = main(["--explain", "--cwd", self.root])
+            self.assertEqual(code, 0)
+            text = buf.getvalue()
+            self.assertIn("Rule 1 armed for: nothing", text)
+            self.assertIn("no commit gate", text)
+            self.assertIn("closed", text)
+            self.assertIn("milestone:", text)
 
     suite = unittest.TestLoader().loadTestsFromTestCase(GuardTest)
     result = unittest.TextTestRunner(verbosity=2).run(suite)

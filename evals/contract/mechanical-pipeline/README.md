@@ -187,3 +187,34 @@ staleness ordering).
 
 Step count history: 13 steps before the two evidence gates were added (steps 10a, 10b,
 11a, 11b), 17 after.
+
+## Added in 2.6.1 (the audit-fix wave)
+
+Steps 12c-12d and 17-21b cover the gate-contract changes that closed the
+2026-09-07 audit's Metric-19 and Metric-20 findings. Each is composed against
+the same real git repo the rest of the suite builds, and each pairs a refusal
+with the clearing case, because a gate proven only against failure is a gate
+that fails closed on everything.
+
+- **12c/12d** — `check_agent_report.py`: ONE real capture cited by three
+  unrelated check lines is now `capture_command_mismatch` (exit-code equality
+  cleared all three, since every clean scan claims 0 or 1), and
+  `--allow-uncaptured` does not waive it. 12b was rewritten in the same change:
+  its report now names the argv actually recorded, because the eval must not
+  model a report that lies about its command.
+- **17a-17c** — `check_handoff.py --advisory`: Forge's propose handoff refused
+  without the flag, accepted with it, `advisory: true` in the chained ledger
+  line, and `<changed_files>` still required for a builder.
+- **18a-18c** — `mark_milestone.py --reopen`: the real round trip on this
+  suite's own plan, read back through the real `next_milestone.py`, plus the
+  four usage refusals that keep a reopen evidenced.
+- **19a-19e** — `check_tier1_provenance.py`: a future-dated stamp; drift still
+  exit 0 by default; `--verify-current` turning the same drift into
+  `tier1_drift`; `--allow-drift` and both of its misuse refusals.
+- **20/20b** — `record_run.py`: an unresolvable `--model` is exit 2 and writes
+  nothing (it used to record `tier: null` and silently delete the inversion
+  check), and `dep` counts as a producer.
+- **21/21b** — `guard_action.py` driven through real stdin: eight Bash
+  mutations of a ledger and of a frozen test all DENY while three read-only
+  commands allow; and the lane's own `--commit` PASS un-arms rule 1 for the
+  sanctioned local merge while another milestone's does not.

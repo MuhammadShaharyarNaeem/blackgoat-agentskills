@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "TEMPLATE, not auto-loaded. Cursor reads hooks from <project>/.cursor/hooks.json or ~/.cursor/hooks.json, not from a plugin's hooks/ folder: copy this file to one of those paths and replace <PLUGIN_ROOT> with this plugin's install root. Cursor's documented pre-execution hooks cover shell, MCP and file reads, so only rule 1 (commit through the gate) is mechanically enforceable there; rules 2-4 hold as prose contract under Cursor -- see rules/cursor-runtime.mdc.",
+  "description": "TEMPLATE, not auto-loaded. Cursor reads hooks from <project>/.cursor/hooks.json or ~/.cursor/hooks.json, not from a plugin's hooks/ folder: copy this file to one of those paths and replace <PLUGIN_ROOT> with this plugin's install root. Cursor's documented pre-execution hooks cover shell, MCP and file reads but not a write TOOL, so beforeShellExecution enforces rule 1 (commit through the gate) AND, since 2.6.1, the shell half of rules 2 and 4 (a redirect, tee, Set-Content, sed -i, mv/rm or git checkout targeting a frozen test or a gate artifact). What stays prose contract under Cursor is the write-tool half of rules 2 and 4 and all of rule 3 (no delegation before intake) -- see rules/cursor-runtime.mdc.",
   "hooks": {
     "beforeShellExecution": [
       {

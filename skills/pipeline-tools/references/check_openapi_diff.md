@@ -56,3 +56,51 @@ Note the asymmetry a reader should expect: with a waiver the `result` field read
 ## Self-test
 
 `--self-test` runs **38** cases: the additive baselines (identical, added field, new endpoint, new operation), one per breaking class, the rename-as-remove-plus-add shape, enum widening and enum introduction, all five `required_request_field_added` shapes, `$ref` resolution of both a removal and a type change, the self-referential component, a nested object property, path-level parameter merging, `allOf` walking, the four exit-2 usage paths, both `--allow-breaking` refusals and the accepted one, the three-record chained-ledger assertion, and four YAML cases (block subset parses, anchors refused, block scalar refused, JSON-in-a-`.yaml`-file loads).
+
+## `unanalyzable_schema`, and `nullable_removed` (2.6.1)
+
+The 2026-09-07 audit's finding, in one line: **the gate reported PASS on a
+document it had not analyzed.** A response schema wrapped in `oneOf: [ … ]`
+with a field removed inside it returned exit 0, `breaking: []`, and the output
+carried no `warnings` key at all. `allOf` was caught because the walk merges
+its members; `oneOf`, `anyOf` and `not` were silently invisible, and nothing in
+the JSON said so.
+
+A refusal is strictly better than that PASS, so any schema node carrying one
+of those three keywords — after one level of `$ref` resolution, and including
+a parameter schema — is exit **2** with the operation, the JSON path and the
+keyword named. It is **not waivable**: `--allow-breaking` waives a diff
+somebody read, and there is no diff here to read. An identical pair of
+unanalyzable documents is still refused, because a no-op diff over a union is
+still a document that was not analyzed.
+
+**Why not decompose the union?** Deciding whether a variant was dropped needs a
+subtype relation over the branches — is `{type: string}` still accepted by
+`oneOf: [{type: string, maxLength: 8}]`? — and this tool implements none.
+Guessing at one is how a diff tool starts lying, which is the failure it was
+just caught in. `check_runtime_evidence.py` refuses the same class the same
+way (`schema_skipped_reason`), so the family is consistent. The escape is to
+compare those branches by hand and record the finding with `--allow-breaking`
+on documents the gate CAN read, or to restructure the schema.
+
+**`nullable_removed`.** `nullable: true → false` on a response schema is
+breaking. The narrowing is on the produced set, which for a response alone
+would be additive; the reason it is breaking here is that one level of `$ref`
+resolution reaches the SAME component from a request body, so the flip breaks
+every caller that sends or round-trips null — and it is the same class of
+narrowing the gate already refuses under `type_changed`. Deliberately
+conservative and deliberately **waivable**: exit 1 with a named kind and a
+one-flag waiver, against the silent PASS this was. The widening is
+`nullable_widened` (additive) and also lands in `warnings`, because a caller
+that never handled null now has to.
+
+**The `warnings` list.** New in the JSON on every path, and never gating: an
+unresolvable `$ref` (previously a silent skip — the raw `{$ref: …}` compared
+symmetrically and reported nothing), a walk stopped at `MAX_SCHEMA_DEPTH`, and
+the nullability widening. `unanalyzable` is its own array of
+`{where, path, keyword}` because it IS gating.
+
+**Still open, deliberately out of this change's scope**: YAML whose
+indentation uses tabs parses instead of exiting 2 with the construct named,
+which the audit noted as a secondary. It is a loader-level issue rather than a
+schema-analysis one.

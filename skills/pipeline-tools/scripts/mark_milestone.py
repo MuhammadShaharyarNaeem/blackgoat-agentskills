@@ -23,10 +23,39 @@ has an EXPLICIT opt-out for the same case -- `--require-gates none` -- so the
 decision to mark an ungated milestone is one somebody makes and the ledger
 records, never one a forgotten flag makes silently.
 
+REOPENING A CLOSED MILESTONE (`--reopen`)
+-----------------------------------------
+Completion was a one-way door: `already_complete` refuses a second mark and
+nothing removed the marker, so a `bgpdd-shipping` finding against a milestone
+whose `[x]` is already written had nowhere to go -- `next_milestone.py`
+reported DONE, `mark_milestone.py` refused, and the only way back into the
+plan was the hand edit this file exists to replace.
+
+`--reopen "<milestone>"` removes that milestone's `[x]`, which is exactly what
+`next_milestone.py` reads: `COMPLETE_RE` is `\[x\]`, so a heading without the
+marker is pending again and the router returns it as NEXT. It is the one write
+here that DESTROYS a recorded verdict, so all three of `--evidence <path>`
+(a file that exists -- the shipping finding, the failing capture, the report),
+`--reason "<text>"` and `--ledger <path>` are mandatory: exit 2 without any of
+them. The record is chained, carries `"action": "reopen"` with the evidence
+path, its sha256 and the reason, and leaves the ORIGINAL close record in
+place -- a reopen adds a line to the history, it never edits one.
+
+Deliberate deviation from the S1 brief, which said "flips `[x]` to `[ ]`":
+this grammar has no `[ ]` token. Completion is the PRESENCE of `[x]`, and
+`next_milestone.py:158` builds a milestone's title by stripping the heading
+prefix and nothing else, so an appended `[ ]` would become part of the title
+every later gate is scoped by (`--milestone`), silently splitting one
+milestone's ledger records into two names. Removing the marker restores the
+heading to exactly what it was before the close, which is what a reopen means.
+
 Usage:
     python mark_milestone.py --plan <path> --milestone "<title>" \
         --ledger <path> [--repo <dir>] [--require-commit] \
-        [--require-gates <name>[,<name>...] | --require-gates none]
+        [--require-gates <name>[,<name>...] | --require-gates none] \
+        [--require-game-tape <path>]
+    python mark_milestone.py --plan <path> --reopen "<milestone>" \
+        --evidence <path> --reason "<text>" --ledger <path>
     python mark_milestone.py --self-test
 
 Pure standard library. See ../SKILL.md for the full contract.
@@ -303,13 +332,22 @@ def check_commit_exists(repo, milestone):
     return bool(proc.stdout.strip())
 
 
-# --- the build game-tape gate (--require-game-tape) ------------------------
-# `bgpdd-build` Phase 6 fires each time a milestone closes, and the closing
-# write is the moment the Orchestrator most wants to move on -- so the cadence
-# rule is enforced by the two scripts that perform that write, not by prose
-# (CLAUDE.md convention #9). Byte-identical in mark_milestone.py and
+# --- the lane game-tape gate (--require-game-tape) -------------------------
+# A pipeline's game-tape phase fires each time a milestone closes, and the
+# closing write is the moment the Orchestrator most wants to move on -- so the
+# cadence rule is enforced by the two scripts that perform that write, not by
+# prose (CLAUDE.md convention #9). Byte-identical in mark_milestone.py and
 # update_state.py (family convention: one file each, no shared module).
-GAME_TAPE_HEADING_RE = re.compile(r"^#{2,4}\s*bgpdd-build\s*[\u2014\u2013-]\s*(?P<body>.+?)\s*$")
+#
+# The heading names ITS OWN LANE (`bgpdd-<lane>`). It was hard-coded to
+# `bgpdd-build`, which made the flag unusable from every other lane:
+# `bgpdd-bugfix`'s Phase 5 tape is written under a `## bgpdd-bugfix - `
+# heading and could never satisfy a gate that only looked for one word, so
+# that lane's tape was unenforceable. Build is unchanged -- `bgpdd-build` is
+# one value of `<lane>` -- and the SHAPE requirements below (3-6 bullets, a
+# fenced block, a telemetry line) are identical for every lane.
+GAME_TAPE_HEADING_RE = re.compile(
+    r"^#{2,4}\s*(?P<lane>bgpdd-[a-z]+)\s*[\u2014\u2013-]\s*(?P<body>.+?)\s*$")
 GAME_TAPE_ANY_HEADING_RE = re.compile(r"^#{1,6}\s")
 GAME_TAPE_BULLET_RE = re.compile(r"^\s*[-*+]\s+\S")
 GAME_TAPE_FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
@@ -356,10 +394,12 @@ def check_game_tape(path, milestone):
     Problem codes: `game-tape-missing`, `no-section`, `bullet-count`,
     `no-pasted-output`, `no-telemetry`.
 
-    Deliberately the shape `bgpdd-build` Phase 6 states and nothing more
+    Deliberately the shape a lane's game-tape phase states and nothing more
     (convention #8, and narrower than the skeleton's Game Tape section, which
-    caps at 10 bullets once per RUN): a `## bgpdd-build - <milestone> - <date>`
-    section, 3-6 bullets, at least one fenced block (the verbatim command and
+    caps at 10 bullets once per RUN): a
+    `## bgpdd-<lane> - <milestone> - <date>` section (`bgpdd-build`,
+    `bgpdd-bugfix`, ... -- the lane writing the tape names itself),
+    3-6 bullets, at least one fenced block (the verbatim command and
     its captured output -- "no pasted output, no claim"), and either a
     `summarize_run` mention or a table row (the pasted telemetry block).
     The epic-summary heading is explicitly not a milestone checkpoint.
@@ -367,8 +407,9 @@ def check_game_tape(path, milestone):
     p = Path(path)
     if not p.is_file():
         return [{"problem": "game-tape-missing",
-                 "detail": "no game tape at {0} - Phase 6 fires at the "
-                           "milestone close, not at the end of the run".format(path)}]
+                 "detail": "no game tape at {0} - the lane's game-tape "
+                           "phase fires at the milestone close, not at the "
+                           "end of the run".format(path)}]
     try:
         text = p.read_text(encoding="utf-8-sig", errors="replace")
     except OSError as exc:
@@ -396,10 +437,12 @@ def check_game_tape(path, milestone):
 
     if start is None:
         return [{"problem": "no-section",
-                 "detail": "no '## bgpdd-build - <milestone> - <date>' section "
-                           "in {0} naming {1!r} (an epic-summary heading is not "
-                           "a milestone checkpoint; a heading inside a fenced "
-                           "block is a template)".format(path, milestone)}]
+                 "detail": "no '## bgpdd-<lane> - <milestone> - <date>' section "
+                           "in {0} naming {1!r} (any lane name matches: "
+                           "bgpdd-build, bgpdd-bugfix, ...; an epic-summary "
+                           "heading is not a milestone checkpoint; a heading "
+                           "inside a fenced block is a template)".format(
+                               path, milestone)}]
 
     end = len(blanked)
     for j in range(start + 1, len(blanked)):
@@ -543,6 +586,54 @@ def build_report(args):
     return report
 
 
+def build_reopen_report(args):
+    """Remove one milestone's `[x]`. See REOPENING A CLOSED MILESTONE above."""
+    report = {
+        "plan_file": args.plan,
+        "milestone": args.reopen,
+        "action": "reopen",
+        "matched_heading": None,
+        "evidence": args.evidence,
+        "evidence_sha256": sha256_file(args.evidence) if args.evidence else None,
+        "reason": (args.reason or "").strip(),
+        "ledger": args.ledger,
+        "problems": [],
+        "reopened": False,
+        "result": "FAIL",
+        "error": None,
+    }
+    text = read_text(args.plan)
+    lines = split_lines(text)
+    if not any(MILESTONE_HEADING_RE.match(c) for c, _e in lines):
+        raise GateError(
+            "plan has no '## Milestone <n>' or '### Milestone <n>' headings")
+
+    index, problems = find_milestone(lines, args.reopen)
+    report["problems"] += problems
+    if index is None:
+        return report
+
+    heading = lines[index][0]
+    report["matched_heading"] = HEADING_PREFIX_RE.sub("", heading).rstrip()
+    if not COMPLETE_RE.search(heading):
+        report["problems"].append({
+            "problem": "not_complete",
+            "detail": f"heading {report['matched_heading']!r} carries no "
+                      "'[x]' — there is nothing to reopen. next_milestone.py "
+                      "already returns this milestone as pending."})
+        return report
+
+    content, ending = lines[index]
+    # Remove the marker and the whitespace that was inserted with it, leaving
+    # the heading byte-identical to its pre-close form.
+    reopened = COMPLETE_RE.sub("", content).rstrip()
+    lines[index][0] = reopened
+    write_text(args.plan, "".join(c + e for c, e in lines))
+    report["reopened"] = True
+    report["result"] = "PASS"
+    return report
+
+
 OPT_OUT_TOKENS = ("none", "off", "no", "-")
 
 
@@ -599,10 +690,88 @@ def build_parser():
     parser.add_argument(
         "--require-game-tape", dest="require_game_tape",
         help="refuse unless game-tape.md carries a conforming "
-             "'## bgpdd-build - <milestone> - <date>' checkpoint for this "
-             "milestone (bgpdd-build Phase 6)")
+             "'## bgpdd-<lane> - <milestone> - <date>' checkpoint for this "
+             "milestone (the lane's game-tape phase; any lane name matches)")
+    parser.add_argument(
+        "--reopen",
+        help="REMOVE this milestone's '[x]' so next_milestone.py returns it "
+             "again (a shipping finding against a closed milestone). "
+             "Requires --evidence, --reason and --ledger.")
+    parser.add_argument(
+        "--evidence",
+        help="--reopen only: path to the finding that justifies reopening. "
+             "The file must exist; its sha256 is recorded in the ledger.")
+    parser.add_argument(
+        "--reason",
+        help="--reopen only: why this milestone is being reopened, recorded "
+             "in the ledger. An empty or whitespace-only reason is exit 2.")
     parser.add_argument("--self-test", action="store_true")
     return parser
+
+
+def main_reopen(args, argv):
+    """The `--reopen` mode: destroy a recorded close, on the record.
+
+    Deliberately its own entry point rather than a branch inside the mark
+    path: this mode writes the OPPOSITE thing, and every backing flag
+    (`--require-commit`, `--require-gates`, `--require-game-tape`) is about
+    justifying a CLOSE. Sharing them would ask a reopen to prove the milestone
+    was finished, which is the claim it exists to withdraw.
+    """
+    extra = {"action": "reopen",
+             "evidence": args.evidence,
+             "evidence_sha256": (sha256_file(args.evidence)
+                                 if args.evidence else None),
+             "reason": (args.reason or "").strip() or None}
+
+    def finish(code, verdict):
+        append_ledger(args.ledger, argv, args.milestone or args.reopen,
+                      [p for p in (args.plan, args.evidence) if p],
+                      verdict, code, extra)
+        return code
+
+    def fail_usage(message):
+        print(json.dumps({"result": "ERROR", "action": "reopen",
+                          "error": message}))
+        return finish(2, "ERROR")
+
+    if not args.plan:
+        return fail_usage("--reopen requires --plan <path>")
+    if not args.ledger:
+        return fail_usage(
+            "--reopen requires --ledger <path>: removing a recorded close is "
+            "the one write here that destroys a verdict, so it is never "
+            "unrecorded")
+    if not args.evidence:
+        return fail_usage(
+            "--reopen requires --evidence <path>: the finding that justifies "
+            "reopening (a shipping finding, a failing capture, a report). A "
+            "reopen with no evidence is the hand edit this file replaced")
+    if not Path(args.evidence).is_file():
+        return fail_usage(
+            f"--evidence names no readable file: {args.evidence}. An evidence "
+            "path that does not resolve is not evidence")
+    if not (args.reason or "").strip():
+        return fail_usage(
+            "--reopen requires a non-empty --reason \"<text>\": what the "
+            "evidence shows, in the words of whoever decided to reopen")
+    for flag, value in (("--require-commit", args.require_commit),
+                        ("--require-game-tape", args.require_game_tape)):
+        if value:
+            return fail_usage(
+                f"{flag} is a backing term for a CLOSE and is meaningless "
+                "with --reopen")
+
+    try:
+        report = build_reopen_report(args)
+    except GateError as exc:
+        print(json.dumps({"result": "ERROR", "action": "reopen",
+                          "error": str(exc)}))
+        return finish(2, "ERROR")
+
+    print(json.dumps(report, indent=2))
+    passed = report["result"] == "PASS"
+    return finish(0 if passed else 1, "PASS" if passed else "FAIL")
 
 
 def main(argv):
@@ -610,6 +779,18 @@ def main(argv):
 
     if args.self_test:
         return run_self_test()
+
+    if args.reopen:
+        return main_reopen(args, argv)
+
+    for flag in ("evidence", "reason"):
+        if getattr(args, flag) is not None:
+            print(json.dumps({
+                "result": "ERROR",
+                "error": f"--{flag} is only meaningful with --reopen"}))
+            append_ledger(args.ledger, argv, args.milestone,
+                          [args.plan] if args.plan else [], "ERROR", 2)
+            return 2
 
     # Gate backing is ON unless explicitly waived. Absent flag => the default
     # set; `--require-gates none` => waived and recorded in the ledger argv.
@@ -687,9 +868,10 @@ def run_self_test():
     GT_FENCE = "```"
 
     def gt_section(title="Milestone 2", date="2026-09-07", bullets=4,
-                   fenced=True, telemetry=True, fenced_heading=False):
-        """A Phase 6 checkpoint section, with each requirement switchable."""
-        heading = "## bgpdd-build \u2014 {0} \u2014 {1}".format(title, date)
+                   fenced=True, telemetry=True, fenced_heading=False,
+                   lane="bgpdd-build"):
+        """A game-tape checkpoint section, with each requirement switchable."""
+        heading = "## {0} \u2014 {1} \u2014 {2}".format(lane, title, date)
         if fenced_heading:
             return chr(10).join(
                 [GT_FENCE, heading, "- a", "- b", "- c", GT_FENCE]) + chr(10)
@@ -719,7 +901,8 @@ def run_self_test():
             base = dict(plan=str(self.plan), milestone=milestone,
                         repo=str(self.dir), require_commit=False,
                         ledger=None, require_gates=[],
-                        require_game_tape=None, self_test=False)
+                        require_game_tape=None, self_test=False,
+                        reopen=None, evidence=None, reason=None)
             base.update(kw)
             return argparse.Namespace(**base)
 
@@ -1030,6 +1213,167 @@ def run_self_test():
         def test_game_tape_without_telemetry_blocks(self):
             self.assertEqual(self._gt_codes(self._tape(telemetry=False)),
                              ["no-telemetry"])
+
+        # ---- any lane's tape satisfies it (audit3 Metric 20) ------------
+
+        def test_game_tape_accepts_every_lane_heading(self):
+            for lane in ("bgpdd-build", "bgpdd-bugfix", "bgpdd-quick",
+                         "bgpdd-lite", "bgpdd-verify", "bgpdd-shipping"):
+                # A pass MARKS the plan, so reset it between lanes.
+                self.plan.write_text(PLAN, encoding="utf-8")
+                self.assertEqual(self._gt_run(self._tape(lane=lane)), 0, lane)
+
+        def test_game_tape_rejects_a_heading_that_names_no_lane(self):
+            for lane in ("bgpdd", "build", "pdd-build", "BGPDD-BUILD"):
+                self.assertEqual(self._gt_codes(self._tape(lane=lane)),
+                                 ["no-section"], lane)
+
+        def test_game_tape_shape_rules_are_identical_for_every_lane(self):
+            self.assertEqual(
+                self._gt_codes(self._tape(lane="bgpdd-bugfix", bullets=2)),
+                ["bullet-count"])
+            self.assertEqual(
+                self._gt_codes(self._tape(lane="bgpdd-bugfix", fenced=False)),
+                ["no-pasted-output"])
+
+        # ---- --reopen (audit3 Metric 13) --------------------------------
+
+        def _closed_plan(self):
+            """Close Milestone 2 the sanctioned way, then hand back the args."""
+            self._write_ledger()
+            self.assertEqual(main(["--plan", str(self.plan), "--milestone",
+                                   "Milestone 2", "--ledger",
+                                   str(self.ledger)]), 0)
+            self.assertIn("Persistence [API] [vs:api] [x]",
+                          self.plan.read_text(encoding="utf-8"))
+            evidence = self.dir / "finding.md"
+            evidence.write_text("p95 regressed 40% under the canary\n",
+                                encoding="utf-8")
+            return str(evidence)
+
+        def _reopen(self, extra=None, evidence=None, milestone="Milestone 2"):
+            argv = ["--plan", str(self.plan), "--reopen", milestone,
+                    "--ledger", str(self.ledger)]
+            if evidence is not None:
+                argv += ["--evidence", evidence]
+            argv += ["--reason", "shipping found a p95 regression"]
+            return main(argv + (extra or []))
+
+        def test_reopen_removes_the_marker_and_next_milestone_returns_it(self):
+            evidence = self._closed_plan()
+            self.assertEqual(self._reopen(evidence=evidence), 0)
+            text = self.plan.read_text(encoding="utf-8")
+            self.assertIn("## Milestone 2 — Persistence [API] [vs:api]", text)
+            self.assertNotIn("Persistence [API] [vs:api] [x]", text)
+            # The heading is byte-identical to its pre-close form, so the
+            # title every later gate is scoped by is unchanged.
+            self.assertNotIn("[ ]", text)
+            nm = Path(__file__).resolve().parent / "next_milestone.py"
+            if nm.is_file():
+                proc = subprocess.run(
+                    [sys.executable, str(nm), "--plan", str(self.plan)],
+                    capture_output=True, text=True, timeout=240)
+                data = json.loads(proc.stdout)
+                self.assertEqual(data["result"], "NEXT")
+                self.assertTrue(
+                    data["next_milestone"]["title"].startswith("Milestone 2"))
+
+        def test_reopen_records_a_chained_ledger_line_naming_the_action(self):
+            evidence = self._closed_plan()
+            self.assertEqual(self._reopen(evidence=evidence), 0)
+            record = self._ledger_records()[-1]
+            self.assertEqual(record["gate"], "mark_milestone.py")
+            self.assertEqual(record["action"], "reopen")
+            self.assertEqual(record["verdict"], "PASS")
+            self.assertEqual(record["milestone"], "Milestone 2")
+            self.assertEqual(record["reason"],
+                             "shipping found a p95 regression")
+            self.assertEqual(record["evidence_sha256"], sha256_file(evidence))
+            self.assertEqual(record["self"], ledger_self_hash(record))
+
+        def test_reopen_leaves_the_original_close_record_in_place(self):
+            evidence = self._closed_plan()
+            before = len(self._ledger_records())
+            self.assertEqual(self._reopen(evidence=evidence), 0)
+            records = self._ledger_records()
+            self.assertEqual(len(records), before + 1)
+            self.assertTrue(any(r.get("action") != "reopen"
+                                and r.get("gate") == "mark_milestone.py"
+                                for r in records))
+
+        def test_reopen_refuses_without_evidence_reason_or_ledger(self):
+            self._closed_plan()
+            self.assertEqual(self._reopen(evidence=None), 2)
+            self.assertEqual(main([
+                "--plan", str(self.plan), "--reopen", "Milestone 2",
+                "--evidence", str(self.dir / "finding.md"),
+                "--ledger", str(self.ledger), "--reason", "   "]), 2)
+            self.assertEqual(main([
+                "--plan", str(self.plan), "--reopen", "Milestone 2",
+                "--evidence", str(self.dir / "finding.md"),
+                "--reason", "because"]), 2)
+            self.assertIn("Persistence [API] [vs:api] [x]",
+                          self.plan.read_text(encoding="utf-8"))
+
+        def test_reopen_refuses_an_evidence_path_that_does_not_exist(self):
+            self._closed_plan()
+            self.assertEqual(
+                self._reopen(evidence=str(self.dir / "nope.md")), 2)
+            self.assertIn("Persistence [API] [vs:api] [x]",
+                          self.plan.read_text(encoding="utf-8"))
+
+        def test_reopen_of_an_open_milestone_is_exit_1(self):
+            evidence = self.dir / "finding.md"
+            evidence.write_text("x", encoding="utf-8")
+            self.assertEqual(
+                self._reopen(evidence=str(evidence), milestone="Milestone 3"),
+                1)
+            record = self._ledger_records()[-1]
+            self.assertEqual(record["verdict"], "FAIL")
+
+        def test_reopen_of_an_unknown_milestone_is_exit_1(self):
+            evidence = self.dir / "finding.md"
+            evidence.write_text("x", encoding="utf-8")
+            self.assertEqual(
+                self._reopen(evidence=str(evidence), milestone="Milestone 99"),
+                1)
+
+        def test_reopen_rejects_the_close_backing_flags(self):
+            evidence = self._closed_plan()
+            self.assertEqual(
+                self._reopen(evidence=evidence, extra=["--require-commit"]), 2)
+            tape = self._tape()
+            self.assertEqual(
+                self._reopen(evidence=evidence,
+                             extra=["--require-game-tape", tape]), 2)
+
+        def test_evidence_and_reason_are_refused_without_reopen(self):
+            self._write_ledger()
+            self.assertEqual(main([
+                "--plan", str(self.plan), "--milestone", "Milestone 2",
+                "--ledger", str(self.ledger), "--evidence", "x"]), 2)
+            self.assertEqual(main([
+                "--plan", str(self.plan), "--milestone", "Milestone 2",
+                "--ledger", str(self.ledger), "--reason", "x"]), 2)
+
+        def test_a_reopened_milestone_can_be_closed_again(self):
+            evidence = self._closed_plan()
+            self.assertEqual(self._reopen(evidence=evidence), 0)
+            self._write_ledger()
+            self.assertEqual(main(["--plan", str(self.plan), "--milestone",
+                                   "Milestone 2", "--ledger",
+                                   str(self.ledger)]), 0)
+            self.assertIn("Persistence [API] [vs:api] [x]",
+                          self.plan.read_text(encoding="utf-8"))
+
+        def test_reopen_preserves_crlf_line_endings(self):
+            self.plan.write_text(PLAN.replace(chr(10), chr(13) + chr(10)),
+                                 encoding="utf-8", newline="")
+            evidence = self._closed_plan()
+            self.assertEqual(self._reopen(evidence=evidence), 0)
+            raw = self.plan.read_bytes()
+            self.assertNotIn(b"[x]\r\n", raw.split(b"Persistence")[1][:40])
+            self.assertIn(b"\r\n", raw)
 
         def test_game_tape_last_matching_section_wins(self):
             p = self.dir / "game-tape.md"

@@ -33,6 +33,16 @@ restraint rule the Orchestrator skips at the moment it wants to proceed
 becomes a mechanical gate, not louder prose). `--from-json` may supply it.
 Every other event is unchanged: a gate, phase or note record has no model.
 
+An UNRESOLVABLE `--model` is exit 2 (`model_unknown`), not a null tier. The
+tier-inversion check below reads the tier out of the model string, and a value
+it cannot resolve -- `gpt-4o`, a name that mentions two tiers
+(`sonnet-or-opus`), a typo -- used to record cleanly with `tier: null` and
+silently DELETE the check for that delegation. A mistyped flag must not be
+able to disable a gate. Resolvable means: the value contains exactly one of
+`haiku`/`sonnet`/`opus`, case-insensitively, so `opus`, `Opus`, `opus-4.1`
+and `claude-opus-4-20250514` all resolve and `gpt-4o` does not. Only
+`--event delegation` is checked -- a gate, phase or note record has no model.
+
 Usage:
     python record_run.py --log <path> --pipeline <name> --phase <name> \
         --event <delegation|gate|phase|note> \
@@ -63,7 +73,10 @@ STATUSES = ("COMPLETE", "PARTIAL", "BLOCKED", "PASS", "FAIL", "ERROR")
 # becomes a refusal instead of a finding.
 TIER_ORDER = {"haiku": 1, "sonnet": 2, "opus": 3}
 VERIFIER_AGENTS = ("quinn", "luna", "vera", "cipher")
-PRODUCER_AGENTS = ("mason", "nova", "max")
+# `dep` produces the deployment artifacts Vera and Cipher judge at shipping,
+# so a verifier running below Dep is the same inversion as one running below
+# Mason. Its absence from this tuple made that one pairing unmeasurable.
+PRODUCER_AGENTS = ("mason", "nova", "max", "dep")
 
 # --from-json key aliases, searched at the payload's top level and then inside
 # a nested "usage" object. Deliberately conservative: only names that mean
@@ -408,6 +421,21 @@ def main(argv):
                     "tier the delegation actually ran at (supply --model, or "
                     "a --from-json payload carrying it)")
 
+    # ...and it must NAME a tier. An unresolvable string recorded cleanly with
+    # tier: null and silently deleted the inversion check for that record.
+    if fields["event"] == "delegation" and model_tier(fields.get("model")) is None:
+        print(json.dumps({
+            "recorded": False, "problem": "model_unknown",
+            "error": "--model {0!r} resolves to no tier: it must contain "
+                     "exactly one of {1} (case-insensitive), e.g. `opus` or "
+                     "`claude-opus-4-20250514`. An unresolved tier is not a "
+                     "measured one, and recording it as null would disable "
+                     "the verifier-below-producer check for this delegation "
+                     "without saying so.".format(
+                         fields.get("model"),
+                         "/".join(sorted(TIER_ORDER, key=TIER_ORDER.get)))}))
+        return 2
+
     # Tier inversion is checked BEFORE the write, against the log this record
     # is about to join: a refused delegation records nothing.
     problem, detail = check_tier_inversion(args.log, fields)
@@ -703,11 +731,50 @@ def run_self_test():
             self.assertEqual(self._delegate("nova", "haiku"), 0)
             self.assertEqual(self._delegate("luna", "sonnet"), 0)
 
-        def test_unknown_tier_on_either_side_is_never_compared(self):
-            self.assertEqual(self._delegate("mason", "gpt-hypothetical"), 0)
-            self.assertEqual(self._delegate("luna", "haiku"), 0)
-            self.assertEqual(self._delegate("mason", "opus"), 0)
-            self.assertEqual(self._delegate("luna", "some-unnamed-model"), 0)
+        # ---- model_unknown (audit3 F8) --------------------------------
+
+        def test_an_unresolvable_model_is_exit_2_and_records_nothing(self):
+            """A typo used to record tier: null and delete the check."""
+            for model in ("gpt-4o", "o3-mini", "sonnet-or-opus",
+                          "some-unnamed-model", "  "):
+                self.assertEqual(self._delegate("mason", model), 2, model)
+            self.assertFalse(self.log.exists(),
+                             "a refused delegation wrote a record")
+
+        def test_the_model_unknown_error_names_the_problem_and_the_tiers(self):
+            import contextlib
+            import io
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = main(["--log", str(self.log), "--pipeline",
+                             "bgpdd-build", "--phase", "Phase 1", "--event",
+                             "delegation", "--agent", "mason", "--model",
+                             "gpt-4o", "--unit", "M1"])
+            self.assertEqual(code, 2)
+            data = json.loads(buf.getvalue())
+            self.assertEqual(data["problem"], "model_unknown")
+            self.assertIs(data["recorded"], False)
+            for tier in ("haiku", "sonnet", "opus"):
+                self.assertIn(tier, data["error"])
+
+        def test_a_typo_can_no_longer_disable_the_inversion_check(self):
+            """audit3 F8, end to end: opus producer, then a mistyped verifier."""
+            self.assertEqual(self._delegate("mason", "claude-opus-4-1"), 0)
+            self.assertEqual(self._delegate("luna", "opus-4.1"), 0)  # resolves
+            self.assertEqual(self._delegate("luna", "gpt-4o"), 2)
+            self.assertEqual(self._delegate("luna", "haiku"), 1)
+
+        def test_a_gate_or_note_record_needs_no_resolvable_model(self):
+            self.assertEqual(main(["--log", str(self.log), "--pipeline",
+                                   "bgpdd-build", "--phase", "Phase 1",
+                                   "--event", "note", "--note", "x"]), 0)
+
+        def test_dep_is_a_producer(self):
+            """audit3 Metric 14: a verifier below Dep is an inversion too."""
+            self.assertIn("dep", PRODUCER_AGENTS)
+            self.assertEqual(self._delegate("dep", "opus"), 0)
+            self.assertEqual(self._delegate("vera", "haiku"), 1)
+            self.assertEqual(self._delegate("cipher", "opus"), 0)
 
         def test_full_model_ids_resolve_to_their_tier(self):
             self.assertEqual(self._delegate("mason", "claude-opus-4-1"), 0)

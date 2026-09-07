@@ -25,9 +25,12 @@ structurally cannot:
   record as `allow_breaking_reason` alongside `breaking_kinds`. The flag buys
   durability, not verification (`skills/pipeline-tools/SKILL.md`), so the only thing
   worth asserting about it is that the reason survives to the record — step 19.
-- **Its ledger records are a chain a hand edit breaks.** `check_openapi_diff.py` is
-  a new gate and is **not** in `check_ledger.py`'s `CHAINED_GATES` drift-guard list,
-  so nothing else in the tree asserts that its `append_ledger` actually chains.
+- **Its ledger records are a chain a hand edit breaks.** Until 2.6.1
+  `check_openapi_diff.py` was absent from `check_ledger.py`'s `CHAINED_GATES`
+  drift-guard list -- a missing comma had concatenated its name onto
+  `update_state.py`'s, silently dropping both -- so nothing else in the tree
+  asserted that its `append_ledger` actually chains. The list is fixed and two
+  new `check_ledger.py` cases guard it; these steps remain the end-to-end half.
   Steps 21–23 do it end to end: the 17 records it wrote verify intact; a recorded
   `FAIL` hand-edited to `PASS` — the exact forgery that would make a downstream
   `--require-ledger-gates check_openapi_diff.py` read a green — fails `self-mismatch`
@@ -83,8 +86,8 @@ the fixture is two JSON documents and a temp directory.
   or `references/breaking-change-classes.md` — the `kind` strings asserted here are
   that table's mechanical half, and a renamed `kind` must break this case rather than
   silently orphan a wiring line.
-- Any change to the shared ledger-chain helper (steps 21–23 are this gate's only
-  chain coverage until it is added to `check_ledger.py`'s `CHAINED_GATES`).
+- Any change to the shared ledger-chain helper (steps 21–23 are this gate's
+  end-to-end chain coverage; `check_ledger.py`'s drift guard covers the helper).
 - Any change to the wiring in `bgpdd-build/references/build-gate-ladders.md` § 6b or
   `bgpdd-shipping` Step 3 that alters how the gate is invoked.
 
@@ -97,3 +100,26 @@ python evals/contract/openapi-diff-adversarial/run.py --record   # + results.jso
 
 Exit 0 only if all 25 steps pass. The script creates and removes its own temp
 directory; it writes nothing under the repository except the `--record` line.
+
+## Added in 2.6.1 (the audit-fix wave)
+
+Steps 26-28 close the 2026-09-07 audit's F5, whose finding was not a missed
+breaking class but a **PASS over a document the gate never analyzed**: a
+response schema wrapped in `oneOf` with a field removed inside returned exit 0,
+`breaking: []`, and no warning of any kind.
+
+- **26/26b/26c** — `oneOf`, `anyOf` and `not` are `unanalyzable_schema`, exit
+  2, naming the operation, the JSON path and the keyword. Both documents are
+  wrapped so the only difference is inside the union; diffing a wrapped head
+  against a plain base would report the wrapper itself and prove nothing.
+- **26d** — `--allow-breaking` does not clear it. A waiver waives a diff
+  somebody read, and there is no diff here to read.
+- **26e** — the near-miss: `allOf` IS walked, so it must still be analyzed
+  rather than refused. A rule that refused every composition keyword would be
+  a different bug.
+- **27/27b/27c** — `nullable: true -> false` on a response schema is
+  `nullable_removed` (breaking); the widening is `nullable_widened` (additive)
+  and also warned; and unlike an unanalyzable schema this one IS waivable,
+  because it is a diff a person can read.
+- **28** — every report now carries a `warnings` list, and an unresolvable
+  `$ref` lands in it instead of comparing symmetrically and reporting nothing.

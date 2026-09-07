@@ -32,3 +32,26 @@ Two consequences worth stating:
 `--require-game-tape` without `--milestone` is exit 2, not a skip. The refusal exits **1** and writes nothing at all — not a partial state with the cursor moved.
 
 `--milestone` also becomes this run's ledger `milestone` value, replacing the previous `--set-cursor`-derived fallback. That fallback recorded the milestone being moved *to*; `--milestone` names the one being closed, which is what the record is about.
+
+## The game-tape heading names its own lane (2.6.1)
+
+`--require-game-tape`'s heading regex was `bgpdd-build` literally, so the flag
+was unusable from every other lane: `bgpdd-bugfix` writes its Phase 5 tape
+under a `## bgpdd-bugfix - ` heading and could never satisfy a gate that
+looked for one word, leaving that lane's tape unenforceable (2026-09-07 audit,
+Metric 20 -- "the `--require-game-tape` regex hard-codes `bgpdd-build` so
+bugfix's tape is unenforceable"). It is now `bgpdd-<lane>` for any lane name,
+with the lane captured so a future message can name it.
+
+Build is unchanged: `bgpdd-build` is one value of `<lane>`. Every SHAPE
+requirement is identical for every lane -- 3-6 bullets, at least one fenced
+block, a `summarize_run` mention or a table row, the epic-summary heading
+excluded, a heading inside a fence not counting, last matching section wins.
+The regex and the whole `check_game_tape()` block stay byte-identical in
+`mark_milestone.py`, which is the point of duplicating rather than importing
+them: the two scripts that perform the closing write must agree exactly.
+
+The near-misses are asserted too: `bgpdd`, `build`, `pdd-build` and
+`BGPDD-BUILD` are all `no-section`. The lane token is lower-case by
+convention, and a case-insensitive match would let a heading that is not a
+lane name satisfy a lane gate.

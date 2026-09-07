@@ -742,9 +742,26 @@ def check_run_log_agents(log_path, agent_names, milestone):
     gate has to read.
 
     `--model` must be present on each named agent's record: `record_run.py`
-    already refuses a delegation without one, so a record missing it was
+    already refuses a delegation without one (and, since 2.6.1, refuses a
+    model string that resolves to no tier), so a record missing it was
     hand-written, and a hand-written delegation record is not evidence that a
     delegation occurred.
+
+    WHAT THIS FLAG PROVES, AND WHAT IT DOES NOT -- a scope limit documented
+    here because the 2026-09-07 audit found it documented nowhere. The run log
+    is AUTHORED, not tool-provenanced: `record_run.py` writes nothing a person
+    cannot type. Its records carry no hash of anything observed, no capture
+    and no chain -- unlike `gates.jsonl`, whose entries this gate verifies by
+    RE-HASHING every input the recorded run read (`ledger_stale`). So
+    `--require-agents` proves that a delegation record EXISTS, is scoped to
+    this milestone and names a tier; it does not prove the delegation
+    happened. Its value is the one the ledger's own accepted limit has:
+    skipping a round becomes an omission somebody has to notice, and faking
+    one becomes a written act rather than a silence. Anyone who fabricates the
+    run log satisfies this flag, and that is accepted rather than papered
+    over -- closing it needs a provenance the runtime does not offer for its
+    own dispatches. The terms with teeth beside it are
+    `--require-ledger-gates` (re-hashes) and `--require-rendered-evidence`.
 
     Scoping is EXACT on the record's `unit` -- a deliberate divergence from
     `--require-ledger-gates`, which also accepts an unscoped entry (convention
@@ -1276,7 +1293,11 @@ def build_parser():
     # Did the delegation the review report claims actually happen?
     parser.add_argument(
         "--require-run-log", dest="require_run_log",
-        help="record_run.py's run log; the source --require-agents reads")
+        help="record_run.py's run log; the source --require-agents reads. The "
+             "run log is AUTHORED, not tool-provenanced: this pair proves a "
+             "delegation record exists, is scoped to the milestone and names "
+             "a tier — not that the delegation happened. --require-ledger-"
+             "gates is the flag that re-hashes what it read.")
     parser.add_argument(
         "--require-agents", action="append", default=[],
         help="comma-separated agent names that must each carry a delegation "

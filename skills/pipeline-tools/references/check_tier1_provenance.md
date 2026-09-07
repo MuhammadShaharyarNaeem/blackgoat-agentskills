@@ -51,3 +51,46 @@ At Phase 1 there are no feature directories yet, so the unscoped run checks `con
 `python scripts/check_tier1_provenance.py --self-test` runs 16 in-process cases against real temp git repos (skipped, never faked, when git is absent): both artifacts stamped and passing, a feature-scoped run, a missing sha, a missing date, a sha below the first heading not counting, an unresolvable sha, each artifact missing, drift warning while still passing, drift exiting 0 through `main`, a multi-repo scope demanding a keyed sha per repo, a multi-repo scope with the two shas *swapped* between repos being caught, a `--repo` path that does not exist, bad-argument errors, `--repo` parsing, and the ledger recording all three exit paths.
 
 The swapped-sha case is the reason the fixture repos are seeded with content keyed on their own directory name: two repos initialized in the same second by the same author from identical content produce the *same* commit sha, and the mis-keying would have been invisible.
+
+## `stamp_date_future` and `--verify-current` (2.6.1)
+
+**A future date is not a date.** The date was checked for SHAPE only -- a
+`YYYY-MM-DD` anywhere in the header -- so `2031-01-01` passed, and the
+2026-09-07 audit recorded this gate as BITES-with-a-date-gap for exactly that.
+A stamp's claim is "this map was derived from the tree on this day"; a day
+that has not happened records nothing that happened, and it fails in the
+direction that keeps a stale map reading as fresh to every downstream
+freshness comparison.
+
+Only the LATEST date in the header is judged -- a header may legitimately
+mention an earlier one in prose ("supersedes the 2026-01-04 map") -- against
+today plus one day. The day of slack is for a machine running ahead of UTC; a
+stamp written this morning is the normal case and must not be accused of
+forgery. An impossible date (`2026-02-31`) never matches the day alternation
+in `DATE_RE`, so it reads as no date rather than raising.
+
+**`--verify-current` inverts the drift rule for the CONSUMER end.**
+`bgpdd-discovery` section 1 says drift is a warning, and the default run still
+obeys that: a hard failure at the producer would only teach people to skip
+Tier 1. But the audit's Metric-13 finding was the other half -- the stamp had
+**zero consumers**: plan, build, lite, verify and shipping all read a Tier-1
+map without any of them checking that it describes the tree they are about to
+work in, while discovery's section 1 hands the consumer half to them.
+
+So the flag exists for the Pre-Flight that is about to brief agents from the
+map. With it, a stamped sha that is not the repo's current HEAD is
+`tier1_drift`, exit 1, naming repo, stamped sha and HEAD. `--allow-drift
+"<reason>"` records the consumer's decision to proceed anyway -- the reason
+and the waived entries land in the chained ledger record. Two refusals keep
+the waiver honest: an empty or whitespace-only reason is exit 2 (matching
+`--allow-breaking` and `--allow-tier-inversion`), and `--allow-drift` without
+`--verify-current` is exit 2, because waiving a check that never ran records a
+decision nobody had to make. It waives `tier1_drift` and nothing else -- a
+missing stamp beside a waived drift still fails.
+
+The self-test grew to **27**: five date cases (a future stamp, today and one
+day of slack, the latest header date being the one judged, an impossible date
+not raising, and the exit code through `main`) and six `--verify-current` /
+`--allow-drift` cases (drift as a finding with all three values in the detail,
+HEAD still matching, the waiver, the waiver not covering a real finding, all
+three exit codes with the ledger record, and both misuse refusals).

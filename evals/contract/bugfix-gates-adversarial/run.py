@@ -513,6 +513,65 @@ def run_suite(repo):
            lambda d: "green_runs_short" in codes(d),
            "it did not name green_runs_short")
 
+    # --- 13b (2.6.1): 5 green captures, but only ONE run --------------------
+    # `--green-runs 5` counted --green OCCURRENCES, so the same capture path
+    # cited five times satisfied it: the one flag in this gate that speaks
+    # about repeated execution proved nothing about it. The lane's own rule is
+    # "4 of 5 green is not fixed"; 1 of 1 was passing as 5 of 5.
+    args = ["--red", red_rel] + ["--green", green_rel] * 5
+    args += ["--green-runs", "5", "--milestone", SLUG, "--ledger", ledger]
+    proc = run_py(CHECK_RED_GREEN, args, repo)
+    expect("13b. red/green: one GREEN capture cited 5x under --green-runs 5 "
+           "-> exit 1 (green_runs_not_distinct)", proc, 1,
+           lambda d: "green_runs_not_distinct" in codes(d)
+           # Not caught by the older term: five were supplied.
+           and "green_runs_short" not in codes(d)
+           and d.get("green_distinct_runs") == 1,
+           "it did not name green_runs_not_distinct on its own")
+
+    # --- 13c (2.6.1): 5 byte-identical COPIES under five names --------------
+    # Copy the capture AND its sidecar together and every hash still matches,
+    # because copying preserves exactly what the hashes protect. Distinctness
+    # therefore needs the OUTPUT key as well as the process key.
+    copies = []
+    for index in range(1, 6):
+        rel = f".docs/bugfix/{SLUG}/evidence/green/{SLUG}-copy{index}.md"
+        shutil.copy(str(repo / green_rel), str(repo / rel))
+        shutil.copy(str(repo / (green_rel + ".meta.json")),
+                    str(repo / (rel + ".meta.json")))
+        copies.append(rel)
+    args = ["--red", red_rel]
+    for rel in copies:
+        args += ["--green", rel]
+    args += ["--green-runs", "5", "--milestone", SLUG, "--ledger", ledger]
+    proc = run_py(CHECK_RED_GREEN, args, repo)
+    expect("13c. red/green: 5 byte-identical copies under --green-runs 5 "
+           "-> exit 1 (green_runs_not_distinct)", proc, 1,
+           lambda d: "green_runs_not_distinct" in codes(d)
+           # The point of the case: every copy still hashes to its sidecar.
+           and "sidecar_hash_mismatch" not in codes(d)
+           and "sidecar_missing" not in codes(d)
+           and d.get("green_distinct_bodies") == 1,
+           "it did not name green_runs_not_distinct over intact hashes")
+
+    # --- 13d (2.6.1): five REAL runs still pass -----------------------------
+    # A distinctness rule that also refused honest evidence would be worse than
+    # none, so the clearing case runs the probe five more times for real.
+    real_runs = []
+    for index in range(1, 6):
+        rel = f".docs/bugfix/{SLUG}/evidence/green/{SLUG}-real{index}.md"
+        write_capture(repo, rel)
+        real_runs.append(rel)
+    args = ["--red", red_rel]
+    for rel in real_runs:
+        args += ["--green", rel]
+    args += ["--green-runs", "5", "--milestone", SLUG, "--ledger", ledger]
+    proc = run_py(CHECK_RED_GREEN, args, repo)
+    expect("13d. red/green: 5 REAL runs under --green-runs 5 -> exit 0", proc, 0,
+           lambda d: d.get("result") == "PASS"
+           and d.get("green_distinct_runs") == 5,
+           "five genuine runs were not accepted as five distinct runs")
+
     # --- Commit-gate fixtures: 6 declared files, all real ------------------
     declared = []
     for index in range(1, 7):

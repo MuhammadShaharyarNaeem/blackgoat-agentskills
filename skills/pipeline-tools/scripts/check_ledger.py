@@ -422,20 +422,61 @@ def run_self_test():
 
         # ---- drift guard across the family's nineteen copies -----------
 
+        # Every gate that appends to a shared gates.jsonl. A missing comma
+        # here is not a typo with no effect: `"update_state.py"` and
+        # `"check_openapi_diff.py"` sat on adjacent lines with no comma
+        # between them, so Python concatenated them into one name matching no
+        # file, and BOTH gates dropped out of the guard below (which skips a
+        # name whose file does not exist). Keep the trailing commas; the two
+        # tests after this list are what make a recurrence loud.
         CHAINED_GATES = (
-            "check_acceptance_suite.py", "check_agent_report.py",
-            "check_blockers.py", "check_bugfix_intake.py",
-            "check_commit_gate.py", "check_coverage.py",
-            "check_quick_close.py", "check_red_green.py",
-            "check_runtime_evidence.py", "check_ship_decision.py",
-            "mark_milestone.py", "next_bugfix_route.py",
-            "review_package.py", "update_state.py"
-            "check_openapi_diff.py",
+            "check_acceptance_suite.py",
+            "check_agent_report.py",
             "check_always_on.py",
+            "check_blockers.py",
+            "check_bugfix_intake.py",
+            "check_commit_gate.py",
+            "check_coverage.py",
             "check_handoff.py",
-            "check_tier1_provenance.py",
+            "check_openapi_diff.py",
+            "check_quick_close.py",
+            "check_red_green.py",
+            "check_runtime_evidence.py",
             "check_runtime_recipe.py",
+            "check_ship_decision.py",
+            "check_tier1_provenance.py",
+            "mark_milestone.py",
+            "next_bugfix_route.py",
+            "review_package.py",
+            "update_state.py",
         )
+
+        def test_the_chained_gate_list_names_only_real_files(self):
+            """The missing-comma class, asserted rather than re-read."""
+            here = Path(__file__).resolve().parent
+            missing = [n for n in self.CHAINED_GATES
+                       if not (here / n).is_file()]
+            self.assertEqual(missing, [],
+                             "CHAINED_GATES names files that do not exist "
+                             "(a missing comma concatenates two entries)")
+            self.assertEqual(len(set(self.CHAINED_GATES)),
+                             len(self.CHAINED_GATES))
+
+        def test_every_script_that_appends_a_ledger_is_listed(self):
+            """The other direction: a new gate must join the guard."""
+            here = Path(__file__).resolve().parent
+            appending = []
+            for script in sorted(here.glob("*.py")):
+                if script.name == "check_ledger.py":
+                    continue
+                src = script.read_text(encoding="utf-8", errors="replace")
+                if ("def append_ledger(" in src
+                        and 'with open(p, "a", encoding="utf-8") as fh:' in src):
+                    appending.append(script.name)
+            self.assertEqual(
+                sorted(set(appending) - set(self.CHAINED_GATES)), [],
+                "these scripts append to a ledger but are not in "
+                "CHAINED_GATES, so nothing checks that they chain")
 
         def test_the_chain_helper_is_byte_identical_everywhere(self):
             """One file each, no shared module -- so drift is what to test.

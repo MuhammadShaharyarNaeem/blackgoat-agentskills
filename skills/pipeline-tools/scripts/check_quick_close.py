@@ -19,6 +19,15 @@ Given the note, the capture and the declared file list, it verifies, in order:
     different change.
   * `capture_missing` / `not_a_capture` -- the How-verified command's run was
     captured to disk by `run_quiet.py --capture`, not narrated
+  * `capture_command_mismatch` -- the capture's sidecar recorded the command
+    the note's `How verified` line NAMES. Until this term existed the gate
+    checked that A capture existed, hashed, was fresh and exited 0 -- never
+    that it captured THE DECLARED CHECK. A real
+    `run_quiet.py --capture ... -- cmd /c exit 0` closed a lane whose note
+    said `npm test`: no forgery, one legitimate tool call, and the only gate
+    this lane has. The comparison is `next_bugfix_route.py --red`'s, reused
+    verbatim (see NOTE GRAMMAR below): TOKEN LISTS, never strings, under
+    three tokenizations
   * `sidecar_missing` / `sidecar_hash_mismatch` -- the capture carries its
     provenance sidecar and still hashes to it (a hand-typed or after-the-fact
     edited capture is authored, not observed)
@@ -56,6 +65,33 @@ Given the note, the capture and the declared file list, it verifies, in order:
 On a clean pass, `--commit` commits EXACTLY the declared files (`git add --
 <paths>`, never `-A`), so a skipped gate is loud -- no commit exists -- rather
 than silent.
+
+NOTE GRAMMAR: `- How verified: <command>`
+----------------------------------------
+The value is ONE argv-runnable command -- what `run_quiet.py` executes
+directly, with no shell -- optionally wrapped in backticks. No pipes, no
+redirects, no `&&`: `run_quiet.py` spawns argv with `shell=False`, so a
+shell-only construct is not re-runnable as written and its tokens could never
+equal a real capture's.
+
+`capture_command_mismatch` compares the value with the sidecar's recorded
+child `argv` on TOKEN LISTS, never on strings, because the recorded argv is
+what the process actually received -- the shell already removed the quoting,
+so `-d '{}'` in the note becomes `['-d', '{}']` in argv and a string compare
+would reject precisely the carefully quoted commands. Three candidate
+tokenizations, ANY match passes, nothing fuzzier (no case-folding, no
+reordering, no dropped tokens):
+
+  1. `shlex.split(posix=True)` -- the shell's own rule, and the one that makes
+     quoted JSON bodies and quoted headers work;
+  2. the same with backslashes doubled first, so a Windows path survives posix
+     mode instead of having its separators eaten as escapes;
+  3. a raw whitespace split -- an unquoted command tokenizes identically under
+     it, and it cannot be defeated by a shlex parse error.
+
+This grammar and this matcher are byte-identical to `next_bugfix_route.py`'s
+`- Command:` check (family convention: duplicated per file, never imported);
+the two gates must not disagree about what "the same command" means.
 
 Deliberate divergences from sibling gates in this family, both labelled per
 CLAUDE.md convention #8:
@@ -95,6 +131,7 @@ import json
 import math
 import os
 import re
+import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -579,6 +616,45 @@ def check_frozen(entries, frozen, repo):
 # The note
 # ---------------------------------------------------------------------------
 
+def normalize_command(text):
+    """The note's `How verified` value: backticks and outer space stripped.
+
+    Byte-identical to next_bugfix_route.py's helper of the same name (family
+    convention: one file each, no shared module).
+    """
+    return (text or "").strip().strip("`").strip()
+
+
+def command_token_candidates(command):
+    """Every legitimate tokenization of the note's command string.
+
+    See NOTE GRAMMAR in the module docstring for why the comparison is on
+    token lists and what the three candidates are. Byte-identical to
+    next_bugfix_route.py's function of the same name.
+    """
+    candidates = []
+    for label, text in (("shlex", command),
+                        ("shlex-escaped", command.replace("\\", "\\\\"))):
+        try:
+            tokens = shlex.split(text, posix=True)
+        except ValueError:
+            continue    # unbalanced quotes: that candidate does not apply
+        if tokens:
+            candidates.append((label, tokens))
+    raw = command.split()
+    if raw:
+        candidates.append(("whitespace", raw))
+    return candidates
+
+
+def command_matches(command, argv):
+    """(matched?, the strategy name that matched, or None)."""
+    for label, tokens in command_token_candidates(command):
+        if tokens == argv:
+            return True, label
+    return False, None
+
+
 def parse_note(path):
     """(fields dict, problems list). Missing/placeholder values read as absent."""
     fields = {label: None for label in NOTE_LABELS}
@@ -626,6 +702,8 @@ def build_report(args):
         "size_ok": None,
         "capture_sidecar": None,
         "capture_body_agrees": None,
+        "capture_argv": None,
+        "capture_command_match": None,
         "capture_exit_code": None,
         "capture_finished": None,
         "newest_changed_file": None,
@@ -705,6 +783,40 @@ def build_report(args):
             report["capture_body_agrees"] = code is None
             if code:
                 fail(code, detail)
+            # ...and the sidecar recorded THE DECLARED CHECK. Everything
+            # above proves the capture is a real, unedited recording of
+            # SOMETHING; this is the term that makes it a recording of the
+            # command the note names (see NOTE GRAMMAR).
+            argv = meta.get("argv")
+            if not isinstance(argv, list) or not argv:
+                fail("capture_command_mismatch",
+                     "the sidecar records no child argv, so nothing ties this "
+                     "capture to the note's 'How verified' command -- re-take "
+                     "it with `run_quiet.py --capture <path> -- <command>`")
+            elif fields["how verified"]:
+                argv = [str(a) for a in argv]
+                report["capture_argv"] = argv
+                expected = normalize_command(fields["how verified"])
+                matched, strategy = command_matches(expected, argv)
+                report["capture_command_match"] = strategy
+                if not matched:
+                    tried = [toks for _, toks
+                             in command_token_candidates(expected)]
+                    fail("capture_command_mismatch",
+                         "the capture's sidecar recorded argv {0!r}, which "
+                         "matches none of the tokenizations of the note's "
+                         "'How verified' command {1!r} ({2!r}) -- comparison "
+                         "is on token lists, not strings. This capture "
+                         "records a different run than the check the note "
+                         "declares: re-run the declared command through "
+                         "`run_quiet.py --capture`, or correct the note to "
+                         "name the command that was actually run (a "
+                         "'How verified' value must be one argv-runnable "
+                         "command -- no pipes, redirects or `&&`)".format(
+                             argv, expected, tried))
+            else:
+                report["capture_argv"] = [str(a) for a in argv]
+
             exit_code = meta.get("exit_code")
             if not isinstance(exit_code, int):
                 fail("capture_exit_nonzero",
@@ -771,8 +883,13 @@ def build_report(args):
         fail("frozen_path_modified",
              "frozen path(s) were edited: {0} -- this lane never edits an "
              "existing test to make it pass (adding a NEW test is fine). Fix "
-             "the code, or state why the test itself was wrong and take the "
-             "change to /bgpdd-bugfix where a RED capture proves it.".format(
+             "the code instead. If the edited path is NOT a test the fix has "
+             "to leave alone -- a rename that legitimately touches the spec "
+             "beside the code, say -- the escape is to narrow the glob: pass "
+             "a `--frozen` value that still covers the tests this change must "
+             "not touch, and record why in the note's `## Result` section. "
+             "Only a defect whose test was genuinely WRONG goes to "
+             "/bgpdd-bugfix, where a RED capture has to prove it.".format(
                  ", ".join(report["frozen_modified"])))
 
     # --- 11. the size bound ------------------------------------------------
@@ -1161,6 +1278,123 @@ def run_self_test():
             r = self._run(note, capture, [str(self.repo / rel)])
             self.assertEqual(r["result"], "PASS", r["problems"])
             self.assertTrue(r["capture_body_agrees"])
+            self.assertEqual(r["capture_argv"], self.cmd)
+            self.assertEqual(r["capture_command_match"], "shlex")
+
+        # -- capture_command_mismatch (audit3 F3) -----------------------
+
+        def test_capture_of_another_command_is_a_mismatch(self):
+            rel = self._edit()
+            note = self._note()
+            capture = self._capture(cmd=["cmd", "/c", "exit", "0"])
+            r = self._run(note, capture, [str(self.repo / rel)])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("capture_command_mismatch", r["problem_codes"])
+            self.assertIn("token lists, not strings",
+                          " ".join(r["problems"]))
+
+        def test_note_command_with_quoted_json_body_matches_its_argv(self):
+            """The case a STRING compare rejected: the shell ate the quotes."""
+            rel = self._edit()
+            argv = ["curl", "--fail", "-X", "POST", "http://h/o", "-d", "{}"]
+            note = self._note(
+                how="curl --fail -X POST http://h/o -d '{}'")
+            capture = self._capture(cmd=argv)
+            r = self._run(note, capture, [str(self.repo / rel)])
+            self.assertEqual(r["result"], "PASS", r["problems"])
+            self.assertEqual(r["capture_command_match"], "shlex")
+
+        def test_a_backslashed_windows_path_matches_via_the_escaped_candidate(self):
+            rel = self._edit()
+            argv = [r"C:\tools\npm.cmd", "test"]
+            note = self._note(how=r"C:\tools\npm.cmd test")
+            capture = self._capture(cmd=argv)
+            r = self._run(note, capture, [str(self.repo / rel)])
+            self.assertEqual(r["result"], "PASS", r["problems"])
+            self.assertEqual(r["capture_command_match"], "shlex-escaped")
+
+        def test_an_unbalanced_quote_in_the_note_falls_back_to_whitespace(self):
+            rel = self._edit()
+            argv = ["npm", "test", "--", "\"broken"]
+            note = self._note(how='npm test -- "broken')
+            capture = self._capture(cmd=argv)
+            r = self._run(note, capture, [str(self.repo / rel)])
+            self.assertEqual(r["result"], "PASS", r["problems"])
+            self.assertEqual(r["capture_command_match"], "whitespace")
+
+        def test_a_reordered_or_trimmed_command_is_still_a_mismatch(self):
+            rel = self._edit()
+            note = self._note(how="npm test --silent")
+            for argv in (["npm", "--silent", "test"],   # reordered
+                         ["npm", "test"],               # a token dropped
+                         ["NPM", "test", "--silent"]):  # case-folded
+                capture = self._capture(cmd=argv, name="c.md")
+                r = self._run(note, capture, [str(self.repo / rel)])
+                self.assertIn("capture_command_mismatch", r["problem_codes"],
+                              argv)
+
+        def test_a_sidecar_with_no_argv_is_a_mismatch(self):
+            rel = self._edit()
+            note = self._note()
+            capture = self._capture()
+            side = sidecar_path_for(Path(capture))
+            meta = json.loads(side.read_text(encoding="utf-8"))
+            del meta["argv"]
+            side.write_text(json.dumps(meta), encoding="utf-8")
+            r = self._run(note, capture, [str(self.repo / rel)])
+            self.assertIn("capture_command_mismatch", r["problem_codes"])
+            self.assertIn("records no child argv", " ".join(r["problems"]))
+
+        def test_the_mismatch_check_is_skipped_when_the_note_has_no_command(self):
+            """An unusable note is `note_incomplete`, not two findings."""
+            rel = self._edit()
+            note = self._note(lines=[
+                "# Quick note", "", "- What: x", "- Where: src/a.py",
+                "- How verified: <command>", ""])
+            capture = self._capture(cmd=["cmd", "/c", "exit", "0"])
+            r = self._run(note, capture, [str(self.repo / rel)])
+            self.assertIn("note_incomplete", r["problem_codes"])
+            self.assertNotIn("capture_command_mismatch", r["problem_codes"])
+
+        def test_the_matcher_agrees_with_next_bugfix_route(self):
+            """Both gates must mean the same thing by "the same command".
+
+            The drift guard for a helper this family duplicates rather than
+            imports: compares the parsed CODE of the three token functions
+            (docstrings dropped -- each file names its own field), so a
+            reworded rationale is free and a changed candidate list is not.
+            """
+            import ast
+            sibling = Path(__file__).resolve().parent / "next_bugfix_route.py"
+            if not sibling.is_file():
+                self.skipTest("next_bugfix_route.py not found")
+
+            def shapes(path):
+                tree = ast.parse(Path(path).read_text(encoding="utf-8",
+                                                      errors="replace"))
+                out = {}
+                for node in tree.body:
+                    if not isinstance(node, ast.FunctionDef):
+                        continue
+                    if node.name not in ("normalize_command",
+                                         "command_token_candidates",
+                                         "command_matches"):
+                        continue
+                    body = list(node.body)
+                    if (body and isinstance(body[0], ast.Expr)
+                            and isinstance(body[0].value, ast.Constant)
+                            and isinstance(body[0].value.value, str)):
+                        body = body[1:]
+                    out[node.name] = "\n".join(ast.dump(n) for n in body)
+                return out
+
+            mine, theirs = shapes(__file__), shapes(sibling)
+            self.assertEqual(sorted(mine), ["command_matches",
+                                            "command_token_candidates",
+                                            "normalize_command"])
+            self.assertEqual(mine, theirs,
+                             "the command matcher has drifted from "
+                             "next_bugfix_route.py's")
 
         def test_one_second_render_skew_still_passes(self):
             """The pre-2.4 build path stamped `Captured` just after `finished`."""
@@ -1553,10 +1787,40 @@ def run_self_test():
                             "import sys; sys.exit(0)"],
                            capture_output=True, timeout=120)
             self.assertTrue(sidecar_path_for(cap).is_file())
-            note = self._note()
+            # The note names the command that RAN, interpreter path included:
+            # `capture_command_mismatch` compares the sidecar's argv, and the
+            # child's argv[0] is whatever the caller handed run_quiet.py. A
+            # backslashed Windows path survives via the shlex-escaped
+            # candidate.
+            note = self._note(how='{0} -c "import sys; sys.exit(0)"'.format(
+                sys.executable))
             r = self._run(note, str(cap), [str(self.repo / rel)])
             self.assertEqual(r["result"], "PASS", r["problems"])
             self.assertEqual(r["capture_exit_code"], 0)
+            self.assertEqual(r["capture_argv"][1:],
+                             ["-c", "import sys; sys.exit(0)"])
+
+        def test_a_real_capture_of_a_different_command_fails(self):
+            """audit3 F3: the qc2.py repro, as a case.
+
+            A genuine `run_quiet.py --capture` of a trivially passing command,
+            cited by a note whose `How verified` says something else. No
+            forgery; one legitimate tool call closed the lane.
+            """
+            run_quiet = Path(__file__).resolve().parent / "run_quiet.py"
+            if not run_quiet.is_file():
+                self.skipTest("run_quiet.py not found beside this script")
+            rel = self._edit()
+            cap = self.repo / ".docs" / "quick" / "evidence" / "other.md"
+            subprocess.run([sys.executable, str(run_quiet), "--capture",
+                            str(cap), "--", sys.executable, "-c",
+                            "import sys; sys.exit(0)"],
+                           capture_output=True, timeout=120)
+            note = self._note(how="npm test")
+            r = self._run(note, str(cap), [str(self.repo / rel)])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("capture_command_mismatch", r["problem_codes"])
+            self.assertIsNone(r["capture_command_match"])
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(QuickCloseTests)
     result = unittest.TextTestRunner(verbosity=1).run(suite)

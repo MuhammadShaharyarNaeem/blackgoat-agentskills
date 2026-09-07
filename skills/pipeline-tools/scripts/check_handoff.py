@@ -11,12 +11,46 @@ CLAUDE.md convention #9: the restraint this asks for lands at the moment the
 Orchestrator most wants to proceed (the phase is "done", the agent said
 COMPLETE), so it is a command with an exit code, not a paragraph.
 
+ADVISORY HANDOFFS (`--advisory`)
+--------------------------------
+Two sanctioned steps ask an agent for a RECOMMENDATION and no artifact:
+Forge's propose handoff in `bgpdd-learn` (it proposes edits and waits for
+approval, so nothing is written yet) and Aria's Mode 2 blast-radius advisory
+in `bgpdd-build`. Both failed this gate exit 1 in every tag form, so the
+Orchestrator's mandatory validation was contradicted by the pipelines twice
+per epic. `--advisory` makes `<artifact>` and `<changed_skills>` OPTIONAL for
+that one call and records `"advisory": true` in the ledger line, so waiving
+the artifact is a written act rather than a skipped gate.
+
+Nothing else relaxes: `<status>`, `<blockers>`, the path checks on whatever IS
+declared, the honesty contradictions and the status enum all still apply, and
+`<changed_files>` stays required for the personas that carry it -- an agent
+that wrote code has an artifact whether or not the brief asked for one.
+
+`--advisory` is the CALLER's declaration about the brief it wrote, so it
+belongs in the pipeline step, never in the agent's output: an agent that could
+set it could waive its own artifact.
+
+STATUS IS THE DELIVERY STATE, NOT THE VERDICT
+---------------------------------------------
+`<status>` is COMPLETE / PARTIAL / BLOCKED: whether the agent finished the
+work it was briefed for. A verification VERDICT (PASS / FAIL / BLOCKED) is a
+different claim and belongs in the body, where the durable report the verdict
+is about can be cited. `BLOCKED` is the one token both vocabularies share, and
+it means the same thing in each.
+
 Usage:
     python check_handoff.py --handoff <file> --persona <name> --repo <dir> \
-        [--since <ref>] [--fix-round] [--require consumers] \
+        [--since <ref>] [--advisory] [--fix-round] [--require consumers] \
         [--milestone "<title>"] [--ledger <path>]
     ... | python check_handoff.py --persona mason --repo .      # stdin
     python check_handoff.py --self-test
+
+`--since <ref>` is OPTIONAL to this CLI and REQUIRED by the pipelines: it is
+the only term here that git can contradict (without it `<changed_files>` need
+merely exist; with it, a file the agent never touched is rejected). Every
+pipeline handoff step passes `--since` and `--ledger`; a call without them
+checks shape only and says nothing about what was actually written.
 
 Exit 0 PASS, 1 FAIL (findings against a readable handoff), 2 ERROR (usage,
 unreadable input, unusable repo). Pure standard library.
@@ -87,8 +121,14 @@ PATH_ELEMENTS = ("changed_files", "artifact", "changed_skills")
 # mandated by § Incremental Persistence ("report unfinished sections and return
 # PARTIAL, never COMPLETE"); BLOCKED by § Evidence Integrity ("An honest
 # BLOCKED costs one round-trip"). Nothing else is sanctioned anywhere in the
-# plugin, so nothing else passes.
+# plugin, so nothing else passes. See STATUS IS THE DELIVERY STATE above: a
+# PASS/FAIL verdict is a different claim and lives in the body.
 STATUSES = ("COMPLETE", "PARTIAL", "BLOCKED")
+
+# Elements `--advisory` demotes from required to optional: the two "here is a
+# recommendation, nothing is written yet" handoffs. `<changed_files>` is
+# deliberately NOT here -- see ADVISORY HANDOFFS above.
+ADVISORY_OPTIONAL_ELEMENTS = ("artifact", "changed_skills")
 
 KNOWN_ELEMENTS = ("status", "artifact", "changed_files", "changed_skills",
                   "blockers", "consumers", "fix_verification")
@@ -160,8 +200,14 @@ def ledger_self_hash(record):
         .encode("utf-8")).hexdigest()
 
 
-def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code):
-    """Append ONE JSON line recording this run. Best-effort by design."""
+def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code,
+                  extra=None):
+    """Append ONE JSON line recording this run. Best-effort by design.
+
+    `extra` merges into the record BEFORE `prev`/`self` are computed, so the
+    chain covers it: `--advisory` records `"advisory": true`, which is how a
+    waived artifact stays attributable after the run.
+    """
     if not ledger_path:
         return
     record = {
@@ -173,6 +219,8 @@ def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code):
         "verdict": verdict,
         "exit": exit_code,
     }
+    if extra:
+        record.update(extra)
     try:
         p = Path(ledger_path)
         if str(p.parent):
@@ -350,7 +398,7 @@ def check_honesty(elements):
 
 
 def build_report(text, persona, repo, since=None, fix_round=False,
-                 require=(), source="<stdin>"):
+                 require=(), source="<stdin>", advisory=False):
     persona_key = (persona or "").strip().lower()
     if persona_key not in PERSONA_ELEMENTS:
         known = ", ".join(sorted(PERSONA_ELEMENTS))
@@ -359,6 +407,10 @@ def build_report(text, persona, repo, since=None, fix_round=False,
         raise GateError(f"--repo is not a directory: {repo}")
 
     required = list(PERSONA_ELEMENTS[persona_key])
+    waived = []
+    if advisory:
+        waived = [e for e in required if e in ADVISORY_OPTIONAL_ELEMENTS]
+        required = [e for e in required if e not in ADVISORY_OPTIONAL_ELEMENTS]
     if fix_round:
         required.append("fix_verification")
     if "consumers" in require:
@@ -371,6 +423,8 @@ def build_report(text, persona, repo, since=None, fix_round=False,
         "repo": str(repo),
         "since": since,
         "fix_round": bool(fix_round),
+        "advisory": bool(advisory),
+        "advisory_waived_elements": waived,
         "required_elements": required,
         "present_elements": [],
         "findings": [],
@@ -396,6 +450,11 @@ def build_report(text, persona, repo, since=None, fix_round=False,
 
     elements = parse_elements(block)
     report["present_elements"] = sorted(elements)
+    if advisory:
+        report["warnings"].append(
+            "--advisory: <" + ">/<".join(waived or ADVISORY_OPTIONAL_ELEMENTS)
+            + "> waived for this call — the brief asked for a recommendation, "
+              "not a written artifact. Every other element still applies.")
     for tag in unknown_tags(block):
         report["warnings"].append(f"unrecognized element <{tag}> in the handoff")
 
@@ -416,7 +475,11 @@ def build_report(text, persona, repo, since=None, fix_round=False,
     for value in statuses:
         if value.upper() not in STATUSES:
             finding("status_invalid",
-                    f"<status>{value}</status> is not one of {'/'.join(STATUSES)}",
+                    f"<status>{value}</status> is not one of "
+                    f"{'/'.join(STATUSES)} — <status> is the DELIVERY state "
+                    "(did the agent finish the work it was briefed for); the "
+                    "verification verdict (PASS/FAIL/BLOCKED) belongs in the "
+                    "body, beside the report it is a verdict about",
                     value=value)
         elif value != value.upper():
             report["warnings"].append(
@@ -472,7 +535,16 @@ def main(argv):
     parser.add_argument("--repo", default=".",
                         help="repository root the handoff's paths are relative to")
     parser.add_argument("--since", help="git ref: <changed_files> must be a "
-                                        "subset of what git reports changed since it")
+                                        "subset of what git reports changed "
+                                        "since it. Optional here, REQUIRED by "
+                                        "every pipeline handoff step — it is "
+                                        "the only term git can contradict")
+    parser.add_argument("--advisory", action="store_true",
+                        help="the brief asked for a recommendation, not a "
+                             "written artifact (Forge's propose handoff, "
+                             "Aria Mode 2): <artifact>/<changed_skills> "
+                             "become optional and the ledger records "
+                             "advisory: true. Nothing else relaxes.")
     parser.add_argument("--fix-round", action="store_true",
                         help="a remediation round: <fix_verification> is required")
     parser.add_argument("--require", action="append", choices=["consumers"],
@@ -488,7 +560,8 @@ def main(argv):
     def finish(code, verdict):
         """One exit point: EVERY return path records a ledger line."""
         append_ledger(args.ledger, argv, args.milestone,
-                      [args.handoff] if args.handoff else [], verdict, code)
+                      [args.handoff] if args.handoff else [], verdict, code,
+                      {"advisory": True} if args.advisory else None)
         return code
 
     if not args.persona:
@@ -520,7 +593,7 @@ def main(argv):
     try:
         report = build_report(text, args.persona, args.repo, since=args.since,
                               fix_round=args.fix_round, require=args.require,
-                              source=source)
+                              source=source, advisory=args.advisory)
     except GateError as exc:
         print(json.dumps({"result": "ERROR", "error": str(exc)}))
         return finish(2, "ERROR")
@@ -596,6 +669,102 @@ def run_self_test():
         def test_default_persona_requires_artifact(self):
             r = build_report(GOOD_MASON, "luna", self.dir)
             self.assertEqual(self.codes(r), ["element_missing"])
+
+        # --- --advisory (audit3 Metric 1) -------------------------------
+
+        FORGE_PROPOSE = ("<handoff><status>COMPLETE</status>"
+                         "<blockers>None</blockers></handoff>")
+        ARIA_ADVISORY = ("<handoff><status>COMPLETE</status>"
+                         "<blockers>None</blockers></handoff>")
+
+        def test_forge_propose_handoff_fails_without_advisory(self):
+            """bgpdd-learn:48 — the pipeline's own step, exit 1 by design."""
+            r = build_report(self.FORGE_PROPOSE, "forge", self.dir)
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["findings"][0]["element"], "changed_skills")
+
+        def test_forge_propose_handoff_passes_with_advisory(self):
+            r = build_report(self.FORGE_PROPOSE, "forge", self.dir,
+                             advisory=True)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertTrue(r["advisory"])
+            self.assertEqual(r["advisory_waived_elements"], ["changed_skills"])
+            self.assertNotIn("changed_skills", r["required_elements"])
+            self.assertTrue(any("--advisory" in w for w in r["warnings"]))
+
+        def test_aria_mode_2_advisory_passes(self):
+            """bgpdd-build:113 — a recommendation, no artifact."""
+            r = build_report(self.ARIA_ADVISORY, "aria", self.dir,
+                             advisory=True)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertEqual(r["advisory_waived_elements"], ["artifact"])
+
+        def test_advisory_still_requires_status_and_blockers(self):
+            for text in ("<handoff><blockers>None</blockers></handoff>",
+                         "<handoff><status>COMPLETE</status></handoff>"):
+                r = build_report(text, "forge", self.dir, advisory=True)
+                self.assertEqual(r["result"], "FAIL", text)
+                self.assertEqual(self.codes(r), ["element_missing"])
+
+        def test_advisory_does_not_waive_changed_files(self):
+            """A builder that wrote code has an artifact regardless."""
+            text = ("<handoff><status>COMPLETE</status>"
+                    "<blockers>None</blockers></handoff>")
+            r = build_report(text, "mason", self.dir, advisory=True)
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["findings"][0]["element"], "changed_files")
+
+        def test_advisory_does_not_waive_the_status_enum_or_honesty(self):
+            text = ("<handoff><status>PASS</status>"
+                    "<blockers>None</blockers></handoff>")
+            r = build_report(text, "forge", self.dir, advisory=True)
+            self.assertIn("status_invalid", self.codes(r))
+            blocked = ("<handoff><status>BLOCKED</status>"
+                       "<blockers>none</blockers></handoff>")
+            r = build_report(blocked, "forge", self.dir, advisory=True)
+            self.assertIn("honesty_contradiction", self.codes(r))
+
+        def test_advisory_still_checks_a_declared_path(self):
+            text = ("<handoff><status>COMPLETE</status>"
+                    "<changed_skills>skills/gone/SKILL.md</changed_skills>"
+                    "<blockers>None</blockers></handoff>")
+            r = build_report(text, "forge", self.dir, advisory=True)
+            self.assertEqual(self.codes(r), ["path_missing"])
+
+        def test_the_status_invalid_message_names_where_a_verdict_belongs(self):
+            text = ("<handoff><status>PASS</status>"
+                    "<changed_files>src/a.py</changed_files>"
+                    "<blockers>None</blockers></handoff>")
+            r = build_report(text, "mason", self.dir)
+            detail = r["findings"][0]["detail"]
+            self.assertIn("delivery", detail.lower())
+            self.assertIn("PASS/FAIL/BLOCKED", detail)
+            self.assertIn("body", detail)
+
+        def test_advisory_is_recorded_in_the_ledger(self):
+            path = self.dir / "h.md"
+            path.write_text(self.FORGE_PROPOSE, encoding="utf-8")
+            ledger = self.dir / "gates.jsonl"
+            code = main(["--handoff", str(path), "--persona", "forge",
+                         "--repo", str(self.dir), "--advisory",
+                         "--ledger", str(ledger)])
+            self.assertEqual(code, 0)
+            record = json.loads(
+                ledger.read_text(encoding="utf-8").splitlines()[-1])
+            self.assertIs(record["advisory"], True)
+            # The chain must cover the extra field.
+            self.assertEqual(record["self"], ledger_self_hash(record))
+
+        def test_a_non_advisory_ledger_record_carries_no_advisory_key(self):
+            path = self.dir / "h.md"
+            path.write_text(GOOD_MASON, encoding="utf-8")
+            ledger = self.dir / "gates.jsonl"
+            self.assertEqual(main(["--handoff", str(path), "--persona",
+                                   "mason", "--repo", str(self.dir),
+                                   "--ledger", str(ledger)]), 0)
+            record = json.loads(
+                ledger.read_text(encoding="utf-8").splitlines()[-1])
+            self.assertNotIn("advisory", record)
 
         # --- adversarial ------------------------------------------------
         def test_fenced_handoff_is_not_a_handoff(self):

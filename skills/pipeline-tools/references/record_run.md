@@ -51,3 +51,34 @@ This introduces exit **1** to a script that previously had only 0 and 2. A refus
 ## Self-test inventory
 
 `python scripts/record_run.py --self-test` runs **31** cases: append plus parent-directory creation, unknowns staying `null`, an explicit `0` preserved, `tokens_total` derivation, field order, `--from-json` mapping including a nested `usage` object and the cache-token exclusion, an unmapped payload key leaving the field `null`, an explicit flag overriding the payload, a malformed and a missing `--from-json` file (exit 2), a missing required flag (exit 2), a bad `--event`/`--status`/count value (exit 2), a UTF-8 round trip, an unwritable path (exit 2), the four mandatory-`--model` cases, and the twelve tier-inversion cases (refused and blocking the write; equal and higher tiers passing; `--allow-tier-inversion` recording its reason; an empty reason as exit 2; a clean record carrying no inversion key; unit scoping; a verifier running first; latest-producer-wins; an unknown tier on either side; a full model id resolving to its tier; non-verifier and non-delegation records ungated; and the `model_tier` helper).
+
+## `model_unknown`, and `dep` as a producer (2.6.1)
+
+**An unresolvable `--model` is exit 2, not a null tier.** The tier-inversion
+check reads the tier out of the model string, and `model_tier()` returns
+`None` for a value naming no tier or two. The 2026-09-07 audit found that
+`Sonnet`, `sonnet[1m]` and `haiku` all correctly reported
+`verifier_below_producer` for a Luna record after a `claude-opus-4-1` Mason,
+while `gpt-4o` landed `tier: null`, exit 0, no warning. **A typo silently
+deleted the check** for that delegation, and nothing in the record said the
+check had not run.
+
+A mistyped flag must not be able to disable a gate, so a delegation whose
+`--model` resolves to no tier is refused with `problem: "model_unknown"` and
+nothing is written. Resolvable means the value contains exactly one of
+`haiku`/`sonnet`/`opus`, case-insensitively -- `opus`, `Opus`, `opus-4.1` and
+`claude-opus-4-20250514` all pass; `gpt-4o` and `sonnet-or-opus` do not. Only
+`--event delegation` is checked: a gate, phase or note record has no model,
+and demanding one there would invite a fabrication.
+
+**`PRODUCER_AGENTS` gained `dep`.** Dep produces the deployment artifacts Vera
+and Cipher judge at shipping, so a verifier running below Dep is the same
+inversion as one running below Mason. Its absence made that single pairing
+unmeasurable -- recorded in the audit as a latent Metric-14 nit
+(`record_run.py:66 PRODUCER_AGENTS omits dep`), and cheaper to close than to
+keep explaining.
+
+The self-test grew to **35**: the five `model_unknown` strings (with nothing
+written), the error's shape and content, the end-to-end case proving a typo
+can no longer disable the inversion check, a non-delegation event still
+needing no resolvable model, and the `dep`-as-producer pairing.

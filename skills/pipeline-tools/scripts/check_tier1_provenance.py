@@ -8,10 +8,36 @@ absence of a gate as licence to skip the check." This is that gate (CLAUDE.md
 convention #9 -- the phase that most wants to close is the one being asked to
 re-read a header).
 
-What it asserts, and nothing more: the stamp EXISTS, carries a date, carries a
-40-hex sha per in-scope repo, and each sha RESOLVES in that repo. Drift against
-current HEAD is reported and never fails -- the SKILL's contract says drift is
-a warning, because a hard failure would only teach people to skip Tier 1.
+What it asserts by default, and nothing more: the stamp EXISTS, carries a date
+that is not in the future, carries a 40-hex sha per in-scope repo, and each sha
+RESOLVES in that repo. Drift against current HEAD is reported and never fails
+-- the SKILL's contract says drift is a warning, because a hard failure would
+only teach people to skip Tier 1.
+
+A FUTURE DATE IS NOT A DATE (`stamp_date_future`)
+-------------------------------------------------
+The date was checked for SHAPE only, so `2031-01-01` passed. A stamp says
+"this map was derived from the tree on this day"; a date that has not happened
+records nothing that happened, and it defeats every downstream freshness
+comparison in the direction that keeps a stale map looking new. Today (UTC) is
+allowed -- a stamp written this morning is the normal case, and a machine one
+timezone ahead must not be accused of forgery, so the bound is the LATEST date
+in the header against today plus one day.
+
+`--verify-current`: DRIFT AS A GATE, ON DEMAND (`tier1_drift`)
+--------------------------------------------------------------
+Drift stays a warning in the default run, exactly as `bgpdd-discovery` § 1
+says. `--verify-current` is the opt-in inversion for the CONSUMER end -- the
+plan/build/lite/verify/shipping Pre-Flight that is about to brief agents from
+this map: with it, a stamped sha that is not the repo's current HEAD is
+`tier1_drift`, exit 1, naming the repo, the stamped sha and HEAD. The producer
+(discovery) writes the stamp and never passes it; the consumer decides whether
+a map derived from a different tree is good enough, and `--allow-drift
+"<reason>"` (exit 2 on an empty or whitespace-only reason, matching
+`--allow-breaking` and `--allow-tier-inversion` elsewhere in this family)
+records that decision in the ledger rather than leaving it to a flag nobody
+passed. `--allow-drift` without `--verify-current` is exit 2: it would
+otherwise read as a waiver of something that was never checked.
 
 Stamp grammar (the gate's half of the contract; the writing agent's half is the
 SKILL step). In the artifact's header -- everything above its first `## `
@@ -23,11 +49,13 @@ several shas readable. With a single repo in scope, a bare sha line suffices.
 Usage:
     python check_tier1_provenance.py --summary-root .docs/summary \
         [--feature <id>] --repo [<name>=]<path> [--repo ...] \
-        [--warn-on-drift] [--milestone "<title>"] [--ledger <path>]
+        [--warn-on-drift] [--verify-current [--allow-drift "<reason>"]] \
+        [--milestone "<title>"] [--ledger <path>]
     python check_tier1_provenance.py --self-test
 
-Exit 0 PASS (drift included), 1 FAIL (findings), 2 ERROR (usage, unusable
-summary root, git unavailable -- an unperformable check is never a PASS).
+Exit 0 PASS (drift included, unless `--verify-current`), 1 FAIL (findings),
+2 ERROR (usage, unusable summary root, git unavailable -- an unperformable
+check is never a PASS).
 Pure standard library.
 """
 import argparse
@@ -38,7 +66,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 SHA_RE = re.compile(r"(?<![0-9a-fA-F])([0-9a-fA-F]{40})(?![0-9a-fA-F])")
@@ -100,8 +128,14 @@ def ledger_self_hash(record):
         .encode("utf-8")).hexdigest()
 
 
-def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code):
-    """Append ONE JSON line recording this run. Best-effort by design."""
+def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code,
+                  extra=None):
+    """Append ONE JSON line recording this run. Best-effort by design.
+
+    `extra` merges in BEFORE `prev`/`self` are computed, so the chain covers
+    it: `--allow-drift` records the reason, which is what makes accepting a
+    stale map a written act rather than a flag nobody noticed.
+    """
     if not ledger_path:
         return
     record = {
@@ -113,6 +147,8 @@ def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code):
         "verdict": verdict,
         "exit": exit_code,
     }
+    if extra:
+        record.update(extra)
     try:
         p = Path(ledger_path)
         if str(p.parent):
@@ -171,7 +207,26 @@ def stamp_lines(header):
     return [line for line in header.splitlines() if SHA_RE.search(line)]
 
 
-def check_artifact(path, repos, findings, warnings, drift, tier):
+def latest_header_date(header):
+    """The newest YYYY-MM-DD in the header as a date, or None if there is none.
+
+    The LATEST, not the first: a header may legitimately mention an earlier
+    date in prose ("supersedes the 2026-01-04 map"), and the stamp's claim is
+    the most recent one it makes.
+    """
+    found = []
+    for match in DATE_RE.finditer(header):
+        try:
+            found.append(datetime(int(match.group(1)), int(match.group(2)),
+                                  int(match.group(3)), tzinfo=timezone.utc)
+                         .date())
+        except ValueError:      # 2026-02-31 and friends
+            continue
+    return max(found) if found else None
+
+
+def check_artifact(path, repos, findings, warnings, drift, tier,
+                   today=None, verify_current=False):
     """Assert one Tier-1 root artifact's stamp. Appends to the given lists."""
     rel = str(path)
     if not path.is_file():
@@ -185,9 +240,24 @@ def check_artifact(path, repos, findings, warnings, drift, tier):
         findings.append({"code": "stamp_missing", "artifact": rel,
                          "detail": f"{rel}: no 40-hex commit sha in the header "
                                    "(everything above the first '## ' heading)"})
-    if not DATE_RE.search(header):
+    stamped_date = latest_header_date(header)
+    if stamped_date is None:
         findings.append({"code": "date_missing", "artifact": rel,
                          "detail": f"{rel}: header carries no YYYY-MM-DD date"})
+    else:
+        # One day of slack for a machine running ahead of UTC; see the
+        # docstring. Anything beyond that records a day that has not happened.
+        limit = (today or datetime.now(timezone.utc).date()) + timedelta(days=1)
+        if stamped_date > limit:
+            findings.append({
+                "code": "stamp_date_future", "artifact": rel,
+                "date": stamped_date.isoformat(),
+                "detail": f"{rel}: the stamp is dated {stamped_date}, which "
+                          f"is after today ({limit - timedelta(days=1)}). A "
+                          "stamp records the day the map was derived from the "
+                          "tree; a future date records nothing that happened "
+                          "and makes a stale map read as fresh to every "
+                          "downstream freshness check"})
 
     single = len(repos) == 1
     for name, repo_path in repos:
@@ -228,9 +298,21 @@ def check_artifact(path, repos, findings, warnings, drift, tier):
                 f"{rel}: repo '{name}' stamped {matched[:12]} but HEAD is now "
                 f"{current[:12]} - the map may be stale (warning, never a "
                 "failure: bgpdd-discovery section 1)")
+            if verify_current:
+                findings.append({
+                    "code": "tier1_drift", "artifact": rel, "repo": name,
+                    "stamped": matched, "head": current,
+                    "detail": f"{rel}: repo '{name}' is stamped {matched} but "
+                              f"HEAD is now {current} - --verify-current was "
+                              "asked for, so this map was derived from a "
+                              "different tree than the one about to be worked "
+                              "in. Re-run /bgpdd-discovery for this feature, "
+                              "or accept the staleness in writing with "
+                              "--allow-drift \"<reason>\""})
 
 
-def build_report(summary_root, repos, feature=None):
+def build_report(summary_root, repos, feature=None, today=None,
+                 verify_current=False, allow_drift=None):
     root = Path(summary_root)
     if not root.is_dir():
         raise GateError(f"--summary-root is not a directory: {summary_root}")
@@ -242,7 +324,8 @@ def build_report(summary_root, repos, feature=None):
 
     context = root / CONTEXT_ARTIFACT
     checked.append(str(context))
-    check_artifact(context, repos, findings, warnings, drift, "Tier-1 root")
+    check_artifact(context, repos, findings, warnings, drift, "Tier-1 root",
+                   today, verify_current)
 
     if feature:
         features = [feature]
@@ -253,7 +336,17 @@ def build_report(summary_root, repos, feature=None):
         overview = root / name / FEATURE_ARTIFACT
         checked.append(str(overview))
         check_artifact(overview, repos, findings, warnings, drift,
-                       f"Tier-1 feature '{name}'")
+                       f"Tier-1 feature '{name}'", today, verify_current)
+
+    waived = []
+    if verify_current and allow_drift:
+        waived = [f for f in findings if f["code"] == "tier1_drift"]
+        findings = [f for f in findings if f["code"] != "tier1_drift"]
+        if waived:
+            warnings.append(
+                "DRIFT WAIVED by --allow-drift for {0}: {1}".format(
+                    ", ".join(sorted({f["repo"] for f in waived})),
+                    allow_drift.strip()))
 
     return {
         "result": "FAIL" if findings else "PASS",
@@ -262,6 +355,10 @@ def build_report(summary_root, repos, feature=None):
         "features_checked": features,
         "artifacts_checked": checked,
         "repos": [{"name": n, "path": str(p)} for n, p in repos],
+        "verify_current": bool(verify_current),
+        "allow_drift": allow_drift.strip() if (verify_current and allow_drift
+                                               and waived) else None,
+        "drift_waived": waived,
         "findings": findings,
         "drift": drift,
         "warnings": warnings,
@@ -280,6 +377,14 @@ def main(argv):
     parser.add_argument("--warn-on-drift", action="store_true",
                         help="also print drift warnings to stderr; drift NEVER "
                              "changes the exit code (bgpdd-discovery §1)")
+    parser.add_argument("--verify-current", action="store_true",
+                        help="CONSUMER mode: a stamped sha that is not the "
+                             "repo's current HEAD is tier1_drift, exit 1. "
+                             "Opt-in — the default run keeps drift a warning.")
+    parser.add_argument("--allow-drift", dest="allow_drift",
+                        help="--verify-current only: accept the drift with a "
+                             "written reason, recorded in the ledger. An "
+                             "empty reason is exit 2.")
     parser.add_argument("--milestone", help="recorded in the ledger line")
     parser.add_argument("--ledger", help="append one JSON record per run to this path")
     parser.add_argument("--self-test", action="store_true")
@@ -288,14 +393,33 @@ def main(argv):
     if args.self_test:
         return run_self_test()
 
-    def finish(code, verdict, inputs=()):
+    def finish(code, verdict, inputs=(), extra=None):
         """One exit point: EVERY return path records a ledger line."""
-        append_ledger(args.ledger, argv, args.milestone, list(inputs), verdict, code)
+        append_ledger(args.ledger, argv, args.milestone, list(inputs), verdict,
+                      code, extra)
         return code
+
+    if args.allow_drift is not None:
+        if not args.verify_current:
+            print(json.dumps({
+                "result": "ERROR",
+                "error": "--allow-drift requires --verify-current: waiving a "
+                         "check that never ran records a decision nobody had "
+                         "to make"}))
+            return finish(2, "ERROR")
+        if not args.allow_drift.strip():
+            print(json.dumps({
+                "result": "ERROR",
+                "error": "--allow-drift requires a non-empty reason: an "
+                         "unreasoned waiver is indistinguishable from an "
+                         "omission"}))
+            return finish(2, "ERROR")
 
     try:
         repos = [parse_repo_arg(raw) for raw in (args.repo or ["."])]
-        report = build_report(args.summary_root, repos, args.feature)
+        report = build_report(args.summary_root, repos, args.feature,
+                              verify_current=args.verify_current,
+                              allow_drift=args.allow_drift)
     except GateError as exc:
         print(json.dumps({"result": "ERROR", "error": str(exc)}))
         return finish(2, "ERROR")
@@ -306,8 +430,13 @@ def main(argv):
 
     print(json.dumps(report, indent=2))
     inputs = report["artifacts_checked"]
-    return (finish(0, "PASS", inputs) if report["result"] == "PASS"
-            else finish(1, "FAIL", inputs))
+    extra = ({"allow_drift_reason": report["allow_drift"],
+              "drift_waived": [{"repo": f["repo"], "stamped": f["stamped"],
+                                "head": f["head"]}
+                               for f in report["drift_waived"]]}
+             if report.get("allow_drift") else None)
+    return (finish(0, "PASS", inputs, extra) if report["result"] == "PASS"
+            else finish(1, "FAIL", inputs, extra))
 
 
 def run_self_test():
@@ -370,9 +499,9 @@ def run_self_test():
             (self.summary / "slide" / "overview.md").write_text(
                 body if body is not None else self.stamp(), encoding="utf-8")
 
-        def report(self, repos=None, feature=None):
+        def report(self, repos=None, feature=None, **kw):
             return build_report(self.summary, repos or [("app", self.repo)],
-                                feature)
+                                feature, **kw)
 
         def codes(self, report):
             return sorted({f["code"] for f in report["findings"]})
@@ -448,6 +577,122 @@ def run_self_test():
             self.assertEqual(main(["--summary-root", str(self.summary),
                                    "--repo", f"app={self.repo}",
                                    "--warn-on-drift"]), 0)
+
+        # --- stamp_date_future (audit3 F: the date gap) --------------------
+        def test_a_future_dated_stamp_fails(self):
+            future = (datetime.now(timezone.utc).date()
+                      + timedelta(days=30)).isoformat()
+            self.write_context(self.stamp(date=future))
+            self.write_overview()
+            r = self.report()
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(self.codes(r), ["stamp_date_future"])
+            self.assertEqual(r["findings"][0]["date"], future)
+
+        def test_todays_date_and_one_day_of_slack_pass(self):
+            today = datetime.now(timezone.utc).date()
+            for offset in (0, 1, -1, -400):
+                stamp_date = (today + timedelta(days=offset)).isoformat()
+                self.write_context(self.stamp(date=stamp_date))
+                self.write_overview(self.stamp(date=stamp_date))
+                r = self.report()
+                self.assertEqual(r["result"], "PASS", (offset, r["findings"]))
+
+        def test_the_latest_header_date_is_the_one_judged(self):
+            future = (datetime.now(timezone.utc).date()
+                      + timedelta(days=30)).isoformat()
+            body = (f"# Context\n\n> Provenance — 2026-01-04\n"
+                    f"> supersedes the {future} draft\n"
+                    f"> `{self.sha}`\n\n## Stacks\n")
+            self.write_context(body)
+            self.write_overview()
+            self.assertEqual(self.codes(self.report()), ["stamp_date_future"])
+
+        def test_an_impossible_date_is_date_missing_not_a_crash(self):
+            body = (f"# Context\n\n> Provenance — 2026-02-31\n"
+                    f"> `{self.sha}`\n\n## Stacks\n")
+            self.write_context(body)
+            self.write_overview()
+            # 2026-02-31 never matches DATE_RE's day alternation as a real
+            # date; the point is that nothing raises.
+            self.assertNotIn("stamp_date_future", self.codes(self.report()))
+
+        def test_the_future_date_exit_code_is_one_through_main(self):
+            future = (datetime.now(timezone.utc).date()
+                      + timedelta(days=30)).isoformat()
+            self.write_context(self.stamp(date=future))
+            self.write_overview()
+            self.assertEqual(main(["--summary-root", str(self.summary),
+                                   "--repo", f"app={self.repo}"]), 1)
+
+        # --- --verify-current / --allow-drift ------------------------------
+        def test_verify_current_turns_drift_into_a_finding(self):
+            self.write_context()
+            self.write_overview()
+            self.advance(self.repo)
+            r = self.report(verify_current=True)
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(self.codes(r), ["tier1_drift"])
+            finding = r["findings"][0]
+            self.assertEqual(finding["repo"], "app")
+            self.assertEqual(finding["stamped"], self.sha)
+            self.assertNotEqual(finding["head"], self.sha)
+            self.assertIn(self.sha, finding["detail"])
+            self.assertIn(finding["head"], finding["detail"])
+
+        def test_verify_current_passes_when_head_still_matches(self):
+            self.write_context()
+            self.write_overview()
+            r = self.report(verify_current=True)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertEqual(r["drift"], [])
+
+        def test_allow_drift_waives_the_finding_and_records_the_reason(self):
+            self.write_context()
+            self.write_overview()
+            self.advance(self.repo)
+            r = self.report(verify_current=True,
+                            allow_drift="canary only touches the CDN config")
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertEqual(r["allow_drift"],
+                             "canary only touches the CDN config")
+            self.assertEqual(len(r["drift_waived"]), 2)
+            self.assertTrue(any("DRIFT WAIVED" in w for w in r["warnings"]))
+
+        def test_allow_drift_does_not_waive_a_real_finding(self):
+            self.write_context("# Context\n\n> Provenance — 2026-09-07\n\n## S\n")
+            self.write_overview()
+            self.advance(self.repo)
+            r = self.report(verify_current=True, allow_drift="known stale")
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("stamp_missing", self.codes(r))
+
+        def test_verify_current_exit_codes_and_ledger_through_main(self):
+            self.write_context()
+            self.write_overview()
+            self.advance(self.repo)
+            ledger = self.dir / "gates.jsonl"
+            base = ["--summary-root", str(self.summary),
+                    "--repo", f"app={self.repo}", "--ledger", str(ledger)]
+            self.assertEqual(main(base), 0)                      # warning only
+            self.assertEqual(main(base + ["--verify-current"]), 1)
+            self.assertEqual(main(base + ["--verify-current",
+                                          "--allow-drift", "accepted"]), 0)
+            record = json.loads(
+                ledger.read_text(encoding="utf-8").splitlines()[-1])
+            self.assertEqual(record["allow_drift_reason"], "accepted")
+            self.assertEqual(record["self"], ledger_self_hash(record))
+
+        def test_allow_drift_needs_verify_current_and_a_reason(self):
+            self.write_context()
+            self.write_overview()
+            base = ["--summary-root", str(self.summary),
+                    "--repo", f"app={self.repo}"]
+            self.assertEqual(main(base + ["--allow-drift", "x"]), 2)
+            self.assertEqual(main(base + ["--verify-current",
+                                          "--allow-drift", ""]), 2)
+            self.assertEqual(main(base + ["--verify-current",
+                                          "--allow-drift", "   "]), 2)
 
         # --- multi-repo ----------------------------------------------------
         def test_multi_repo_requires_a_sha_keyed_per_repo(self):
