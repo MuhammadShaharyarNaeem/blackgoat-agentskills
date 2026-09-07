@@ -84,17 +84,30 @@ carries a synthetic PII value through the system and inspecting the resulting lo
 1. Issue a request containing a synthetic, clearly-fake value for the PII class under test
    (e.g. a fabricated card number or email that matches the field's format but is not real
    and not reused from any other fixture).
-2. Capture the run: `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/security/log-redaction-<class>.md -- <command that issues the request and then greps the resulting log>`.
-3. The capture must show the log line for that request present, and the synthetic PII value
-   **absent** — replaced by the redaction marker the logger emits (e.g. `[REDACTED]`,
+2. Capture the run in **two captures, never one chained command**. `run_quiet.py` executes
+   argv directly with no shell, so `&&`, `|` and `>` are passed to the program as literal
+   arguments and the run exits 0 having done the wrong thing (the same reason
+   `{PLUGIN_ROOT}/bgpdd-bugfix/references/bug-report-template.md` forbids `&&` in a
+   `- Command:` line):
+
+   ```
+   python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/security/log-redaction-<class>-request.md -- <the single argv-runnable request command>
+   python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/security/log-redaction-<class>.md -- grep -n <marker or synthetic value> <log path>
+   ```
+
+   Where the two genuinely must be one command — the log is a stream, not a file — put the
+   request-then-grep sequence in a committed script and capture the **script** as a single
+   argv (`-- bash scripts/log-redaction-check.sh <class>` or the PowerShell equivalent).
+3. The grep capture must show the log line for that request present, and the synthetic PII
+   value **absent** — replaced by the redaction marker the logger emits (e.g. `[REDACTED]`,
    `***`). Finding the redaction marker is the PASS condition; finding the raw value is FAIL;
    finding neither (the log line is missing entirely) is FAIL, not PASS — it means the
    request was never observed, not that it was safely handled.
 
-Check line:
+Check line — one backticked command, the grep, matching the cited capture's argv:
 
 ```
-- Log redaction (<PII class>): PASS|FAIL — `<request command> && grep <marker or synthetic value> <log path>` — exit N — <redaction marker found | raw value found | log line absent> — capture: evidence/security/log-redaction-<class>.md
+- Log redaction (<PII class>): PASS|FAIL — `grep -n <marker or synthetic value> <log path>` — exit N — <redaction marker found | raw value found | log line absent> — capture: evidence/security/log-redaction-<class>.md
 ```
 
 Repeat per PII class actually present in the system — a system with no Financial data does

@@ -16,11 +16,11 @@ A user can ask for this directly on named files — a deliberate refinement of a
 
 Derived from the contract below for a ≤ 3-file change; no new rules (convention #8 — deliberately narrower than the full contract, which binds inside any lane).
 
-1. Capture the new test failing — a second `evidence/` capture through the lane's wrapper — before the code exists (§ The Iron Law; § Workflow, RED).
+1. Capture the new test failing — a second `evidence/` capture through the lane's wrapper — before the code exists (§ The Iron Law).
 2. Write the minimum code to pass — no speculative options or abstractions (§ Workflow, GREEN).
 3. One behaviour per test, AAA, named for the behaviour (§ Rules).
 4. Real code; mock only true external boundaries you do not own (§ Rules).
-5. Full suite green with pristine output before closing; three RED-RED cycles → escalate (§ Verification Checklist; § Escalate When).
+5. Full suite green with pristine output before closing; three RED-RED cycles → escalate (§ Escalate When).
 
 - Brief → the quick note (What / Where / How verified)
 - Artifact → the capture at `{quick-root}/evidence/check.md`

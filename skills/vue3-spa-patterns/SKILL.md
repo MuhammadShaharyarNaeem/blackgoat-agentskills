@@ -12,10 +12,10 @@ Frontend rigor equal to backend rigor. Components render; stores mutate; one Axi
 Derived from the contract below for a ≤ 3-file change; no new rules (convention #8).
 
 1. `<script setup lang="ts">`, typed `defineProps`/`defineEmits` (§ Authoring & Typing).
-2. Shared state mutates only in Pinia actions; no store `v-model` (§ State Boundary).
-3. All HTTP through the one shared Axios instance (§ HTTP Layer).
-4. Every interactive element you touch carries a `data-test` ID (§ Testability).
-5. Pair every listener, timer or subscription with its teardown (§ Lifecycle & Reactivity Hygiene).
+2. State mutates only in Pinia actions; no store `v-model` (§ State Boundary).
+3. All HTTP through the shared Axios instance (§ HTTP Layer).
+4. Every interactive element carries `data-test` (§ Testability).
+5. Pair every listener, timer or subscription with teardown (§ Lifecycle & Reactivity Hygiene).
 
 - Brief → the quick note (What / Where / How verified)
 - Artifact → the capture at `{quick-root}/evidence/check.md`

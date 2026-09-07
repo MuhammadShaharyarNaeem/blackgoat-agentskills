@@ -87,23 +87,33 @@ The tier ladder, the out-of-process probe, the capture artifact and the `**Runti
 
 ### Feature Flag Strategy
 
-Ship behind feature flags to decouple deployment from release.
+Ship behind feature flags to decouple deployment from release. **The flag contract itself — declaration fields, owner, `expiry`/`review`, the removal task, default-off, fail-to-safe, config-as-code, both branches tested, no nesting — is owned by `{PLUGIN_ROOT}/feature-flag-patterns/SKILL.md`. Read it there; the rules are deliberately not restated here.** This section owns only the **rollout staging** and what this checklist runs at ship time.
 
-**Feature flag lifecycle:**
+**Rollout staging (this skill's half):**
 
 ```
 1. DEPLOY with flag OFF     → Code is in production but inactive
 2. ENABLE for team/beta     → Internal testing in production environment
 3. GRADUAL ROLLOUT          → 5% → 25% → 50% → 100% of users
-4. MONITOR at each stage    → Watch error rates, performance, user feedback
-5. CLEAN UP                 → Remove flag and dead code path after full rollout
+4. MONITOR at each stage    → Watch error rates, performance, user feedback (§ Staged Rollout)
+5. CLEAN UP                 → The removal task written at creation time runs
 ```
 
-**Rules:**
-- Every feature flag has an owner and an expiration date
-- Clean up flags within 2 weeks of full rollout
-- Don't nest feature flags (creates exponential combinations)
-- Test both flag states (on and off) in CI
+**Ship-time flag rows.** Both are mandated commands, not judgement calls (convention #9):
+
+- [ ] The `expiry` scan ran and its capture was read:
+
+```bash
+python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py \
+    --capture .docs/{project-name}/implementation/evidence/shipping/flag-expiry.md \
+    -- grep -rnE "expiry:|review:" <the committed flag config path>
+```
+
+  Every date the capture shows **at or before the ship date** is a plan-level blocker per `feature-flag-patterns` (*Expiry is a blocker*). Reading the config in your head is not this row.
+
+- [ ] The flag-debt review ran over the same capture — the three questions in `{PLUGIN_ROOT}/feature-flag-patterns/references/flag-lifecycle.md` (*The flag-debt review*) — and its output is recorded as findings, not fixes.
+
+> **Cleanup timing — deliberate refinement of `feature-flag-patterns`' per-flag `expiry` (convention #8).** That skill's clock is the date chosen at declaration and is the binding one. This checklist adds a **ceiling on top of it**: a flag still present two weeks after reaching 100 % rollout is a finding at the next shipping run even when its declared `expiry` has not arrived. The tighter of the two applies; neither replaces the other.
 
 ### Baseline Capture
 

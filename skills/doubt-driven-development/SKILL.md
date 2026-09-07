@@ -17,11 +17,11 @@ A user can ask for this directly on named files — a deliberate refinement of a
 
 Derived from the contract below for a ≤ 3-file change; no new rules (convention #8 — deliberately narrower than the full contract, which binds inside any lane).
 
-1. Skip the cycle for a rename, a format pass, or an obvious one-liner (§ When to Use, *When NOT to use*).
+1. Skip the cycle for a rename, a format pass, or an obvious one-liner (§ When to Use).
 2. Run it when the change branches, crosses a boundary, or outruns the compiler (§ When to Use).
 3. Write the CLAIM in two or three lines before it stands (§ Step 1).
-4. Hand the reviewer ARTIFACT + CONTRACT only — never the CLAIM or your reasoning (§ Step 2; § Step 3).
-5. Classify each finding against the artifact text; stop at trivial findings or 3 cycles (§ Step 4; § Step 5).
+4. Hand the reviewer ARTIFACT + CONTRACT only — never the CLAIM (§ Step 2).
+5. Classify each finding against the artifact text; stop at trivial findings or 3 cycles (§ Step 4).
 
 - Brief → the quick note (What / Where / How verified)
 - Artifact → the capture at `{quick-root}/evidence/check.md`

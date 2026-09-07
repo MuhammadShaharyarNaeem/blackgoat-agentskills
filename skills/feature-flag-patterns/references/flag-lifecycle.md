@@ -14,6 +14,8 @@ Read on demand. `../SKILL.md` is executable without any of this.
 
 Stage 5's half-done form is worth naming, because it looks like completion. A config entry that no code reads is worse than one that does: it advertises a control that does not exist, and the first person to flip it in an incident learns that the hard way. The removal task's acceptance criteria must assert the *absence* of both — no reader in code, no entry in config.
 
+**Why `expiry` is chosen at declaration and not later.** A flag created without one is created with an expiry of *never*, whatever the comment beside it says: the date has to be picked while the intent is still known — while someone can still say what "done rolling out" looks like for this flag. Asked three months later, the only honest answer available is "when we get to it", which is not a date and cannot be scanned for.
+
 ## Release flags versus kill switches
 
 These are the only two kinds. Anything that is neither is a configuration setting and should be named and treated as one.
@@ -50,7 +52,7 @@ The removal task is an ordinary task under `{PLUGIN_ROOT}/planning-and-task-brea
 
 ## The flag-debt review
 
-Flags rot in aggregate, not one at a time. A standing review — at each shipping run, or on a fixed cadence — reads the whole config and asks three questions per entry:
+Flags rot in aggregate, not one at a time. The review has a place it actually runs: `{PLUGIN_ROOT}/shipping-and-launch/SKILL.md`'s pre-launch checklist (*Feature Flag Strategy*) carries it as a checklist row alongside the mandated `expiry` scan, so it fires once per shipping run rather than on a cadence nobody owns. It reads the whole config and asks three questions per entry:
 
 1. Is it past its `expiry` or `review` date? (A blocker, per the contract.)
 2. Does anything still read it? (If not, stage 5 was left half-done.)

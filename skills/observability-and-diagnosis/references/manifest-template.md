@@ -27,9 +27,13 @@ carries deltas only — that precedence is runtime-evidence's, unchanged.
   this in* and gets silently trusted; `none` reads as *this service emits no traces*, which
   a reviewer can challenge and an incident can cite. This is the same reasoning
   `runtime-evidence`'s `[vs:none]` uses for verification surfaces.
-- **The correlation-id field name is per-service and recorded.** `X-Correlation-Id`,
-  `traceparent`, `X-Request-Id` — a responder grepping for the wrong key finds nothing and
-  concludes the id is absent.
+- **The canonical token is `X-Correlation-Id` on the wire and `correlation_id` in a log line,
+  a run record and this column** — the pair fixed by `../SKILL.md` (*A Correlation Id on
+  Every Request and Job*). A project already standardised on `traceparent` or `X-Request-Id`
+  writes that token here instead, once, and every service uses it. What is forbidden is
+  leaving the column as `<header name>`: a responder grepping for the wrong key finds
+  nothing and concludes the id is absent, and two services can each "comply" without
+  interoperating.
 - No agent fills a gap in this block from convention. An index name you would have to infer
   from a config file is caller-supplied context, escalated, not guessed — the same rule
   `runtime-evidence` applies to start commands and base URLs.
@@ -41,8 +45,8 @@ carries deltas only — that precedence is runtime-evidence's, unchanged.
 
 | Service | Logs (sink + query) | Metrics (dashboard + key metric) | Traces (backend + entry) | Correlation id field |
 |---|---|---|---|---|
-| <service-name> | <sink / index> — `<query>` | <dashboard> — `<metric name>` | <backend> — `<service or entry span>` | `<header name>` |
-| <service-name> | <sink / index> — `<query>` | <dashboard> — `<metric name>` | none | `<header name>` |
+| <service-name> | <sink / index> — `<query>` | <dashboard> — `<metric name>` | <backend> — `<service or entry span>` | `X-Correlation-Id` |
+| <service-name> | <sink / index> — `<query>` | <dashboard> — `<metric name>` | none | `X-Correlation-Id` |
 
 ### Retention
 - Logs: <duration>

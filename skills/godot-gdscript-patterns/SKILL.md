@@ -14,11 +14,11 @@ Production patterns for Godot 4.x game development with GDScript, covering archi
 
 Derived from the sections below for a ≤ 3-file change; no new rules (convention #8).
 
-1. Clarify goal, constraints and inputs before editing (§ Instructions).
+1. State goal, constraints and inputs before editing (§ Instructions).
 2. Validate in-engine; reading a script is not verification (§ Instructions).
-3. Pool return: `remove_child()` first, guard pops with `is_instance_valid()` (§ Procedural Memories).
-4. Atomic save: `.tmp` → verify → `.bak` → rename (§ Procedural Memories).
-5. Never hardcode a key; derive from `OS.get_unique_id()` plus salt (§ Procedural Memories).
+3. Pool return: `remove_child()` first; guard pops with `is_instance_valid()` (§ Procedural Memories).
+4. Atomic save: `.tmp`, verify, `.bak`, rename (§ Procedural Memories).
+5. Never hardcode a key; derive it from `OS.get_unique_id()` (§ Procedural Memories).
 
 - Brief → the quick note (What / Where / How verified)
 - Artifact → the capture at `{quick-root}/evidence/check.md`

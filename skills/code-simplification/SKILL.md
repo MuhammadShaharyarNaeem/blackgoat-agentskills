@@ -20,7 +20,7 @@ Derived from the contract below for a ≤ 3-file change; no new rules (conventio
 1. Run the suite first — a green baseline before you touch anything (§ Rules).
 2. Preserve behaviour exactly; every existing test passes unmodified (§ The Five Principles, 1).
 3. Can't say why the code exists? Don't simplify it (§ Chesterton's Fence).
-4. One kind of change; no drive-by refactor of code you did not already touch (§ Rules; § The Five Principles, 5).
+4. One kind of change; no drive-by refactor of code you did not already touch (§ Rules).
 5. It only passes by modifying a test → revert and escalate (§ Escalate When).
 
 - Brief → the quick note (What / Where / How verified)

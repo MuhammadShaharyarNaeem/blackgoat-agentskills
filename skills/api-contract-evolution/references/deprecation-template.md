@@ -35,13 +35,33 @@ User:
 
 The comment block and the spec marker are both required. The marker is machine-readable but says nothing about *when* or *what instead*; the block says both but is invisible to tooling. Neither alone is a deprecation.
 
+## JSON contract documents
+
+JSON has no comments, and `check_openapi_diff.py` reads JSON as the primary format — so in a JSON document the block above is not merely invisible, it is **unwritable**. Carry the same three facts as an `x-deprecated` extension object beside the marker. OpenAPI allows `x-` extensions anywhere a specification object appears, so this survives every generator and linter that reads the document:
+
+```json
+"name": {
+  "type": "string",
+  "deprecated": true,
+  "x-deprecated": {
+    "sunset": "<YYYY-MM-DD>",
+    "replacement": "<path or field, or 'none — see <link>'>",
+    "announced": "<YYYY-MM-DD>",
+    "consumers": ["<path::symbol>", "external only — see <link>"],
+    "migration": "<one line: what a caller changes>"
+  }
+}
+```
+
+`deprecated: true` alone is still not a deprecation in JSON either — the `x-deprecated` object is what carries *when* and *what instead*, and it is the form the Verification Checklist's "in the contract document" row is satisfied by for a JSON document. Use the comment block for YAML, this object for JSON; never both in one document.
+
 ## The three fields, and what each is load-bearing for
 
 **`sunset:` — an actual date, not "next quarter".** A deprecation without a date is a permanent second shape: every consumer defers, nothing migrates, and the field is still there three years later carrying the maintenance cost of a supported feature. Pick a date long enough for your slowest consumer, then hold it.
 
 **`replacement:` — a concrete path or field, or an explicit "none".** "Use the new API" is not a replacement. If the capability is genuinely going away with nothing taking its place, write `none — <one line on what callers should do instead>`; that is a legitimate answer and a reader can act on it. What a reader cannot act on is a blank.
 
-**`Consumers:` — the `<consumers>` list from `agents/mason.md`'s grammar.** The migration plan is only as real as the list of who has to execute it. An entry saying "external only" is fine when the callers are outside this repository, provided the external consumers are named somewhere the announcement can reach them.
+**`Consumers:` — the `<consumers>` list from `{PLUGIN_ROOT}/../agents/mason.md`'s grammar.** The migration plan is only as real as the list of who has to execute it. An entry saying "external only" is fine when the callers are outside this repository, provided the external consumers are named somewhere the announcement can reach them.
 
 ## The sunset window rule
 

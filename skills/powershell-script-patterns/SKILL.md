@@ -11,11 +11,11 @@ A PowerShell script is untested theory until it has been executed and its extern
 
 Derived from the contract below for a ≤ 3-file change; no new rules (convention #8).
 
-1. Execute it; capture stdout, stderr and exit code (§ Execution Testing).
-2. Embedded in a host string → extract to a scratch `.ps1`, test, re-embed (§ Embedded Scripts).
-3. Never invent an un-inferable parameter — escalate (§ Missing Parameters).
-4. Fetch every external URL this run, or flag `UNVERIFIED` (§ External URL Verification).
-5. One `Set-StrictMode -Version Latest` pass; PSScriptAnalyzer if installed (§ Static Sanity Pass).
+1. Execute it; capture stdout, stderr, exit code (§ Execution Testing).
+2. Embedded in a host string → extract, test, re-embed (§ Embedded Scripts).
+3. Never invent an un-inferable parameter (§ Missing Parameters).
+4. Fetch every external URL, or flag `UNVERIFIED` (§ External URL Verification).
+5. `Set-StrictMode -Version Latest`; PSScriptAnalyzer if present (§ Static Sanity Pass).
 
 - Brief → the quick note (What / Where / How verified)
 - Artifact → the capture at `{quick-root}/evidence/check.md`

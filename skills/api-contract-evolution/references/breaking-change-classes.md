@@ -61,8 +61,11 @@ Five shapes, all one class:
    properties:
      items: {...}
 +    tenantId: {type: string}
+-  required: [items]
 +  required: [items, tenantId]
 ```
+
+One entry: `tenantId`. **Watch the variant where `required` did not exist at all in the base** — writing `+ required: [items, tenantId]` onto a schema with no `required` key makes `items` required too, and the gate correctly emits **two** `required_request_field_added` entries, one of them a field you did not think you were touching. If you meant only the new field, the base must already list the others.
 
 ```diff
    parameters:

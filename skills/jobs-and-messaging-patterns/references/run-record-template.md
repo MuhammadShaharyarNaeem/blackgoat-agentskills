@@ -20,7 +20,7 @@ is idempotent — see the contract) or skips the gap silently.
 |---|---|---|
 | `job_name` | text | Stable identifier — the scheduler's name for it, not a description |
 | `run_id` | id | One per attempt, including retried attempts |
-| `correlation_id` | text | Propagated into every log line and every message this run publishes (`{PLUGIN_ROOT}/observability-and-diagnosis/SKILL.md`) |
+| `correlation_id` | text | Propagated into every log line and every message this run publishes. Canonical field name — the wire token is `X-Correlation-Id`; both are fixed by `{PLUGIN_ROOT}/observability-and-diagnosis/SKILL.md` (*A Correlation Id on Every Request and Job*), which owns any project-level override |
 | `started_at` | timestamp | Written **at start**, not at finish — a row with no `finished_at` is how a crashed run announces itself |
 | `finished_at` | timestamp, nullable | `NULL` while running or after a crash |
 | `status` | enum | `running`, `succeeded`, `failed`, `partial` |

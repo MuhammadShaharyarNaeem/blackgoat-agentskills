@@ -13,9 +13,9 @@ Derived from the contract below for a ≤ 3-file change; no new rules (conventio
 
 1. Stay in the existing layer; `Domain` stays dependency-free (§ Solution Segregation).
 2. Match the declared API mode; never mix (§ API Mode).
-3. Every response is a `BaseResponse<T>`; failures are structured `Error`s (§ Response Pattern).
-4. Read-only queries get `AsNoTracking()` and a DTO projection (§ EF Core & Data Discipline).
-5. A wire or envelope claim needs Tier 3 — escalate (§ Testing Doctrine).
+3. Every response is `BaseResponse<T>`; failures are `Error`s (§ Response Pattern).
+4. Read-only queries: `AsNoTracking()` plus a DTO projection (§ EF Core).
+5. A wire or envelope claim needs Tier 3 (§ Testing Doctrine).
 
 - Brief → the quick note (What / Where / How verified)
 - Artifact → the capture at `{quick-root}/evidence/check.md`
@@ -48,13 +48,9 @@ Every API result — in **both** modes — maps to the standardized `BaseRespons
 
 ### Design Principles — SOLID & Separation of Concerns
 
-The contract already *is* these principles applied; keep them explicit so they aren't quietly eroded:
+Solution Segregation (above) and the two API modes already *are* SOLID applied here. The full mapping — SoC, DIP, SRP, ISP, OCP/LSP, each stated against this contract's own structure — is in [solid-and-separation.md](references/solid-and-separation.md). One rule the sections above do not already imply, and it binds:
 
-- **Separation of Concerns** — enforced by Solution Segregation (above) and, in REPR, by vertical slices (Locality of Behavior). Framework/IO concerns (EF Core, ASP.NET, SDKs) stay out of `Domain`/`Core`. Don't leak persistence or transport types into domain logic.
-- **DIP (dependency inversion)** — dependencies point *inward*: `Domain`/`Core` defines interfaces (`IEmailService`, `IPaymentGateway`, …), `Infrastructure` implements them, and the composition root (`Program.cs` / DI registration) is the only place concretes bind. `Core` depends on nothing.
-- **SRP** — one reason to change per unit: one handler/endpoint per use case; no god services (extract a `{Feature}Service` over a 20-method `CustomerService`).
-- **ISP** — keep `Core` interfaces narrow and role-specific; don't force implementers to stub members they don't use.
-- **OCP/LSP** — extend via new handlers/slices/behaviors rather than editing shared cross-cutting code; any interface implementation must honor the contract fully (no `NotImplementedException` members — that failure mode is exactly what surfaced when EF repository implementations drifted from their interfaces).
+- **No `NotImplementedException` interface members.** An implementation honours its interface fully, or the interface is wrong and gets narrowed (ISP). This is the failure mode that surfaced when EF repository implementations drifted from their interfaces.
 
 ### EF Core & Data Discipline
 
@@ -118,3 +114,4 @@ Read on demand. **Load only the playbook for the mode the blueprint declares**, 
 - **Mode B →** [repr-playbook.md](references/repr-playbook.md) — REPR + Vertical Slice: endpoint file structure, endpoint filters (replacing MediatR behaviors), `IQueryable<T>` extensions, DI composition root, migration checklist, worked example, and how REPR emits the Response Pattern via `.ToResult()` + `IExceptionHandler`.
 - **Both modes →** [response-and-errors.md](references/response-and-errors.md) — the shared `BaseResponse<T>` envelope, the `Error` / `ErrorCode` model + code registries, `Notifications`, `CustomException`, and the per-mode emit paths.
 - **Both modes →** [data-and-testing.md](references/data-and-testing.md) — AsNoTracking + projection GOOD/BAD, async + `CancellationToken` propagation, and the zero-mock integration-test-against-Dev-DB pattern.
+- **Both modes →** [solid-and-separation.md](references/solid-and-separation.md) — SoC, DIP, SRP, ISP and OCP/LSP mapped onto the structural rules above, as vocabulary for a review.

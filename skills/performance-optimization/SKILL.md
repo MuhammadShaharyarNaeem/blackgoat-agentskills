@@ -17,7 +17,7 @@ Derived from the contract below for a ≤ 3-file change; no new rules (conventio
 
 1. Take a baseline measurement with real numbers before changing anything (§ Workflow, MEASURE).
 2. Fix only the bottleneck the measurement named, never the one you assumed (§ Workflow, IDENTIFY/FIX).
-3. Measure again afterwards and record both numbers (§ Workflow, VERIFY; § Verification Checklist).
+3. Measure again afterwards and record both numbers (§ Workflow, VERIFY).
 4. Existing tests still pass — you changed speed, not behaviour (§ Verification Checklist).
 5. No measurement possible here → escalate; never optimize blind (§ Escalate When).
 
