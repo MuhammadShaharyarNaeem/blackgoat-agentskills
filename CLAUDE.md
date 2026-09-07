@@ -1,25 +1,6 @@
 # CLAUDE.md — Working Guidance for Editing This Plugin
 
-This file instructs an AI agent editing the `blackgoat-agentskills` plugin. It reflects the **current** refactored architecture. Follow it exactly; do not reintroduce retired patterns.
-
-## Repo Map
-
-```
-blackgoat-agentskills/
-├── .claude-plugin/plugin.json   # Plugin manifest (name, version, author)
-├── .mcp.json                    # MCP servers: chrome-devtools, playwright, linear, github
-├── agents/                      # One .md persona per squad member (WHO)
-│   ├── blackgoat.md             #   Orchestrator persona
-│   ├── rex, aria, alex, mason, nova, luna, max, quinn, echo, vera, cipher, dep, forge, iris, scout
-├── skills/                      # One folder per skill (HOW)
-│   ├── agent-squad/
-│   │   ├── SKILL.md             #   The Orchestrator/delegation model
-│   │   └── base-persona.md      #   THE ONE shared base persona (universal invariants)
-│   ├── bgpdd-discovery|lite|plan|build|verify|shipping/SKILL.md   # PDD SOP pipelines
-│   ├── bgpdd-bugfix/SKILL.md    #   Lean bugfix SOP (RCA → Mason/Nova → Quinn → Luna)
-│   ├── <methodology>/SKILL.md   #   One SKILL.md per methodology
-│   └── <skill>/references/*.md  #   Progressive-disclosure deep dives
-```
+This file instructs an AI agent editing the `blackgoat-agentskills` plugin. It reflects the **current** refactored architecture. Follow it exactly; do not reintroduce retired patterns. The tree is what `ls` shows: `agents/*.md` are personas (WHO), `skills/*/SKILL.md` are methodologies and lanes (HOW), `skills/*/references/` hold on-demand depth.
 
 ## Non-Negotiable Conventions
 
@@ -58,23 +39,12 @@ blackgoat-agentskills/
 
     Card drift is an `agent-audit` Metric 18 finding.
 
-## Adding a New Agent
+## Adding a New Agent or Methodology Skill
 
-1. Create `agents/<name>.md` with frontmatter: `name`, `description`, `model`, `role`, `phase`, `squad: agent-squad`, `reports-to: agent-squad`, and `depends-on` (if any).
-2. Add a **Methodology Dependencies** table listing only the skills it truly needs; mark heavy ones on-demand (`When ...`), not `Always`. Include `base-persona` as `Always`.
-3. If the agent's write boundary or handoff tag differs from the base persona, add an inline **"Base Persona Override"** block — do not fork `base-persona.md`.
-4. Wire it into whichever SOP pipeline spawns it (`skills/bgpdd-*/SKILL.md`) and, if relevant, the squad table in `skills/agent-squad/SKILL.md`.
-5. Confirm every dependency path resolves.
-
-## Adding a New Methodology Skill
-
-1. Create `skills/<name>/SKILL.md` with `name` + `description` frontmatter.
-2. Put the lean operational spine (`## Worker Execution Contract`: workflow, rules, verification, escalation) at the top. Keep it minimal.
-3. Put depth (rationale, anti-patterns, examples) in `skills/<name>/references/*.md` and reference it for on-demand loading. **Do not create a `SKILL-CONTRACT.md`.**
-4. Reference the skill from the agent(s) that use it via their Methodology Dependencies table.
+Step-by-step authoring procedure: `skills/agent-squad/references/authoring-agents-and-skills.md`. A new skill arrives with a gate script or a lane that consumes it, or it waits.
 
 ## Validating a Change
 
-- Run the **`agent-audit`** skill against any agent/methodology you touched. It enforces the structural invariants via 21 heuristics: interface alignment, dependency conflict, role cohesion, escalation-path validity, token efficiency, DRY/contract reuse, orchestrator-vs-methodology collision, context/file bloat, ID traceability, wake-up context weight, frontmatter/metadata hygiene (parseability first — a block that fails to parse is unregistered), trigger collision, cross-pipeline consistency (including re-entry closure and bound labeling), model-assignment fit (a verifier never runs below the producer it judges), skill content validity & cross-skill contract coherence, defect-class enforcement, output-rubric gate coverage, convergent redundancy (distillation), gate adversarial proof (run every gate against fabricated input), gate invocation coverage & lane parity (every gate carries `--ledger`; every lane has a scripted close), and eval-suite health (every suite has run; reds are triaged GRADER/FIXTURE/CONTRACT/AGENT/INFRA before being reported). It starts with a **mechanical preflight** (`check_frontmatter.py`, `check_dependency_tables.py`, a registration diff against the runtime, every `--self-test`, the ledger grep) before any prose is read. Fill every row of its coverage table; every `FAIL` must flip to `PASS` before you're done.
+- Run the **`agent-audit`** skill against any agent/methodology you touched — it owns the current heuristic list and its coverage table. It starts with a **mechanical preflight** (`check_frontmatter.py`, `check_dependency_tables.py`, a registration diff against the runtime, every `--self-test`, the ledger grep) before any prose is read. Fill every row of its coverage table; every `FAIL` must flip to `PASS` before you're done.
 - Independently confirm all `{PLUGIN_ROOT}` dependency paths resolve to existing files — `python skills/pipeline-tools/scripts/check_dependency_tables.py skills` is the sanctioned way to run this check.
 - Grep the tree to confirm no `SKILL-CONTRACT.md` and no `base-persona-{builder,devops,meta,qa}` variant files were introduced (exclude `references/` — `skills/agent-squad/references/base-persona-rationale.md` is a legitimate rationale doc, not a variant).
