@@ -55,7 +55,8 @@ The illustrative file-by-file trees for both tiers, and the phase-transition han
   1. Determine whether this is brownfield (modifying an existing system) or greenfield (new project). If greenfield, skip this check entirely and go to Phase 1.
   2. **Brownfield**: check that the Tier-1 `.docs/summary/context.md` exists, and — for the feature being enhanced — that `.docs/summary/{feature}/overview.md` exists.
   3. **If either is missing**: HALT. Explicitly instruct the user to run **`/bgpdd-discovery`** first to map the global tech stack, per-API feature fragments, and legacy QA baseline. Do NOT attempt to run discovery yourself or hand-author these files — resume Phase 1 only once the knowledge base is present.
-  4. **If present**: confirm the `{feature}` id with the user (so downstream phases read the right `.docs/summary/{feature}/` subtree) and proceed to Phase 1.
+  4. **If present**: confirm the `{feature}` id with the user (so downstream phases read the right `.docs/summary/{feature}/` subtree).
+  5. **Tier-1 drift (mechanical, convention #9)** — the consumer half of the provenance contract `bgpdd-discovery` §1 states: `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_tier1_provenance.py --verify-current --summary-root .docs/summary --feature {feature} --ledger .docs/{project-name}/implementation/gates.jsonl`. Drift warns, never halts: relay the artifact, its stamped sha and current HEAD, and let the user decide whether to plan against this map or re-run `/bgpdd-discovery` first. `--allow-drift "<reason>"` records their explicit word — never supply it yourself. Then proceed to Phase 1.
 
 ### Phase 1: Honing & Requirements (HYBRID)
 - **Behavioral spec**: `{PLUGIN_ROOT}/../agents/rex.md` (Rex, the Analyst) + `{PLUGIN_ROOT}/blackgoat-idea-honing/SKILL.md`

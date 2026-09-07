@@ -24,6 +24,16 @@ Before transitioning between phases (or steps), explicitly verify the required a
 
 A pipeline may additionally require a named artifact to satisfy a **content contract** — existence and non-emptiness alone are not sufficient. It states that contract in its own Global System Constraints section and extends the format line to name which check(s) passed. That is an extension of this section, not a divergence from it: this section sets the floor, and a content contract raises it for one artifact, so no convention #8 label is needed. Only a pipeline that *lowers* the floor (skips the existence check for some artifact) diverges, and must label it.
 
+## Branch close
+
+Held once here because three lanes closed a branch with three near-identical copies of it. **Interactive, main session, never delegated** (Orchestrator Contract §1 — irreversible steps need the user). A lane that closes a branch cites this section and states only its own deltas: which route it applies on, where the post-merge capture goes, and what survives the close.
+
+- **Read the base branch from the repo**, never guess it: `git symbolic-ref refs/remotes/origin/HEAD`, else the repo's configured default.
+- **Offer exactly three, and no fourth**: **merge locally**; **publish the branch and open a pull request through the runtime's tooling**; **keep the branch**. Discarding is not one of the three — it requires the user to type the branch name.
+- **After a merge, done is a capture (convention #9)**: `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture <the lane's post-merge capture path> -- <the project's test command>`. Non-zero exit → report it and stop; the work is not closed.
+- **Worktree branch**: offer to remove the worktree after merging.
+- **Which lanes have a branch to close.** `bgpdd-bugfix` Phase 5 step 9 (standalone route only) and `bgpdd-lite` Phase 3 step 4 (only when the user stops there) cite this section as written. `bgpdd-shipping` Step 4.5 is the **epic variant** — it pushes the branch and opens the PR rather than offering three, because an epic's branch closes through the release, not through a local choice. `bgpdd-plan`, `bgpdd-verify`, `bgpdd-discovery` and `bgpdd-learn` create no branch and close none; `bgpdd-quick`'s close gate commits on the current branch and offers nothing.
+
 ## Game Tape
 
 The obligation is the Orchestrator Contract §4's: evidence checkpoints fire at every state persistence, and the gate ledger — not the tape — is the record of which gates fired, with which flags, against which artifact hashes, so the tape cites `.docs/{project-name}/implementation/gates.jsonl` rather than reproducing it. Neither this file nor a pipeline restates those rules.

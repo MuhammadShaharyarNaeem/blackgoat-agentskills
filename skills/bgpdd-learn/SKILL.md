@@ -26,8 +26,17 @@ This skill runs in the main session, never inside a delegated subagent.
 
 Scan the live conversation for user corrections, agent failures and retries, circuit-breaker trips, and the skills/agents in play. Then read the durable evidence **in this order — mechanical first, narrative second**:
 
-1. **The run-log summary and the gate ledger.** `python {PLUGIN_ROOT}/pipeline-tools/scripts/summarize_run.py --run-log .docs/{project-name}/implementation/run-log.jsonl --ledger .docs/{project-name}/implementation/gates.jsonl` — what the run cost, per agent and per unit, and which gates fired versus only ever passed. These two files were written by tools at the moment each thing happened; everything below was written by someone recalling it.
-2. **`.docs/{project-name}/implementation/game-tape.md`** — the accumulated per-phase checkpoints, if present.
+1. **The run-log summary and the gate ledger.** `python {PLUGIN_ROOT}/pipeline-tools/scripts/summarize_run.py --run-log <the lane's run log> --ledger <the lane's gate ledger>` — what the run cost, per agent and per unit, and which gates fired versus only ever passed. These files were written by tools at the moment each thing happened; everything below was written by someone recalling it.
+   - **Resolve the roots first — the session may hold more than one, and the epic path is only one of five.** Read every root that exists, in this order, and say which you read:
+     | Root | Run log | Gate ledger |
+     |---|---|---|
+     | `.docs/{project-name}/implementation/` (plan/lite/build/shipping/verify epic) | `run-log.jsonl` | `gates.jsonl` |
+     | `.docs/{project-name}/implementation/bugs/<bug-slug>/` (bugfix, feature route) | `run-log.jsonl` | `gates.jsonl` |
+     | `.docs/bugfix/<slug>/` (bugfix, standalone route) | `run-log.jsonl` | `gates.jsonl` |
+     | `.docs/quick/<date>-<slug>/` | **none** — the lane delegates to nobody (`bgpdd-quick` §1) | `gates.jsonl` |
+     | `.docs/summary/` (discovery) | `run-log.jsonl` (`bgpdd-discovery` §1) | `gates.jsonl` |
+   - **A root with no run log gets the ledger alone**, and you say so in the brief rather than reporting an empty cost table: quick has no delegations to cost. A root whose files are simply absent is a lane that never ran here — skip it silently.
+2. **The game tapes** — `game-tape.md` under each root above that has one (quick's single bullet lives in its `note.md`; discovery and learn keep no tape, per the skeleton).
 3. **The durable reports** — `review-report.md`, `test-report.md`, `security-report.md`, handoffs relayed in-conversation, and recent `git log`.
 4. **Filtered transcript greps**, last and only for what the first three left open (never a full read — see Step 2).
 
@@ -45,7 +54,7 @@ State the hard filtered-read rule in the delegation: Forge NEVER full-reads a tr
 
 ### Step 3: PROPOSAL
 
-Forge does NOT write any proposal file. He returns the improvement plan inside his `<handoff>` — per lesson: the generalized rule, its destination file, and a one-line rationale for that layer. You read the plan from the handoff.
+Forge does NOT write any proposal file. He returns the improvement plan inside his `<handoff>` — per lesson: the generalized rule, its destination file, and a one-line rationale for that layer. You read the plan from the handoff. **Validate it with `check_handoff.py --advisory`** (plus `--persona forge --repo . --since <the sha HEAD held when you launched him> --ledger <the lane's gate ledger>`): the brief declares no artifact, and `--advisory` is what lets a deliberately artifact-less handoff pass instead of failing `element_missing`. Without the flag this gate fails by design on every run of this step.
 
 **One lesson, one destination, listed separately.** Reject a plan that groups several lessons under one destination line or leaves a lesson's destination implicit, and send it back for the pairing — this is what makes a later revert one file per lesson instead of an unpickable batch. A lesson that genuinely needs two files is two entries, not one.
 

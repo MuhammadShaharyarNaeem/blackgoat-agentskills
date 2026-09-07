@@ -21,14 +21,14 @@ Most changes are not epics. The smallest lane that still leaves evidence: what y
 
 > ### MANDATORY FIRST READ
 >
-> **Before Phase 0 you MUST read `## Runtime Neutrality` and `## 3. Role Boundaries` from `{PLUGIN_ROOT}/agent-squad/orchestrator-contract.md`, then `{PLUGIN_ROOT}/agent-squad/pipeline-skeleton.md` in full** (path resolution, error recovery, upgraded chain of thought, game tape). Improvise neither from memory; an unresolved path is a STOP. Refinements below override the skeleton only where labelled (convention #8).
+> **Before Phase 0 you MUST read `## Runtime Neutrality`, `## 3. Role Boundaries`, §1's *Command Timeout Discipline* rule and §2's three halt triggers from `{PLUGIN_ROOT}/agent-squad/orchestrator-contract.md`, then `{PLUGIN_ROOT}/agent-squad/pipeline-skeleton.md` in full** (path resolution, error recovery, upgraded chain of thought, game tape). Improvise neither from memory; an unresolved path is a STOP. Refinements below override the skeleton only where labelled (convention #8).
 >
-> **Two sections, not the whole contract — a deliberate convention-#8 refinement of the every-pipeline-reads-the-contract rule.** Its other 3,700 words govern delegation, state hand-off and the circuit breaker, none of which this lane performs. **If this lane escalates, the receiving lane reads the contract in full.**
+> **Four items, not the whole contract — a deliberate convention-#8 refinement of the every-pipeline-reads-the-contract rule.** Dropped: delegation construction, background execution, continuation-vs-fresh, phase-transition confirmation, the state hand-off, and the three rules passed verbatim to subagents — all of which govern a delegated agent, and this lane delegates to nobody. **Kept, because here the Orchestrator *is* the worker**: the 4-minute bound on every command you run, and the halt triggers (tool-call loop, hallucinated path, three failed attempts). **If this lane escalates, the receiving lane reads the contract in full.**
 
 The bullets below carry ONLY this skill's refinements.
 
 - **No delegation: you are the worker — deliberate divergence from Contract §3's role boundaries (convention #8).** §3 guards against context collapse; at three files there is no separation of duties to buy. Not relaxed: Phase 2's capture, never your reading, is the evidence.
-- **Methodology on demand, inline.** Follow one `{PLUGIN_ROOT}/<skill>/SKILL.md`'s Worker Execution Contract yourself: `test-driven-development` (new behaviour with a test), `debugging-and-error-recovery` (something broken), `code-simplification` (a refactor). None fits → wrong lane.
+- **Methodology on demand, inline.** Follow one `{PLUGIN_ROOT}/<skill>/SKILL.md` yourself — its **`## Quick card`** where it has one, else its Worker Execution Contract. The three usual: `test-driven-development` (new behaviour with a test), `debugging-and-error-recovery` (something broken), `code-simplification` (a refactor). **Any skill carrying a `## Quick card` is admissible — a deliberate widening of this rule's own prior three-skill list (convention #8)**: the card *is* that skill's contract at this lane's size, written by its owner for exactly this use, so refusing a skill that advertises one makes the cards unreachable. Still one skill, never two; no card and no fit → wrong lane.
 - **Workspace**: `{quick-root}` = `.docs/quick/{YYYY-MM-DD}-{slug}/` — refining `base-persona.md`'s `.docs/{project-name}/` model (convention #8): no epic to live under. Holds `note.md`, `evidence/check.md` (+ sidecar), `gates.jsonl`.
 - **No `orchestrator-state.json`, no `run-log.jsonl` — deliberate divergence from Contract §4 (convention #8).** State is an inter-pipeline handoff and this lane closes in one session; the run log records *delegations*, and this lane never delegates. `gates.jsonl` plus the commit is the record.
 - **Phase transitions are emitted, not recalled (convention #9):** before starting any phase run `python {PLUGIN_ROOT}/pipeline-tools/scripts/pipeline_driver.py --root {quick-root} --lane quick --json`; do the `next_action` it prints; exit 1 means the current phase's gate has not passed — run that gate, never the next phase. (Exit 3 = closed and committed.) Contract in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
@@ -53,13 +53,13 @@ Four phases; do not skip or reorder.
    | Fixes a defect that has a reproduction | `/bgpdd-bugfix` |
    | Adds a capability, or changes a schema or contract | `/bgpdd-plan` |
 
-   **A test that goes red *while* you make this change stays here** — your own edit misbehaving, which is what the `debugging-and-error-recovery` card is for; a defect that existed **before you started**, with a reproduction, is `/bgpdd-bugfix`. Escalation stays one-way and upward (the router's ratchet), and **seeds** the next intake: the note's `What` drafts the bug report's observed behaviour, its `How verified` the reproduction command — drafts only; `check_bugfix_intake.py` still lints them.
+   **A test that goes red *while* you make this change stays here** — your own edit misbehaving, which is what the `debugging-and-error-recovery` card is for; a defect that existed **before you started**, with a reproduction, is `/bgpdd-bugfix`. **Escalating mid-change leaves a dirty tree**: name every edit already made and either stash it or hand it over as declared changes — `/bgpdd-bugfix` closes on `--verify-tree`, which blocks undeclared ones (its Phase 0 step 1). Escalation stays one-way and upward (the router's ratchet), and **seeds** the next intake: the note's `What` drafts the bug report's observed behaviour, its `How verified` the reproduction command — drafts only; `check_bugfix_intake.py` still lints them.
 
 3. **Run the stack detector; propose, never adopt, its defaults:**
    ```bash
    python {PLUGIN_ROOT}/pipeline-tools/scripts/detect_stack.py --repo . --json
    ```
-   Offer its first `suggested_check_commands` entry as the `How verified` default — the user confirms or replaces it, never you silently. `test_path_globs` goes to Phase 3's `--frozen`. A detected stack with a `skills` entry contributes **only** its `## Quick card` — when that skill has one; a stack skill without a card contributes nothing here (its full contract is a lane-time read) (e.g. `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md § Quick card`).
+   Offer its first `suggested_check_commands` entry as the `How verified` default — the user confirms or replaces it, never you silently. `test_path_globs` goes to Phase 3's `--frozen`. A detected stack with a `skills` entry contributes **only** its `## Quick card` (§1); without a card it contributes nothing here (e.g. `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md § Quick card`).
 4. **Write `{quick-root}/note.md`** — three labelled lines, no placeholders:
    - `- What:` the one sentence.
    - `- Where:` every file you will touch, comma-separated, **≤ 3**. Phase 3 requires it to equal what changed.
@@ -93,10 +93,13 @@ python {PLUGIN_ROOT}/pipeline-tools/scripts/check_quick_close.py \
     --commit --message "<msg>"
 ```
 
-**Pass Phase 0's `test_path_globs`, one `--frozen` per glob** (`tests/**`, `**/*.spec.ts`; a value with no `*`/`?`/`[` is a directory prefix). **The gate holds no default and must not**: a guessed freeze that misses is indistinguishable from a change with no test to protect. Adding a test passes; narrowing a glob goes in `## Result`.
+**Pass Phase 0's `test_path_globs`, one `--frozen` per glob** (`tests/**`, `**/*.spec.ts`; a value with no `*`/`?`/`[` is a directory prefix). **The gate holds no default and must not**: a guessed freeze that misses is indistinguishable from a change with no test to protect. Adding a test passes.
 
 - **Exit 0** = every term held; the gate committed exactly the declared files. Append the `## Result` bullet (§1).
-- **Exit 1** = **BLOCK**; `problem_codes` names the term. Fix and re-run once. `size_bound_exceeded` is unfixable here — **no `--waiver`, deliberately tighter than `bgpdd-bugfix`'s `check_commit_gate.py --waiver` (convention #8)**: the bound *is* the lane, so an overrun means the wrong one — the message names where to escalate.
+- **Exit 1** = **BLOCK**; `problem_codes` names the term. Fix and re-run once. Three terms route differently:
+  - `size_bound_exceeded` is unfixable here — **no `--waiver`, deliberately tighter than `bgpdd-bugfix`'s `check_commit_gate.py --waiver` (convention #8)**: the bound *is* the lane, so an overrun means the wrong one — the message names where to escalate.
+  - `frozen_path_modified` has an escape the gate's message does not name: **narrow the glob.** A rename touches its call sites and one of them is usually a test — this lane's headline case, not a defect, so do not take the message's routing to `/bgpdd-bugfix`, which has no reproduction to intake. Re-run with the narrower `--frozen` set that still covers the tests you must not edit, record which glob you narrowed and why in `## Result`, and count it as the one round.
+  - `capture_command_mismatch` = the capture's recorded `argv` is not the note's `How verified` command. The capture must *be* that command's run: re-run it verbatim through `run_quiet.py --capture`, or correct the note first if the command you needed differed. Never edit the sidecar.
 - **Exit 2** = artifact or environment defect (missing flag, no Python, git unusable). Never hand-edit an artifact to pass a gate.
 
 ## Limitations
