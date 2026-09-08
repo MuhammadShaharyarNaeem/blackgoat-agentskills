@@ -57,15 +57,13 @@ Invoke this skill when:
 
 **Objective:** Iteratively refine the user's raw prompt into a fully specified intent through targeted Q&A — never assume what the user did not say.
 
-**Constraints:**
-- **Ask ONLY ONE question at a time** and wait for the user's response before asking the next.
-- Do NOT list multiple questions at once, as this overwhelms the user.
-- **Every question is multiple-choice.** Offer 2-4 concrete, mutually exclusive options so the user picks instead of composing an answer. Each option states its consequence for the final prompt (see "carries its own finding" below). The user may always answer outside the options — treat a free-form reply as valid. In Claude Code, present the question via the AskUserQuestion tool when available (it renders options natively and includes "Other" automatically); otherwise render options as a lettered list (A/B/C/D).
-- Do NOT pre-populate answers or assume user preferences.
-- **A question must carry its own finding.** When a gap or ambiguity forces a choice, the question must be answerable without the user reconstructing your analysis. State the concrete consequence of each option and what actually differs between them — not just the choice.
-- **Teach the finding when asked, then re-ask.** If the user replies asking for explanation rather than choosing ("I don't understand this", "explain more"), that is a defect in how you posed the question, not user friction. Explain plainly — what each option changes about the final prompt — then re-ask. Never treat a request for clarification as a decision, and never let an unanswered question fall through into the generated prompt as a silent assumption.
-- **Follow the thread.** There is no cap on question count or depth. If an answer raises new questions, surfaces a contradiction, or opens an area that needs clarification, drill into it with follow-up questions before moving to the next topic. Depth is preferred over breadth — fully resolve one thread before starting another.
-- Follow this exact sequence for each question:
+**Constraints:** the one-question-at-a-time protocol has **one owner** — `{PLUGIN_ROOT}/blackgoat-idea-honing/SKILL.md` § *Step 2: Interactive Questioning*. Read the rules there; they are not restated here. In force verbatim: one question at a time and wait; never list several at once; never pre-populate answers or assume preferences; **a question must carry its own finding**; **teach the finding when asked, then re-ask**; never treat a clarification request as a decision, and never let an unanswered question fall through as a silent assumption — here, into the generated prompt.
+
+Three deliberate refinements for prompt work (convention #8), which is all this section adds:
+
+- **Every question is multiple-choice** — tighter than the owner, which does not require options. Offer 2-4 concrete, mutually exclusive options so the user picks instead of composing an answer, each stating its consequence for the final prompt. A free-form reply outside the options is always valid. In Claude Code, present the question via the AskUserQuestion tool when available (it renders options natively and includes "Other"); otherwise render a lettered list (A/B/C/D).
+- **Follow the thread** — looser than the owner's "continue until all critical uncertainties are resolved": there is no cap on question count or depth, and an answer that raises new questions, surfaces a contradiction, or opens an unclear area is drilled into before the next topic. Depth over breadth.
+- **The per-question sequence has no transcript step** — deliberately shorter than the owner's six, because this skill writes no transcript artifact:
   1. Formulate a single, targeted question.
   2. Present the question to the user.
   3. Wait for the user's complete response.

@@ -204,6 +204,24 @@ The permanent version of the same prevention is `/bgpdd-verify {feature}`, which
 turns the case into an executed spec. The close names it as the next command
 whenever a Tier-1 base exists.
 
+## 8b. Why the feature route's artifacts are slug-scoped
+
+`{bugfix-root}` on the feature route was `.docs/{project-name}/implementation/`
+until 2.6.1, so `bug-report.md`, `rca.md` and `review-package.md` were one path
+per epic rather than one per bug. The second bug in an in-flight epic therefore
+rewrote the first's report in place: `check_bugfix_intake.py`'s recorded PASS
+hashed bytes that no longer existed, the ledger read `stale` at the next commit
+gate, and the first bug's root cause was gone with no error anywhere. The fix is
+a per-bug subdirectory -- `implementation/bugs/{bug-slug}/` -- which also makes
+the two routes the same shape: one directory per bug, wherever it lives.
+
+Two files deliberately stay outside it (`{report-root}`): `test-report.md`,
+because the epic's coverage gate and `/bgpdd-shipping` Step 3.5 read exactly one
+test report and a fork would hide the fix's evidence from both; and
+`review-report.md`, because the commit gate selects a review section by the
+`{bug-slug}` token in its heading, so appending to the epic's file is already
+unambiguous and forking it would strand the epic's own milestone reviews.
+
 ## 9. Why there is one state file per tree, and why this lane leaves `pipeline` alone
 
 The first design gave the feature route its own `orchestrator-state.json` inside
@@ -225,7 +243,7 @@ file. Two state files in one tree produced three failures:
 
 The current design: `{bugfix-root}` still holds every artifact, but
 **`{state-file}` is the epic's own `.docs/{project-name}/orchestrator-state.json`
-one level up** on the feature route, and
+above `implementation/`** on the feature route, and
 `.docs/bugfix/{bug-slug}/orchestrator-state.json` only on the standalone route,
 where there is no epic to share.
 

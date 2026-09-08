@@ -33,6 +33,16 @@ restraint rule the Orchestrator skips at the moment it wants to proceed
 becomes a mechanical gate, not louder prose). `--from-json` may supply it.
 Every other event is unchanged: a gate, phase or note record has no model.
 
+An UNRESOLVABLE `--model` is exit 2 (`model_unknown`), not a null tier. The
+tier-inversion check below reads the tier out of the model string, and a value
+it cannot resolve -- `gpt-4o`, a name that mentions two tiers
+(`sonnet-or-opus`), a typo -- used to record cleanly with `tier: null` and
+silently DELETE the check for that delegation. A mistyped flag must not be
+able to disable a gate. Resolvable means: the value contains exactly one of
+`haiku`/`sonnet`/`opus`, case-insensitively, so `opus`, `Opus`, `opus-4.1`
+and `claude-opus-4-20250514` all resolve and `gpt-4o` does not. Only
+`--event delegation` is checked -- a gate, phase or note record has no model.
+
 Usage:
     python record_run.py --log <path> --pipeline <name> --phase <name> \
         --event <delegation|gate|phase|note> \
@@ -54,6 +64,19 @@ from pathlib import Path
 
 EVENTS = ("delegation", "gate", "phase", "note")
 STATUSES = ("COMPLETE", "PARTIAL", "BLOCKED", "PASS", "FAIL", "ERROR")
+
+# --- the tier-inversion check (convention #9) ------------------------------
+# A verifier run BELOW the producer it judges is a review that cannot see what
+# the producer saw. The rule was prose ("a verifier never runs below the
+# producer it judges", agent-audit heuristic 13) and the run log is where the
+# violation is already visible after the fact -- so the log is where it
+# becomes a refusal instead of a finding.
+TIER_ORDER = {"haiku": 1, "sonnet": 2, "opus": 3}
+VERIFIER_AGENTS = ("quinn", "luna", "vera", "cipher")
+# `dep` produces the deployment artifacts Vera and Cipher judge at shipping,
+# so a verifier running below Dep is the same inversion as one running below
+# Mason. Its absence from this tuple made that one pairing unmeasurable.
+PRODUCER_AGENTS = ("mason", "nova", "max", "dep")
 
 # --from-json key aliases, searched at the payload's top level and then inside
 # a nested "usage" object. Deliberately conservative: only names that mean
@@ -203,6 +226,104 @@ def build_record(fields):
     }
 
 
+def normalize_agent(name):
+    """An agent name as the roster spells it, or None."""
+    if not isinstance(name, str):
+        return None
+    return name.strip().lower() or None
+
+
+def model_tier(model):
+    """The tier rank of a model string, or None when it names no known tier.
+
+    Matches on the tier NAME appearing in the value, so both `opus` and
+    `claude-opus-4-20250514` resolve. A value naming two tiers, or none,
+    resolves to None -- an unknown tier is never compared, because refusing on
+    a guess is worse than not refusing (Evidence Integrity: an unknown
+    measurement is not a measurement).
+    """
+    if not isinstance(model, str):
+        return None
+    low = model.strip().lower()
+    hits = [tier for tier in TIER_ORDER if tier in low]
+    if len(hits) != 1:
+        return None
+    return hits[0]
+
+
+def read_log(log_path):
+    """Every parseable JSON-object line of the run log, in file order."""
+    p = Path(log_path)
+    if not p.is_file():
+        return []
+    records = []
+    for line in p.read_text(encoding="utf-8-sig", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(rec, dict):
+            records.append(rec)
+    return records
+
+
+def latest_producer(log_path, unit):
+    """The most recent producer delegation in this unit whose tier is known.
+
+    Scoped to `unit` EXACTLY (an unscoped record matches only an unscoped
+    invocation): the comparison is "this verifier against the producer whose
+    work it is judging", and two different milestones' tiers are unrelated.
+    """
+    latest = None
+    for rec in read_log(log_path):
+        if rec.get("event") != "delegation":
+            continue
+        if normalize_agent(rec.get("agent")) not in PRODUCER_AGENTS:
+            continue
+        if rec.get("unit") != unit:
+            continue
+        if model_tier(rec.get("model")) is None:
+            continue
+        latest = rec
+    return latest
+
+
+def check_tier_inversion(log_path, fields):
+    """(problem_code, detail) when this verifier runs below its producer.
+
+    (None, None) when there is nothing to refuse: a non-delegation, a
+    non-verifier agent, an unknown tier on either side, or no producer record
+    in this unit yet (the verifier may legitimately run first -- Quinn's
+    pre-fix RED capture in the bugfix lane is exactly that).
+    """
+    if fields.get("event") != "delegation":
+        return None, None
+    agent = normalize_agent(fields.get("agent"))
+    if agent not in VERIFIER_AGENTS:
+        return None, None
+    verifier_tier = model_tier(fields.get("model"))
+    if verifier_tier is None:
+        return None, None
+    producer = latest_producer(log_path, fields.get("unit"))
+    if producer is None:
+        return None, None
+    producer_tier = model_tier(producer.get("model"))
+    if TIER_ORDER[verifier_tier] >= TIER_ORDER[producer_tier]:
+        return None, None
+    return "verifier_below_producer", (
+        "{0} is a verifier running on {1}, below {2}, which produced this "
+        "unit's work on {3} ({4} < {5}). A review that runs below what it "
+        "judges cannot see what the producer saw. Re-run the verifier at "
+        "{3} or above, or record the deliberate exception with "
+        "--allow-tier-inversion \"<reason>\"".format(
+            agent, verifier_tier, normalize_agent(producer.get("agent")),
+            producer_tier, TIER_ORDER[verifier_tier],
+            TIER_ORDER[producer_tier]))
+
+
 def append_record(log_path, record):
     """Append one JSON line, creating parent directories. Failure is exit 2.
 
@@ -239,6 +360,10 @@ def main(argv):
     parser.add_argument("--note")
     parser.add_argument("--from-json", dest="from_json",
                         help="a runtime completion payload; explicit flags win")
+    parser.add_argument("--allow-tier-inversion", dest="allow_tier_inversion",
+                        help="a written reason for running a verifier below "
+                             "the producer it judges; recorded on the record "
+                             "as tier_inversion_reason")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
 
@@ -296,7 +421,39 @@ def main(argv):
                     "tier the delegation actually ran at (supply --model, or "
                     "a --from-json payload carrying it)")
 
+    # ...and it must NAME a tier. An unresolvable string recorded cleanly with
+    # tier: null and silently deleted the inversion check for that record.
+    if fields["event"] == "delegation" and model_tier(fields.get("model")) is None:
+        print(json.dumps({
+            "recorded": False, "problem": "model_unknown",
+            "error": "--model {0!r} resolves to no tier: it must contain "
+                     "exactly one of {1} (case-insensitive), e.g. `opus` or "
+                     "`claude-opus-4-20250514`. An unresolved tier is not a "
+                     "measured one, and recording it as null would disable "
+                     "the verifier-below-producer check for this delegation "
+                     "without saying so.".format(
+                         fields.get("model"),
+                         "/".join(sorted(TIER_ORDER, key=TIER_ORDER.get)))}))
+        return 2
+
+    # Tier inversion is checked BEFORE the write, against the log this record
+    # is about to join: a refused delegation records nothing.
+    problem, detail = check_tier_inversion(args.log, fields)
+    if problem and not args.allow_tier_inversion:
+        print(json.dumps({"recorded": False, "problem": problem,
+                          "error": detail}))
+        return 1
+    if problem and not args.allow_tier_inversion.strip():
+        print(json.dumps({"recorded": False, "problem": problem,
+                          "error": "--allow-tier-inversion requires a "
+                                   "non-empty reason: an inversion nobody "
+                                   "justified in writing is the one this "
+                                   "check exists to stop"}))
+        return 2
+
     record = build_record(fields)
+    if problem:
+        record["tier_inversion_reason"] = args.allow_tier_inversion.strip()
     try:
         append_record(args.log, record)
     except RecordError as exc:
@@ -514,6 +671,129 @@ def run_self_test():
                       "--phase", "Phase 1", "--event", "delegation",
                       "--from-json", str(payload)]), 0)
             self.assertEqual(self._lines()[0]["model"], "haiku")
+
+        # ---- a verifier never runs below the producer it judges ----------
+
+        def _delegate(self, agent, model, unit="M1", extra=None):
+            argv = ["--log", str(self.log), "--pipeline", "bgpdd-build",
+                    "--phase", "Phase 1", "--event", "delegation",
+                    "--agent", agent, "--model", model, "--unit", unit]
+            return main(argv + list(extra or []))
+
+        def test_verifier_below_producer_is_refused_and_writes_nothing(self):
+            self.assertEqual(self._delegate("mason", "opus"), 0)
+            self.assertEqual(self._delegate("luna", "sonnet"), 1)
+            self.assertEqual([r["agent"] for r in self._lines()], ["mason"])
+
+        def test_verifier_at_or_above_the_producer_is_fine(self):
+            self.assertEqual(self._delegate("mason", "sonnet"), 0)
+            self.assertEqual(self._delegate("quinn", "sonnet"), 0)
+            self.assertEqual(self._delegate("luna", "opus"), 0)
+            self.assertEqual(len(self._lines()), 3)
+
+        def test_allow_tier_inversion_records_the_reason(self):
+            self.assertEqual(self._delegate("mason", "opus"), 0)
+            self.assertEqual(self._delegate(
+                "vera", "haiku",
+                extra=["--allow-tier-inversion",
+                       "checklist re-read only; no judgement call"]), 0)
+            rec = self._lines()[-1]
+            self.assertEqual(rec["agent"], "vera")
+            self.assertEqual(rec["tier_inversion_reason"],
+                             "checklist re-read only; no judgement call")
+
+        def test_allow_tier_inversion_with_an_empty_reason_is_exit_2(self):
+            self.assertEqual(self._delegate("mason", "opus"), 0)
+            self.assertEqual(self._delegate(
+                "cipher", "haiku", extra=["--allow-tier-inversion", "   "]), 2)
+            self.assertEqual(len(self._lines()), 1)
+
+        def test_a_clean_record_carries_no_inversion_key(self):
+            self.assertEqual(self._delegate("mason", "sonnet"), 0)
+            self.assertEqual(self._delegate(
+                "luna", "opus",
+                extra=["--allow-tier-inversion", "not needed"]), 0)
+            self.assertNotIn("tier_inversion_reason", self._lines()[-1])
+
+        def test_inversion_is_scoped_to_the_unit(self):
+            """M2's cheap verifier is not judged against M1's opus builder."""
+            self.assertEqual(self._delegate("mason", "opus", unit="M1"), 0)
+            self.assertEqual(self._delegate("quinn", "haiku", unit="M2"), 0)
+            self.assertEqual(self._delegate("quinn", "haiku", unit="M1"), 1)
+
+        def test_verifier_running_first_is_allowed(self):
+            """The bugfix lane's pre-fix RED capture has no producer yet."""
+            self.assertEqual(self._delegate("quinn", "haiku"), 0)
+            self.assertEqual(len(self._lines()), 1)
+
+        def test_latest_producer_wins_not_the_first(self):
+            self.assertEqual(self._delegate("mason", "opus"), 0)
+            self.assertEqual(self._delegate("nova", "haiku"), 0)
+            self.assertEqual(self._delegate("luna", "sonnet"), 0)
+
+        # ---- model_unknown (audit3 F8) --------------------------------
+
+        def test_an_unresolvable_model_is_exit_2_and_records_nothing(self):
+            """A typo used to record tier: null and delete the check."""
+            for model in ("gpt-4o", "o3-mini", "sonnet-or-opus",
+                          "some-unnamed-model", "  "):
+                self.assertEqual(self._delegate("mason", model), 2, model)
+            self.assertFalse(self.log.exists(),
+                             "a refused delegation wrote a record")
+
+        def test_the_model_unknown_error_names_the_problem_and_the_tiers(self):
+            import contextlib
+            import io
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = main(["--log", str(self.log), "--pipeline",
+                             "bgpdd-build", "--phase", "Phase 1", "--event",
+                             "delegation", "--agent", "mason", "--model",
+                             "gpt-4o", "--unit", "M1"])
+            self.assertEqual(code, 2)
+            data = json.loads(buf.getvalue())
+            self.assertEqual(data["problem"], "model_unknown")
+            self.assertIs(data["recorded"], False)
+            for tier in ("haiku", "sonnet", "opus"):
+                self.assertIn(tier, data["error"])
+
+        def test_a_typo_can_no_longer_disable_the_inversion_check(self):
+            """audit3 F8, end to end: opus producer, then a mistyped verifier."""
+            self.assertEqual(self._delegate("mason", "claude-opus-4-1"), 0)
+            self.assertEqual(self._delegate("luna", "opus-4.1"), 0)  # resolves
+            self.assertEqual(self._delegate("luna", "gpt-4o"), 2)
+            self.assertEqual(self._delegate("luna", "haiku"), 1)
+
+        def test_a_gate_or_note_record_needs_no_resolvable_model(self):
+            self.assertEqual(main(["--log", str(self.log), "--pipeline",
+                                   "bgpdd-build", "--phase", "Phase 1",
+                                   "--event", "note", "--note", "x"]), 0)
+
+        def test_dep_is_a_producer(self):
+            """audit3 Metric 14: a verifier below Dep is an inversion too."""
+            self.assertIn("dep", PRODUCER_AGENTS)
+            self.assertEqual(self._delegate("dep", "opus"), 0)
+            self.assertEqual(self._delegate("vera", "haiku"), 1)
+            self.assertEqual(self._delegate("cipher", "opus"), 0)
+
+        def test_full_model_ids_resolve_to_their_tier(self):
+            self.assertEqual(self._delegate("mason", "claude-opus-4-1"), 0)
+            self.assertEqual(self._delegate("luna", "claude-haiku-4-5"), 1)
+
+        def test_non_verifier_and_non_delegation_records_are_never_gated(self):
+            self.assertEqual(self._delegate("mason", "opus"), 0)
+            self.assertEqual(self._delegate("dep", "haiku"), 0)
+            self.assertEqual(main(["--log", str(self.log),
+                                   "--pipeline", "bgpdd-build",
+                                   "--phase", "Phase 1", "--event", "gate",
+                                   "--agent", "luna", "--unit", "M1"]), 0)
+
+        def test_model_tier_helper(self):
+            self.assertEqual(model_tier("Opus"), "opus")
+            self.assertEqual(model_tier("claude-sonnet-4-5"), "sonnet")
+            self.assertIsNone(model_tier("sonnet-or-opus"))
+            self.assertIsNone(model_tier(None))
+            self.assertIsNone(model_tier("gpt-4"))
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(RecordRunTests)
     result = unittest.TextTestRunner(verbosity=1).run(suite)

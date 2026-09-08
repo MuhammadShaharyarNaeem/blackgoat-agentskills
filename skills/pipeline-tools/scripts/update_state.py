@@ -61,6 +61,42 @@ def sha256_file(path):
         return None
 
 
+def ledger_line_hash(raw):
+    """sha256 of one ledger LINE's bytes, ignoring its terminator.
+
+    Surrounding whitespace (CR included) is stripped so a ledger written on
+    Windows chains identically to the same file read on POSIX. Byte-identical
+    in every gate in this family and in check_ledger.py, which verifies the
+    chain (family convention: one file each, no shared module).
+    """
+    return hashlib.sha256(raw.strip()).hexdigest()
+
+
+def ledger_prev_hash(ledger_path):
+    """The `prev` value for the next record: hash of the last line on disk.
+
+    `"genesis"` when the ledger is missing or holds no non-blank line.
+    """
+    try:
+        with open(ledger_path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return "genesis"
+    last = None
+    for raw in data.splitlines():
+        if raw.strip():
+            last = raw
+    return "genesis" if last is None else ledger_line_hash(last)
+
+
+def ledger_self_hash(record):
+    """sha256 of the record serialized canonically WITHOUT its `self` field."""
+    body = {k: v for k, v in record.items() if k != "self"}
+    return hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":"))
+        .encode("utf-8")).hexdigest()
+
+
 def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code,
                   extra=None):
     """Append ONE JSON line recording this run. Best-effort by design.
@@ -90,11 +126,160 @@ def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code,
         p = Path(ledger_path)
         if str(p.parent):
             p.parent.mkdir(parents=True, exist_ok=True)
+        record["prev"] = ledger_prev_hash(p)
+        record["self"] = ledger_self_hash(record)
         with open(p, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record) + "\n")
     except OSError as exc:
         print(f"Warning: could not append to ledger {ledger_path}: {exc}",
               file=sys.stderr)
+
+
+# --- the lane game-tape gate (--require-game-tape) -------------------------
+# A pipeline's game-tape phase fires each time a milestone closes, and the
+# closing write is the moment the Orchestrator most wants to move on -- so the
+# cadence rule is enforced by the two scripts that perform that write, not by
+# prose (CLAUDE.md convention #9). Byte-identical in mark_milestone.py and
+# update_state.py (family convention: one file each, no shared module).
+#
+# The heading names ITS OWN LANE (`bgpdd-<lane>`). It was hard-coded to
+# `bgpdd-build`, which made the flag unusable from every other lane:
+# `bgpdd-bugfix`'s Phase 5 tape is written under a `## bgpdd-bugfix - `
+# heading and could never satisfy a gate that only looked for one word, so
+# that lane's tape was unenforceable. Build is unchanged -- `bgpdd-build` is
+# one value of `<lane>` -- and the SHAPE requirements below (3-6 bullets, a
+# fenced block, a telemetry line) are identical for every lane.
+GAME_TAPE_HEADING_RE = re.compile(
+    r"^#{2,4}\s*(?P<lane>bgpdd-[a-z]+)\s*[\u2014\u2013-]\s*(?P<body>.+?)\s*$")
+GAME_TAPE_ANY_HEADING_RE = re.compile(r"^#{1,6}\s")
+GAME_TAPE_BULLET_RE = re.compile(r"^\s*[-*+]\s+\S")
+GAME_TAPE_FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
+GAME_TAPE_TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
+GAME_TAPE_MIN_BULLETS = 3
+GAME_TAPE_MAX_BULLETS = 6
+
+
+def game_tape_tokens(milestone):
+    """The full normalized title plus its leading identifier.
+
+    The same two tokens check_commit_gate.py matches a review heading on, for
+    the same reason: a heading written by hand carries the milestone by name
+    or by id, and both are the milestone.
+    """
+    full = re.sub(r"\s+", " ", (milestone or "").strip().lower())
+    tokens = [full] if full else []
+    short = re.split(r"[:\u2014\u2013-]", full, maxsplit=1)[0].strip()
+    if len(short) >= 2 and short != full:
+        tokens.append(short)
+    return tokens
+
+
+def blank_fenced_lines(lines):
+    """`lines` with every fenced region (and its fences) replaced by "".
+
+    Line count is preserved so section boundaries still line up with the raw
+    text. A heading or bullet inside a fence is a TEMPLATE, and a template has
+    never been a checkpoint.
+    """
+    out, in_fence = [], False
+    for line in lines:
+        if GAME_TAPE_FENCE_RE.match(line):
+            in_fence = not in_fence
+            out.append("")
+            continue
+        out.append("" if in_fence else line)
+    return out
+
+
+def check_game_tape(path, milestone):
+    """[] when this milestone has a conforming Phase 6 checkpoint, else why not.
+
+    Problem codes: `game-tape-missing`, `no-section`, `bullet-count`,
+    `no-pasted-output`, `no-telemetry`.
+
+    Deliberately the shape a lane's game-tape phase states and nothing more
+    (convention #8, and narrower than the skeleton's Game Tape section, which
+    caps at 10 bullets once per RUN): a
+    `## bgpdd-<lane> - <milestone> - <date>` section (`bgpdd-build`,
+    `bgpdd-bugfix`, ... -- the lane writing the tape names itself),
+    3-6 bullets, at least one fenced block (the verbatim command and
+    its captured output -- "no pasted output, no claim"), and either a
+    `summarize_run` mention or a table row (the pasted telemetry block).
+    The epic-summary heading is explicitly not a milestone checkpoint.
+    """
+    p = Path(path)
+    if not p.is_file():
+        return [{"problem": "game-tape-missing",
+                 "detail": "no game tape at {0} - the lane's game-tape "
+                           "phase fires at the milestone close, not at the "
+                           "end of the run".format(path)}]
+    try:
+        text = p.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError as exc:
+        return [{"problem": "game-tape-missing",
+                 "detail": "game tape {0} is unreadable: {1}".format(path, exc)}]
+
+    raw_lines = text.splitlines()
+    blanked = blank_fenced_lines(raw_lines)
+    tokens = game_tape_tokens(milestone)
+    patterns = [re.compile(r"(?<![a-z0-9])" + re.escape(t) + r"(?![a-z0-9])")
+                for t in tokens]
+
+    start = None
+    for i, line in enumerate(blanked):
+        match = GAME_TAPE_HEADING_RE.match(line)
+        if not match:
+            continue
+        body = re.sub(r"\s+", " ", match.group("body").strip().lower())
+        if "epic summary" in body:
+            continue
+        if not re.search(r"[\u2014\u2013-]", body):
+            continue  # no `- <date>` tail: not the Phase 6 heading grammar
+        if any(pat.search(body) for pat in patterns):
+            start = i  # LAST matching section wins: a re-close appends
+
+    if start is None:
+        return [{"problem": "no-section",
+                 "detail": "no '## bgpdd-<lane> - <milestone> - <date>' section "
+                           "in {0} naming {1!r} (any lane name matches: "
+                           "bgpdd-build, bgpdd-bugfix, ...; an epic-summary "
+                           "heading is not a milestone checkpoint; a heading "
+                           "inside a fenced block is a template)".format(
+                               path, milestone)}]
+
+    end = len(blanked)
+    for j in range(start + 1, len(blanked)):
+        if GAME_TAPE_ANY_HEADING_RE.match(blanked[j]):
+            end = j
+            break
+    section_blanked = blanked[start + 1:end]
+    section_raw = raw_lines[start + 1:end]
+
+    problems = []
+    bullets = [l for l in section_blanked if GAME_TAPE_BULLET_RE.match(l)]
+    if not GAME_TAPE_MIN_BULLETS <= len(bullets) <= GAME_TAPE_MAX_BULLETS:
+        problems.append({
+            "problem": "bullet-count",
+            "detail": "the section carries {0} bullet(s); Phase 6 requires "
+                      "{1}-{2} per milestone".format(
+                          len(bullets), GAME_TAPE_MIN_BULLETS,
+                          GAME_TAPE_MAX_BULLETS)})
+    fences = [l for l in section_raw if GAME_TAPE_FENCE_RE.match(l)]
+    if len(fences) < 2:
+        problems.append({
+            "problem": "no-pasted-output",
+            "detail": "the section carries no fenced block - 'no pasted "
+                      "output, no claim': the runtime exit criterion is the "
+                      "verbatim command plus its captured output, never a "
+                      "summary of it"})
+    if ("summarize_run" not in chr(10).join(section_raw)
+            and not any(GAME_TAPE_TABLE_ROW_RE.match(l) for l in section_raw)):
+        problems.append({
+            "problem": "no-telemetry",
+            "detail": "the section pastes no summarize_run.py --markdown block "
+                      "(no `summarize_run` mention and no table row) - what the "
+                      "milestone cost is read off the tool, not off memory"})
+    return problems
 
 
 def build_skeleton(project_name):
@@ -410,6 +595,16 @@ def build_parser():
     parser.add_argument("--evidence")
     parser.add_argument("--ledger",
                         help="append one JSON record per run to this path")
+    parser.add_argument(
+        "--milestone",
+        help="the milestone this write is about; required by "
+             "--require-game-tape and recorded in the ledger line")
+    parser.add_argument(
+        "--require-game-tape", dest="require_game_tape",
+        help="refuse a cursor/pipeline write unless game-tape.md carries a "
+             "conforming '## bgpdd-<lane> - <milestone> - <date>' checkpoint "
+             "for --milestone (the lane's game-tape phase; any lane name "
+             "matches, so bugfix's tape satisfies it as build's does)")
     parser.add_argument("--self-test", action="store_true")
     return parser
 
@@ -433,8 +628,8 @@ def main(argv):
                 extra["resolved_entries"] = resolved
         # The cursor names the milestone this run is about, when it names one;
         # the literal "null" clears it and is recorded as JSON null.
-        milestone = (None if args.set_cursor in (None, "null")
-                     else args.set_cursor)
+        milestone = args.milestone or (None if args.set_cursor in (None, "null")
+                                       else args.set_cursor)
         append_ledger(args.ledger, argv, milestone,
                       [args.state] if args.state else [], verdict, code, extra)
         return code
@@ -442,6 +637,35 @@ def main(argv):
     if not args.state:
         print(json.dumps({"error": "--state is required"}))
         return finish(2, "ERROR")
+
+    # The Phase 6 cadence gate. Scoped to the write that CLOSES a milestone --
+    # a cursor or pipeline move with --milestone -- because that is the write
+    # the checkpoint is the evidence for. Any other action (a blocker add, an
+    # artifact set) is untouched: demanding a checkpoint there would make the
+    # gate noise, and a gate that fires when nothing closed teaches nothing.
+    if args.require_game_tape:
+        if not args.milestone:
+            print(json.dumps({
+                "error": "--require-game-tape requires --milestone (there is "
+                         "no milestone whose checkpoint to look for)"}))
+            return finish(2, "ERROR")
+        closing = (args.set_cursor is not None or args.set_pipeline is not None)
+        if not closing:
+            print("Warning: --require-game-tape is inactive without "
+                  "--set-cursor or --set-pipeline (no milestone is closing "
+                  "in this write)", file=sys.stderr)
+        else:
+            problems = check_game_tape(args.require_game_tape, args.milestone)
+            if problems:
+                print(json.dumps({
+                    "result": "FAIL",
+                    "milestone": args.milestone,
+                    "require_game_tape": args.require_game_tape,
+                    "problems": problems,
+                    "error": "the milestone is not closing over a conforming "
+                             "Phase 6 game-tape checkpoint; nothing was "
+                             "written"}, indent=2))
+                return finish(1, "FAIL")
 
     try:
         state, warnings = apply_updates(args)
@@ -476,6 +700,31 @@ def run_self_test():
                     resolve_blocker=None, evidence=None)
         base.update(overrides)
         return argparse.Namespace(**base)
+
+    # ---- --require-game-tape fixtures (bgpdd-build Phase 6) -------------
+
+    GT_HEAD = "# Game Tape" + chr(10) + chr(10)
+    GT_FENCE = "```"
+
+    def gt_section(title="Milestone 2", date="2026-09-07", bullets=4,
+                   fenced=True, telemetry=True, fenced_heading=False,
+                   lane="bgpdd-build"):
+        """A game-tape checkpoint section, each requirement switchable."""
+        heading = "## {0} \u2014 {1} \u2014 {2}".format(lane, title, date)
+        if fenced_heading:
+            return chr(10).join(
+                [GT_FENCE, heading, "- a", "- b", "- c", GT_FENCE]) + chr(10)
+        out = [heading, ""]
+        for n in range(bullets):
+            out.append("- observation {0}: what actually happened".format(n + 1))
+        if fenced:
+            out += ["", GT_FENCE, "$ curl -s localhost:8080/health",
+                    '{"status":"ok"}', "- Exit code: 0", GT_FENCE]
+        if telemetry:
+            out += ["", "Telemetry (summarize_run.py --markdown):", "",
+                    "| gate | runs | pass |", "|---|---|---|",
+                    "| check_commit_gate.py | 1 | 1 |"]
+        return chr(10).join(out) + chr(10)
 
     class UpdateStateTests(unittest.TestCase):
         def setUp(self):
@@ -823,6 +1072,140 @@ def run_self_test():
                 rc = main(argv_resolve_no_evidence)
             self.assertEqual(rc, 2)
             self.assertIn("error", json.loads(buf.getvalue()))
+
+        # ---- --require-game-tape harness --------------------------------
+
+        def _gt_init(self):
+            self.assertEqual(main(["--state", str(self.state_path), "--init",
+                                   "--project-name", "demo"]), 0)
+
+        def _gt_run(self, tape, milestone="Milestone 2"):
+            self._gt_init()
+            return main(["--state", str(self.state_path),
+                         "--set-cursor", "Milestone 3",
+                         "--milestone", milestone,
+                         "--require-game-tape", tape])
+
+        def _gt_codes(self, tape, milestone="Milestone 2"):
+            """Exit 1, nothing written, and the codes the gate reported."""
+            self._gt_init()
+            before = self.state_path.read_text(encoding="utf-8")
+            self.assertEqual(main(["--state", str(self.state_path),
+                                   "--set-cursor", "Milestone 3",
+                                   "--milestone", milestone,
+                                   "--require-game-tape", tape]), 1)
+            self.assertEqual(self.state_path.read_text(encoding="utf-8"),
+                             before)
+            return [x["problem"] for x in check_game_tape(tape, milestone)]
+
+        # ---- --require-game-tape (bgpdd-build Phase 6 cadence) ----------
+
+        def _tape(self, **kw):
+            p = self.dir / "game-tape.md"
+            p.write_text(GT_HEAD + gt_section(**kw), encoding="utf-8")
+            return str(p)
+
+        def test_game_tape_conforming_section_passes(self):
+            self.assertEqual(self._gt_run(self._tape()), 0)
+
+        def test_game_tape_missing_file_blocks(self):
+            self.assertEqual(self._gt_codes(str(self.dir / "nope.md")),
+                             ["game-tape-missing"])
+
+        def test_game_tape_wrong_milestone_is_no_section(self):
+            self.assertEqual(self._gt_codes(self._tape(title="Milestone 9")),
+                             ["no-section"])
+
+        def test_game_tape_epic_summary_heading_does_not_count(self):
+            self.assertEqual(self._gt_codes(self._tape(title="epic summary")),
+                             ["no-section"])
+
+        def test_game_tape_heading_inside_a_fence_does_not_count(self):
+            self.assertEqual(self._gt_codes(self._tape(fenced_heading=True)),
+                             ["no-section"])
+
+        def test_game_tape_too_few_bullets_blocks(self):
+            self.assertEqual(self._gt_codes(self._tape(bullets=2)),
+                             ["bullet-count"])
+
+        def test_game_tape_too_many_bullets_blocks(self):
+            self.assertEqual(self._gt_codes(self._tape(bullets=7)),
+                             ["bullet-count"])
+
+        def test_game_tape_without_a_fenced_block_blocks(self):
+            self.assertEqual(self._gt_codes(self._tape(fenced=False)),
+                             ["no-pasted-output"])
+
+        def test_game_tape_without_telemetry_blocks(self):
+            self.assertEqual(self._gt_codes(self._tape(telemetry=False)),
+                             ["no-telemetry"])
+
+        # ---- any lane's tape satisfies it (audit3 Metric 20) ------------
+
+        def test_game_tape_accepts_every_lane_heading(self):
+            for lane in ("bgpdd-build", "bgpdd-bugfix", "bgpdd-quick",
+                         "bgpdd-lite", "bgpdd-verify", "bgpdd-shipping"):
+                self.assertEqual(self._gt_run(self._tape(lane=lane)), 0, lane)
+
+        def test_game_tape_rejects_a_heading_that_names_no_lane(self):
+            for lane in ("bgpdd", "build", "pdd-build", "BGPDD-BUILD"):
+                self.assertEqual(self._gt_codes(self._tape(lane=lane)),
+                                 ["no-section"], lane)
+
+        def test_game_tape_shape_rules_are_identical_for_every_lane(self):
+            self.assertEqual(
+                self._gt_codes(self._tape(lane="bgpdd-bugfix", bullets=2)),
+                ["bullet-count"])
+            self.assertEqual(
+                self._gt_codes(self._tape(lane="bgpdd-quick", telemetry=False)),
+                ["no-telemetry"])
+
+        def test_game_tape_last_matching_section_wins(self):
+            p = self.dir / "game-tape.md"
+            p.write_text(GT_HEAD + gt_section(bullets=1, fenced=False,
+                                              telemetry=False)
+                         + chr(10) + gt_section(), encoding="utf-8")
+            self.assertEqual(self._gt_run(str(p)), 0)
+
+        def test_game_tape_short_identifier_token_matches(self):
+            """`M2` names the milestone `M2: Persistence` (commit-gate rule)."""
+            p = self.dir / "game-tape.md"
+            p.write_text(GT_HEAD + gt_section(title="M2"), encoding="utf-8")
+            self.assertEqual(self._gt_run(str(p), milestone="M2: Persistence"), 0)
+
+        def test_game_tape_requires_milestone(self):
+            self._gt_init()
+            self.assertEqual(main(["--state", str(self.state_path),
+                                   "--set-cursor", "M3",
+                                   "--require-game-tape",
+                                   str(self.dir / "game-tape.md")]), 2)
+
+        def test_game_tape_inactive_without_a_cursor_or_pipeline_write(self):
+            """Scoped to the write that CLOSES a milestone, and only that."""
+            self._gt_init()
+            self.assertEqual(main(["--state", str(self.state_path),
+                                   "--milestone", "Milestone 2",
+                                   "--set-artifact", "plan=plan.md",
+                                   "--require-game-tape",
+                                   str(self.dir / "absent.md")]), 0)
+
+        def test_game_tape_blocks_a_pipeline_write_too(self):
+            self._gt_init()
+            self.assertEqual(main(["--state", str(self.state_path),
+                                   "--set-pipeline", "bgpdd-build",
+                                   "--milestone", "Milestone 2",
+                                   "--require-game-tape",
+                                   str(self.dir / "absent.md")]), 1)
+
+        def test_game_tape_milestone_is_recorded_in_the_ledger_line(self):
+            self._gt_init()
+            ledger = self.dir / "gates.jsonl"
+            main(["--state", str(self.state_path), "--set-cursor", "M3",
+                  "--milestone", "Milestone 2", "--ledger", str(ledger),
+                  "--require-game-tape", self._tape()])
+            rec = json.loads(ledger.read_text(
+                encoding="utf-8").splitlines()[-1])
+            self.assertEqual(rec["milestone"], "Milestone 2")
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(UpdateStateTests)
     result = unittest.TextTestRunner(verbosity=1).run(suite)

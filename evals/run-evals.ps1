@@ -121,14 +121,40 @@ $InfraMinDurationSecondsDefault = 60
 $InfraOutputPatterns = @(
     @{ Pattern = '(?m)^\s*API Error'; Reason = 'the CLI reported an API error' },
     @{ Pattern = '(?i)requires approval'; Reason = 'the run hit a permission prompt (requires approval)' },
-    @{ Pattern = '(?i)(usage limit|rate limit)'; Reason = 'the run hit a usage or rate limit' }
+    # Scoped to a CLI/API error context (2026-09-07 audit, Metric 21g). The bare
+    # substring `rate limit` used to match anywhere in the agent's output, and
+    # `agents/cipher.md` instructs Cipher to write about exactly that phrase
+    # ("Headers, cookies, and rate limiting: verify..."). A genuine, on-topic
+    # security finding - "no rate limiting on the login endpoint" - was therefore
+    # reclassifiable as INFRA and silently discarded. The limit must now be
+    # reported *as an error*: an `API Error` / `Error:` / `error:` banner, a
+    # `429`, or a `Claude ...` CLI prefix, within 60 characters before it.
+    @{ Pattern = '(?is)(?:api error|(?:^|[^a-z])error\s*[:\-]|\b429\b|\bclaude\b)[^\r\n]{0,60}?(usage limit|rate limit)'
+       Reason = 'the run hit a usage or rate limit' },
+    @{ Pattern = '(?i)(usage limit|rate limit)[^\r\n]{0,60}?(exceeded|reached|hit|will reset|resets? at|try again)'
+       Reason = 'the run hit a usage or rate limit' }
 )
 
-# Listen ports the node-server fixtures and their graders bind (bgpdd-bugfix-lane,
-# the pressure cases, quinn-runtime-evidence, luna-*, dep-ship-decision-shape). A
-# stray process holding one of these makes a grader's own wire probe read the wrong
-# service, so the pre-flight refuses to start a confirmed batch over it.
-$FixturePortsToCheck = 5182, 5183, 5184, 5185, 5186
+# Listen ports the fixtures and their graders bind. A stray process holding one of
+# these makes a grader's own wire probe read the wrong service, so the pre-flight
+# refuses to start a confirmed batch over it.
+#
+# This literal is checked against the tree by `-SelfTest` (Test-FixturePortCoverage):
+# a fixture that binds a port absent from this list fails the self-test. Deriving the
+# list at pre-flight time was the alternative, but the ports live in five different
+# shapes (`const PORT = 5151`, `process.env.PORT || 5182`, a `config.js` object, a
+# grader override, a `RUNTIME PROBE:` line in a fixture's plan.md) and a regex sweep
+# that silently matched none of them would be a pre-flight checking nothing. A
+# literal plus a test that fails when it drifts is the same guarantee, loudly.
+#   5182-5186 bgpdd-bugfix-lane, dependency-upgrade-contract, quick-lane and the
+#             four pressure cases (5183-5186 reserved for their parallel runs)
+#   5193      jobs-idempotency-contract        5142  quinn-runtime-evidence
+#   5143      mason-fix-verification           5151  luna-clean-approve, luna-verdict-arithmetic
+#   5178/5179 mason-fix-verification-tier3 (fixture / grader override, case.md:88)
+#   5173      nova-ui-contract's Vite probe    5252  cipher-security-report (src/config.js)
+#   5353      scout-brief-path                 3000  dep-ship-decision-shape
+$FixturePortsToCheck = 3000, 5142, 5143, 5151, 5173, 5178, 5179, 5182, 5183, 5184,
+    5185, 5186, 5193, 5252, 5353
 
 # The two zero-LLM cases. Invisible to Get-ContractCases by design (neither has a
 # case.md or a grade.ps1) and free to run, so a confirmed contract batch runs both
@@ -136,6 +162,7 @@ $FixturePortsToCheck = 5182, 5183, 5184, 5185, 5186
 $ZeroLlmCases = @(
     @{ Name = 'mechanical-pipeline'; Script = 'contract\mechanical-pipeline\run.py' },
     @{ Name = 'bugfix-gates-adversarial'; Script = 'contract\bugfix-gates-adversarial\run.py' }
+    @{ Name = 'openapi-diff-adversarial'; Script = 'contract\openapi-diff-adversarial\run.py' }
 )
 
 # Bump this string whenever the result-record contract (the set of keys written to
@@ -775,6 +802,33 @@ function Invoke-TriggerJudgeSelfTest {
         -OutputText "Claude usage limit reached. Your limit will reset at 3pm." `
         -DurationSeconds 6 -MinDurationSeconds 60 `
         -ExpectInfra $true -ExpectedReasonMatch 'usage or rate limit'
+    # The `rate limit` narrowing (2026-09-07 audit, Metric 21g). Cipher's own
+    # persona tells him to write about rate limiting, so his best-case artifact
+    # contains the phrase. It must survive; only the phrase reported AS AN ERROR
+    # is INFRA.
+    $failures += Test-InfraCase -Label 'infra 5b (a Cipher finding about rate limiting is NOT infra)' `
+        -OutputText @"
+## Security Audit: notes-api - 2026-09-07
+
+- Dependency audit: PASS - ``npm audit`` - exit 0 - 0 findings - capture: evidence/security/npm-audit.md
+
+- **Critical** - no rate limiting on the login endpoint; credential stuffing is unbounded - src/auth.js:41
+- **Important** - rate limit headers absent from every 429 response - src/server.js:12
+
+**Verdict:** Fail
+"@ `
+        -DurationSeconds 420 -MinDurationSeconds 60 `
+        -ExpectInfra $false -ExpectedReasonMatch $null
+    # An error banner that is NOT the `API Error` line the first pattern already
+    # owns, so this proves the narrowed rate-limit pattern itself still fires.
+    $failures += Test-InfraCase -Label 'infra 5c (rate limit reported as an error IS infra)' `
+        -OutputText "Error: 429 rate limit exceeded for this organization." `
+        -DurationSeconds 8 -MinDurationSeconds 60 `
+        -ExpectInfra $true -ExpectedReasonMatch 'usage or rate limit'
+    $failures += Test-InfraCase -Label 'infra 5d (bare rate-limit prose with no error context is NOT infra)' `
+        -OutputText "The service applies a rate limit of 100 requests per minute per tenant." `
+        -DurationSeconds 300 -MinDurationSeconds 60 `
+        -ExpectInfra $false -ExpectedReasonMatch $null
     $failures += Test-InfraCase -Label 'infra 6 (real output, impossibly fast)' `
         -OutputText "Wrote .docs/orders/implementation/plan.md with 3 milestones." `
         -DurationSeconds 12.5 -MinDurationSeconds 60 `
@@ -860,6 +914,85 @@ function Invoke-TriggerJudgeSelfTest {
         }
     } finally {
         Remove-Item -Path $tempCaseDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    $failures += Test-FixturePortCoverage
+
+    return $failures
+}
+
+function Test-FixturePortCoverage {
+    # $FixturePortsToCheck is a hand-maintained literal, and a hand-maintained
+    # list of ports is exactly the thing that goes stale without anyone noticing:
+    # before 2026-09-07 it covered 6 of ~15 bound ports, so eight fixtures ran
+    # with no pre-flight at all. This scans the tree for every port a fixture or
+    # its grader actually binds and fails when one is not in the literal.
+    Write-Host ''
+    $failures = 0
+    $found = @{}
+
+    function Add-Port {
+        param($Table, $Port, [string]$Where)
+        $n = 0
+        if ([int]::TryParse($Port, [ref]$n) -and $n -ge 1024 -and $n -le 65535) {
+            if (-not $Table.ContainsKey($n)) { $Table[$n] = @() }
+            if ($Table[$n] -notcontains $Where) { $Table[$n] += $Where }
+        }
+    }
+
+    # (a) server sources and config objects: `PORT = 5151`, `port: 5252`,
+    #     `process.env.PORT || 5182`.
+    $sourceFiles = @(Get-ChildItem -Path (Join-Path $EvalsRoot 'contract'), (Join-Path $EvalsRoot 'trigger') `
+        -Recurse -File -Include '*.js', '*.mjs', '*.cjs' -ErrorAction SilentlyContinue)
+    foreach ($file in $sourceFiles) {
+        $text = Get-Content -Path $file.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        if (-not $text) { continue }
+        foreach ($m in [regex]::Matches($text, '(?i)\bport\b\s*[:=]\s*(?:Number\()?\s*(?:process\.env\.[A-Z_]+\s*\|\|\s*)?(\d{4,5})')) {
+            Add-Port $found $m.Groups[1].Value $file.FullName
+        }
+    }
+    # (b) grader overrides and probe URLs declared in case.md / fixture plans.
+    $docFiles = @(Get-ChildItem -Path (Join-Path $EvalsRoot 'contract') -Recurse -File `
+        -Include 'case.md', 'grade.ps1', 'plan.md' -ErrorAction SilentlyContinue)
+    foreach ($file in $docFiles) {
+        $text = Get-Content -Path $file.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        if (-not $text) { continue }
+        foreach ($m in [regex]::Matches($text, '(?i)(?:localhost|127\.0\.0\.1):(\d{4,5})')) {
+            Add-Port $found $m.Groups[1].Value $file.FullName
+        }
+        foreach ($m in [regex]::Matches($text, '(?i)\$?\bgradePort\b\s*=\s*(\d{4,5})')) {
+            Add-Port $found $m.Groups[1].Value $file.FullName
+        }
+    }
+
+    if ($found.Count -eq 0) {
+        Write-Host 'SELFTEST FAILED: ports 1 - the fixture scan found no bound port at all; the scanner itself is broken.'
+        return 1
+    }
+
+    $missing = @()
+    foreach ($port in ($found.Keys | Sort-Object)) {
+        if ($FixturePortsToCheck -notcontains $port) {
+            $owner = Split-Path -Leaf (Split-Path -Parent (Split-Path -Parent $found[$port][0]))
+            $missing += "$port (e.g. $owner)"
+        }
+    }
+    if ($missing.Count -eq 0) {
+        Write-Host "SELFTEST PASSED: ports 1 (all $($found.Count) fixture-bound port(s) are in `$FixturePortsToCheck)"
+    } else {
+        Write-Host "SELFTEST FAILED: ports 1 - bound by a fixture but absent from `$FixturePortsToCheck: $($missing -join ', ')"
+        $failures++
+    }
+
+    # And the negative: the scanner must actually be able to see a missing port,
+    # or the check above is a test that can only ever pass.
+    $probe = @{}
+    Add-Port $probe 65001 'synthetic'
+    if ($probe.ContainsKey(65001) -and ($FixturePortsToCheck -notcontains 65001)) {
+        Write-Host 'SELFTEST PASSED: ports 2 (an unlisted port is detected as missing)'
+    } else {
+        Write-Host 'SELFTEST FAILED: ports 2 - the coverage check cannot detect an unlisted port.'
+        $failures++
     }
 
     return $failures

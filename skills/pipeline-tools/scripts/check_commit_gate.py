@@ -163,6 +163,107 @@ def sha256_file(path):
         return None
 
 
+def ledger_line_hash(raw):
+    """sha256 of one ledger LINE's bytes, ignoring its terminator.
+
+    Surrounding whitespace (CR included) is stripped so a ledger written on
+    Windows chains identically to the same file read on POSIX. Byte-identical
+    in every gate in this family and in check_ledger.py, which verifies the
+    chain (family convention: one file each, no shared module).
+    """
+    return hashlib.sha256(raw.strip()).hexdigest()
+
+
+def ledger_prev_hash(ledger_path):
+    """The `prev` value for the next record: hash of the last line on disk.
+
+    `"genesis"` when the ledger is missing or holds no non-blank line.
+    """
+    try:
+        with open(ledger_path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return "genesis"
+    last = None
+    for raw in data.splitlines():
+        if raw.strip():
+            last = raw
+    return "genesis" if last is None else ledger_line_hash(last)
+
+
+def ledger_self_hash(record):
+    """sha256 of the record serialized canonically WITHOUT its `self` field."""
+    body = {k: v for k, v in record.items() if k != "self"}
+    return hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":"))
+        .encode("utf-8")).hexdigest()
+
+
+def verify_ledger_chain(ledger_path):
+    """(ok, problem|None) — walk the chain and stop at the FIRST broken link.
+
+    `problem` is `{"line", "reason", "detail"}` with reason one of
+    `unparseable`, `legacy-after-chained`, `incomplete-chain-fields`,
+    `self-mismatch`, `prev-mismatch`, `unreadable`. A missing ledger file is
+    NOT a break here (there is no chain to break); callers that require the
+    ledger to exist say so themselves.
+
+    Byte-identical in check_ledger.py, check_commit_gate.py and
+    mark_milestone.py (family convention: one file each, no shared module).
+    """
+    p = Path(ledger_path)
+    if not p.is_file():
+        return True, None
+    try:
+        data = p.read_bytes()
+    except OSError as exc:
+        return False, {"line": 0, "reason": "unreadable",
+                       "detail": "cannot read {0}: {1}".format(ledger_path, exc)}
+    chained_seen = False
+    prev_hash = "genesis"
+    for lineno, raw in enumerate(data.splitlines(), start=1):
+        if not raw.strip():
+            continue
+        try:
+            rec = json.loads(raw.decode("utf-8-sig", errors="replace"))
+        except ValueError:
+            return False, {"line": lineno, "reason": "unparseable",
+                           "detail": "line is not parseable JSON"}
+        if not isinstance(rec, dict):
+            return False, {"line": lineno, "reason": "unparseable",
+                           "detail": "line is not a JSON object"}
+        has_prev, has_self = "prev" in rec, "self" in rec
+        if not has_prev and not has_self:
+            if chained_seen:
+                return False, {
+                    "line": lineno, "reason": "legacy-after-chained",
+                    "detail": "an unchained record follows a chained one; a "
+                              "ledger that has started chaining cannot revert "
+                              "to unchained"}
+            prev_hash = ledger_line_hash(raw)
+            continue
+        if not (has_prev and has_self):
+            return False, {
+                "line": lineno, "reason": "incomplete-chain-fields",
+                "detail": "record carries only one of `prev`/`self`; a chained "
+                          "record carries both"}
+        if rec.get("self") != ledger_self_hash(rec):
+            return False, {
+                "line": lineno, "reason": "self-mismatch",
+                "detail": "`self` does not hash this record's own content — "
+                          "the line was edited after it was written"}
+        if rec.get("prev") != prev_hash:
+            return False, {
+                "line": lineno, "reason": "prev-mismatch",
+                "detail": "`prev` is {0} but the preceding record hashes to "
+                          "{1} — a record was inserted, removed or edited "
+                          "before this line".format(
+                              str(rec.get("prev"))[:16], prev_hash[:16])}
+        chained_seen = True
+        prev_hash = ledger_line_hash(raw)
+    return True, None
+
+
 def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code,
                   extra=None):
     """Append ONE JSON line recording this run. Best-effort by design.
@@ -187,6 +288,8 @@ def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code,
         p = Path(ledger_path)
         if str(p.parent):
             p.parent.mkdir(parents=True, exist_ok=True)
+        record["prev"] = ledger_prev_hash(p)
+        record["self"] = ledger_self_hash(record)
         with open(p, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record) + "\n")
     except OSError as exc:
@@ -594,6 +697,124 @@ def check_undeclared_tree(changed_files, repo):
     return undeclared
 
 
+def read_run_log(log_path):
+    """Every parseable JSON-object line of record_run.py's run log.
+
+    (path_missing, records). Duplicated from summarize_run.py by family
+    convention (stdlib-only, one file each, no shared module).
+    """
+    p = Path(log_path)
+    if not p.is_file():
+        return True, []
+    records = []
+    try:
+        text = p.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return True, []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(rec, dict):
+            records.append(rec)
+    return False, records
+
+
+def normalize_unit(value):
+    """A unit/milestone title as a comparable token, or None."""
+    if not isinstance(value, str):
+        return None
+    return re.sub(r"\s+", " ", value.strip()).casefold() or None
+
+
+def check_run_log_agents(log_path, agent_names, milestone):
+    """Verify each named agent has a recorded delegation for this milestone.
+
+    The commit gate already refuses to commit over an unapproved review. What
+    it could not see is whether the review HAPPENED: a milestone whose Quinn
+    or Luna round was skipped outright leaves a green report and an empty run
+    log, and the gate passed on the report alone. Convention #9 -- the
+    Orchestrator Contract's "record the delegation" rule became a file this
+    gate has to read.
+
+    `--model` must be present on each named agent's record: `record_run.py`
+    already refuses a delegation without one (and, since 2.6.1, refuses a
+    model string that resolves to no tier), so a record missing it was
+    hand-written, and a hand-written delegation record is not evidence that a
+    delegation occurred.
+
+    WHAT THIS FLAG PROVES, AND WHAT IT DOES NOT -- a scope limit documented
+    here because the 2026-09-07 audit found it documented nowhere. The run log
+    is AUTHORED, not tool-provenanced: `record_run.py` writes nothing a person
+    cannot type. Its records carry no hash of anything observed, no capture
+    and no chain -- unlike `gates.jsonl`, whose entries this gate verifies by
+    RE-HASHING every input the recorded run read (`ledger_stale`). So
+    `--require-agents` proves that a delegation record EXISTS, is scoped to
+    this milestone and names a tier; it does not prove the delegation
+    happened. Its value is the one the ledger's own accepted limit has:
+    skipping a round becomes an omission somebody has to notice, and faking
+    one becomes a written act rather than a silence. Anyone who fabricates the
+    run log satisfies this flag, and that is accepted rather than papered
+    over -- closing it needs a provenance the runtime does not offer for its
+    own dispatches. The terms with teeth beside it are
+    `--require-ledger-gates` (re-hashes) and `--require-rendered-evidence`.
+
+    Scoping is EXACT on the record's `unit` -- a deliberate divergence from
+    `--require-ledger-gates`, which also accepts an unscoped entry (convention
+    #8, tighter on purpose): a gate ledger line legitimately covers the whole
+    epic, but a delegation with no unit does not say which milestone it built.
+
+    Returns [{"agent", "problem", "detail"}]. Codes: `run_log_missing`,
+    `run_log_agent_missing`, `run_log_model_missing`.
+    """
+    missing, records = read_run_log(log_path)
+    if missing:
+        return [{"agent": None, "problem": "run_log_missing",
+                 "detail": "no readable run log at {0}; --require-agents has "
+                           "nothing to read (Orchestrator Contract "
+                           "\u00a74 records every delegation via "
+                           "record_run.py)".format(log_path)}]
+    unit = normalize_unit(milestone)
+    problems = []
+    for name in agent_names:
+        wanted = name.strip().casefold()
+        matches = [r for r in records
+                   if r.get("event") == "delegation"
+                   and isinstance(r.get("agent"), str)
+                   and r["agent"].strip().casefold() == wanted
+                   and normalize_unit(r.get("unit")) == unit]
+        if not matches:
+            problems.append({
+                "agent": name, "problem": "run_log_agent_missing",
+                "detail": "no delegation record for {0!r} scoped to unit {1!r} "
+                          "in {2} -- the phase that agent owns has no evidence "
+                          "it ran".format(name, milestone, log_path)})
+            continue
+        if not any(isinstance(r.get("model"), str) and r["model"].strip()
+                   for r in matches):
+            problems.append({
+                "agent": name, "problem": "run_log_model_missing",
+                "detail": "every delegation record for {0!r} on {1!r} carries a "
+                          "null model; record_run.py refuses to write one, so "
+                          "this record was hand-written".format(name, milestone)})
+    return problems
+
+
+def parse_agent_names(values):
+    """Flatten repeated and/or comma-separated --require-agents values."""
+    names = []
+    for value in values or []:
+        for token in value.split(","):
+            token = token.strip()
+            if token and token not in names:
+                names.append(token)
+    return names
+
+
 def check_ledger_gates(ledger_path, gate_names, milestone):
     """Verify that each named gate LAST recorded a PASS for this milestone.
 
@@ -606,9 +827,23 @@ def check_ledger_gates(ledger_path, gate_names, milestone):
     read is exactly how a stale PASS reaches a commit.
 
     Returns a list of {"gate", "problem", "detail"} — empty means every named
-    gate is backed. Problem codes: `ledger_missing`, `ledger_failed`,
-    `ledger_stale`.
+    gate is backed. Problem codes: `ledger_chain_broken`, `ledger_missing`,
+    `ledger_failed`, `ledger_stale`.
+
+    The chain is checked FIRST and short-circuits: a PASS read out of a ledger
+    whose hash chain is broken is not evidence of anything, so there is no
+    point naming which gate recorded it.
     """
+    chain_ok, chain = verify_ledger_chain(ledger_path)
+    if not chain_ok:
+        return [{
+            "gate": ledger_path, "problem": "ledger_chain_broken",
+            "detail": "the gate ledger's hash chain is broken at line "
+                      "{0} ({1}): {2}. Every verdict it records is "
+                      "unverifiable until the break is explained; run "
+                      "check_ledger.py --ledger {3}".format(
+                          chain["line"], chain["reason"], chain["detail"],
+                          ledger_path)}]
     records = read_ledger(ledger_path)
     problems = []
     for name in gate_names:
@@ -853,6 +1088,10 @@ def build_report(args):
         "require_ledger_gates": list(args.require_ledger_gates or []),
         "ledger_gate_problems": [],
         "ledger_gates_ok": True,
+        "run_log": args.require_run_log,
+        "require_agents": parse_agent_names(args.require_agents),
+        "run_log_problems": [],
+        "run_log_ok": True,
         "undeclared_changes": [],
         "tree_verified": True,
         "max_changed_files": args.max_changed_files,
@@ -934,6 +1173,17 @@ def build_report(args):
             report["warnings"].append(
                 f"{problem['problem']}: {problem['detail']}")
 
+    if args.require_agents:
+        # Normalized HERE as well as in main(): build_report is called
+        # directly by the self-test with raw argv, and a comma list that only
+        # main() splits is a flag the tests never really exercise.
+        report["run_log_problems"] = check_run_log_agents(
+            args.require_run_log, report["require_agents"], args.milestone)
+        report["run_log_ok"] = not report["run_log_problems"]
+        for problem in report["run_log_problems"]:
+            report["warnings"].append(
+                "{0}: {1}".format(problem["problem"], problem["detail"]))
+
     if args.require_runtime_evidence:
         runtime_ok, payload = run_runtime_gate(args)
         report["runtime_evidence_ok"] = runtime_ok
@@ -980,6 +1230,7 @@ def build_report(args):
                and report["rendered_evidence_ok"]
                and report["runtime_evidence_ok"]
                and report["ledger_gates_ok"]
+               and report["run_log_ok"]
                and report["size_ok"]
                and report["tree_verified"]
                and not report["already_committed"])
@@ -1039,6 +1290,18 @@ def build_parser():
         "--require-ledger-gates", action="append", default=[],
         help="comma-separated gate script names whose LATEST ledger entry for "
              "this milestone must be PASS over unchanged inputs")
+    # Did the delegation the review report claims actually happen?
+    parser.add_argument(
+        "--require-run-log", dest="require_run_log",
+        help="record_run.py's run log; the source --require-agents reads. The "
+             "run log is AUTHORED, not tool-provenanced: this pair proves a "
+             "delegation record exists, is scoped to the milestone and names "
+             "a tier — not that the delegation happened. --require-ledger-"
+             "gates is the flag that re-hashes what it read.")
+    parser.add_argument(
+        "--require-agents", action="append", default=[],
+        help="comma-separated agent names that must each carry a delegation "
+             "record for this milestone, with a model, in --require-run-log")
     parser.add_argument("--self-test", action="store_true")
     return parser
 
@@ -1057,7 +1320,8 @@ def parse_gate_names(values):
 def ledger_inputs(args):
     """Every file path this gate READ, in the order it was declared."""
     paths = [args.review_report, args.state] + list(args.changed_files or [])
-    for extra in (args.runtime_report, args.openapi_doc, args.waiver):
+    for extra in (args.runtime_report, args.openapi_doc, args.waiver,
+                  args.require_run_log):
         if extra:
             paths.append(extra)
     return [p for p in paths if p]
@@ -1070,6 +1334,7 @@ def main(argv):
         return run_self_test()
 
     args.require_ledger_gates = parse_gate_names(args.require_ledger_gates)
+    args.require_agents = parse_agent_names(args.require_agents)
 
     def finish(code, verdict):
         """One exit point: EVERY return path records a ledger line."""
@@ -1113,6 +1378,17 @@ def main(argv):
         print(json.dumps({"result": "ERROR",
                           "error": "--require-ledger-gates requires --ledger "
                                     "(there is no ledger to read otherwise)"}))
+        return finish(2, "ERROR")
+    if args.require_agents and not args.require_run_log:
+        print(json.dumps({"result": "ERROR",
+                          "error": "--require-agents requires --require-run-log "
+                                    "(there is no run log to read otherwise)"}))
+        return finish(2, "ERROR")
+    if args.require_run_log and not args.require_agents:
+        print(json.dumps({"result": "ERROR",
+                          "error": "--require-run-log given without "
+                                    "--require-agents \u2014 a run log nobody "
+                                    "names an agent in asserts nothing"}))
         return finish(2, "ERROR")
     forwarded = [n for n, v in (("--runtime-report", args.runtime_report),
                                  ("--surface", args.surface),
@@ -1680,6 +1956,11 @@ def run_self_test():
                    "inputs": {str(self.changed): sha256_file(self.changed)},
                    "verdict": "PASS", "exit": 0}
             rec.update(over)
+            # Chained exactly as a real gate writes it -- a hand-written
+            # unchained line is `legacy-after-chained` once anything has
+            # chained, which is the contract, not a fixture bug.
+            rec["prev"] = ledger_prev_hash(ledger)
+            rec["self"] = ledger_self_hash(rec)
             with open(ledger, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(rec) + "\n")
 
@@ -1743,6 +2024,44 @@ def run_self_test():
                 "--require-ledger-gates", "check_agent_report.py"]))
             self.assertEqual(r["result"], "PASS", r["warnings"])
 
+        def test_require_ledger_gates_refuses_a_broken_chain(self):
+            """An edited ledger record is not a weaker PASS; it is no PASS."""
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            ledger = self.dir / "gates.jsonl"
+            self._write_ledger(ledger)
+            self._write_ledger(ledger, gate="check_runtime_evidence.py")
+            lines = ledger.read_text(encoding="utf-8").splitlines()
+            rec = json.loads(lines[0])
+            rec["verdict"] = "PASS"
+            rec["exit"] = 0
+            rec["argv"] = ["tampered"]
+            lines[0] = json.dumps(rec)
+            ledger.write_text(chr(10).join(lines) + chr(10), encoding="utf-8")
+            r = build_report(self._ns(extra=[
+                "--ledger", str(ledger),
+                "--require-ledger-gates", "check_agent_report.py"]))
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["ledger_gate_problems"][0]["problem"],
+                             "ledger_chain_broken")
+            self.assertIn("line 1", r["ledger_gate_problems"][0]["detail"])
+
+        def test_require_ledger_gates_refuses_an_unchained_record_appended_after(self):
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            ledger = self.dir / "gates.jsonl"
+            self._write_ledger(ledger)
+            with open(ledger, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps({
+                    "ts": "2026-09-02T00:00:01Z", "gate": "check_agent_report.py",
+                    "argv": [], "milestone": "M3", "inputs": {},
+                    "verdict": "PASS", "exit": 0}) + chr(10))
+            r = build_report(self._ns(extra=[
+                "--ledger", str(ledger),
+                "--require-ledger-gates", "check_agent_report.py"]))
+            self.assertEqual(r["ledger_gate_problems"][0]["problem"],
+                             "ledger_chain_broken")
+
         def test_require_ledger_gates_splits_a_comma_list(self):
             self.assertEqual(parse_gate_names(["a.py,b.py", "c.py"]),
                              ["a.py", "b.py", "c.py"])
@@ -1752,6 +2071,122 @@ def run_self_test():
                 "--review-report", str(self.review), "--state", str(self.state),
                 "--milestone", "M3", "--changed-files", str(self.changed),
                 "--require-ledger-gates", "check_agent_report.py"]), 2)
+
+        # ---- --require-run-log / --require-agents ----------------------
+
+        def _run_log(self, *entries):
+            """A record_run.py-shaped run log; each entry is a kwargs dict."""
+            log = self.dir / "run-log.jsonl"
+            with open(log, "a", encoding="utf-8") as fh:
+                for entry in entries:
+                    rec = {"ts": "2026-09-05T00:00:00Z",
+                           "pipeline": "bgpdd-build", "phase": "Phase 2",
+                           "unit": "M3", "agent": None, "model": "sonnet",
+                           "event": "delegation", "duration_s": None,
+                           "tokens_in": None, "tokens_out": None,
+                           "tokens_total": None, "rounds": None,
+                           "status": "COMPLETE", "note": None}
+                    rec.update(entry)
+                    fh.write(json.dumps(rec) + chr(10))
+            return log
+
+        def _rl_report(self, log, agents="quinn,luna"):
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            return build_report(self._ns(extra=[
+                "--require-run-log", str(log), "--require-agents", agents]))
+
+        def test_require_agents_passes_when_each_delegation_is_recorded(self):
+            log = self._run_log({"agent": "quinn"}, {"agent": "luna"},
+                                {"agent": "mason"})
+            r = self._rl_report(log, "quinn,luna,mason")
+            self.assertEqual(r["run_log_problems"], [])
+            self.assertEqual(r["result"], "PASS")
+
+        def test_require_agents_blocks_a_skipped_reviewer(self):
+            """The hole: a green report with no Luna delegation behind it."""
+            log = self._run_log({"agent": "quinn"})
+            r = self._rl_report(log)
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["run_log_problems"][0]["problem"],
+                             "run_log_agent_missing")
+            self.assertEqual(r["run_log_problems"][0]["agent"], "luna")
+
+        def test_require_agents_blocks_a_missing_run_log(self):
+            r = self._rl_report(self.dir / "nope.jsonl")
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["run_log_problems"][0]["problem"],
+                             "run_log_missing")
+
+        def test_require_agents_blocks_a_hand_written_record_with_no_model(self):
+            log = self._run_log({"agent": "quinn"},
+                                {"agent": "luna", "model": None})
+            r = self._rl_report(log)
+            self.assertEqual(r["run_log_problems"][0]["problem"],
+                             "run_log_model_missing")
+
+        def test_require_agents_ignores_another_milestones_delegation(self):
+            log = self._run_log({"agent": "quinn"},
+                                {"agent": "luna", "unit": "M9"})
+            r = self._rl_report(log)
+            self.assertEqual(r["run_log_problems"][0]["problem"],
+                             "run_log_agent_missing")
+
+        def test_require_agents_does_not_accept_an_unscoped_delegation(self):
+            """Tighter than --require-ledger-gates, on purpose (#8)."""
+            log = self._run_log({"agent": "quinn"},
+                                {"agent": "luna", "unit": None})
+            r = self._rl_report(log)
+            self.assertEqual(r["run_log_problems"][0]["problem"],
+                             "run_log_agent_missing")
+
+        def test_require_agents_ignores_non_delegation_events(self):
+            log = self._run_log({"agent": "quinn"},
+                                {"agent": "luna", "event": "note"})
+            r = self._rl_report(log)
+            self.assertEqual(r["run_log_problems"][0]["problem"],
+                             "run_log_agent_missing")
+
+        def test_require_agents_is_case_and_whitespace_insensitive(self):
+            log = self._run_log({"agent": "Quinn"},
+                                {"agent": "luna", "unit": " m3 "})
+            self.assertEqual(self._rl_report(log)["run_log_problems"], [])
+
+        def test_require_agents_accepts_a_later_record_carrying_the_model(self):
+            """A round-1 record without a model is covered by round 2's."""
+            log = self._run_log({"agent": "quinn", "model": None},
+                                {"agent": "quinn", "model": "sonnet"},
+                                {"agent": "luna"})
+            self.assertEqual(self._rl_report(log)["run_log_problems"], [])
+
+        def test_require_agents_without_a_run_log_is_usage_error(self):
+            self.assertEqual(main([
+                "--review-report", str(self.review), "--state", str(self.state),
+                "--milestone", "M3", "--changed-files", str(self.changed),
+                "--require-agents", "quinn,luna"]), 2)
+
+        def test_require_run_log_without_agents_is_usage_error(self):
+            log = self._run_log({"agent": "quinn"})
+            self.assertEqual(main([
+                "--review-report", str(self.review), "--state", str(self.state),
+                "--milestone", "M3", "--changed-files", str(self.changed),
+                "--require-run-log", str(log)]), 2)
+
+        def test_run_log_is_hashed_into_this_runs_ledger_line(self):
+            log = self._run_log({"agent": "quinn"}, {"agent": "luna"})
+            ledger = self.dir / "gates.jsonl"
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            main(["--review-report", str(self.review), "--state", str(self.state),
+                  "--milestone", "M3", "--changed-files", str(self.changed),
+                  "--repo", str(self.dir), "--ledger", str(ledger),
+                  "--require-run-log", str(log), "--require-agents", "quinn,luna"])
+            rec = self._ledger_records(ledger)[-1]
+            self.assertEqual(rec["inputs"][str(log)], sha256_file(log))
+
+        def test_parse_agent_names_splits_a_comma_list(self):
+            self.assertEqual(parse_agent_names(["quinn,luna", "mason"]),
+                             ["quinn", "luna", "mason"])
 
         # ---- --max-changed-files (the bugfix lane's fix-size bound) ----
 

@@ -12,7 +12,23 @@ date_added: "2026-02-27"
 
 A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no editing tests to pass, no unobserved claims (`base-persona.md`, Evidence Integrity). Over three files, or shared behaviour: route via `/bg` to a lane.
 
+## Quick card
+
+Derived from the contract below for a ≤ 3-file change; no new rules (convention #8 — deliberately narrower than the full contract, which binds inside any lane).
+
+1. Capture the new test failing — a second `evidence/` capture through the lane's wrapper — before the code exists (§ The Iron Law).
+2. Write the minimum code to pass — no speculative options or abstractions (§ Workflow, GREEN).
+3. One behaviour per test, AAA, named for the behaviour (§ Rules).
+4. Real code; mock only true external boundaries you do not own (§ Rules).
+5. Full suite green with pristine output before closing; three RED-RED cycles → escalate (§ Escalate When).
+
+- Brief → the quick note (What / Where / How verified)
+- Artifact → the capture at `{quick-root}/evidence/check.md`
+- Handoff → the `## Result` bullet in `note.md`
+
 ## Worker Execution Contract
+
+For a change of ≤ 3 files outside a pipeline, the Quick card above is the contract; the full contract applies inside a lane.
 
 ### The Iron Law
 

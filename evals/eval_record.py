@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """One place that writes a `results.jsonl` record for a zero-LLM eval case.
 
-The two zero-LLM cases (`contract/mechanical-pipeline/run.py`,
-`contract/bugfix-gates-adversarial/run.py`) are invisible to `run-evals.ps1`'s case
+The three zero-LLM cases (`contract/mechanical-pipeline/run.py`,
+`contract/bugfix-gates-adversarial/run.py`,
+`contract/openapi-diff-adversarial/run.py`) are invisible to `run-evals.ps1`'s case
 discovery by design and used to write **no record at all** -- so the only proof
-either had ever run was a human remembering it. They are free, so there was never a
+any had ever run was a human remembering it. They are free, so there was never a
 cost reason not to keep history; there was just no writer.
 
 This module is that writer, and it is shared rather than copy-pasted into both
@@ -25,6 +26,7 @@ Usage from a case's run.py:
 Nothing here raises on failure: a broken record write must not turn a green eval
 red. It warns on stderr and returns None.
 """
+import hashlib
 import io
 import json
 import os
@@ -81,6 +83,27 @@ def plugin_dirty():
     return bool(status.strip())
 
 
+def case_sha256(case, case_path=None):
+    """Hex sha256 of the case's `run.py`, or None when it cannot be read.
+
+    The LLM-graded rows carry a `case_sha256` of their `case.md`; these three
+    zero-LLM cases carried none, so "did the case change since this red was
+    recorded?" could only be answered by hashing `run.py` by hand (2026-09-07
+    audit, Metric 21b). A zero-LLM case's `run.py` IS its case definition --
+    fixtures, assertions and grader in one file -- so it is the right subject.
+
+    Resolved from the case name by convention (`contract/<case>/run.py`) so the
+    three existing callers need no change; pass `case_path` to override.
+    """
+    path = Path(case_path) if case_path else EVALS_ROOT / "contract" / case / "run.py"
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        print(f"warning: could not hash the case script {path}; "
+              "recording case_sha256=null", file=sys.stderr)
+        return None
+
+
 def utc_timestamp():
     # Matches PowerShell's (Get-Date).ToUniversalTime().ToString('o') closely enough
     # for a reader parsing with a standard ISO-8601 parser.
@@ -88,7 +111,7 @@ def utc_timestamp():
 
 
 def append_script_record(case, passed, failed_criterion=None, duration_s=None,
-                         results_path=None):
+                         results_path=None, case_path=None):
     """Append one flat record for a deterministic, script-graded eval run.
 
     `run_index` is always 1 and `judge` is always "script": there is no LLM
@@ -97,6 +120,9 @@ def append_script_record(case, passed, failed_criterion=None, duration_s=None,
     not pool a `judge: "script"` row with the LLM rows for the same case name --
     there is no such case name overlap today, and this field is how it stays
     detectable if one is ever added.
+
+    `case_sha256` is computed here rather than passed in, so the three existing
+    callers keep working unchanged; `case_path` overrides the convention.
     """
     record = {
         "timestamp": utc_timestamp(),
@@ -108,6 +134,7 @@ def append_script_record(case, passed, failed_criterion=None, duration_s=None,
         "duration_s": duration_s,
         "plugin_sha": plugin_sha(),
         "plugin_dirty": plugin_dirty(),
+        "case_sha256": case_sha256(case, case_path),
         "judge": "script",
         "harness_version": harness_version(),
     }

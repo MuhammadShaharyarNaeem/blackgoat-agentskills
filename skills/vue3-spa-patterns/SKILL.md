@@ -7,9 +7,23 @@ description: "Provides the Vue 3 SPA execution contract: Composition API authori
 
 Frontend rigor equal to backend rigor. Components render; stores mutate; one Axios instance talks to the API; every interactive element is testable by ID.
 
+## Quick card
+
+Derived from the contract below for a ≤ 3-file change; no new rules (convention #8).
+
+1. `<script setup lang="ts">`, typed `defineProps`/`defineEmits` (§ Authoring & Typing).
+2. State mutates only in Pinia actions; no store `v-model` (§ State Boundary).
+3. All HTTP through the shared Axios instance (§ HTTP Layer).
+4. Every interactive element carries `data-test` (§ Testability).
+5. Pair every listener, timer or subscription with teardown (§ Lifecycle & Reactivity Hygiene).
+
+- Brief → the quick note (What / Where / How verified)
+- Artifact → the capture at `{quick-root}/evidence/check.md`
+- Handoff → the `## Result` bullet in `note.md`
+
 ## Worker Execution Contract
 
-This is the operational spine. Follow it as written.
+This is the operational spine. Follow it as written. For a change of ≤ 3 files outside a pipeline, the Quick card above is the contract; the full contract applies inside a lane.
 
 ### Authoring & Typing
 

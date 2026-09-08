@@ -1300,6 +1300,42 @@ def ledger_key(path):
         return str(p)
 
 
+def ledger_line_hash(raw):
+    """sha256 of one ledger LINE's bytes, ignoring its terminator.
+
+    Surrounding whitespace (CR included) is stripped so a ledger written on
+    Windows chains identically to the same file read on POSIX. Byte-identical
+    in every gate in this family and in check_ledger.py, which verifies the
+    chain (family convention: one file each, no shared module).
+    """
+    return hashlib.sha256(raw.strip()).hexdigest()
+
+
+def ledger_prev_hash(ledger_path):
+    """The `prev` value for the next record: hash of the last line on disk.
+
+    `"genesis"` when the ledger is missing or holds no non-blank line.
+    """
+    try:
+        with open(ledger_path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return "genesis"
+    last = None
+    for raw in data.splitlines():
+        if raw.strip():
+            last = raw
+    return "genesis" if last is None else ledger_line_hash(last)
+
+
+def ledger_self_hash(record):
+    """sha256 of the record serialized canonically WITHOUT its `self` field."""
+    body = {k: v for k, v in record.items() if k != "self"}
+    return hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":"))
+        .encode("utf-8")).hexdigest()
+
+
 def append_ledger(path, record):
     """Append one JSON line. Returns a warning string on failure, else None.
 
@@ -1310,6 +1346,8 @@ def append_ledger(path, record):
         p = Path(path)
         if str(p.parent) not in ("", "."):
             p.parent.mkdir(parents=True, exist_ok=True)
+        record["prev"] = ledger_prev_hash(p)
+        record["self"] = ledger_self_hash(record)
         with open(p, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record) + "\n")
         return None

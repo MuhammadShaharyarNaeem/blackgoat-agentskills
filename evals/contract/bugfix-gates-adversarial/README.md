@@ -141,3 +141,20 @@ reported as a defect: `check_bugfix_intake.py`'s JSON returns `runtime_observabl
 `regression` as **JSON booleans**, not as the `yes`/`no` strings the report writes.
 `skills/pipeline-tools/SKILL.md` lists both keys without their types, so step 2 pins
 the observed contract — a reader following the field rules alone would guess wrong.
+
+## Added in 2.6.1 (the audit-fix wave)
+
+Steps 13b-13d close the 2026-09-07 audit's F4: `--green-runs N` counted
+`--green` OCCURRENCES, so the flag that exists to say "this bug is flaky
+enough to need five clean runs" was satisfied by one run cited five times.
+
+- **13b** — the same capture path cited 5x under `--green-runs 5` is
+  `green_runs_not_distinct`, and explicitly NOT `green_runs_short`: five were
+  supplied.
+- **13c** — five byte-identical copies under five names, made by copying the
+  capture and its sidecar together. The step asserts that no hash term fires,
+  which is the point: copying preserves exactly what the hashes protect, so
+  distinctness needs the OUTPUT key (`capture_sha256`) as well as the process
+  key (`started` + `pid`).
+- **13d** — five genuine re-runs of the probe still pass. A distinctness rule
+  that also refused honest evidence would be worse than none.

@@ -43,6 +43,14 @@ A fenced block counts as content (a pasted log is exactly what the error section
 is for), but a heading or a `- Key: value` line **inside** a fence satisfies
 nothing.
 
+**Arriving from an escalated `/bgpdd-quick`?** That lane's `{quick-root}/note.md`
+may pre-fill two fields as **drafts**: its `- What:` line seeds *Observed
+behaviour*, and its `- How verified:` line seeds the *Reproduction*
+`- Command:`. Nothing else carries over, and the intake gate lints both exactly
+as if you had typed them — a draft that is not really a reproduction still fails.
+
+- **Fields may be pre-filled from telemetry.** When an incident produced this report, Observed behaviour, the error text, Environment and the first-seen timestamp are copied from the alert, log excerpt or trace rather than typed from memory (`{PLUGIN_ROOT}/observability-and-diagnosis/SKILL.md`). Pre-filled is still linted: a pasted log excerpt satisfies the error section, an unanswered `<...>` does not.
+
 ---
 
 Everything below the next line is the report body. Copy from there down.

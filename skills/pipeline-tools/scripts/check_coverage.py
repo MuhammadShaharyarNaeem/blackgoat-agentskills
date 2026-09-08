@@ -185,6 +185,15 @@ REGISTER_ROW_ID_RE = re.compile(r"\b([A-Z]{2,5}-\d+)\b")
 # requirements as supporting argument without superseding them.
 SUBJECT_CELL_COUNT = 2
 
+# blackgoat-research's ADR filing convention (Worker Execution Contract): every
+# register row that supersedes a design decision cites the ADR that authorised
+# it, filed at `.docs/{project-name}/design/adr/NNNN-<slug>.md`. A citation is
+# either the bare id token or a path segment naming it — the same two-shape
+# citation lint_supersession_annotations() already accepts for its own row-id
+# routing link.
+ADR_TOKEN_RE = re.compile(r"\bADR-\d+\b", re.IGNORECASE)
+ADR_PATH_RE = re.compile(r"\badr/\d+-", re.IGNORECASE)
+
 FILE_URI_RE = re.compile(r"file:///\S*[^\s`'\"()\[\],;.]")
 WINDOWS_ABS_PATH_RE = re.compile(r"(?<![\w:/\\])[A-Za-z]:[\\/][^\s`'\"()\[\],;]*")
 UNC_PATH_RE = re.compile(r"(?<!\S)\\\\[^\s`'\"()\[\],;]+")
@@ -1029,6 +1038,68 @@ def lint_supersession_annotations(requirements_text, rows, known_ids):
     return failures
 
 
+def lint_adr_citation(design_text, known_ids):
+    """Every register row that supersedes a design decision cites its ADR.
+
+    A row counts as a supersession row under the same test
+    parse_design_register() uses: its SUBJECT cells (the first
+    SUBJECT_CELL_COUNT columns) cite at least one FR/NFR id. Unlike the
+    supersession-annotation lint, the citation this one looks for is
+    blackgoat-research's ADR id — `ADR-NNNN` or a `adr/NNNN-` path segment —
+    and it legitimately lives in a LATER column (why/consequences), so the
+    row's FULL text is searched, not just the subject.
+
+    Known-id filtering mirrors lint_supersession_annotations(): a row citing
+    only an id `requirements.md` never defines is not this lint's business —
+    that stays the pre-existing unknown-id warning path.
+
+    Scope limit (mirrors lint_supersession_annotations): a design with no
+    register section, or a register with no row citing a known FR/NFR id,
+    yields zero failures — both are parse_design_register()'s own warning
+    paths, not this lint's.
+
+    Failure class: `supersession_without_adr` (named in the detail message so
+    it is greppable independent of the `check` field's kebab-case form).
+    """
+    section = extract_register_section(design_text)
+    if not section:
+        return []
+
+    failures = []
+    reported = set()
+    for line in section:
+        if not TABLE_ROW_RE.match(line) or TABLE_SEPARATOR_RE.match(line):
+            continue
+
+        cells = line.strip().strip("|").split("|")
+        subject = "|".join(cells[:SUBJECT_CELL_COUNT])
+        ids = []
+        for token in ID_TOKEN_RE.findall(subject):
+            token = token.upper()
+            if token in known_ids and token not in ids:
+                ids.append(token)
+        if not ids:
+            continue  # not a known supersession row: same filter as parse_design_register
+
+        label = " ".join(ROW_LABEL_CLEAN_RE.sub(" ", cells[0]).split()) or "register row"
+        if label in reported:
+            continue
+        if ADR_TOKEN_RE.search(line) or ADR_PATH_RE.search(line):
+            continue
+        reported.add(label)
+        failures.append(
+            _failure(
+                "adr-citation",
+                label,
+                f"register row names {', '.join(ids)} but cites no ADR-NNNN token "
+                f"or adr/NNNN- path (supersession_without_adr); file the decision "
+                f"under .docs/{{project-name}}/design/adr/NNNN-<slug>.md and cite "
+                f"its id in this row",
+            )
+        )
+    return failures
+
+
 # ---------------------------------------------------------------------------
 # test-report.md parsing
 # ---------------------------------------------------------------------------
@@ -1202,6 +1273,7 @@ def build_report(mode, requirements_path, target_path):
         report["lint_failures"] = (
             lint_supersession_annotations(requirements_text, rows, known_ids)
             + lint_fr_citations(target_text, must_have)
+            + lint_adr_citation(target_text, known_ids)
         )
         report["result"] = "FAIL" if report["lint_failures"] else "PASS"
         return report
@@ -1297,6 +1369,42 @@ def sha256_file(path):
         return None
 
 
+def ledger_line_hash(raw):
+    """sha256 of one ledger LINE's bytes, ignoring its terminator.
+
+    Surrounding whitespace (CR included) is stripped so a ledger written on
+    Windows chains identically to the same file read on POSIX. Byte-identical
+    in every gate in this family and in check_ledger.py, which verifies the
+    chain (family convention: one file each, no shared module).
+    """
+    return hashlib.sha256(raw.strip()).hexdigest()
+
+
+def ledger_prev_hash(ledger_path):
+    """The `prev` value for the next record: hash of the last line on disk.
+
+    `"genesis"` when the ledger is missing or holds no non-blank line.
+    """
+    try:
+        with open(ledger_path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return "genesis"
+    last = None
+    for raw in data.splitlines():
+        if raw.strip():
+            last = raw
+    return "genesis" if last is None else ledger_line_hash(last)
+
+
+def ledger_self_hash(record):
+    """sha256 of the record serialized canonically WITHOUT its `self` field."""
+    body = {k: v for k, v in record.items() if k != "self"}
+    return hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":"))
+        .encode("utf-8")).hexdigest()
+
+
 def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code):
     """Append ONE JSON line recording this run. Best-effort by design.
 
@@ -1319,6 +1427,8 @@ def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code):
         p = Path(ledger_path)
         if str(p.parent):
             p.parent.mkdir(parents=True, exist_ok=True)
+        record["prev"] = ledger_prev_hash(p)
+        record["self"] = ledger_self_hash(record)
         with open(p, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record) + "\n")
     except OSError as exc:

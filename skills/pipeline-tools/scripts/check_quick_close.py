@@ -19,6 +19,15 @@ Given the note, the capture and the declared file list, it verifies, in order:
     different change.
   * `capture_missing` / `not_a_capture` -- the How-verified command's run was
     captured to disk by `run_quiet.py --capture`, not narrated
+  * `capture_command_mismatch` -- the capture's sidecar recorded the command
+    the note's `How verified` line NAMES. Until this term existed the gate
+    checked that A capture existed, hashed, was fresh and exited 0 -- never
+    that it captured THE DECLARED CHECK. A real
+    `run_quiet.py --capture ... -- cmd /c exit 0` closed a lane whose note
+    said `npm test`: no forgery, one legitimate tool call, and the only gate
+    this lane has. The comparison is `next_bugfix_route.py --red`'s, reused
+    verbatim (see NOTE GRAMMAR below): TOKEN LISTS, never strings, under
+    three tokenizations
   * `sidecar_missing` / `sidecar_hash_mismatch` -- the capture carries its
     provenance sidecar and still hashes to it (a hand-typed or after-the-fact
     edited capture is authored, not observed)
@@ -34,8 +43,15 @@ Given the note, the capture and the declared file list, it verifies, in order:
   * `changed_file_missing` -- every declared path exists on disk
   * `undeclared_tree_changes` -- the working tree holds nothing dirty beyond
     the declared files and `.docs/`
-  * `frozen_path_modified` -- no `--frozen` path (typically `tests/`) appears
-    in the working tree's diff as a MODIFIED tracked file. This is the
+  * `frozen_path_modified` -- no `--frozen` path appears in the working tree's
+    diff as a MODIFIED tracked file. A `--frozen` value is a path/directory
+    prefix (`tests/`) unless it carries a glob metacharacter, in which case it
+    is matched as a repo-relative forward-slash glob with `**` support
+    (`**/*.spec.ts`, `**/*.Tests/**`) -- so a stack whose tests sit beside the
+    code they cover can be frozen too. `--frozen` has NO default: the gate
+    must not guess what is frozen, because a guessed freeze that misses is
+    indistinguishable from a passing check. The caller (bgpdd-quick Phase 3,
+    handed `detect_stack.py`'s `test_path_globs`) states it. This is the
     mechanical form of the lane's "never edit an existing test to make it
     pass" rule; a newly ADDED test is not an edit and passes, which is what
     keeps the rule from forbidding the lane's own use case.
@@ -49,6 +65,33 @@ Given the note, the capture and the declared file list, it verifies, in order:
 On a clean pass, `--commit` commits EXACTLY the declared files (`git add --
 <paths>`, never `-A`), so a skipped gate is loud -- no commit exists -- rather
 than silent.
+
+NOTE GRAMMAR: `- How verified: <command>`
+----------------------------------------
+The value is ONE argv-runnable command -- what `run_quiet.py` executes
+directly, with no shell -- optionally wrapped in backticks. No pipes, no
+redirects, no `&&`: `run_quiet.py` spawns argv with `shell=False`, so a
+shell-only construct is not re-runnable as written and its tokens could never
+equal a real capture's.
+
+`capture_command_mismatch` compares the value with the sidecar's recorded
+child `argv` on TOKEN LISTS, never on strings, because the recorded argv is
+what the process actually received -- the shell already removed the quoting,
+so `-d '{}'` in the note becomes `['-d', '{}']` in argv and a string compare
+would reject precisely the carefully quoted commands. Three candidate
+tokenizations, ANY match passes, nothing fuzzier (no case-folding, no
+reordering, no dropped tokens):
+
+  1. `shlex.split(posix=True)` -- the shell's own rule, and the one that makes
+     quoted JSON bodies and quoted headers work;
+  2. the same with backslashes doubled first, so a Windows path survives posix
+     mode instead of having its separators eaten as escapes;
+  3. a raw whitespace split -- an unquoted command tokenizes identically under
+     it, and it cannot be defeated by a shlex parse error.
+
+This grammar and this matcher are byte-identical to `next_bugfix_route.py`'s
+`- Command:` check (family convention: duplicated per file, never imported);
+the two gates must not disagree about what "the same command" means.
 
 Deliberate divergences from sibling gates in this family, both labelled per
 CLAUDE.md convention #8:
@@ -88,6 +131,7 @@ import json
 import math
 import os
 import re
+import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -134,6 +178,42 @@ def sha256_file(path):
         return None
 
 
+def ledger_line_hash(raw):
+    """sha256 of one ledger LINE's bytes, ignoring its terminator.
+
+    Surrounding whitespace (CR included) is stripped so a ledger written on
+    Windows chains identically to the same file read on POSIX. Byte-identical
+    in every gate in this family and in check_ledger.py, which verifies the
+    chain (family convention: one file each, no shared module).
+    """
+    return hashlib.sha256(raw.strip()).hexdigest()
+
+
+def ledger_prev_hash(ledger_path):
+    """The `prev` value for the next record: hash of the last line on disk.
+
+    `"genesis"` when the ledger is missing or holds no non-blank line.
+    """
+    try:
+        with open(ledger_path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return "genesis"
+    last = None
+    for raw in data.splitlines():
+        if raw.strip():
+            last = raw
+    return "genesis" if last is None else ledger_line_hash(last)
+
+
+def ledger_self_hash(record):
+    """sha256 of the record serialized canonically WITHOUT its `self` field."""
+    body = {k: v for k, v in record.items() if k != "self"}
+    return hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":"))
+        .encode("utf-8")).hexdigest()
+
+
 def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code,
                   extra=None):
     """Append ONE JSON line recording this run. Best-effort by design."""
@@ -154,6 +234,8 @@ def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code,
         p = Path(ledger_path)
         if str(p.parent):
             p.parent.mkdir(parents=True, exist_ok=True)
+        record["prev"] = ledger_prev_hash(p)
+        record["self"] = ledger_self_hash(record)
         with open(p, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record) + "\n")
     except OSError as exc:
@@ -422,8 +504,90 @@ def check_undeclared_tree(entries, declared):
     return undeclared
 
 
+GLOB_META_RE = re.compile(r"[*?\[]")
+
+
+def glob_to_regex(pattern):
+    """Compile a repo-relative forward-slash glob to an anchored regex.
+
+    Path-segment semantics, so a glob can name a test layout rather than a
+    directory prefix:
+
+      * `**/` matches zero or more leading segments (`**/*.spec.ts` matches
+        `a.spec.ts` AND `src/x/a.spec.ts`)
+      * a trailing/bare `**` matches the rest of the path, separators included
+      * `*` and `?` stop at `/` -- `tests/*.py` is not `tests/a/b.py`
+      * `[...]` is a character class, `[!...]` its negation
+
+    fnmatch is deliberately NOT used: its `*` crosses `/`, which would make
+    `tests/*.py` silently mean `tests/**/*.py`.
+    """
+    out = []
+    i, n = 0, len(pattern)
+    while i < n:
+        c = pattern[i]
+        if c == "*":
+            if pattern[i:i + 3] == "**/":
+                out.append(r"(?:[^/]+/)*")
+                i += 3
+                continue
+            if pattern[i:i + 2] == "**":
+                out.append(r".*")
+                i += 2
+                continue
+            out.append(r"[^/]*")
+            i += 1
+        elif c == "?":
+            out.append(r"[^/]")
+            i += 1
+        elif c == "[":
+            end = i + 1
+            if end < n and pattern[end] in "!^":
+                end += 1
+            if end < n and pattern[end] == "]":
+                end += 1
+            while end < n and pattern[end] != "]":
+                end += 1
+            if end >= n:                      # unterminated class: literal '['
+                out.append(re.escape("["))
+                i += 1
+                continue
+            body = pattern[i + 1:end]
+            if body[:1] in ("!", "^"):
+                body = "^" + body[1:]
+            out.append("[" + body.replace("\\", "\\\\") + "]")
+            i = end + 1
+        else:
+            out.append(re.escape(c))
+            i += 1
+    return re.compile("^" + "".join(out) + "$")
+
+
+def normalize_frozen_pattern(raw, repo):
+    """Comparison form for a --frozen GLOB: forward slashes, case-folded.
+
+    A glob is not a path, so it never goes through `normalize_repo_path`
+    (which resolves against the filesystem and would mangle `*`). It is
+    normalized the same two ways the candidate paths are -- backslashes to
+    forward slashes so a Windows-typed `tests\\**` still matches, and
+    `os.path.normcase` so a case-insensitive platform compares like one.
+    `normcase` re-introduces backslashes on Windows, so they are stripped out
+    again afterwards -- exactly as `normalize_repo_path` does.
+    """
+    text = str(raw).replace("\\", "/")
+    while text.startswith("./"):
+        text = text[2:]
+    return os.path.normcase(text).replace("\\", "/")
+
+
 def check_frozen(entries, frozen, repo):
-    """Frozen paths (or paths under a frozen directory) that were EDITED.
+    """Frozen paths, prefixes or GLOBS that were EDITED.
+
+    A `--frozen` value with no glob metacharacter (`*`, `?`, `[`) is a path or
+    directory prefix, as before -- `tests/` still freezes the whole test root.
+    A value with one is matched as a glob against the repo-relative,
+    forward-slash path (`**/*.spec.ts`, `**/*.Tests/**`), so a lane can freeze
+    the test LAYOUT its stack actually uses rather than only a directory.
 
     Only tracked modifications count (`is_tracked_change`): the rule this
     enforces is "never edit an existing test to make it pass", and a brand new
@@ -432,13 +596,17 @@ def check_frozen(entries, frozen, repo):
     """
     hits = []
     for raw in frozen:
-        norm = normalize_repo_path(raw, repo).rstrip("/")
-        prefix = norm + "/"
+        if GLOB_META_RE.search(str(raw)):
+            matcher = glob_to_regex(normalize_frozen_pattern(raw, repo)).match
+        else:
+            norm = normalize_repo_path(raw, repo).rstrip("/")
+            prefix = norm + "/"
+            matcher = (lambda cand, norm=norm, prefix=prefix:
+                       cand == norm or cand.startswith(prefix))
         for status, candidate in entries:
             if not is_tracked_change(status):
                 continue
-            cand = candidate.rstrip("/")
-            if cand == norm or cand.startswith(prefix):
+            if matcher(candidate.rstrip("/")):
                 if candidate not in hits:
                     hits.append(candidate)
     return hits
@@ -447,6 +615,45 @@ def check_frozen(entries, frozen, repo):
 # ---------------------------------------------------------------------------
 # The note
 # ---------------------------------------------------------------------------
+
+def normalize_command(text):
+    """The note's `How verified` value: backticks and outer space stripped.
+
+    Byte-identical to next_bugfix_route.py's helper of the same name (family
+    convention: one file each, no shared module).
+    """
+    return (text or "").strip().strip("`").strip()
+
+
+def command_token_candidates(command):
+    """Every legitimate tokenization of the note's command string.
+
+    See NOTE GRAMMAR in the module docstring for why the comparison is on
+    token lists and what the three candidates are. Byte-identical to
+    next_bugfix_route.py's function of the same name.
+    """
+    candidates = []
+    for label, text in (("shlex", command),
+                        ("shlex-escaped", command.replace("\\", "\\\\"))):
+        try:
+            tokens = shlex.split(text, posix=True)
+        except ValueError:
+            continue    # unbalanced quotes: that candidate does not apply
+        if tokens:
+            candidates.append((label, tokens))
+    raw = command.split()
+    if raw:
+        candidates.append(("whitespace", raw))
+    return candidates
+
+
+def command_matches(command, argv):
+    """(matched?, the strategy name that matched, or None)."""
+    for label, tokens in command_token_candidates(command):
+        if tokens == argv:
+            return True, label
+    return False, None
+
 
 def parse_note(path):
     """(fields dict, problems list). Missing/placeholder values read as absent."""
@@ -495,6 +702,8 @@ def build_report(args):
         "size_ok": None,
         "capture_sidecar": None,
         "capture_body_agrees": None,
+        "capture_argv": None,
+        "capture_command_match": None,
         "capture_exit_code": None,
         "capture_finished": None,
         "newest_changed_file": None,
@@ -574,6 +783,40 @@ def build_report(args):
             report["capture_body_agrees"] = code is None
             if code:
                 fail(code, detail)
+            # ...and the sidecar recorded THE DECLARED CHECK. Everything
+            # above proves the capture is a real, unedited recording of
+            # SOMETHING; this is the term that makes it a recording of the
+            # command the note names (see NOTE GRAMMAR).
+            argv = meta.get("argv")
+            if not isinstance(argv, list) or not argv:
+                fail("capture_command_mismatch",
+                     "the sidecar records no child argv, so nothing ties this "
+                     "capture to the note's 'How verified' command -- re-take "
+                     "it with `run_quiet.py --capture <path> -- <command>`")
+            elif fields["how verified"]:
+                argv = [str(a) for a in argv]
+                report["capture_argv"] = argv
+                expected = normalize_command(fields["how verified"])
+                matched, strategy = command_matches(expected, argv)
+                report["capture_command_match"] = strategy
+                if not matched:
+                    tried = [toks for _, toks
+                             in command_token_candidates(expected)]
+                    fail("capture_command_mismatch",
+                         "the capture's sidecar recorded argv {0!r}, which "
+                         "matches none of the tokenizations of the note's "
+                         "'How verified' command {1!r} ({2!r}) -- comparison "
+                         "is on token lists, not strings. This capture "
+                         "records a different run than the check the note "
+                         "declares: re-run the declared command through "
+                         "`run_quiet.py --capture`, or correct the note to "
+                         "name the command that was actually run (a "
+                         "'How verified' value must be one argv-runnable "
+                         "command -- no pipes, redirects or `&&`)".format(
+                             argv, expected, tried))
+            else:
+                report["capture_argv"] = [str(a) for a in argv]
+
             exit_code = meta.get("exit_code")
             if not isinstance(exit_code, int):
                 fail("capture_exit_nonzero",
@@ -640,8 +883,13 @@ def build_report(args):
         fail("frozen_path_modified",
              "frozen path(s) were edited: {0} -- this lane never edits an "
              "existing test to make it pass (adding a NEW test is fine). Fix "
-             "the code, or state why the test itself was wrong and take the "
-             "change to /bgpdd-bugfix where a RED capture proves it.".format(
+             "the code instead. If the edited path is NOT a test the fix has "
+             "to leave alone -- a rename that legitimately touches the spec "
+             "beside the code, say -- the escape is to narrow the glob: pass "
+             "a `--frozen` value that still covers the tests this change must "
+             "not touch, and record why in the note's `## Result` section. "
+             "Only a defect whose test was genuinely WRONG goes to "
+             "/bgpdd-bugfix, where a RED capture has to prove it.".format(
                  ", ".join(report["frozen_modified"])))
 
     # --- 11. the size bound ------------------------------------------------
@@ -675,8 +923,11 @@ def build_parser():
                         help="lane size bound (default {0}; no waiver "
                              "exists)".format(DEFAULT_MAX_CHANGED_FILES))
     parser.add_argument("--frozen", action="append", default=[],
-                        help="a path or directory that must NOT appear in the "
-                             "diff (typically tests/); repeatable")
+                        help="a path, directory or GLOB whose existing files "
+                             "must NOT be edited (tests/, **/*.spec.ts, "
+                             "**/*.Tests/**); repeatable. No default: the "
+                             "caller states what is frozen, the gate never "
+                             "guesses")
     parser.add_argument("--milestone", help="the slug, scoping ledger records")
     parser.add_argument("--ledger",
                         help="append one JSON record per run to this path")
@@ -1027,6 +1278,123 @@ def run_self_test():
             r = self._run(note, capture, [str(self.repo / rel)])
             self.assertEqual(r["result"], "PASS", r["problems"])
             self.assertTrue(r["capture_body_agrees"])
+            self.assertEqual(r["capture_argv"], self.cmd)
+            self.assertEqual(r["capture_command_match"], "shlex")
+
+        # -- capture_command_mismatch (audit3 F3) -----------------------
+
+        def test_capture_of_another_command_is_a_mismatch(self):
+            rel = self._edit()
+            note = self._note()
+            capture = self._capture(cmd=["cmd", "/c", "exit", "0"])
+            r = self._run(note, capture, [str(self.repo / rel)])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("capture_command_mismatch", r["problem_codes"])
+            self.assertIn("token lists, not strings",
+                          " ".join(r["problems"]))
+
+        def test_note_command_with_quoted_json_body_matches_its_argv(self):
+            """The case a STRING compare rejected: the shell ate the quotes."""
+            rel = self._edit()
+            argv = ["curl", "--fail", "-X", "POST", "http://h/o", "-d", "{}"]
+            note = self._note(
+                how="curl --fail -X POST http://h/o -d '{}'")
+            capture = self._capture(cmd=argv)
+            r = self._run(note, capture, [str(self.repo / rel)])
+            self.assertEqual(r["result"], "PASS", r["problems"])
+            self.assertEqual(r["capture_command_match"], "shlex")
+
+        def test_a_backslashed_windows_path_matches_via_the_escaped_candidate(self):
+            rel = self._edit()
+            argv = [r"C:\tools\npm.cmd", "test"]
+            note = self._note(how=r"C:\tools\npm.cmd test")
+            capture = self._capture(cmd=argv)
+            r = self._run(note, capture, [str(self.repo / rel)])
+            self.assertEqual(r["result"], "PASS", r["problems"])
+            self.assertEqual(r["capture_command_match"], "shlex-escaped")
+
+        def test_an_unbalanced_quote_in_the_note_falls_back_to_whitespace(self):
+            rel = self._edit()
+            argv = ["npm", "test", "--", "\"broken"]
+            note = self._note(how='npm test -- "broken')
+            capture = self._capture(cmd=argv)
+            r = self._run(note, capture, [str(self.repo / rel)])
+            self.assertEqual(r["result"], "PASS", r["problems"])
+            self.assertEqual(r["capture_command_match"], "whitespace")
+
+        def test_a_reordered_or_trimmed_command_is_still_a_mismatch(self):
+            rel = self._edit()
+            note = self._note(how="npm test --silent")
+            for argv in (["npm", "--silent", "test"],   # reordered
+                         ["npm", "test"],               # a token dropped
+                         ["NPM", "test", "--silent"]):  # case-folded
+                capture = self._capture(cmd=argv, name="c.md")
+                r = self._run(note, capture, [str(self.repo / rel)])
+                self.assertIn("capture_command_mismatch", r["problem_codes"],
+                              argv)
+
+        def test_a_sidecar_with_no_argv_is_a_mismatch(self):
+            rel = self._edit()
+            note = self._note()
+            capture = self._capture()
+            side = sidecar_path_for(Path(capture))
+            meta = json.loads(side.read_text(encoding="utf-8"))
+            del meta["argv"]
+            side.write_text(json.dumps(meta), encoding="utf-8")
+            r = self._run(note, capture, [str(self.repo / rel)])
+            self.assertIn("capture_command_mismatch", r["problem_codes"])
+            self.assertIn("records no child argv", " ".join(r["problems"]))
+
+        def test_the_mismatch_check_is_skipped_when_the_note_has_no_command(self):
+            """An unusable note is `note_incomplete`, not two findings."""
+            rel = self._edit()
+            note = self._note(lines=[
+                "# Quick note", "", "- What: x", "- Where: src/a.py",
+                "- How verified: <command>", ""])
+            capture = self._capture(cmd=["cmd", "/c", "exit", "0"])
+            r = self._run(note, capture, [str(self.repo / rel)])
+            self.assertIn("note_incomplete", r["problem_codes"])
+            self.assertNotIn("capture_command_mismatch", r["problem_codes"])
+
+        def test_the_matcher_agrees_with_next_bugfix_route(self):
+            """Both gates must mean the same thing by "the same command".
+
+            The drift guard for a helper this family duplicates rather than
+            imports: compares the parsed CODE of the three token functions
+            (docstrings dropped -- each file names its own field), so a
+            reworded rationale is free and a changed candidate list is not.
+            """
+            import ast
+            sibling = Path(__file__).resolve().parent / "next_bugfix_route.py"
+            if not sibling.is_file():
+                self.skipTest("next_bugfix_route.py not found")
+
+            def shapes(path):
+                tree = ast.parse(Path(path).read_text(encoding="utf-8",
+                                                      errors="replace"))
+                out = {}
+                for node in tree.body:
+                    if not isinstance(node, ast.FunctionDef):
+                        continue
+                    if node.name not in ("normalize_command",
+                                         "command_token_candidates",
+                                         "command_matches"):
+                        continue
+                    body = list(node.body)
+                    if (body and isinstance(body[0], ast.Expr)
+                            and isinstance(body[0].value, ast.Constant)
+                            and isinstance(body[0].value.value, str)):
+                        body = body[1:]
+                    out[node.name] = "\n".join(ast.dump(n) for n in body)
+                return out
+
+            mine, theirs = shapes(__file__), shapes(sibling)
+            self.assertEqual(sorted(mine), ["command_matches",
+                                            "command_token_candidates",
+                                            "normalize_command"])
+            self.assertEqual(mine, theirs,
+                             "the command matcher has drifted from "
+                             "next_bugfix_route.py's")
 
         def test_one_second_render_skew_still_passes(self):
             """The pre-2.4 build path stamped `Captured` just after `finished`."""
@@ -1203,6 +1571,108 @@ def run_self_test():
             self.assertEqual(r["result"], "PASS", r["problems"])
             self.assertEqual(r["frozen_modified"], [])
 
+        # -- --frozen as a GLOB -------------------------------------------
+
+        def test_glob_catches_a_spec_file_outside_any_test_directory(self):
+            """The case `--frozen tests/` cannot see: a colocated spec."""
+            rel = "src/widget.spec.ts"
+            self._edit(rel, "it('x', () => {});\n")
+            self._git("add", "-A")
+            self._git("commit", "-q", "-m", "add spec")
+            self._edit(rel, "it('x', () => { expect(1).toBe(1); });\n")
+            time.sleep(0.01)
+            note = self._note(where=rel)
+            capture = self._capture()
+            r = self._run(note, capture, [str(self.repo / rel)],
+                          ["--frozen", "tests/", "--frozen", "**/*.spec.ts"])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("frozen_path_modified", r["problem_codes"])
+            self.assertIn("src/widget.spec.ts", r["frozen_modified"])
+
+        def test_glob_star_does_not_cross_a_separator(self):
+            """`tests/*.py` is not `tests/**/*.py` -- fnmatch would say it is."""
+            rel = "tests/deep/test_b.py"
+            self._edit(rel, "def test_b():\n    assert True\n")
+            self._git("add", "-A")
+            self._git("commit", "-q", "-m", "add deep test")
+            self._edit(rel, "def test_b():\n    assert 1\n")
+            time.sleep(0.01)
+            note = self._note(where=rel)
+            capture = self._capture()
+            r = self._run(note, capture, [str(self.repo / rel)],
+                          ["--frozen", "tests/*.py"])
+            self.assertEqual(r["frozen_modified"], [])
+            r2 = self._run(note, capture, [str(self.repo / rel)],
+                           ["--frozen", "tests/**"])
+            self.assertIn("frozen_path_modified", r2["problem_codes"])
+
+        def test_leading_doublestar_matches_zero_segments(self):
+            rel = "a.spec.ts"
+            self._edit(rel, "it('x', () => {});\n")
+            self._git("add", "-A")
+            self._git("commit", "-q", "-m", "add root spec")
+            self._edit(rel, "it('y', () => {});\n")
+            time.sleep(0.01)
+            note = self._note(where=rel)
+            r = self._run(note, self._capture(), [str(self.repo / rel)],
+                          ["--frozen", "**/*.spec.ts"])
+            self.assertIn("frozen_path_modified", r["problem_codes"])
+
+        def test_windows_separators_in_a_glob_still_match(self):
+            rel = "tests/deep/test_b.py"
+            self._edit(rel, "def test_b():\n    assert True\n")
+            self._git("add", "-A")
+            self._git("commit", "-q", "-m", "add deep test")
+            self._edit(rel, "def test_b():\n    assert 1\n")
+            time.sleep(0.01)
+            note = self._note(where=rel)
+            r = self._run(note, self._capture(), [str(self.repo / rel)],
+                          ["--frozen", r"tests\**\test_*.py"])
+            self.assertIn("frozen_path_modified", r["problem_codes"])
+
+        def test_a_new_file_matching_a_glob_still_passes(self):
+            """The add-vs-edit rule is unchanged by glob matching."""
+            rel = "src/new.spec.ts"
+            self._edit(rel, "it('new', () => {});\n")
+            time.sleep(0.01)
+            note = self._note(what="add a spec for the widget", where=rel)
+            r = self._run(note, self._capture(), [str(self.repo / rel)],
+                          ["--frozen", "**/*.spec.ts"])
+            self.assertEqual(r["result"], "PASS", r["problems"])
+            self.assertEqual(r["frozen_modified"], [])
+
+        def test_a_literal_frozen_value_is_still_a_prefix_not_a_glob(self):
+            note, capture, changed = self._happy()
+            r = self._run(note, capture, changed, ["--frozen", "src"])
+            self.assertIn("frozen_path_modified", r["problem_codes"])
+
+        def test_glob_to_regex_unit_cases(self):
+            cases = [
+                ("**/*.test.*", "src/a.test.js", True),
+                ("**/*.test.*", "a.test.js", True),
+                ("**/*.test.*", "src/a.js", False),
+                ("**/*.Tests/**", "app.tests/foo.cs", True),
+                ("**/*.Tests/**", "src/app.tests/deep/foo.cs", True),
+                ("**/*.Tests/**", "src/app/foo.cs", False),
+                ("**/test_*.py", "tests/test_a.py", True),
+                ("**/test_*.py", "tests/a.py", False),
+                ("**/__tests__/**", "src/__tests__/a.ts", True),
+                ("tests/**", "tests/a/b/c.py", True),
+                ("tests/**", "src/tests/a.py", False),
+                ("**/*.Tests.ps1", "build/deploy.tests.ps1", True),
+                ("src/?.py", "src/a.py", True),
+                ("src/?.py", "src/ab.py", False),
+                ("src/[ab].py", "src/a.py", True),
+                ("src/[!ab].py", "src/a.py", False),
+                ("src/[!ab].py", "src/c.py", True),
+            ]
+            for pattern, path, expected in cases:
+                # normalize_frozen_pattern lowercases on Windows; the fixture
+                # paths above are already lowercase where case would matter.
+                rx = glob_to_regex(normalize_frozen_pattern(pattern, "."))
+                self.assertEqual(bool(rx.match(path)), expected,
+                                 "%s vs %s" % (pattern, path))
+
         # -- the size bound ---------------------------------------------
 
         def test_size_bound_exceeded_names_the_escalation_lanes(self):
@@ -1317,10 +1787,40 @@ def run_self_test():
                             "import sys; sys.exit(0)"],
                            capture_output=True, timeout=120)
             self.assertTrue(sidecar_path_for(cap).is_file())
-            note = self._note()
+            # The note names the command that RAN, interpreter path included:
+            # `capture_command_mismatch` compares the sidecar's argv, and the
+            # child's argv[0] is whatever the caller handed run_quiet.py. A
+            # backslashed Windows path survives via the shlex-escaped
+            # candidate.
+            note = self._note(how='{0} -c "import sys; sys.exit(0)"'.format(
+                sys.executable))
             r = self._run(note, str(cap), [str(self.repo / rel)])
             self.assertEqual(r["result"], "PASS", r["problems"])
             self.assertEqual(r["capture_exit_code"], 0)
+            self.assertEqual(r["capture_argv"][1:],
+                             ["-c", "import sys; sys.exit(0)"])
+
+        def test_a_real_capture_of_a_different_command_fails(self):
+            """audit3 F3: the qc2.py repro, as a case.
+
+            A genuine `run_quiet.py --capture` of a trivially passing command,
+            cited by a note whose `How verified` says something else. No
+            forgery; one legitimate tool call closed the lane.
+            """
+            run_quiet = Path(__file__).resolve().parent / "run_quiet.py"
+            if not run_quiet.is_file():
+                self.skipTest("run_quiet.py not found beside this script")
+            rel = self._edit()
+            cap = self.repo / ".docs" / "quick" / "evidence" / "other.md"
+            subprocess.run([sys.executable, str(run_quiet), "--capture",
+                            str(cap), "--", sys.executable, "-c",
+                            "import sys; sys.exit(0)"],
+                           capture_output=True, timeout=120)
+            note = self._note(how="npm test")
+            r = self._run(note, str(cap), [str(self.repo / rel)])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("capture_command_mismatch", r["problem_codes"])
+            self.assertIsNone(r["capture_command_match"])
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(QuickCloseTests)
     result = unittest.TextTestRunner(verbosity=1).run(suite)

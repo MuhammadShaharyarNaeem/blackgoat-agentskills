@@ -11,7 +11,23 @@ Systematic root-cause debugging for test failures, build errors, runtime bugs, a
 
 A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no editing tests to pass, no unobserved claims (`base-persona.md`, Evidence Integrity). Over three files, or shared behaviour: route via `/bg` to a lane.
 
+## Quick card
+
+Derived from the contract below for a ≤ 3-file change; no new rules (convention #8 — deliberately narrower than the full contract, which binds inside any lane).
+
+1. A defect that predates your edit is `/bgpdd-bugfix`, never quick — this card covers only an error your own change just caused (§ Escalate When).
+2. Reproduce it before touching anything; unreproduced is unfixable (§ Workflow, REPRODUCE).
+3. State one hypothesis, then make one change (§ Rules).
+4. Re-run the exact check that failed, at the tier it was reported at (§ Workflow, VERIFY).
+5. Past three files or three failed attempts → stop and escalate (§ Escalate When).
+
+- Brief → the quick note (What / Where / How verified)
+- Artifact → the capture at `{quick-root}/evidence/check.md`
+- Handoff → the `## Result` bullet in `note.md`
+
 ## Worker Execution Contract
+
+For a change of ≤ 3 files outside a pipeline, the Quick card above is the contract; the full contract applies inside a lane.
 
 ### Core Principle
 
@@ -47,6 +63,7 @@ Never guess. Reproduce first, then trace systematically. Fix the root cause, not
 
 ### Escalate When
 
+- **The defect predates the change in front of you** → it is a `/bgpdd-bugfix` item, not a debugging pass inside this change. Report it to the Orchestrator, which routes it; this contract covers an error the current change just caused.
 - The bug cannot be reproduced in your environment → ask manager.
 - Root cause is in a dependency you cannot modify → ask manager.
 - 3 failed fix attempts → halt, document findings, report to manager.

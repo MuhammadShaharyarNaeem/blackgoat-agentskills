@@ -23,6 +23,8 @@ Before asking anything, locate or initialize the transcript artifact your core p
 
 Iteratively refine the initial concept into a detailed specification.
 
+**This section is the single owner of the one-question-at-a-time Q&A protocol.** `{PLUGIN_ROOT}/prompt-engineering/SKILL.md` (§ Step 2) cites it and adds three labelled refinements for prompt work; no other skill restates these rules.
+
 **Constraints:**
 - **Ask ONLY ONE question at a time** and wait for the user's response before the next.
 - NEVER list multiple questions at once.

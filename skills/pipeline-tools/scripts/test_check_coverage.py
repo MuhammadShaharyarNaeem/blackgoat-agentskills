@@ -957,6 +957,59 @@ class TestFrCitationLint(unittest.TestCase):
         self.assertEqual([f["task"] for f in failures], ["FR-1", "FR-10"])
 
 
+class TestAdrCitationLint(unittest.TestCase):
+    KNOWN_IDS = {"FR-1", "FR-2"}
+
+    def _lint(self, design_text, known_ids=None):
+        return cc.lint_adr_citation(design_text, known_ids or self.KNOWN_IDS)
+
+    def test_row_with_adr_token_passes(self):
+        design = (
+            "## Divergence & Supersession Register\n"
+            "| **SUP-01** | **FR-2** | link replaces email | see ADR-0007 |\n"
+        )
+        self.assertEqual(self._lint(design), [])
+
+    def test_row_with_adr_path_passes(self):
+        design = (
+            "## Divergence & Supersession Register\n"
+            "| **SUP-01** | **FR-2** | link replaces email | "
+            "design/adr/0007-signed-link.md |\n"
+        )
+        self.assertEqual(self._lint(design), [])
+
+    def test_row_without_adr_citation_fails(self):
+        design = (
+            "## Divergence & Supersession Register\n"
+            "| **SUP-01** | **FR-2** | link replaces email | no relay provisioned |\n"
+        )
+        failures = self._lint(design)
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]["check"], "adr-citation")
+        self.assertEqual(failures[0]["task"], "SUP-01")
+        self.assertIn("FR-2", failures[0]["detail"])
+        self.assertIn("supersession_without_adr", failures[0]["detail"])
+
+    def test_no_register_section_passes(self):
+        self.assertEqual(self._lint("# Design\n\n## 4. Data Model\n"), [])
+
+    def test_row_with_no_known_id_is_not_a_supersession_row(self):
+        design = (
+            "## Divergence & Supersession Register\n"
+            "| **DIV-01** | the error-envelope playbook | consumes FR-9 budget |\n"
+        )
+        # FR-9 is not in KNOWN_IDS, so this row is not linted at all.
+        self.assertEqual(self._lint(design), [])
+
+    def test_same_row_reported_once(self):
+        design = (
+            "## Divergence & Supersession Register\n"
+            "| **SUP-01** | **FR-2** | no ADR here, cited **FR-1** too |\n"
+        )
+        failures = self._lint(design)
+        self.assertEqual(len(failures), 1)
+
+
 class TestDomainTagLint(unittest.TestCase):
     def _lint(self, plan_text):
         return cc.lint_domain_tags(plan_text)

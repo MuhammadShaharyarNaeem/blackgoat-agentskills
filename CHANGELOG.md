@@ -3,6 +3,96 @@
 All notable changes to the `blackgoat-agentskills` plugin are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [2.6.1] — 2026-09-08
+
+The audit-fix release. The 2026-09-07 whole-plugin audit (nine lenses, 21 metrics) found 23 confirmed Blockers on the 2.6.0 tree; every one is closed here. Six gates that passed fabricated input now fail closed, the hook covers the shell writes and the bugfix route it missed, two dead pipeline routes are wired, four one-ended contracts in the 2.6.0 skills are documented at both ends, and the eval instrument is decontaminated.
+
+### Migration notes — gate-contract changes
+- **`check_quick_close.py` — `capture_command_mismatch`.** The capture's recorded `argv` must be the note's `- How verified:` command (token match, as `next_bugfix_route.py --red`). A note whose capture ran something else now fails; no waiver. `frozen_path_modified`'s message names the escape (narrow the glob, record why in `## Result`) instead of routing to bugfix.
+- **`check_red_green.py --green-runs N`** requires N distinct process identities (sidecar `started`+`pid`): one capture cited N times, or N copies of it, is one run (`green_runs_not_distinct`). Identical bodies from distinct runs are accepted. Single-green invocations are unchanged.
+- **`check_agent_report.py`** — every check line that cites a capture must carry the backticked command and it must match the capture's `argv` (`capture_command_mismatch`, never waived).
+- **`check_openapi_diff.py`** — a compared schema carrying `oneOf`, `anyOf` or `not` is `unanalyzable_schema`, exit 2, no verdict, not waivable; `nullable: true → false` on a response is breaking (`nullable_removed`). The JSON gained `unanalyzable` and `warnings` arrays.
+- **`check_handoff.py --advisory`** (opt-in) makes `<artifact>`/`<changed_skills>` optional for the two artifact-free handoffs the pipelines request (Forge's propose in `/bgpdd-learn`, Aria Mode 2 in `/bgpdd-build`); the ledger record carries `advisory: true`. `<status>` stays `COMPLETE|PARTIAL|BLOCKED`; the verification verdict belongs in the body.
+- **`mark_milestone.py --reopen <milestone> --evidence <path> --reason "<text>" --ledger <path>`** removes a milestone's `[x]` (heading bytes unchanged) so `next_milestone.py` returns it; this is how `/bgpdd-shipping`'s exit-2 finding re-enters `/bgpdd-build`. **`--require-game-tape`** on `update_state.py` and `mark_milestone.py` accepts any `## bgpdd-<lane> — …` heading (widening only).
+- **`record_run.py`** refuses a `--model` that names no tier (`model_unknown`, exit 2) instead of recording `tier: null`; `dep` is a producer for the verifier-below-producer check.
+- **`check_tier1_provenance.py`** — a future-dated stamp fails (`stamp_date_future`); new `--verify-current` (consumer mode) fails on `tier1_drift` when a stamped sha is not the repo's HEAD, waivable with `--allow-drift "<reason>"`; plan, lite, build, verify and shipping now run it at entry.
+- **The guard hook** denies shell writes to gate artifacts and frozen tests (`>>`, `tee`, `Set-Content`/`Out-File`, `python -c open()`, `sed -i`, `perl -pi`, `mv`/`rm`, `git checkout --`), arms the bugfix rules on the feature route, widens the git surface (`am`, `rebase`, `stash`, `notes`, `tag`, `gh pr merge`), no longer denies a lane's own merge after its commit gate passed with `--commit`, and does not arm the commit rule in a `bgpdd-verify` lane (its specs are committed by hand, step 4b).
+- **BREAKING layout — bugfix feature route.** `{bugfix-root}` on the feature route is now `.docs/{project-name}/implementation/bugs/{bug-slug}/`; the two shared epic reports (`test-report.md`, `review-report.md`) stay at `{report-root}` = `.docs/{project-name}/implementation/`. An in-flight 2.6.0 bug keeps working where it is: `pipeline_driver.py` and the hook recognise the old shape. Do not move it mid-lane (the intake ledger hash would go `ledger_stale`); finish it, or move the folder and re-run intake and route.
+- **`check_runtime_evidence.py` never parsed audit captures** — `dependency-upgrade-patterns` now cites them on an `**Audit capture:**` line under `evidence/upgrade/`; a 2.6.0 report citing them as `**Runtime evidence:**` fails that gate (it always did).
+- **Plan tasks carry two new tags** owned by `planning-and-task-breakdown` § Contract-change tags: `[breaking: <kind> — <consumer impact>]` on any task authorising a breaking API-contract change (the builder returns the task unbuilt without it), and a flag-introducing task is written together with its removal task. Alex loads `api-contract-evolution` and `feature-flag-patterns` conditionally.
+
+### Fixed
+- Pipelines: shipping stamps `pipeline: bgpdd-shipping` at Step 0.2b, so its resume path and build's re-entry are reachable and the resume branch no longer re-applies `--require-go` to an exit verdict; shipping's exit-2 route reopens the affected milestone before handing to build; verify passes `check_acceptance_suite.py --emit-gate-args` and consumes `gate_args.argv` (the "no emitter exists" disclaimer was false); every agent handoff in bugfix, build, verify, lite, discovery and learn is validated with `check_handoff.py --since --ledger` and the gate is bound into bugfix's ledger-gates list; learn reads every lane root; discovery records a run log and names its Tier-1 consumers; build appends review sections, scopes `check_agent_report.py` by milestone, reads `artifacts.plan`; the branch-close protocol is owned once in `pipeline-skeleton.md`; quick admits any skill carrying a `## Quick card` (its spine said three skills while fourteen cards promised entry), keeps contract §1 timeout discipline and §2 halt triggers, and states the tree-hygiene rule when escalating to bugfix.
+- Skills: `shipping-and-launch` cites `feature-flag-patterns` as the flag owner instead of restating a second lifecycle (the 2-week bound is labelled per #8); worker Escalate rows in the five 2.6.0 skills end at the Orchestrator (convention #6); `agents/mason.md` cited with a resolvable path; `pip audit` → `pip-audit`; argv-safe capture recipe in the privacy checklist; observability's intake fields match the bug-report template; `X-Correlation-Id`/`correlation_id` fixed at both ends; the one-question protocol has one owner.
+- Personas: `base-persona.md` names `run_quiet.py --timeout`; Quinn's jobs row no longer fires on a plain relational write; Luna's Reviewer Directive covers every methodology she loads; `depends-on` completed for rex, luna, mason, nova; `source`/`date_added` parity.
+- Docs: README version, agent model column (6 of 16 were wrong), the five 2.6.0 skills filed under Methodology skills; `pipeline-tools/SKILL.md` documents `--milestone` for `check_always_on.py`/`check_tier1_provenance.py`, `adr-citation`, the unkeyed-sidecar blast radius (one forger, seven gates), the authored nature of the run log, and its own size as a labelled convention-#1 divergence; `check_ledger.py`'s drift guard had silently dropped two writers (a missing comma).
+- Evals: 35 pre-instrumentation trigger records archived out of the live `results.jsonl` (110 valid records remain); fixture-port pre-flight covers 15 ports with a drift self-test; the INFRA `rate limit` pattern no longer swallows a Cipher rate-limiting finding; zero-LLM records carry `case_sha256`; `weekly-check.ps1` wires `openapi-diff-adversarial`.
+
+### Added
+- CLAUDE.md convention #10 owns the `## Quick card` shape; all 17 cards conform (scripted check). `skills/agent-squad/references/authoring-agents-and-skills.md` holds the agent/skill authoring procedure (moved out of CLAUDE.md with the repo map and the heuristic list, which `agent-audit` owns).
+- `runtime-evidence/references/environment-manifest.md` (the manifest's authoring half; spine 3,039 → 2,447 words, Quinn −620 and Vera −567 wake-up words); `dotnet-backend-patterns/references/solid-and-separation.md`; `check_always_on.py --require-row-agreement` (strict trim check, unarmed by default; the index states the description is canonical); `check_dependency_tables.py --help`.
+- Self-tests: guard_action 42 → 88, check_openapi_diff 38 → 53, check_quick_close 46 → 55, check_red_green 31 → 38, check_agent_report 38 → 47, check_handoff 26 → 36, mark_milestone 36 → 50, update_state 44 → 47, check_tier1_provenance 16 → 27, record_run 31 → 35, check_ledger 21 → 23, pipeline_driver 59 → 61, check_always_on 18 → 23, check_dependency_tables 9 → 14. Zero-LLM suites: mechanical-pipeline 28 → 45, bugfix-gates-adversarial 18 → 21, openapi-diff-adversarial 25 → 34.
+
+### Known, not fixed
+- `check_commit_gate.py` still exits 0 on a wholly forged evidence base (capture, sidecar, ledger record and run log are all authored); the limit is now stated in `pipeline-tools/SKILL.md` § Limits. The five 2.6.0 spines sit at 1,536–1,605 words against a ~1,200 target; reaching it means deleting rules. Ten of fifteen agents still exceed 2,500 wake-up words. The 36 eval cases with no valid record (quick-lane, the three 2.6.0 contract cases, four pressure cases, 22 trigger cases) remain unrun by decision; the gate changes above are verified by self-tests and the zero-LLM suites only until they run.
+
+## [2.6.0] — 2026-09-07
+
+The daily-driver and coverage release: the quick lane gets cheaper and stack-aware, every methodology carries a Quick card for inline use, and five new skills cover the work that happens between features and in production.
+
+### Migration notes
+- **Quick lane defaults come from `detect_stack.py`.** Phase 0 now proposes the check command and the frozen test globs from the detected stack; you confirm or replace the command, never the lane silently. `check_quick_close.py --frozen` accepts globs; metacharacter-free values behave exactly as before.
+- **`check_coverage.py --design` gains `adr-citation`.** A Divergence & Supersession Register row that cites a known FR/NFR must also cite the ADR that authorised it (`ADR-NNNN` or an `adr/NNNN-` path). Design documents written under 2.5.0 with register rows fail this lint until an ADR is written and cited.
+- **`check_openapi_diff.py` is bound into build's commit gate for `[API]` milestones with an OpenAPI document and into shipping Step 3.** A breaking change needs `--allow-breaking "<reason>"`, recorded in the chained ledger.
+- **New persona dependency rows are all conditional**; no agent's Always wake-up load changed.
+
+### Added
+- **Quick lane usability**: the mandatory read is trimmed to the contract's Runtime Neutrality and §3 plus the skeleton (labelled refinement; roughly 3,500 fewer words per run); stack-driven `suggested_check_commands` and `test_path_globs` in `detect_stack.py` (18 → 26 self-tests); glob-aware `--frozen` in `check_quick_close.py` (39 → 46); the driver prints the suggested command and the detected globs (52 → 59); the "test went red while I changed it stays in quick, a pre-existing defect is bugfix" rule in quick and `/bg`; quick's escalation seeds the bug report from the note.
+- **Quick cards** in the eight directly-invocable methodology skills (≤ 150 words) and four stack skills (≤ 100): the five contract rules that matter at ≤ 3 files, each citing its section, plus the inline mapping (note = brief, capture = artifact, Result bullet = handoff).
+- **New skills**: `dependency-upgrade-patterns`, `feature-flag-patterns`, `jobs-and-messaging-patterns`, `observability-and-diagnosis`, `api-contract-evolution`, each with a Worker Execution Contract, Quick card, Direct invocation, references, conditional persona rows, and a contract eval case.
+- **`check_openapi_diff.py`** (38 self-tests): removed paths, operations, status codes and fields; type changes; new required request fields; enum narrowing; `$ref` resolved one level; JSON or the JSON-compatible YAML subset (everything else refused, never guessed). `evals/contract/openapi-diff-adversarial` (25 zero-LLM steps) registered in the harness.
+- **Architecture decision records**: `blackgoat-research/references/adr-template.md`; every ≥ 2-option design decision gets an ADR; register rows cite it; `check_coverage.py` `adr-citation` lint (126 → 132 self-tests).
+- **Data-privacy checklist** in Cipher's check-line grammar; Cipher's dependency row and security-and-hardening pointer.
+- **Doubt-driven development** gains three job-semantics attacks (duplicate delivery, out-of-order delivery, crash between effect and ack).
+- **Eval cases** (authored, self-checked on held and caved trees, not yet run): `quick-lane`, `dependency-upgrade-contract`, `jobs-idempotency-contract`. Harness pre-flight also checks port 5193.
+
+### Changed
+- README skill catalog lists 43 skills; bug-report template notes pre-fill from a quick note or from telemetry.
+
+### Checked, not added
+- Accessibility is already a Nova-side contract in `ui-design-patterns` plus Vera's shipping depth; CI YAML authoring is covered by `cloud-deploy-patterns`; race/concurrency *diagnosis* is partial (prevention and adversarial review exist, no diagnostic method) — a candidate for a later skill.
+
+## [2.5.0] — 2026-09-07
+
+The hardening release. Restraint moves from "the model should not" to "the model cannot": a PreToolUse hook denies the actions the gates exist to catch, a driver emits the next mandatory action instead of the Orchestrator recalling it, every agent handoff is validated by a script, and the gate ledger is a hash chain.
+
+### Migration notes — read before upgrading a project with in-flight `.docs/` artifacts
+
+- **The ledger is chained.** Every record now carries `prev` and `self`. Existing ledgers keep working: legacy records are tolerated before the first chained one, and a chained ledger may never revert to unchained. `check_commit_gate.py --require-ledger-gates` and `mark_milestone.py --require-gates` verify the chain first and fail with `ledger_chain_broken`; a ledger someone edited by hand will not pass again. Accepted limit: a tail rewritten consistently is undetectable; a single edited or inserted record is now visible.
+- **Hooks are active in Claude Code.** `guard_action.py` denies `git commit|merge|cherry-pick|revert` from the shell while a lane is active (the gates commit through their own subprocess and are unaffected), edits to existing test files during a bugfix before its commit gate passes, delegation while a bug report lacks an intake PASS, and any direct write to `gates.jsonl`, `orchestrator-state.json`, `run-log.jsonl` or a `*.meta.json`. A lane counts as active from its artifacts within a 12-hour window. Outside a lane nothing changes. Cursor cannot enforce these; the rules are stated in its runtime contract.
+- **Build's commit gate and bugfix's Phase 5 gate require the run log**: `--require-run-log … --require-agents quinn,luna,<builder>` fails the commit when any named agent has no delegation record with a model for that unit. A milestone whose delegations were never recorded under 2.4.0 cannot be committed under 2.5.0 until `record_run.py` lines are added for them.
+- **Milestone closure requires the game tape**: `mark_milestone.py --require-game-tape` and `update_state.py --require-game-tape` refuse the write when the milestone's section is missing, has fewer than 3 or more than 6 bullets, has no fenced output, or no telemetry line.
+- **Shipping's ship decision binds coverage and acceptance**: `check_ship_decision.py --require-ledger-gates check_coverage.py,check_acceptance_suite.py` (lite epics omit the acceptance suite). Run Step 3.5's coverage gate first if the ledger has no coverage PASS.
+- **`record_run.py` refuses a verifier recorded below its producer's tier** in the same unit unless `--allow-tier-inversion "<reason>"` is recorded.
+- **Discovery's Tier-1 stamp has a grammar**: `check_tier1_provenance.py` requires a date and a 40-hex sha per repo in the header of `context.md` and each `<feature>/overview.md`, and the sha must resolve. Existing Tier-1 files without a stamp fail with `stamp_missing`; add the header line.
+
+### Added
+- `guard_action.py` (42 self-tests) and three `PreToolUse` entries in `hooks/hooks.json`; proven end to end with a headless session that was denied a hand commit inside an active lane and allowed one outside.
+- `pipeline_driver.py` (52): the next mandatory action for the bugfix and quick lanes, exit 1 when the current phase's gate has not passed, exit 3 on completion; wired into both spines ("phase transitions are emitted, not recalled").
+- `check_handoff.py` (26): required elements per persona, path existence, changed files within the diff, status enum, consumers grammar, PASS beside NOT VERIFIED; orchestrator-contract §1 validates every handoff before acting on it.
+- `check_ledger.py` (21): chain verifier; drift guards assert every writer chains byte-identically.
+- `check_always_on.py` (18), `check_tier1_provenance.py` (16), `check_runtime_recipe.py` (16); discovery Phase 1, 4 and 4b wired.
+- `check_ship_decision.py --require-ledger-gates`; `--require-game-tape` on `mark_milestone.py` and `update_state.py`; `check_commit_gate.py --require-run-log/--require-agents`; `record_run.py --allow-tier-inversion`.
+- CI: ubuntu + windows matrix running both lints, every pipeline-tools self-test, both zero-LLM cases, `check_always_on.py`, the harness self-test and a parse of every PowerShell file.
+- `mechanical-pipeline` steps 13–16 (28/28).
+
+### Changed
+- `--ledger` on the `--add-blocker` calls in shipping Step 3, build Phase 0 and plan.
+- `pipeline-tools/SKILL.md` description names every script in 802 chars; sections for all seven new scripts.
+
+### Not adopted
+- LangGraph. It replaces the Claude Code host; the driver plus hooks give the deterministic control flow it would have provided, inside the runtime the plugin already lives in. If headless pipeline runs are ever needed, the Agent SDK with `pipeline_driver.py` is the path.
+
 ## [2.4.0] — 2026-09-07
 
 The audit release. A 21-metric fan-out audit of 2.3.0 found six Blocker metrics; every one is closed here, and two of the fixes change gate contracts.

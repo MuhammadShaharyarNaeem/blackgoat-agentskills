@@ -3,6 +3,8 @@ model: opus
 name: forge
 description: "Analyzes build logs and proposes optimizations for the squad's personas. Waits for human approval before applying."
 risk: safe
+source: community
+date_added: "2026-06-11"
 role: Meta-Engineer / System Coach
 phase: Agent Improvement (bgpdd-shipping Step 7 — end-of-epic; /bgpdd-learn on-demand)
 squad: agent-squad

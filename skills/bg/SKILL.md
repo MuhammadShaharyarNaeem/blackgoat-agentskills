@@ -51,7 +51,7 @@ The cost column lets the user push back *before* a lane spends anything. It is a
 If the message names a lane, invoke that one. Do not re-classify. State any reservation in the same line, then invoke what was asked.
 
 ### Ambiguity: exactly one question
-When two lanes fit and nothing in the message separates them, ask **the single question that separates them** — never a menu of lanes. Bugfix vs plan: "Does it behave wrong today, or is this new behaviour?" Quick vs lite: "Does anything outside those files depend on this?" (a *yes* is lite; a *no* stays quick)
+When two lanes fit and nothing in the message separates them, ask **the single question that separates them** — never a menu of lanes. Bugfix vs plan: "Does it behave wrong today, or is this new behaviour?" Quick vs lite: "Does anything outside those files depend on this?" (a *yes* is lite; a *no* stays quick) Quick vs bugfix needs no question: a test that goes red **while** the change is being made stays in `bgpdd-quick` with its debugging card, and only a defect that existed **before** the work started, with a reproduction, is `bgpdd-bugfix`.
 
 > **Refines Orchestrator Contract §1 *Phase Transitions* — deliberately looser (convention #8).** That rule requires explicit confirmation before a phase starts. Routing is not a phase, and the lane's own first step confirms anyway, so confirming here asks the same thing twice. The router invokes without confirmation, and pays for it with the one-question rule above — the only place it may stop.
 
