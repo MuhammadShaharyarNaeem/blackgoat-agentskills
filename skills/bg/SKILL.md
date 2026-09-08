@@ -32,6 +32,7 @@ Check the **state rows** first; if none matches, answer the three questions in o
 | # | Question | Lane | What it costs |
 |---|---|---|---|
 | 1 | Is there a **reproduction of wrong behaviour** — an error, a red test, "it used to work"? | `bgpdd-bugfix` | ~4 delegations (Quinn RED, builder, Quinn GREEN, Luna) and the intake/red-green/route/commit gates. |
+| 1a | …and are there **two or more independent bugs** for this session? A single bug stays `bgpdd-bugfix`. | `bgpdd-bugfix-batch` | Question 1's cost per bug, in waves, plus a worktree and a merge each. |
 | 2 | Does it need a **new capability, schema, or contract** — or is the spec still unknown? | `bgpdd-plan` | Heaviest lane: Rex Q&A, Aria, Alex, then `/bgpdd-build`. |
 | 2a | …and is the codebase **unmapped** (no `.docs/summary/` in the repo)? | `bgpdd-discovery` **first** | Iris, Scout and Echo write the Tier-1 knowledge base; plan follows. |
 | 3 | Is it **≤ 3 files** with no behaviour anyone outside them depends on? | `bgpdd-quick` | Cheapest: main session only, no delegation, one closing gate. |

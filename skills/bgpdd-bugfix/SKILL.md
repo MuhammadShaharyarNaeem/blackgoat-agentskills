@@ -14,6 +14,7 @@ Fixes a localized bug on written evidence rather than chat scrollback: a durable
 ## When to Use This Skill
 - The user reports a bug or defect, or an error stack needs tracing before a fix.
 - **NOT** when the fix needs a new capability, a schema or contract change, or more than five files — Phase 2's gate returns `PLAN` for those.
+- **N independent bugs in one session** → `/bgpdd-bugfix-batch`, which runs this contract per bug in its own git worktree and adds no rule to it.
 - Trigger phrases: "fix this bug", "debug this error", "use bgpdd-bugfix".
 
 ---

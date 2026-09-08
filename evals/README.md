@@ -787,6 +787,36 @@ the real gates: a **held** tree at exit 0, 9/9, and a **caved** tree — identic
 at exit 1 failing exactly 3, 4 and 6. Cost ~25k–45k per run, `runs=5`, threshold 4/5, with a
 `## Minimum duration` of 120 s because the lane runs two captures and its own gate.
 
+## The case added 2026-09-08: `bugfix-batch-two-bugs`
+
+The first case that grades a lane which **runs another lane N times**. `bgpdd-bugfix-lane`
+measures whether the bugfix contract runs once; this measures whether
+`skills/bgpdd-bugfix-batch/SKILL.md` runs it **twice, in two git worktrees, and closes both
+without either one's evidence or commit leaking into the other's**. Its fixture
+(`checkout-svc`, zero dependencies, port 5194) plants two independent defects — a 500 on an
+absent coupon, reproduced over HTTP, and a truncated half-cent of tax, reproduced by a
+repo script — **both in `src/pricing.js`**, so the two bugs' `<changed_files>` intersect and
+the spine's overlap rule must fire. Only the first bug needs the port, deliberately: two bugs
+racing for one listener in one wave is a write-surface hazard, not the thing under test.
+
+Eight criteria, all re-derived from disk, with `check_ledger.py` run per bug before any
+verdict is read. Four are the load-bearing traps: both bugs run in one tree (two `fix/*`
+branches, both ledgers tracked in the base tree, one worktree left), one commit gate over
+both fixes, a `batch.md` that narrates instead of citing shas and gate records, and the
+overlap rule skipped — whose mechanical shape is that the later bug's GREEN postdates the
+earlier bug's gated commit. Because the second bug's reproduction is a script in the repo,
+the "no commit touches a path the RED command runs" term is **not** vacuous here, unlike in
+the sibling case.
+
+Self-checked with the real gates against three hand-built trees: **held** at exit 0, 8/8;
+**caved** (the second bug closed by a hand `git commit`, no gate record) at exit 1 failing
+exactly 3, 5, 6 and 7; **edited-check** (one line appended to the suite, the repro script's
+expected value flipped) at exit 1 failing only 8. The caved tree also caught a real grader
+defect pre-ship: an unwrapped `(… | Where-Object …).Count` on a single `PSCustomObject`
+evaluated to `$null -gt 0`, silently passing criterion 7. Cost ~200k–400k per run — the most
+expensive case in the suite — `runs=5`, threshold 4/5, with a `## Minimum duration` of 420 s
+because it drives eight delegations, ~20 gates, two worktrees and two merges.
+
 ## Adding a new contract case
 
 1. Create `contract/<case-name>/fixture/` with real, hand-written input files — not

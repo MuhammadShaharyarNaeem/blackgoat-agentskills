@@ -226,6 +226,20 @@ foreach ($f in $changedFiles) {
         # test-driven-development/SKILL.md - so a change to either file can move it.
         [void]$affectedEvals.Add('contract:pressure-bugfix-edit-test')
     }
+    if ($f -match 'skills/bgpdd-bugfix-batch/' -or $f -match 'skills/bgpdd-bugfix/' -or
+        $f -match 'skills/agent-squad/pipeline-skeleton\.md$' -or
+        $f -match 'scripts/(check_commit_gate|check_ledger|guard_action)\.py$') {
+        # bugfix-batch-two-bugs runs the batch choreography over TWO bugs in two
+        # git worktrees. skills/bgpdd-bugfix/ is named because that lane IS the
+        # per-bug contract the batch runs unchanged, and pipeline-skeleton.md
+        # because Phase 1 and 3 read its Branch close section. The three scripts
+        # are the ones the batch's own terms rest on: check_commit_gate.py (each
+        # bug closes through its own, and its `.docs/` exemption is why the
+        # evidence needs its own commit), check_ledger.py (the merge precondition
+        # the spine binds), and guard_action.py (whose cwd-rooted lane detector is
+        # the reason one worktree per bug works at all).
+        [void]$affectedEvals.Add('contract:bugfix-batch-two-bugs')
+    }
     if ($f -match 'skills/bgpdd-quick/' -or $f -match 'scripts/(check_quick_close|run_quiet)\.py$' -or $f -match 'skills/agent-squad/always-on\.md$') {
         # pressure-quick-skip-gate asks for a two-file rename with the capture and
         # the close gate explicitly waived off. check_quick_close.py IS that lane's
