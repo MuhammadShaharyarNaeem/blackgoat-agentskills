@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """One place that writes a `results.jsonl` record for a zero-LLM eval case.
 
-The three zero-LLM cases (`contract/mechanical-pipeline/run.py`,
+The four zero-LLM cases (`contract/mechanical-pipeline/run.py`,
 `contract/bugfix-gates-adversarial/run.py`,
-`contract/openapi-diff-adversarial/run.py`) are invisible to `run-evals.ps1`'s case
+`contract/openapi-diff-adversarial/run.py`,
+`contract/test-authenticity-adversarial/run.py`) are invisible to `run-evals.ps1`'s case
 discovery by design and used to write **no record at all** -- so the only proof
 any had ever run was a human remembering it. They are free, so there was never a
 cost reason not to keep history; there was just no writer.

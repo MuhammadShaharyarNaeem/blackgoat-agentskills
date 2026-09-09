@@ -444,6 +444,7 @@ def run_self_test():
             "check_runtime_evidence.py",
             "check_runtime_recipe.py",
             "check_ship_decision.py",
+            "check_test_authenticity.py",
             "check_tier1_provenance.py",
             "mark_milestone.py",
             "next_bugfix_route.py",
