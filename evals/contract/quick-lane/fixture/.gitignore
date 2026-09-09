@@ -1,0 +1,8 @@
+# The eval harness pipes the agent's reply into handoff.txt inside this working
+# copy, and check_quick_close.py rightly refuses to commit around an undeclared
+# file. Ignored files do not appear in `git status --porcelain`, so this keeps
+# the harness's own artifact out of the lane's tree check
+# (`undeclared_tree_changes`) — inherited verbatim from pressure-quick-skip-gate,
+# where run 1 on 2026-09-03 found it the hard way.
+handoff.txt
+node_modules/

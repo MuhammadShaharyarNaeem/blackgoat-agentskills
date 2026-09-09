@@ -83,6 +83,44 @@ PAREN_RE = re.compile(r"\(([^)]*)\)")
 REQ_ID_RE = re.compile(r"\b[A-Z]{2,6}-\d+\b")
 META_PAIR_RE = re.compile(r"^\s*\**\s*([A-Za-z][A-Za-z /_-]{0,30}?)\s*\**\s*:\s*(.*)$")
 SEPARATOR_CELL_RE = re.compile(r"^:?-{2,}:?$")
+
+# --- `## Environment` preamble parsing (for --emit-gate-args) ---------------
+# `bgpdd-verify` Phase 3 told the Orchestrator to copy `--require-key`,
+# `--expect-status` and `--forbid-host` out of the matrix's `## Environment`
+# preamble BY EYE, and said so while naming itself an interim (convention #9:
+# a rule asking for careful transcription is the shape that becomes a tool).
+# A silently mistyped key or a loosened status turns the runtime gate into one
+# that passes an assertion nobody chose. This emits them instead.
+#
+# The parse is deliberately CONSERVATIVE, mirroring
+# `next_milestone.py --emit-gate-args`: a field it is unsure of comes back
+# null/empty WITH a warning, so the caller supplies it explicitly rather than
+# receiving a guess that reads as a declaration. It is ADVISORY -- it never
+# changes an exit code, and nothing here requires the preamble to exist (the
+# build and lite lanes' matrices legitimately have none).
+ENVIRONMENT_HEADING_RE = re.compile(r"(?im)^(#{2,4})\s*Environment\b[^\r\n]*$")
+LEVELLED_HEADING_RE = re.compile(r"(?m)^(#{1,6})\s")
+ENV_FIELD_RE = re.compile(r"^\s*[-*]\s*([A-Za-z][A-Za-z /_-]{1,40}?)\s*:\s*(.*)$")
+ENV_KEY_TOKEN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
+ENV_STATUS_RE = re.compile(r"\b([1-5]\d{2})\b")
+ENV_PLACEHOLDER_VALUES = {"none", "n/a", "na", "-", "tbd", "todo", "unknown"}
+ENV_FIELD_ALIASES = {
+    "surface": "surface",
+    "expect status": "expect_status",
+    "expected status": "expect_status",
+    "expect-status": "expect_status",
+    "require key": "require_keys",
+    "require keys": "require_keys",
+    "response key": "require_keys",
+    "response keys": "require_keys",
+    "response envelope keys": "require_keys",
+    "envelope keys": "require_keys",
+    "forbid host": "forbid_hosts",
+    "forbid hosts": "forbid_hosts",
+    "forbidden host": "forbid_hosts",
+    "forbidden hosts": "forbid_hosts",
+    "forbidden host patterns": "forbid_hosts",
+}
 INVERSE_RE = re.compile(r"\[\s*inverse\s+of\s+(\d+)\s*\]", re.IGNORECASE)
 # Escape hatch for legitimately one-way steps: nothing un-queues a distributed
 # job, nothing un-reinstalls. The reason text is REQUIRED — presence is
@@ -201,6 +239,42 @@ def sha256_file(path):
         return None
 
 
+def ledger_line_hash(raw):
+    """sha256 of one ledger LINE's bytes, ignoring its terminator.
+
+    Surrounding whitespace (CR included) is stripped so a ledger written on
+    Windows chains identically to the same file read on POSIX. Byte-identical
+    in every gate in this family and in check_ledger.py, which verifies the
+    chain (family convention: one file each, no shared module).
+    """
+    return hashlib.sha256(raw.strip()).hexdigest()
+
+
+def ledger_prev_hash(ledger_path):
+    """The `prev` value for the next record: hash of the last line on disk.
+
+    `"genesis"` when the ledger is missing or holds no non-blank line.
+    """
+    try:
+        with open(ledger_path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return "genesis"
+    last = None
+    for raw in data.splitlines():
+        if raw.strip():
+            last = raw
+    return "genesis" if last is None else ledger_line_hash(last)
+
+
+def ledger_self_hash(record):
+    """sha256 of the record serialized canonically WITHOUT its `self` field."""
+    body = {k: v for k, v in record.items() if k != "self"}
+    return hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":"))
+        .encode("utf-8")).hexdigest()
+
+
 def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code):
     """Append ONE JSON line recording this run. Best-effort by design."""
     if not ledger_path:
@@ -218,6 +292,8 @@ def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code):
         p = Path(ledger_path)
         if str(p.parent):
             p.parent.mkdir(parents=True, exist_ok=True)
+        record["prev"] = ledger_prev_hash(p)
+        record["self"] = ledger_self_hash(record)
         with open(p, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record) + "\n")
     except OSError as exc:
@@ -408,6 +484,123 @@ def parse_requirements(text):
 # ---------------------------------------------------------------------------
 # Matrix parsing
 # ---------------------------------------------------------------------------
+
+def environment_section(text):
+    """The body under the matrix's first `## Environment` heading, or None.
+
+    `text` must already be fence-blanked (family rule): a fenced example
+    preamble declares nothing.
+    """
+    m = ENVIRONMENT_HEADING_RE.search(text)
+    if not m:
+        return None
+    level = len(m.group(1))
+    for h in LEVELLED_HEADING_RE.finditer(text, m.end()):
+        if len(h.group(1)) <= level:
+            return text[m.end():h.start()]
+    return text[m.end():]
+
+
+def split_env_values(raw):
+    """Comma- and/or whitespace-separated values, backticks stripped."""
+    cleaned = (raw or "").replace("`", " ").replace(";", ",")
+    out = []
+    for part in cleaned.split(","):
+        for token in part.split():
+            token = token.strip().strip("<>\"'").strip()
+            if token and token.lower() not in ENV_PLACEHOLDER_VALUES:
+                out.append(token)
+    return out
+
+
+def emit_gate_args(matrix_text):
+    """({surface, expect_status, require_keys, forbid_hosts, argv}, warnings).
+
+    Reads ONLY the `## Environment` preamble's `- Key: value` lines. Repeated
+    fields are AMBIGUOUS, not last-wins: a per-surface preamble legitimately
+    declares two different statuses, and picking one silently is exactly the
+    transcription error this exists to prevent -- so it emits nothing for that
+    field and names the conflict.
+    """
+    warnings = []
+    args = {"surface": None, "expect_status": None, "require_keys": [],
+            "forbid_hosts": [], "argv": [], "source": None}
+    section = environment_section(strip_fenced_blocks(matrix_text))
+    if section is None:
+        warnings.append(
+            "--emit-gate-args: the matrix has no '## Environment' preamble, so "
+            "no gate arguments could be derived; supply --surface / "
+            "--require-key / --expect-status / --forbid-host explicitly")
+        return args, warnings
+    args["source"] = "## Environment"
+
+    seen = {}
+    for line in section.split("\n"):
+        m = ENV_FIELD_RE.match(line)
+        if not m:
+            continue
+        name = " ".join(m.group(1).split()).lower()
+        field = ENV_FIELD_ALIASES.get(name)
+        if not field:
+            continue
+        seen.setdefault(field, []).append(m.group(2).strip())
+
+    for field, raws in sorted(seen.items()):
+        values = []
+        for raw in raws:
+            values.extend(split_env_values(raw))
+        if field == "surface":
+            unique = sorted({v.lower() for v in values})
+            if len(unique) == 1:
+                args["surface"] = unique[0]
+            elif unique:
+                warnings.append(
+                    "--emit-gate-args: the preamble declares several surfaces "
+                    f"({', '.join(unique)}); pass --surface explicitly for the "
+                    "run being gated")
+        elif field == "expect_status":
+            codes = sorted({int(m.group(1)) for m in
+                            (ENV_STATUS_RE.search(v) for v in values) if m})
+            if len(codes) == 1:
+                args["expect_status"] = codes[0]
+            elif codes:
+                warnings.append(
+                    "--emit-gate-args: the preamble declares several expected "
+                    f"statuses ({', '.join(str(c) for c in codes)}); pass "
+                    "--expect-status explicitly for the run being gated")
+            elif values:
+                warnings.append(
+                    "--emit-gate-args: could not read an HTTP status from "
+                    f"{values!r}; pass --expect-status explicitly")
+        elif field == "require_keys":
+            for v in values:
+                if ENV_KEY_TOKEN_RE.match(v) and v not in args["require_keys"]:
+                    args["require_keys"].append(v)
+                elif not ENV_KEY_TOKEN_RE.match(v):
+                    warnings.append(
+                        f"--emit-gate-args: ignored {v!r} in the response-keys "
+                        "field — not an identifier; pass --require-key "
+                        "explicitly if it really is a key")
+        else:   # forbid_hosts
+            for v in values:
+                if v not in args["forbid_hosts"]:
+                    args["forbid_hosts"].append(v)
+
+    for name, value in (("--surface", args["surface"]),
+                         ("--expect-status", args["expect_status"])):
+        if value is not None:
+            args["argv"] += [name, str(value)]
+    for key in args["require_keys"]:
+        args["argv"] += ["--require-key", key]
+    for host in args["forbid_hosts"]:
+        args["argv"] += ["--forbid-host", host]
+    if not args["argv"]:
+        warnings.append(
+            "--emit-gate-args: the '## Environment' preamble declared none of "
+            "Surface / Expect status / Response keys / Forbidden hosts in the "
+            "`- Key: value` form this reads, so nothing was emitted")
+    return args, warnings
+
 
 def new_scenario(heading):
     """Build a scenario dict from a `## ` heading, or None if it names no id.
@@ -706,6 +899,7 @@ def new_report(args):
         "uncovered_should": [],
         "lint_failures": [],
         "extra_results": [],
+        "gate_args": None,
         "warnings": [],
         "result": "FAIL",
         "error": None,
@@ -740,6 +934,13 @@ def build_report(args):
         raise GateError(
             f"no parseable scenario in {args.matrix} — a scenario is a '## ' "
             "heading naming an id like 'AS-2'; not a conforming acceptance matrix")
+
+    # Advisory in BOTH modes, and never a term in either verdict: the matrix
+    # is the input to both, and the verify lane needs these flags at plan time
+    # (to author the preamble) and at gate time (to pass them on).
+    if getattr(args, "emit_gate_args", False):
+        report["gate_args"], emit_warnings = emit_gate_args(matrix_text)
+        report["warnings"].extend(emit_warnings)
 
     if args.lint_only:
         return lint_report(report, scenarios, matrix_text, args)
@@ -1219,6 +1420,11 @@ def build_parser():
     p.add_argument("--require-priority")
     p.add_argument("--min-scenarios", type=int, default=1)
     p.add_argument("--lint-only", action="store_true")
+    p.add_argument("--emit-gate-args", action="store_true",
+                   help="derive check_runtime_evidence.py's --surface / "
+                        "--require-key / --expect-status / --forbid-host from "
+                        "the matrix's '## Environment' preamble into "
+                        "gate_args (advisory; never changes an exit code)")
     p.add_argument("--changed-files", nargs="+", default=[],
                    help="the milestone's declared changes; the results file "
                         "must be at least as new as the newest of them")
@@ -1368,7 +1574,8 @@ Surface: web+api | Preconditions: integration connected (AS-1)
         "missing_priority", "missing_step_table", "missing_columns",
         "unrecognized_mode", "missing_stores", "duplicate_keys",
         "malformed_steps", "must_have", "should_have", "uncovered_should",
-        "lint_failures", "extra_results", "warnings", "result", "error"}
+        "lint_failures", "extra_results", "gate_args", "warnings", "result",
+        "error"}
 
     def results(lines):
         return ("# Acceptance Results — slide-integration\n\n"
@@ -1402,7 +1609,7 @@ Surface: web+api | Preconditions: integration connected (AS-1)
                         requirements=None, repo=str(self.dir),
                         require_priority=None, min_scenarios=1,
                         lint_only=False, changed_files=[], ledger=None,
-                        self_test=False)
+                        emit_gate_args=False, self_test=False)
             base.update(kw)
             return argparse.Namespace(**base)
 
@@ -2151,6 +2358,120 @@ Surface: web+api | Preconditions: integration connected (AS-1)
                     requirements=self._requirements(
                         "# Requirements\n\n## Should Have\n\n"
                         "- **FR-7** — the mapping list is searchable.\n")))
+
+        # ---- --emit-gate-args: the `## Environment` preamble ----
+
+        ENV = ("# Acceptance Matrix — slide-integration\n\n"
+               "## Environment\n\n"
+               "- Start command: `npm run dev`\n"
+               "- Base URL: http://localhost:5142\n"
+               "- Surface: api\n"
+               "- Expect status: 200 OK\n"
+               "- Response envelope keys: `isSuccess`, `notifications`, data\n"
+               "- Forbidden hosts: dev.gorelo.io, staging.gorelo.io\n\n")
+
+        def _emit(self, preamble=None, matrix=None):
+            text = (preamble if preamble is not None else self.ENV) + \
+                (matrix if matrix is not None else
+                 MATRIX[MATRIX.index("## AS-1"):])
+            r = self._run(matrix=text, emit_gate_args=True)
+            return r["gate_args"], r["warnings"]
+
+        def test_emit_gate_args_reads_the_preamble(self):
+            args, warns = self._emit()
+            self.assertEqual(args["surface"], "api")
+            self.assertEqual(args["expect_status"], 200)
+            self.assertEqual(args["require_keys"],
+                             ["isSuccess", "notifications", "data"])
+            self.assertEqual(args["forbid_hosts"],
+                             ["dev.gorelo.io", "staging.gorelo.io"])
+            self.assertEqual(args["argv"], [
+                "--surface", "api", "--expect-status", "200",
+                "--require-key", "isSuccess", "--require-key", "notifications",
+                "--require-key", "data",
+                "--forbid-host", "dev.gorelo.io",
+                "--forbid-host", "staging.gorelo.io"])
+            self.assertEqual([w for w in warns if "emit-gate-args" in w], [])
+
+        def test_emit_gate_args_is_absent_without_the_flag(self):
+            self.assertIsNone(self._run()["gate_args"])
+
+        def test_emit_gate_args_never_changes_the_verdict(self):
+            """Advisory, like next_milestone.py's --ledger."""
+            self.results.write_text(results(GREEN), encoding="utf-8")
+            plain = build_report(self._args())
+            emitted = build_report(self._args(emit_gate_args=True))
+            self.assertEqual(plain["result"], emitted["result"])
+            self.assertEqual(emitted["result"], "PASS")
+
+        def test_emit_gate_args_works_in_lint_only_mode(self):
+            text = self.ENV + LINT_CLEAN[LINT_CLEAN.index("## "):]
+            r = self._lint(matrix=text, emit_gate_args=True)
+            self.assertEqual(r["gate_args"]["surface"], "api")
+            self.assertEqual(r["result"], "PASS", r["lint_failures"])
+
+        def test_emit_gate_args_without_a_preamble_warns_and_emits_nothing(self):
+            args, warns = self._emit(preamble="# Acceptance Matrix\n\n")
+            self.assertEqual(args["argv"], [])
+            self.assertIsNone(args["source"])
+            self.assertTrue(any("no '## Environment' preamble" in w
+                                for w in warns))
+
+        def test_emit_gate_args_refuses_to_pick_between_two_statuses(self):
+            """A per-surface preamble declares two; guessing is the defect."""
+            args, warns = self._emit(
+                preamble="## Environment\n\n"
+                         "- Expect status: 200\n- Expect status: 201\n\n")
+            self.assertIsNone(args["expect_status"])
+            self.assertTrue(any("several expected statuses" in w
+                                for w in warns))
+
+        def test_emit_gate_args_refuses_to_pick_between_two_surfaces(self):
+            args, warns = self._emit(
+                preamble="## Environment\n\n- Surface: api\n- Surface: ui\n\n")
+            self.assertIsNone(args["surface"])
+            self.assertTrue(any("several surfaces" in w for w in warns))
+
+        def test_emit_gate_args_ignores_a_non_identifier_key(self):
+            args, warns = self._emit(
+                preamble="## Environment\n\n"
+                         "- Response keys: isSuccess, `data[0].id`\n\n")
+            self.assertEqual(args["require_keys"], ["isSuccess"])
+            self.assertTrue(any("not an identifier" in w for w in warns))
+
+        def test_emit_gate_args_skips_placeholder_values(self):
+            args, _ = self._emit(
+                preamble="## Environment\n\n- Surface: api\n"
+                         "- Response keys: none\n- Forbidden hosts: TBD\n\n")
+            self.assertEqual(args["require_keys"], [])
+            self.assertEqual(args["forbid_hosts"], [])
+            self.assertEqual(args["argv"], ["--surface", "api"])
+
+        def test_emit_gate_args_ignores_a_fenced_preamble(self):
+            """A template block in the matrix declares nothing (family rule)."""
+            args, warns = self._emit(
+                preamble="# Acceptance Matrix\n\nUse this shape:\n\n"
+                         "```markdown\n## Environment\n\n- Surface: api\n"
+                         "- Expect status: 500\n```\n\n")
+            self.assertIsNone(args["surface"])
+            self.assertIsNone(args["expect_status"])
+            self.assertTrue(any("no '## Environment' preamble" in w
+                                for w in warns))
+
+        def test_emit_gate_args_stops_at_the_next_heading(self):
+            """A scenario's `Surface: api | ...` line is not the preamble."""
+            args, _ = self._emit(
+                preamble="## Environment\n\n- Expect status: 200\n\n")
+            self.assertIsNone(args["surface"])
+            self.assertEqual(args["expect_status"], 200)
+
+        def test_emit_gate_args_cli(self):
+            self.matrix.write_text(
+                self.ENV + MATRIX[MATRIX.index("## AS-1"):], encoding="utf-8")
+            self.results.write_text(results(GREEN), encoding="utf-8")
+            self.assertEqual(main(["--matrix", str(self.matrix), "--results",
+                                   str(self.results), "--repo", str(self.dir),
+                                   "--emit-gate-args"]), 0)
 
         # ---- CLI ----
 

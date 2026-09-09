@@ -13,6 +13,13 @@ Given one RED capture and one or more GREEN captures, all produced by
   * every capture carries its `<capture>.meta.json` provenance sidecar, whose
     `capture_sha256` still matches the capture FILE's bytes -- a hand-typed
     capture has no sidecar and an edited one fails the hash
+  * every sidecar AGREES with its capture's own header lines: `exit_code`
+    equals `- Exit code:` and `finished` equals `- Captured:`. The hash
+    protects the capture file and NOTHING protects the sidecar, so editing the
+    sidecar alone -- a RED's exit_code 3 -> 0, or a GREEN's `finished` pushed
+    past the RED's to manufacture the ordering below -- passed every other
+    check here (`sidecar_body_disagrees`; a capture with no header pair at all
+    is `capture_header_missing` and must be re-taken)
   * the sidecars record the IDENTICAL child `argv` -- the same command was
     run before and after the fix
   * the RED sidecar's `exit_code` is NON-zero (the failure was observed)
@@ -22,8 +29,34 @@ Given one RED capture and one or more GREEN captures, all produced by
     stamp has one-second resolution and the comparison is strictly `>`:
     EQUAL stamps do not order two runs, so they fail closed. A real RED and
     GREEN are a fix round apart; a pair inside one second is re-taken.
-  * with `--green-runs N`, at least N green captures were supplied and all of
-    them pass -- for a flaky bug, 4 of 5 green is NOT fixed
+  * with `--green-runs N`, at least N green captures were supplied, all of
+    them pass, and they are N DISTINCT RUNS -- for a flaky bug, 4 of 5 green
+    is NOT fixed, and 1 of 1 cited five times is not 5 of 5 either
+
+DISTINCTNESS, AND WHY THE FLAG ASSERTED NOTHING WITHOUT IT
+----------------------------------------------------------
+`--green-runs 5` is the fixer's own declaration that this bug is flaky enough
+to need five clean runs. Until 2.6.1 it counted `--green` OCCURRENCES: the
+same capture path repeated five times passed, and so did five byte-identical
+copies under five names (copy the capture and its sidecar together and every
+hash still matches, because copying preserves exactly what the hashes
+protect). The one flag in this gate that speaks about repeated execution
+proved nothing about it.
+
+The key is the sidecar's `(started, pid)` pair -- what identifies a PROCESS.
+Two runs of the same command in the same second still differ by pid; one run
+cited twice cannot differ from itself; a copied capture carries its original's
+sidecar, so five copies are one identity. The body's `capture_sha256` is
+reported (`green_distinct_bodies`) but is NOT a required key: five honest runs
+of a deterministic command inside one second produce byte-identical bodies,
+and a rule that refused that evidence would be worse than none (audit3 step
+13d). When a sidecar carries neither `started` nor `pid`, the body count is
+the fallback identity. Forging N sidecars with N pids is the documented
+unkeyed-sidecar limit, not this term's job. Problem code:
+`green_runs_not_distinct`. This is a term about REPETITION only: it applies
+when `--green-runs` is greater than 1 and never to a single green, so the
+default invocation is unchanged (convention #8 -- deliberately narrower than
+`command_mismatch`, which applies to every green).
 
 The sidecar validation is deliberately the SAME logic
 `check_runtime_evidence.py` applies (sidecar present, JSON object, matching
@@ -79,6 +112,42 @@ def sha256_file(path):
         return None
 
 
+def ledger_line_hash(raw):
+    """sha256 of one ledger LINE's bytes, ignoring its terminator.
+
+    Surrounding whitespace (CR included) is stripped so a ledger written on
+    Windows chains identically to the same file read on POSIX. Byte-identical
+    in every gate in this family and in check_ledger.py, which verifies the
+    chain (family convention: one file each, no shared module).
+    """
+    return hashlib.sha256(raw.strip()).hexdigest()
+
+
+def ledger_prev_hash(ledger_path):
+    """The `prev` value for the next record: hash of the last line on disk.
+
+    `"genesis"` when the ledger is missing or holds no non-blank line.
+    """
+    try:
+        with open(ledger_path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return "genesis"
+    last = None
+    for raw in data.splitlines():
+        if raw.strip():
+            last = raw
+    return "genesis" if last is None else ledger_line_hash(last)
+
+
+def ledger_self_hash(record):
+    """sha256 of the record serialized canonically WITHOUT its `self` field."""
+    body = {k: v for k, v in record.items() if k != "self"}
+    return hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":"))
+        .encode("utf-8")).hexdigest()
+
+
 def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code,
                   extra=None):
     """Append ONE JSON line recording this run. Best-effort by design."""
@@ -99,6 +168,8 @@ def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code,
         p = Path(ledger_path)
         if str(p.parent):
             p.parent.mkdir(parents=True, exist_ok=True)
+        record["prev"] = ledger_prev_hash(p)
+        record["self"] = ledger_self_hash(record)
         with open(p, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record) + "\n")
     except OSError as exc:
@@ -140,6 +211,95 @@ def parse_finished(meta):
                       f"an ISO-8601 UTC instant ({TIMESTAMP_FMT})")
 
 
+# --- body-vs-sidecar agreement (duplicated from check_runtime_evidence.py) --
+# `capture_sha256` protects the capture FILE's bytes; NOTHING protects the
+# sidecar's own fields. So the hash-checked body is the witness and the sidecar
+# is the claim under test: flipping a RED sidecar's `exit_code` 3 -> 0, or
+# pushing a GREEN's `finished` past the RED's to manufacture the ordering this
+# gate checks, leaves every hash intact -- and did, until this comparison
+# existed. `- Captured:` is compared against `finished`, which is what
+# run_quiet.py now stamps it FROM; the window is one-sided (never EARLIER than
+# `finished`) and two seconds wide solely so a capture from the pre-2.4 build
+# path, which re-stamped the header while rendering, is not accused of forgery.
+CAPTURED_SKEW_SECONDS = 2
+BODY_EXIT_CODE_RE = re.compile(
+    r"(?im)^[^\S\n]*-[^\S\n]*Exit[^\S\n]+code[^\S\n]*:[^\S\n]*(-?\d+)[^\S\n]*$")
+BODY_CAPTURED_RE = re.compile(
+    r"(?im)^[^\S\n]*-[^\S\n]*Captured[^\S\n]*:[^\S\n]*(\S+)[^\S\n]*$")
+FENCE_LINE_RE = re.compile(r"^[^\S\n]*(`{3,}|~{3,})")
+
+
+def capture_header(text):
+    """The capture's header region: before `## Captured output`, fences blanked.
+
+    Both cuts matter. A probe's own output routinely contains a line like
+    `- Exit code: 3` (this gate's captures are test-runner transcripts), and a
+    capture's prose preamble may fence an example header block; either would
+    otherwise supply the value that is supposed to witness the sidecar.
+    """
+    m = CAPTURED_HEADING_RE.search(text)
+    head = text[:m.start()] if m else text
+    out, fence = [], None
+    for line in head.split("\n"):
+        fm = FENCE_LINE_RE.match(line)
+        if fence is None:
+            if fm:
+                fence = fm.group(1)
+                out.append("")
+                continue
+            out.append(line)
+        else:
+            if fm and fm.group(1)[0] == fence[0] and len(fm.group(1)) >= len(fence):
+                fence = None
+            out.append("")
+    return "\n".join(out)
+
+
+def sidecar_body_disagreement(text, meta):
+    """(problem-code, detail) when the capture's header and sidecar disagree."""
+    head = capture_header(text)
+    exit_m = BODY_EXIT_CODE_RE.search(head)
+    cap_m = BODY_CAPTURED_RE.search(head)
+    if exit_m is None or cap_m is None:
+        return ("capture_header_missing",
+                "the capture carries no readable '- Exit code:' and "
+                "'- Captured:' header pair, so the sidecar's exit_code and "
+                "finished stamp cannot be checked against anything -- a "
+                "capture predating run_quiet.py's header contract must be "
+                "re-taken with `run_quiet.py --capture`")
+    body_exit = int(exit_m.group(1))
+    side_exit = meta.get("exit_code")
+    if isinstance(side_exit, int) and side_exit != body_exit:
+        return ("sidecar_body_disagrees",
+                f"the sidecar records exit_code {side_exit} but the capture's "
+                f"own hash-protected body records '- Exit code: {body_exit}' — "
+                "the sidecar was edited after the run (the capture file's hash "
+                "still matches, because only the sidecar was touched)")
+    try:
+        body_dt = datetime.strptime(cap_m.group(1), TIMESTAMP_FMT)
+    except ValueError:
+        return ("capture_header_missing",
+                f"the capture's '- Captured: {cap_m.group(1)}' is not an "
+                f"ISO-8601 UTC instant ({TIMESTAMP_FMT})")
+    side_dt, reason = parse_finished(meta)
+    if side_dt is None:
+        return ("sidecar_body_disagrees",
+                f"{reason} to check against the capture's '- Captured: "
+                f"{cap_m.group(1)}'")
+    skew = (body_dt - side_dt).total_seconds()
+    if not 0 <= skew <= CAPTURED_SKEW_SECONDS:
+        return ("sidecar_body_disagrees",
+                f"the sidecar records finished {meta.get('finished')!r} but the "
+                f"capture's own hash-protected body records '- Captured: "
+                f"{cap_m.group(1)}' ({skew:+.0f}s apart; allowed 0.."
+                f"{CAPTURED_SKEW_SECONDS}s) — run_quiet.py stamps "
+                "'- Captured:' FROM 'finished', so a pair this far apart was "
+                "not written by it: either the sidecar's timestamp was edited "
+                "(which is how a GREEN is made to look newer than the RED it "
+                "is ordered against) or the capture was authored by hand")
+    return None, None
+
+
 def evaluate_capture(path, role):
     """Per-capture result dict. Empty `problems` => structurally usable.
 
@@ -148,8 +308,10 @@ def evaluate_capture(path, role):
     res = {
         "path": str(path), "role": role, "exists": False,
         "is_capture": None, "sidecar": None, "sidecar_present": None,
-        "sidecar_capture_sha256_ok": None, "exit_code": None,
+        "sidecar_capture_sha256_ok": None, "sidecar_body_agrees": None,
+        "exit_code": None,
         "argv": None, "finished": None,
+        "started": None, "pid": None, "capture_sha256": None,
         "problems": [], "problem_codes": [],
     }
 
@@ -183,6 +345,13 @@ def evaluate_capture(path, role):
 
     declared = meta.get("capture_sha256")
     actual = sha256_file(p)
+    res["capture_sha256"] = actual
+    # The run's identity, for --green-runs distinctness. Recorded even when a
+    # check below fails: a report that cannot say WHICH run a capture is has
+    # nothing to explain a `green_runs_not_distinct` with.
+    started = meta.get("started")
+    res["started"] = started.strip() if isinstance(started, str) else None
+    res["pid"] = meta.get("pid")
     res["sidecar_capture_sha256_ok"] = bool(
         declared and actual and declared == actual)
     if not res["sidecar_capture_sha256_ok"]:
@@ -190,6 +359,13 @@ def evaluate_capture(path, role):
              f"the capture file's sha256 ({actual}) does not match the "
              f"sidecar's capture_sha256 ({declared}) — the artifact was edited "
              "after it was recorded, so its contents are authored, not observed")
+
+    # The hash above protects the capture file, not the sidecar. Compare the
+    # two BEFORE trusting the exit code or the ordering stamp below.
+    code, detail = sidecar_body_disagreement(text, meta)
+    res["sidecar_body_agrees"] = code is None
+    if code:
+        fail(code, detail)
 
     exit_code = meta.get("exit_code")
     if not isinstance(exit_code, int):
@@ -232,6 +408,8 @@ def build_report(args):
         "green_runs": args.green_runs,
         "red_result": None,
         "green_results": [],
+        "green_distinct_runs": None,
+        "green_distinct_bodies": None,
         "command": None,
         "problems": [],
         "problem_codes": [],
@@ -279,6 +457,38 @@ def build_report(args):
         report["problems"] += [f"green[{i}]: {p}" for p in g["problems"]]
         report["problem_codes"] += g["problem_codes"]
 
+    # --green-runs N means N DISTINCT runs. See DISTINCTNESS in the docstring.
+    identities = {(g["started"], g["pid"]) for g in greens
+                  if g["started"] is not None or g["pid"] is not None}
+    bodies = {g["capture_sha256"] for g in greens if g["capture_sha256"]}
+    report["green_distinct_runs"] = len(identities)
+    report["green_distinct_bodies"] = len(bodies)
+    if args.green_runs > 1 and greens:
+        every_green_has_identity = all(
+            g["started"] is not None or g["pid"] is not None for g in greens)
+        distinct = len(identities) if every_green_has_identity else len(bodies)
+        if distinct < args.green_runs:
+            repeated = sorted(
+                {Path(g["path"]).name for g in greens
+                 if [(h["started"], h["pid"]) for h in greens].count(
+                     (g["started"], g["pid"])) > 1
+                 or (not every_green_has_identity
+                     and [h["capture_sha256"] for h in greens].count(
+                         g["capture_sha256"]) > 1)})
+            fail("green_runs_not_distinct",
+                 f"--green-runs {args.green_runs} requires "
+                 f"{args.green_runs} DISTINCT runs but the "
+                 f"{len(greens)} capture(s) supplied are "
+                 f"{len(identities)} distinct process(es) "
+                 f"(sidecar started+pid; {len(bodies)} distinct "
+                 f"capture body/bodies) — repeated: "
+                 f"{', '.join(repeated) or '(none identifiable)'}. Citing one "
+                 "green N times, or copying a capture and its sidecar under N "
+                 "names, leaves every hash intact and proves exactly one run. "
+                 "Re-run the command N times through `run_quiet.py --capture` "
+                 "with a distinct path each time, or lower --green-runs to "
+                 "the number of runs actually taken")
+
     report["result"] = "PASS" if not report["problems"] else "FAIL"
     return report
 
@@ -289,8 +499,12 @@ def build_parser():
     parser.add_argument("--green", action="append", default=[],
                         help="a post-fix (passing) capture; repeatable")
     parser.add_argument("--green-runs", type=int, default=1,
-                        help="how many GREEN captures must be supplied and "
-                             "pass (default 1; use 5 for a flaky bug)")
+                        help="how many DISTINCT GREEN runs must be supplied "
+                             "and pass (default 1; use 5 for a flaky bug). "
+                             "Above 1, the captures must differ by sidecar "
+                             "started+pid (process identity): one green "
+                             "cited N times, or N copies of it, is one run; "
+                             "identical bodies from distinct runs are fine")
     parser.add_argument("--milestone",
                         help="bug slug, to scope this run's ledger record")
     parser.add_argument("--ledger",
@@ -363,13 +577,15 @@ def run_self_test():
     import tempfile
     import unittest
 
-    def capture_text(cmd, exit_code, body):
+    def capture_text(cmd, exit_code, body, captured):
+        """run_quiet.py's shape: the header records the SAME exit code and
+        instant the sidecar does, so a fixture pair agrees by construction."""
         return (
             "# Runtime capture\n\n"
             "- Milestone: coupon-500\n"
             "- Transport: test runner\n"
             f"- Probe command: `{' '.join(cmd)}` [probe-exempt: test runner]\n"
-            "- Captured: 2026-09-03T10:00:00Z\n"
+            f"- Captured: {captured}\n"
             f"- Exit code: {exit_code}\n\n"
             "## Captured output\n\n```\n" + body + "\n```\n")
 
@@ -382,14 +598,20 @@ def run_self_test():
             shutil.rmtree(self.dir, ignore_errors=True)
 
         def _write(self, name, exit_code, finished, cmd=None, body=None,
-                   sidecar=True, argv=None, hash_ok=True, extra_meta=None):
-            """Write a capture (+ its machine-owned sidecar) like run_quiet."""
+                   sidecar=True, argv=None, hash_ok=True, extra_meta=None,
+                   body_exit=None, body_captured=None):
+            """Write a capture (+ its machine-owned sidecar) like run_quiet.
+
+            `body_exit` / `body_captured` override ONLY the header lines, which
+            is how a fixture forges a sidecar whose hash still matches.
+            """
             cmd = cmd or self.cmd
             cap = self.dir / "evidence" / name
             cap.parent.mkdir(parents=True, exist_ok=True)
             cap.write_text(capture_text(
-                cmd, exit_code,
-                body if body is not None else ("FAILED" if exit_code else "OK")),
+                cmd, exit_code if body_exit is None else body_exit,
+                body if body is not None else ("FAILED" if exit_code else "OK"),
+                finished if body_captured is None else body_captured),
                 encoding="utf-8")
             if sidecar:
                 meta = {
@@ -436,10 +658,97 @@ def run_self_test():
             self.assertEqual(r["red_result"]["exit_code"], 1)
             self.assertEqual(r["green_results"][0]["exit_code"], 0)
 
+        def test_five_distinct_green_runs_are_distinct(self):
+            """audit3 F4's happy side: five real runs still pass."""
+            red = self._write("red.md", 1, "2026-09-03T10:00:00Z")
+            greens = [self._write(f"g{i}.md", 0, f"2026-09-03T1{i}:00:00Z",
+                                  extra_meta={"pid": 4000 + i})
+                      for i in range(1, 6)]
+            r = self._run(red, greens, ["--green-runs", "5"])
+            self.assertEqual(r["result"], "PASS", r["problems"])
+            self.assertEqual(r["green_distinct_runs"], 5)
+            self.assertEqual(r["green_distinct_bodies"], 5)
+
+        def test_one_green_cited_five_times_is_not_five_runs(self):
+            """audit3 F4: `--green-runs 5` satisfied by one capture path x5."""
+            red = self._write("red.md", 1, "2026-09-03T10:00:00Z")
+            green = self._write("green.md", 0, "2026-09-03T11:00:00Z")
+            r = self._run(red, [green] * 5, ["--green-runs", "5"])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("green_runs_not_distinct", r["problem_codes"])
+            self.assertNotIn("green_runs_short", r["problem_codes"])
+            self.assertEqual(r["green_distinct_runs"], 1)
+            self.assertIn("green.md", " ".join(r["problems"]))
+
+        def test_five_byte_identical_copies_are_not_five_runs(self):
+            """audit3 F4: copy the capture AND its sidecar; hashes all match."""
+            red = self._write("red.md", 1, "2026-09-03T10:00:00Z")
+            green = Path(self._write("green.md", 0, "2026-09-03T11:00:00Z"))
+            copies = []
+            for i in range(5):
+                dup = green.parent / f"copy{i}.md"
+                shutil.copy(str(green), str(dup))
+                shutil.copy(str(sidecar_path_for(green)),
+                            str(sidecar_path_for(dup)))
+                copies.append(str(dup))
+            r = self._run(red, copies, ["--green-runs", "5"])
+            # Each copy still hashes to its sidecar -- the point of the case.
+            self.assertNotIn("sidecar_hash_mismatch", r["problem_codes"])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("green_runs_not_distinct", r["problem_codes"])
+            self.assertEqual(r["green_distinct_bodies"], 1)
+
+        def test_distinct_pids_with_an_identical_body_are_distinct(self):
+            """Identity is the process, not the output: two real runs of a
+            deterministic command inside one second are byte-identical and
+            must still count as two (audit3 step 13d rejected honest runs
+            while the body was a required key)."""
+            red = self._write("red.md", 1, "2026-09-03T10:00:00Z")
+            a = Path(self._write("a.md", 0, "2026-09-03T11:00:00Z"))
+            b = a.parent / "b.md"
+            shutil.copy(str(a), str(b))
+            meta = json.loads(sidecar_path_for(a).read_text(encoding="utf-8"))
+            meta["pid"] = 9999
+            sidecar_path_for(b).write_text(json.dumps(meta), encoding="utf-8")
+            r = self._run(red, [str(a), str(b)], ["--green-runs", "2"])
+            self.assertNotIn("green_runs_not_distinct", r["problem_codes"])
+            self.assertEqual(r["green_distinct_runs"], 2)
+            self.assertEqual(r["green_distinct_bodies"], 1)
+
+        def test_identical_started_with_distinct_pids_and_bodies_passes(self):
+            """Two runs inside one second are two runs: pid tells them apart."""
+            red = self._write("red.md", 1, "2026-09-03T10:00:00Z")
+            greens = [
+                self._write("s1.md", 0, "2026-09-03T11:00:00Z", body="run A",
+                            extra_meta={"pid": 11}),
+                self._write("s2.md", 0, "2026-09-03T11:00:00Z", body="run B",
+                            extra_meta={"pid": 12}),
+            ]
+            r = self._run(red, greens, ["--green-runs", "2"])
+            self.assertEqual(r["result"], "PASS", r["problems"])
+            self.assertEqual(r["green_distinct_runs"], 2)
+
+        def test_distinctness_does_not_apply_to_a_single_green_run(self):
+            """convention #8: the term is about repetition, nothing else."""
+            red, green = self._pair()
+            r = self._run(red, [green])
+            self.assertEqual(r["result"], "PASS", r["problems"])
+            self.assertNotIn("green_runs_not_distinct", r["problem_codes"])
+
+        def test_three_distinct_of_five_supplied_still_fails_green_runs_5(self):
+            red = self._write("red.md", 1, "2026-09-03T10:00:00Z")
+            distinct = [self._write(f"d{i}.md", 0, f"2026-09-03T1{i}:00:00Z",
+                                    extra_meta={"pid": 500 + i})
+                        for i in range(1, 4)]
+            r = self._run(red, distinct + distinct[:2], ["--green-runs", "5"])
+            self.assertIn("green_runs_not_distinct", r["problem_codes"])
+            self.assertEqual(r["green_distinct_runs"], 3)
+
         def test_five_green_runs_all_pass(self):
             red = self._write("red.md", 1, "2026-09-03T10:00:00Z")
             greens = [self._write(f"green{i}.md", 0,
-                                  f"2026-09-03T1{i}:00:00Z")
+                                  f"2026-09-03T1{i}:00:00Z",
+                                  extra_meta={"pid": 4200 + i})
                       for i in range(1, 6)]
             r = self._run(red, greens, ["--green-runs", "5"])
             self.assertEqual(r["result"], "PASS", r["problems"])
@@ -471,6 +780,76 @@ def run_self_test():
             r = self._run(red, [green])
             self.assertEqual(r["result"], "FAIL")
             self.assertIn("sidecar_hash_mismatch", r["problem_codes"])
+
+        # ---- the sidecar is the mutable half: it must agree with the body ----
+
+        def test_flipped_red_sidecar_exit_code_is_caught_by_the_body(self):
+            """The attack: a RED that actually passed, sidecar flipped to 1."""
+            red = self._write("red.md", 1, "2026-09-03T10:00:00Z", body_exit=0)
+            green = self._write("green.md", 0, "2026-09-03T11:00:00Z")
+            r = self._run(red, [green])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("sidecar_body_disagrees", r["problem_codes"])
+            self.assertNotIn("sidecar_hash_mismatch", r["problem_codes"])
+            self.assertFalse(r["red_result"]["sidecar_body_agrees"])
+
+        def test_flipped_green_sidecar_exit_code_is_caught_by_the_body(self):
+            red = self._write("red.md", 1, "2026-09-03T10:00:00Z")
+            green = self._write("green.md", 0, "2026-09-03T11:00:00Z",
+                                 body_exit=1)
+            r = self._run(red, [green])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("sidecar_body_disagrees", r["problem_codes"])
+
+        def test_edited_green_timestamp_is_caught_by_the_body(self):
+            """Pushing `finished` past the RED's is how ordering is forged."""
+            red = self._write("red.md", 1, "2026-09-03T12:00:00Z")
+            green = self._write("green.md", 0, "2026-09-03T13:00:00Z",
+                                 body_captured="2026-09-03T09:00:00Z")
+            r = self._run(red, [green])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("sidecar_body_disagrees", r["problem_codes"])
+            self.assertNotIn("green_not_newer", r["problem_codes"])
+
+        def test_agreeing_pair_passes_and_records_agreement(self):
+            red, green = self._pair()
+            r = self._run(red, [green])
+            self.assertEqual(r["result"], "PASS", r["problems"])
+            self.assertTrue(r["red_result"]["sidecar_body_agrees"])
+            self.assertTrue(r["green_results"][0]["sidecar_body_agrees"])
+
+        def test_one_second_render_skew_still_passes(self):
+            """The pre-2.4 build path stamped `Captured` just after `finished`."""
+            red = self._write("red.md", 1, "2026-09-03T10:00:00Z",
+                               body_captured="2026-09-03T10:00:01Z")
+            green = self._write("green.md", 0, "2026-09-03T11:00:00Z",
+                                 body_captured="2026-09-03T11:00:02Z")
+            r = self._run(red, [green])
+            self.assertEqual(r["result"], "PASS", r["problems"])
+
+        def test_capture_without_header_lines_fails_closed(self):
+            red = self._write("red.md", 1, "2026-09-03T10:00:00Z")
+            green = self.dir / "evidence" / "legacy-green.md"
+            green.write_text(
+                "# Runtime capture\n\n- Milestone: coupon-500\n\n"
+                "## Captured output\n\n```\nOK\n```\n", encoding="utf-8")
+            sidecar_path_for(green).write_text(json.dumps({
+                "argv": self.cmd, "exit_code": 0,
+                "started": "2026-09-03T11:00:00Z",
+                "finished": "2026-09-03T11:00:00Z",
+                "capture_sha256": sha256_file(green),
+                "tool": "run_quiet.py", "schema": 1}), encoding="utf-8")
+            r = self._run(red, [str(green)])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("capture_header_missing", r["problem_codes"])
+
+        def test_header_lines_inside_the_captured_output_supply_nothing(self):
+            """A test transcript that PRINTS `- Exit code: 0` is not a header."""
+            red = self._write("red.md", 1, "2026-09-03T10:00:00Z",
+                               body="- Exit code: 0\n- Captured: 1999-01-01T00:00:00Z")
+            green = self._write("green.md", 0, "2026-09-03T11:00:00Z")
+            r = self._run(red, [green])
+            self.assertEqual(r["result"], "PASS", r["problems"])
 
         def test_mismatched_commands_fail(self):
             red = self._write("red.md", 1, "2026-09-03T10:00:00Z")

@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# PreToolUse hook for the blackgoat-agentskills plugin.
+#
+# Pipes the host's hook-input JSON on stdin to guard_action.py and passes that
+# script's stdout back to the host unchanged. The decision logic lives ONCE, in
+# skills/pipeline-tools/scripts/guard_action.py; this file is PACKAGING
+# (CLAUDE.md convention #5) -- it holds no rule, no path pattern and no reason
+# text. Never inline a rule here.
+#
+# It must never fail a session and must never block a tool call by accident:
+# any problem at all -> exit 0 having printed nothing, which the host reads as
+# "no decision", leaving its normal permission flow untouched. Missing python
+# is one such problem, and is deliberately silent.
+#
+# A deny travels as JSON on stdout, never as exit code 2: run-hook.cmd ends
+# every Windows branch with `exit /b 0`, so an exit code from here would be
+# swallowed by the launcher and never reach the host. Only stdout survives.
+#
+# Extensionless on purpose: Claude Code on Windows prepends "bash" to any
+# command containing ".sh", which breaks the run-hook.cmd dispatcher.
+
+set -u
+
+# Anything unexpected: stay silent, succeed.
+trap 'exit 0' ERR
+
+# Plugin root: the runtime's variable when it sets one, else this script's parent.
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+  PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT}"
+elif [ -n "${CURSOR_PLUGIN_ROOT:-}" ]; then
+  PLUGIN_ROOT="${CURSOR_PLUGIN_ROOT}"
+else
+  SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)" || exit 0
+  PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." 2>/dev/null && pwd)" || exit 0
+fi
+
+GUARD="${PLUGIN_ROOT}/skills/pipeline-tools/scripts/guard_action.py"
+[ -r "${GUARD}" ] || exit 0
+
+# Resolve python. No python -> no guard, silently: a hook that errored here
+# would fire on every single tool call.
+PY=""
+for candidate in python3 python; do
+  if command -v "${candidate}" >/dev/null 2>&1; then
+    PY="${candidate}"
+    break
+  fi
+done
+[ -n "${PY}" ] || exit 0
+
+# Read stdin once, then hand it to the guard. Its stderr is dropped: on Claude
+# Code an exit-0 hook's stderr goes to the debug log only, and a diagnostic is
+# not worth risking a malformed frame on any host.
+input="$(cat 2>/dev/null)" || exit 0
+
+output="$(printf '%s' "${input}" | "${PY}" "${GUARD}" "$@" 2>/dev/null)" || exit 0
+
+[ -n "${output}" ] || exit 0
+printf '%s\n' "${output}"
+exit 0

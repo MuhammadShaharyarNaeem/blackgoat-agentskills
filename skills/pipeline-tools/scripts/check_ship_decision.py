@@ -22,7 +22,12 @@ Two opt-in flags convert the two assertions a heading match never proved
         assert that anyone ever reverted anything. The decision must carry a
         `Time to Rollback:` line naming a timed, dated, environment-named
         rehearsal and citing the capture that recorded it, and that capture
-        must carry a run_quiet.py provenance sidecar whose probe exited 0.
+        must carry a run_quiet.py provenance sidecar whose probe exited 0 and
+        which AGREES with the capture's own header lines (`exit_code` =
+        `- Exit code:`, `finished` = `- Captured:`) -- the hash protects the
+        capture file and nothing protects the sidecar, so flipping a failed
+        rehearsal's exit_code to 0 passed every other check here
+        (`sidecar_body_disagrees` / `capture_header_missing`).
   --require-baseline   the rollout threshold table in
         `shipping-and-launch/SKILL.md` is expressed entirely in deltas
         ("within 10% of baseline", ">2x baseline"), so without a captured
@@ -190,6 +195,89 @@ def resolve_path(candidate, report_path, repo):
     return p if p.is_file() else None
 
 
+# --- body-vs-sidecar agreement (duplicated from check_runtime_evidence.py) --
+# `capture_sha256` protects the capture FILE's bytes; NOTHING protects the
+# sidecar's own fields. So the hash-checked body is the witness and the sidecar
+# is the claim under test: flipping a rehearsal sidecar's `exit_code` from 1 to
+# 0 leaves every hash intact, and a rehearsal that FAILED then reads as one
+# that proved the rollback works. `- Captured:` is compared against `finished`,
+# which is what run_quiet.py now stamps it FROM; the window is one-sided (never
+# EARLIER than `finished`) and two seconds wide solely so a capture from the
+# pre-2.4 build path, which re-stamped the header while rendering, is not
+# accused of forgery.
+CAPTURED_SKEW_SECONDS = 2
+SIDECAR_TIMESTAMP_FMT = "%Y-%m-%dT%H:%M:%SZ"
+BODY_EXIT_CODE_RE = re.compile(
+    r"(?im)^[^\S\n]*-[^\S\n]*Exit[^\S\n]+code[^\S\n]*:[^\S\n]*(-?\d+)[^\S\n]*$")
+BODY_CAPTURED_RE = re.compile(
+    r"(?im)^[^\S\n]*-[^\S\n]*Captured[^\S\n]*:[^\S\n]*(\S+)[^\S\n]*$")
+
+
+def capture_header(text):
+    """The capture's header: before `## Captured output`, fences blanked.
+
+    Both cuts matter. A rehearsal transcript routinely contains a line like
+    `- Exit code: 1`, and a preamble may fence an example header block; either
+    would otherwise supply the value meant to witness the sidecar.
+    """
+    m = CAPTURED_OUTPUT_RE.search(text)
+    return strip_fenced_blocks(text[:m.start()] if m else text)
+
+
+def parse_utc_stamp(raw):
+    """A `%Y-%m-%dT%H:%M:%SZ` string as a naive UTC datetime, or None."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        return datetime.strptime(raw.strip(), SIDECAR_TIMESTAMP_FMT)
+    except ValueError:
+        return None
+
+
+def sidecar_body_disagreement(text, meta):
+    """(problem-code, detail) when the capture's header and sidecar disagree."""
+    head = capture_header(text)
+    exit_m = BODY_EXIT_CODE_RE.search(head)
+    cap_m = BODY_CAPTURED_RE.search(head)
+    if exit_m is None or cap_m is None:
+        return ("capture_header_missing",
+                "the cited rehearsal capture carries no readable "
+                "'- Exit code:' and '- Captured:' header pair, so the "
+                "sidecar's exit_code and finished stamp cannot be checked "
+                "against anything — a capture predating run_quiet.py's header "
+                "contract must be re-taken with `run_quiet.py --capture`")
+    body_exit = int(exit_m.group(1))
+    side_exit = meta.get("exit_code")
+    if isinstance(side_exit, int) and side_exit != body_exit:
+        return ("sidecar_body_disagrees",
+                f"the sidecar records exit_code {side_exit} but the capture's "
+                f"own hash-protected body records '- Exit code: {body_exit}' — "
+                "the sidecar was edited after the rehearsal (the capture "
+                "file's hash still matches, because only the sidecar was "
+                "touched)")
+    body_dt = parse_utc_stamp(cap_m.group(1))
+    if body_dt is None:
+        return ("capture_header_missing",
+                f"the capture's '- Captured: {cap_m.group(1)}' is not an "
+                f"ISO-8601 UTC instant ({SIDECAR_TIMESTAMP_FMT})")
+    side_dt = parse_utc_stamp(meta.get("finished"))
+    if side_dt is None:
+        return ("sidecar_body_disagrees",
+                "the sidecar records no parseable 'finished' instant to check "
+                f"against the capture's '- Captured: {cap_m.group(1)}'")
+    skew = (body_dt - side_dt).total_seconds()
+    if not 0 <= skew <= CAPTURED_SKEW_SECONDS:
+        return ("sidecar_body_disagrees",
+                f"the sidecar records finished {meta.get('finished')!r} but the "
+                f"capture's own hash-protected body records '- Captured: "
+                f"{cap_m.group(1)}' ({skew:+.0f}s apart; allowed 0.."
+                f"{CAPTURED_SKEW_SECONDS}s) — run_quiet.py stamps "
+                "'- Captured:' FROM 'finished', so a pair this far apart was "
+                "not written by it: either the sidecar's timestamp was edited "
+                "or the capture was authored by hand")
+    return None, None
+
+
 def load_sidecar(path):
     """(meta dict or None, reason-when-None). Malformed reads as absent.
 
@@ -205,6 +293,212 @@ def load_sidecar(path):
     if not isinstance(meta, dict):
         return None, "sidecar is not a JSON object"
     return meta, None
+
+
+def ledger_line_hash(raw):
+    """sha256 of one ledger LINE's bytes, ignoring its terminator.
+
+    Surrounding whitespace (CR included) is stripped so a ledger written on
+    Windows chains identically to the same file read on POSIX. Byte-identical
+    in every gate in this family and in check_ledger.py, which verifies the
+    chain (family convention: one file each, no shared module).
+    """
+    return hashlib.sha256(raw.strip()).hexdigest()
+
+
+def ledger_prev_hash(ledger_path):
+    """The `prev` value for the next record: hash of the last line on disk.
+
+    `"genesis"` when the ledger is missing or holds no non-blank line.
+    """
+    try:
+        with open(ledger_path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return "genesis"
+    last = None
+    for raw in data.splitlines():
+        if raw.strip():
+            last = raw
+    return "genesis" if last is None else ledger_line_hash(last)
+
+
+def ledger_self_hash(record):
+    """sha256 of the record serialized canonically WITHOUT its `self` field."""
+    body = {k: v for k, v in record.items() if k != "self"}
+    return hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":"))
+        .encode("utf-8")).hexdigest()
+
+
+def verify_ledger_chain(ledger_path):
+    """(ok, problem|None) — walk the chain and stop at the FIRST broken link.
+
+    `problem` is `{"line", "reason", "detail"}` with reason one of
+    `unparseable`, `legacy-after-chained`, `incomplete-chain-fields`,
+    `self-mismatch`, `prev-mismatch`, `unreadable`. A missing ledger file is
+    NOT a break here (there is no chain to break); callers that require the
+    ledger to exist say so themselves.
+
+    Byte-identical in check_ledger.py, check_commit_gate.py and
+    mark_milestone.py (family convention: one file each, no shared module).
+    """
+    p = Path(ledger_path)
+    if not p.is_file():
+        return True, None
+    try:
+        data = p.read_bytes()
+    except OSError as exc:
+        return False, {"line": 0, "reason": "unreadable",
+                       "detail": "cannot read {0}: {1}".format(ledger_path, exc)}
+    chained_seen = False
+    prev_hash = "genesis"
+    for lineno, raw in enumerate(data.splitlines(), start=1):
+        if not raw.strip():
+            continue
+        try:
+            rec = json.loads(raw.decode("utf-8-sig", errors="replace"))
+        except ValueError:
+            return False, {"line": lineno, "reason": "unparseable",
+                           "detail": "line is not parseable JSON"}
+        if not isinstance(rec, dict):
+            return False, {"line": lineno, "reason": "unparseable",
+                           "detail": "line is not a JSON object"}
+        has_prev, has_self = "prev" in rec, "self" in rec
+        if not has_prev and not has_self:
+            if chained_seen:
+                return False, {
+                    "line": lineno, "reason": "legacy-after-chained",
+                    "detail": "an unchained record follows a chained one; a "
+                              "ledger that has started chaining cannot revert "
+                              "to unchained"}
+            prev_hash = ledger_line_hash(raw)
+            continue
+        if not (has_prev and has_self):
+            return False, {
+                "line": lineno, "reason": "incomplete-chain-fields",
+                "detail": "record carries only one of `prev`/`self`; a chained "
+                          "record carries both"}
+        if rec.get("self") != ledger_self_hash(rec):
+            return False, {
+                "line": lineno, "reason": "self-mismatch",
+                "detail": "`self` does not hash this record's own content — "
+                          "the line was edited after it was written"}
+        if rec.get("prev") != prev_hash:
+            return False, {
+                "line": lineno, "reason": "prev-mismatch",
+                "detail": "`prev` is {0} but the preceding record hashes to "
+                          "{1} — a record was inserted, removed or edited "
+                          "before this line".format(
+                              str(rec.get("prev"))[:16], prev_hash[:16])}
+        chained_seen = True
+        prev_hash = ledger_line_hash(raw)
+    return True, None
+
+
+def read_ledger(ledger_path):
+    """Every parseable JSON-object line of the ledger, in file order.
+
+    Duplicated from check_commit_gate.py by family convention (stdlib-only,
+    one file each, no shared module).
+    """
+    p = Path(ledger_path)
+    if not p.is_file():
+        return []
+    records = []
+    for line in p.read_text(encoding="utf-8-sig", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(rec, dict):
+            records.append(rec)
+    return records
+
+
+def check_ledger_gates(ledger_path, gate_names, milestone):
+    """Verify each named gate LAST recorded a PASS still standing on its inputs.
+
+    Same three checks as check_commit_gate.py's `--require-ledger-gates` --
+    intact chain, latest entry PASS, every recorded input still hashing -- with
+    ONE deliberate divergence (CLAUDE.md convention #8), looser on purpose:
+
+      * the commit gate is per-milestone, so it accepts only entries scoped to
+        that milestone or unscoped. The ship decision is EPIC-scoped. With no
+        `--milestone`, EVERY entry for the named gate is a candidate, whatever
+        milestone it carries. That is the point of the flag: `check_coverage.py`
+        and `check_acceptance_suite.py` run once for the epic, and binding an
+        epic verdict to a per-milestone lookup is the deadlock the audit found.
+      * with `--milestone M`, it narrows to the commit gate's rule (M or
+        unscoped), for a shipping run that legitimately scopes to one unit.
+
+    Returns [{"gate", "problem", "detail"}]. Codes: `ledger_chain_broken`,
+    `ledger_missing`, `ledger_failed`, `ledger_stale`.
+    """
+    chain_ok, chain = verify_ledger_chain(ledger_path)
+    if not chain_ok:
+        return [{
+            "gate": ledger_path, "problem": "ledger_chain_broken",
+            "detail": "the gate ledger's hash chain is broken at line "
+                      "{0} ({1}): {2}. Every verdict it records is "
+                      "unverifiable until the break is explained; run "
+                      "check_ledger.py --ledger {3}".format(
+                          chain["line"], chain["reason"], chain["detail"],
+                          ledger_path)}]
+    records = read_ledger(ledger_path)
+    problems = []
+    for name in gate_names:
+        candidates = [r for r in records
+                      if r.get("gate") == name
+                      and (milestone is None
+                           or r.get("milestone") is None
+                           or r.get("milestone") == milestone)]
+        if not candidates:
+            scope = ("(any milestone)" if milestone is None
+                     else "scoped to {0!r} (or unscoped)".format(milestone))
+            problems.append({
+                "gate": name, "problem": "ledger_missing",
+                "detail": "no ledger entry for {0} {1} in {2}".format(
+                    name, scope, ledger_path)})
+            continue
+        latest = candidates[-1]
+        if latest.get("verdict") != "PASS":
+            problems.append({
+                "gate": name, "problem": "ledger_failed",
+                "detail": "the latest {0} ledger entry records verdict {1!r} "
+                          "(exit {2})".format(name, latest.get("verdict"),
+                                              latest.get("exit"))})
+            continue
+        stale = []
+        for path, recorded in (latest.get("inputs") or {}).items():
+            if recorded is None:
+                continue  # nothing was hashed; there is nothing to compare
+            current = sha256_file(path)
+            if current is None:
+                stale.append("{0} (missing now)".format(path))
+            elif current != recorded:
+                stale.append("{0} (content changed since that run)".format(path))
+        if stale:
+            problems.append({
+                "gate": name, "problem": "ledger_stale",
+                "detail": "the latest {0} ledger entry passed over inputs that "
+                          "no longer match on disk: {1}".format(
+                              name, ", ".join(stale))})
+    return problems
+
+
+def parse_gate_names(values):
+    """Flatten repeated and/or comma-separated --require-ledger-gates values."""
+    names = []
+    for value in values or []:
+        for token in value.split(","):
+            token = token.strip()
+            if token and token not in names:
+                names.append(token)
+    return names
 
 
 def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code):
@@ -224,6 +518,8 @@ def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code):
         p = Path(ledger_path)
         if str(p.parent):
             p.parent.mkdir(parents=True, exist_ok=True)
+        record["prev"] = ledger_prev_hash(p)
+        record["self"] = ledger_self_hash(record)
         with open(p, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record) + "\n")
     except OSError as exc:
@@ -285,7 +581,8 @@ def parse_rehearsal(text):
 def check_rehearsal(text, report_path, repo, max_age_days, today):
     """(rehearsal dict, [(code, detail), ...]) for the --require-rehearsal half."""
     res = {"present": False, "time_s": None, "rehearsed_on": None, "env": None,
-           "evidence": None, "sidecar_ok": None, "age_days": None}
+           "evidence": None, "sidecar_ok": None, "body_agrees": None,
+           "age_days": None}
     parsed = parse_rehearsal(text)
     if parsed is None:
         return res, [("rehearsal_missing",
@@ -365,6 +662,15 @@ def check_rehearsal(text, report_path, repo, max_age_days, today):
             f"the capture's sha256 ({actual}) does not match the sidecar's "
             f"capture_sha256 ({declared}) — the artifact was edited after it was "
             "recorded, so its contents are authored, not observed"))
+        return res, problems
+
+    # The hash above protects the capture file, not the sidecar. Compare the
+    # two BEFORE trusting the exit code below.
+    code, detail = sidecar_body_disagreement(capture, meta)
+    res["body_agrees"] = code is None
+    if code:
+        res["sidecar_ok"] = False
+        problems.append((code, detail))
         return res, problems
 
     exit_code = meta.get("exit_code")
@@ -451,7 +757,8 @@ def check_baseline(text, report_path, repo):
 def build_report(path, require_go, require_rehearsal=False,
                  require_baseline=False, repo=".",
                  max_rehearsal_age_days=DEFAULT_MAX_REHEARSAL_AGE_DAYS,
-                 today=None):
+                 today=None, ledger=None, require_ledger_gates=None,
+                 milestone=None):
     # Fences are stripped ONCE, here: the verdict scan, the Rollback heading,
     # the checklist, the rehearsal line and the Baseline section all read a
     # document with no example blocks in it. A `Time to Rollback:` line inside
@@ -508,8 +815,24 @@ def build_report(path, require_go, require_rehearsal=False,
         for code, detail in found:
             record(code, detail)
 
+    # The sibling-gate binding. `check_coverage.py` and
+    # `check_acceptance_suite.py` are epic-scoped and record `milestone: null`,
+    # so this is the gate their PASS binds to -- the per-milestone commit gate
+    # cannot hold an epic verdict.
+    ledger_gate_problems = []
+    if require_ledger_gates:
+        ledger_gate_problems = check_ledger_gates(
+            ledger, require_ledger_gates, milestone)
+        for problem in ledger_gate_problems:
+            record(problem["problem"], problem["detail"])
+
     return {
         "report_file": path,
+        "milestone": milestone,
+        "ledger": ledger,
+        "require_ledger_gates": list(require_ledger_gates or []),
+        "ledger_gate_problems": ledger_gate_problems,
+        "ledger_gates_ok": not ledger_gate_problems,
         "pass": len(failures) == 0,
         "verdict": verdict,
         "require_go": require_go,
@@ -554,18 +877,38 @@ def main(argv):
                         default=DEFAULT_MAX_REHEARSAL_AGE_DAYS,
                         help="reject a rehearsal older than this (default 30)")
     parser.add_argument("--ledger",
-                        help="append one JSON record per run to this path")
+                        help="append one JSON record per run to this path; "
+                             "also the ledger --require-ledger-gates reads")
+    parser.add_argument(
+        "--require-ledger-gates", action="append", default=[],
+        help="comma-separated gate script names whose LATEST ledger entry "
+             "must be PASS over unchanged inputs. EPIC-scoped by default "
+             "(any milestone); narrowed to '--milestone or unscoped' when "
+             "--milestone is given")
+    parser.add_argument(
+        "--milestone",
+        help="narrow --require-ledger-gates to this milestone (or unscoped) "
+             "and record it in this run's ledger line; the ship decision is "
+             "epic-scoped, so this is normally omitted")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
 
     if args.self_test:
         return run_self_test()
 
+    args.require_ledger_gates = parse_gate_names(args.require_ledger_gates)
+
     def finish(code, verdict):
         """One exit point: EVERY return path records a ledger line."""
-        append_ledger(args.ledger, argv, None,
+        append_ledger(args.ledger, argv, args.milestone,
                       [args.report] if args.report else [], verdict, code)
         return code
+
+    if args.require_ledger_gates and not args.ledger:
+        print(json.dumps({"pass": False,
+                          "error": "--require-ledger-gates requires --ledger "
+                                   "(there is no ledger to read otherwise)"}))
+        return finish(2, "ERROR")
 
     if not args.report:
         print(json.dumps({"pass": False, "error": "missing required argument: --report"}))
@@ -576,7 +919,10 @@ def main(argv):
                               require_rehearsal=args.require_rehearsal,
                               require_baseline=args.require_baseline,
                               repo=args.repo,
-                              max_rehearsal_age_days=args.max_rehearsal_age_days)
+                              max_rehearsal_age_days=args.max_rehearsal_age_days,
+                              ledger=args.ledger,
+                              require_ledger_gates=args.require_ledger_gates,
+                              milestone=args.milestone)
     except GateError as exc:
         print(json.dumps({"pass": False, "error": str(exc)}))
         return finish(2, "ERROR")
@@ -692,13 +1038,29 @@ Verdict: NO-GO
 
         def _capture(self, rel="evidence/rollback/2026-09-02-rehearsal.md",
                      body="## Captured output\n\n```\nreverted; health 200\n```\n",
-                     sidecar=True, exit_code=0, sidecar_hash=None):
-            """A run_quiet.py-shaped capture plus its provenance sidecar."""
+                     sidecar=True, exit_code=0, sidecar_hash=None,
+                     finished="2026-09-02T09:00:00Z", body_exit=None,
+                     body_captured=None, header=True):
+            """A run_quiet.py-shaped capture plus its provenance sidecar.
+
+            The header lines are part of that shape: run_quiet writes the same
+            exit code and instant into both records. `body_exit` /
+            `body_captured` / `header` override ONLY the capture's header,
+            which is how a fixture forges a sidecar whose hash still matches.
+            """
             p = self.dir / rel
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text("# Rollback rehearsal\n\n" + body, encoding="utf-8")
+            head = "# Rollback rehearsal\n\n"
+            if header:
+                head += (
+                    "- Probe command: `git revert --no-edit HEAD`\n"
+                    "- Captured: {0}\n- Exit code: {1}\n\n".format(
+                        body_captured if body_captured is not None else finished,
+                        exit_code if body_exit is None else body_exit))
+            p.write_text(head + body, encoding="utf-8")
             if sidecar:
                 meta = {"argv": ["git", "revert", "--no-edit", "HEAD"],
+                        "started": finished, "finished": finished,
                         "exit_code": exit_code, "tool": "run_quiet.py",
                         "capture_sha256": sidecar_hash or sha256_file(p)}
                 Path(str(p) + SIDECAR_SUFFIX).write_text(
@@ -892,6 +1254,54 @@ Verdict: NO-GO
             self.assertIn("rehearsal_failed_exit", report["problems"])
             self.assertFalse(report["rehearsal"]["sidecar_ok"])
 
+        # ---- the sidecar is the mutable half: it must agree with the body ----
+
+        def test_flipped_sidecar_exit_code_is_caught_by_the_body(self):
+            """The attack: a rehearsal that FAILED, sidecar flipped to 0."""
+            self._capture(exit_code=0, body_exit=1)
+            self._write(rehearsal_line())
+            report = self._run(require_rehearsal=True)
+            self.assertFalse(report["pass"])
+            self.assertIn("sidecar_body_disagrees", report["problems"])
+            self.assertNotIn("rehearsal_unevidenced", report["problems"])
+            self.assertFalse(report["rehearsal"]["body_agrees"])
+
+        def test_edited_sidecar_timestamp_is_caught_by_the_body(self):
+            self._capture(body_captured="2026-09-02T08:00:00Z")
+            self._write(rehearsal_line())
+            report = self._run(require_rehearsal=True)
+            self.assertFalse(report["pass"])
+            self.assertIn("sidecar_body_disagrees", report["problems"])
+
+        def test_agreeing_pair_records_agreement(self):
+            self._capture()
+            self._write(rehearsal_line())
+            report = self._run(require_rehearsal=True)
+            self.assertTrue(report["rehearsal"]["body_agrees"])
+            self.assertTrue(report["rehearsal"]["sidecar_ok"])
+
+        def test_one_second_render_skew_still_passes(self):
+            """The pre-2.4 build path stamped `Captured` just after `finished`."""
+            self._capture(body_captured="2026-09-02T09:00:01Z")
+            self._write(rehearsal_line())
+            report = self._run(require_rehearsal=True)
+            self.assertTrue(report["rehearsal"]["body_agrees"])
+
+        def test_capture_without_header_lines_fails_closed(self):
+            self._capture(header=False)
+            self._write(rehearsal_line())
+            report = self._run(require_rehearsal=True)
+            self.assertFalse(report["pass"])
+            self.assertIn("capture_header_missing", report["problems"])
+
+        def test_header_lines_inside_the_captured_output_supply_nothing(self):
+            """A rehearsal transcript that PRINTS `- Exit code: 1` is not a header."""
+            self._capture(body="## Captured output\n\n```\n- Exit code: 1\n"
+                                "- Captured: 1999-01-01T00:00:00Z\n```\n")
+            self._write(rehearsal_line())
+            report = self._run(require_rehearsal=True)
+            self.assertTrue(report["rehearsal"]["body_agrees"], report["problems"])
+
         def test_rehearsal_non_integer_exit_fails(self):
             self._capture(exit_code="0")
             self._write(rehearsal_line())
@@ -1080,6 +1490,142 @@ Verdict: NO-GO
                              sha256_file(self.path))
             self.assertNotEqual(records[0]["inputs"][str(self.path)],
                                 records[1]["inputs"][str(self.path)])
+
+        # ---- --require-ledger-gates (the epic-scoped sibling binding) ----
+
+        def _gate_record(self, ledger, gate, verdict="PASS", milestone=None,
+                         inputs=None, exit_code=0, chained=True):
+            """One ledger line, chained exactly as a real gate writes it."""
+            rec = {"ts": "2026-09-05T00:00:00Z", "gate": gate, "argv": [],
+                   "milestone": milestone,
+                   "inputs": inputs if inputs is not None else {},
+                   "verdict": verdict, "exit": exit_code}
+            if chained:
+                rec["prev"] = ledger_prev_hash(ledger)
+                rec["self"] = ledger_self_hash(rec)
+            ledger.parent.mkdir(parents=True, exist_ok=True)
+            with open(ledger, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(rec) + chr(10))
+            return rec
+
+        def test_require_ledger_gates_passes_on_epic_scoped_records(self):
+            """The deadlock the flag exists for: both records are unscoped."""
+            ledger = self.dir / "gates.jsonl"
+            self._gate_record(ledger, "check_coverage.py")
+            self._gate_record(ledger, "check_acceptance_suite.py")
+            self.path.write_text(HAPPY, encoding="utf-8")
+            r = build_report(str(self.path), require_go=True,
+                             ledger=str(ledger),
+                             require_ledger_gates=["check_coverage.py",
+                                                   "check_acceptance_suite.py"])
+            self.assertTrue(r["pass"], r["failures"])
+            self.assertEqual(r["ledger_gate_problems"], [])
+
+        def test_require_ledger_gates_accepts_a_record_scoped_to_any_milestone(self):
+            """Epic scope: without --milestone, M2's record still counts."""
+            ledger = self.dir / "gates.jsonl"
+            self._gate_record(ledger, "check_coverage.py", milestone="M2")
+            self.path.write_text(HAPPY, encoding="utf-8")
+            r = build_report(str(self.path), require_go=True,
+                             ledger=str(ledger),
+                             require_ledger_gates=["check_coverage.py"])
+            self.assertTrue(r["pass"], r["failures"])
+
+        def test_milestone_narrows_to_that_milestone_or_unscoped(self):
+            ledger = self.dir / "gates.jsonl"
+            self._gate_record(ledger, "check_coverage.py", milestone="M2")
+            self.path.write_text(HAPPY, encoding="utf-8")
+            r = build_report(str(self.path), require_go=True,
+                             ledger=str(ledger), milestone="M7",
+                             require_ledger_gates=["check_coverage.py"])
+            self.assertFalse(r["pass"])
+            self.assertEqual(r["ledger_gate_problems"][0]["problem"],
+                             "ledger_missing")
+            self.assertIn("ledger_missing", r["problems"])
+
+        def test_require_ledger_gates_missing_entry_blocks(self):
+            ledger = self.dir / "gates.jsonl"
+            self._gate_record(ledger, "check_coverage.py")
+            self.path.write_text(HAPPY, encoding="utf-8")
+            r = build_report(str(self.path), require_go=True,
+                             ledger=str(ledger),
+                             require_ledger_gates=["check_acceptance_suite.py"])
+            self.assertFalse(r["pass"])
+            self.assertEqual(r["ledger_gate_problems"][0]["problem"],
+                             "ledger_missing")
+
+        def test_require_ledger_gates_failed_latest_entry_blocks(self):
+            ledger = self.dir / "gates.jsonl"
+            self._gate_record(ledger, "check_coverage.py")
+            self._gate_record(ledger, "check_coverage.py", verdict="FAIL",
+                              exit_code=1)
+            self.path.write_text(HAPPY, encoding="utf-8")
+            r = build_report(str(self.path), require_go=True,
+                             ledger=str(ledger),
+                             require_ledger_gates=["check_coverage.py"])
+            self.assertFalse(r["pass"])
+            self.assertEqual(r["ledger_gate_problems"][0]["problem"],
+                             "ledger_failed")
+
+        def test_require_ledger_gates_stale_inputs_block(self):
+            """A PASS is evidence only while the file it read is unchanged."""
+            ledger = self.dir / "gates.jsonl"
+            req = self.dir / "requirements.md"
+            req.write_text("FR-1 Must-Have" + chr(10), encoding="utf-8")
+            self._gate_record(ledger, "check_coverage.py",
+                              inputs={str(req): sha256_file(req)})
+            req.write_text("FR-1 Must-Have (edited after that gate ran)" + chr(10),
+                           encoding="utf-8")
+            self.path.write_text(HAPPY, encoding="utf-8")
+            r = build_report(str(self.path), require_go=True,
+                             ledger=str(ledger),
+                             require_ledger_gates=["check_coverage.py"])
+            self.assertFalse(r["pass"])
+            self.assertEqual(r["ledger_gate_problems"][0]["problem"],
+                             "ledger_stale")
+
+        def test_require_ledger_gates_refuses_a_broken_chain(self):
+            ledger = self.dir / "gates.jsonl"
+            self._gate_record(ledger, "check_coverage.py")
+            self._gate_record(ledger, "check_acceptance_suite.py")
+            lines = ledger.read_text(encoding="utf-8").splitlines()
+            rec = json.loads(lines[0])
+            rec["argv"] = ["tampered"]
+            lines[0] = json.dumps(rec)
+            ledger.write_text(chr(10).join(lines) + chr(10), encoding="utf-8")
+            self.path.write_text(HAPPY, encoding="utf-8")
+            r = build_report(str(self.path), require_go=True,
+                             ledger=str(ledger),
+                             require_ledger_gates=["check_coverage.py"])
+            self.assertFalse(r["pass"])
+            self.assertEqual(r["ledger_gate_problems"][0]["problem"],
+                             "ledger_chain_broken")
+
+        def test_require_ledger_gates_without_ledger_is_usage_error(self):
+            self.path.write_text(HAPPY, encoding="utf-8")
+            self.assertEqual(main(["--report", str(self.path),
+                                   "--require-ledger-gates",
+                                   "check_coverage.py"]), 2)
+
+        def test_require_ledger_gates_end_to_end_via_main(self):
+            ledger = self.dir / "gates.jsonl"
+            self._gate_record(ledger, "check_coverage.py")
+            self.path.write_text(HAPPY, encoding="utf-8")
+            names = "check_coverage.py,check_acceptance_suite.py"
+            self.assertEqual(main(["--report", str(self.path), "--require-go",
+                                   "--ledger", str(ledger),
+                                   "--require-ledger-gates", names]), 1)
+            self._gate_record(ledger, "check_acceptance_suite.py")
+            self.assertEqual(main(["--report", str(self.path), "--require-go",
+                                   "--ledger", str(ledger),
+                                   "--require-ledger-gates", names]), 0)
+
+        def test_milestone_is_recorded_in_this_runs_ledger_line(self):
+            ledger = self.dir / "gates.jsonl"
+            self.path.write_text(HAPPY, encoding="utf-8")
+            main(["--report", str(self.path), "--ledger", str(ledger),
+                  "--milestone", "M4"])
+            self.assertEqual(self._ledger_records(ledger)[-1]["milestone"], "M4")
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(ShipDecisionTests)
     result = unittest.TextTestRunner(verbosity=1).run(suite)

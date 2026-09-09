@@ -4,6 +4,12 @@ on:
   push:
   pull_request:
 
+# Two jobs by design: the ubuntu and windows legs of one matrix. The pipeline
+# scripts do real path work, so both platforms run the whole Python surface;
+# the PowerShell steps are guarded to the windows leg because that is where
+# `evals/run-evals.ps1` actually runs. Nothing here spends an LLM call -- the
+# only evals invoked are the two zero-LLM mechanical cases and the trigger
+# judge's offline self-test.
 jobs:
   pipeline-tools:
     strategy:
@@ -18,47 +24,95 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Coverage-gate unit tests
-        run: python skills/pipeline-tools/scripts/test_check_coverage.py
-
-      - name: check_coverage.py --self-test
-        run: python skills/pipeline-tools/scripts/check_coverage.py --self-test
-
-      - name: check_commit_gate.py --self-test
-        run: python skills/pipeline-tools/scripts/check_commit_gate.py --self-test
-
-      - name: check_agent_report.py --self-test
-        run: python skills/pipeline-tools/scripts/check_agent_report.py --self-test
-
-      - name: check_runtime_evidence.py --self-test
-        run: python skills/pipeline-tools/scripts/check_runtime_evidence.py --self-test
-
-      - name: check_acceptance_suite.py --self-test
-        run: python skills/pipeline-tools/scripts/check_acceptance_suite.py --self-test
-
-      - name: check_ship_decision.py --self-test
-        run: python skills/pipeline-tools/scripts/check_ship_decision.py --self-test
-
-      - name: check_blockers.py --self-test
-        run: python skills/pipeline-tools/scripts/check_blockers.py --self-test
-
-      - name: next_milestone.py --self-test
-        run: python skills/pipeline-tools/scripts/next_milestone.py --self-test
-
-      - name: update_state.py --self-test
-        run: python skills/pipeline-tools/scripts/update_state.py --self-test
-
-      - name: run_quiet.py --self-test
-        run: python skills/pipeline-tools/scripts/run_quiet.py --self-test
-
-      - name: check_dependency_tables.py --self-test
-        run: python skills/pipeline-tools/scripts/check_dependency_tables.py --self-test
-
-      - name: check_frontmatter.py --self-test
-        run: python skills/pipeline-tools/scripts/check_frontmatter.py --self-test
+      # --- static lints -------------------------------------------------
+      - name: Agent and skill frontmatter is valid
+        run: python skills/pipeline-tools/scripts/check_frontmatter.py .
 
       - name: Methodology Dependencies tables resolve
         run: python skills/pipeline-tools/scripts/check_dependency_tables.py skills
 
-      - name: Agent and skill frontmatter is valid
-        run: python skills/pipeline-tools/scripts/check_frontmatter.py .
+      - name: Always-on index matches the lanes on disk
+        run: python skills/pipeline-tools/scripts/check_always_on.py
+
+      # --- every gate's own self-test -----------------------------------
+      # A loop, not a hand-maintained list: a new script under scripts/ is
+      # covered the moment it lands, and one that ships without --self-test
+      # fails here rather than going unnoticed. test_*.py are unittest modules
+      # run directly below, not CLIs carrying a --self-test flag.
+      - name: Coverage-gate unit tests
+        run: python skills/pipeline-tools/scripts/test_check_coverage.py
+
+      - name: Every pipeline-tools script --self-test (POSIX)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -uo pipefail
+          failed=0
+          for script in skills/pipeline-tools/scripts/*.py; do
+            case "$(basename "$script")" in
+              test_*.py) echo "SKIP   $script (unittest module, run directly)"; continue ;;
+            esac
+            echo "::group::$script --self-test"
+            if python "$script" --self-test; then
+              echo "PASS   $script"
+            else
+              echo "FAIL   $script"
+              failed=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$failed"
+
+      - name: Every pipeline-tools script --self-test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $failed = 0
+          Get-ChildItem skills/pipeline-tools/scripts/*.py | ForEach-Object {
+            if ($_.Name -like 'test_*.py') {
+              Write-Host "SKIP   $($_.Name) (unittest module, run directly)"
+              return
+            }
+            Write-Host "::group::$($_.Name) --self-test"
+            python $_.FullName --self-test
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "FAIL   $($_.Name) (exit $LASTEXITCODE)"
+              $failed = 1
+            } else {
+              Write-Host "PASS   $($_.Name)"
+            }
+            Write-Host "::endgroup::"
+          }
+          exit $failed
+
+      # --- zero-LLM contract evals --------------------------------------
+      - name: Mechanical pipeline composition eval
+        run: python evals/contract/mechanical-pipeline/run.py
+
+      - name: Bugfix gates adversarial eval
+        run: python evals/contract/bugfix-gates-adversarial/run.py
+
+      # --- Windows-only: the PowerShell eval harness --------------------
+      - name: Eval harness self-test
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File evals/run-evals.ps1 -SelfTest
+
+      - name: Every eval PowerShell script parses
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $failed = 0
+          Get-ChildItem -Path evals -Recurse -Filter *.ps1 | ForEach-Object {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName, [ref]$null, [ref]$errors)
+            if ($errors -and $errors.Count -gt 0) {
+              Write-Host "FAIL   $($_.FullName)"
+              $errors | ForEach-Object { Write-Host "       $($_.Message)" }
+              $failed = 1
+            } else {
+              Write-Host "PASS   $($_.FullName)"
+            }
+          }
+          exit $failed

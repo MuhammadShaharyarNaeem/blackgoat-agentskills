@@ -59,7 +59,7 @@ Log: "⚠️ Context integrity check failed — rebuilt from semantic memory."
 - You MUST delegate to the squad members as separate agents. Never attempt to sequentially roleplay their phases yourself.
 - Each agent is delegated **deliberately** — by the user or by the main agent with explicit user approval.
 - Any agent can be called **at any time** for any project state.
-- **Bounded delegation (default model)**: Under this plugin's default fire-and-forget delegation model, a delegated agent runs in its own bounded context and returns its report as its final message — you do not need a timer to "check on" it, and you do not message a running agent. If an agent returns a PARTIAL/BLOCKED handoff, re-delegate a fresh agent with that handoff to continue. **Runtime exception**: some runtimes use long-lived subagents that require an explicit watchdog/terminate lifecycle — where a runtime contract says so (e.g. `AGENTS.md` under Antigravity), follow it. Either way, lifecycle management is the Orchestrator's job: never instruct an agent to schedule its own timer or spawn its own replacement.
+- **Bounded delegation, agent lifecycle and continuation-vs-fresh**: owned by `agent-squad/orchestrator-contract.md` §1 (background execution, continuation vs fresh delegation) and §2 (the bounded, self-terminating lifecycle and its long-lived-subagent exception), in ad-hoc use as in a pipeline. Not restated here.
 - **Exception — interactive phases**: Requirements honing with Rex is a turn-by-turn conversation with the user, as is lite's mini-requirements drafting (bgpdd-lite Phase 1). A delegated agent cannot pause to ask the user and resume, so run these interactive steps yourself (main session) — honing follows Rex's persona; lite drafting follows Rex's template rules. All non-interactive agents are delegated.
 
 ### 2. Context Window Discipline
@@ -121,7 +121,7 @@ Artifacts available to read in your workspace:
 ```
 
 ### 5. Agent Termination
-Under this plugin's default delegation model, a delegated agent terminates on its own when it returns — its `<handoff>` (with `<status>COMPLETE</status>`) arrives as the delegation's final message, and there is no separate "kill" step. Simply read the returned handoff and proceed. **Runtime exception**: runtimes with long-lived subagents require the Orchestrator to watchdog and explicitly terminate them — where a runtime contract (e.g. `AGENTS.md`) says so, follow that lifecycle instead.
+The lifecycle — bounded delegations that terminate on their own return, and the runtime exception for long-lived subagents — is `agent-squad/orchestrator-contract.md` §2's. Read it there; this file adds nothing to it.
 
 ---
 
@@ -167,7 +167,7 @@ This object is updated after every agent interaction. It is the single source of
 - Never resolves conflicts between agents by picking a side. Re-delegating an upstream agent to auto-fix a flagged artifact is governed by the bounded autonomous-rejection rule in `agent-squad/orchestrator-contract.md` §2.
 - Never passes a full agent report as input to another agent — always compresses.
 - Never tries to inspect a delegated agent's internal conversation — it is not accessible in any case. Rely exclusively on the agent's returned `<handoff>` summary and the artifacts it saved under `.docs/` to preserve context space and avoid cluttering judgement.
-- Never delegates the next agent in a chain without confirming the user wants to continue.
+- Never delegates the next agent in a chain without the phase-transition confirmation `agent-squad/orchestrator-contract.md` §1 defines.
 - Never loses track of what phase the project is in.
 
 ---

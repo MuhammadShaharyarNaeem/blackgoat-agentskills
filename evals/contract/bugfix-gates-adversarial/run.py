@@ -22,12 +22,18 @@ which exists to average out LLM variance. There is none here.
 See README.md in this directory for what this proves and when to re-run it.
 
 Usage:
-    python run.py
+    python run.py               # run, print, record nothing
+    python run.py --record      # ... and append one record to results/results.jsonl
 
 Exit 0 only if every step passes. Prints a PASS/FAIL line per step and a final
 RESULT: line; on failure the detail line shows the raw JSON the tool produced.
 The script builds its own temp directory and removes it unconditionally.
+
+--record is OFF by default so an iteration loop on this file does not pollute the
+run log, and `run-evals.ps1` passes it at the start of every confirmed contract
+batch: the case is free, and until that landed it left no history at all.
 """
+import argparse
 import itertools
 import json
 import os
@@ -35,6 +41,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 # evals/contract/bugfix-gates-adversarial/run.py -> plugin root is 3 levels up.
@@ -50,6 +57,12 @@ RUN_QUIET = SCRIPTS / "run_quiet.py"
 
 BUG_REPORT_TEMPLATE = REFERENCES / "bug-report-template.md"
 RCA_TEMPLATE = REFERENCES / "rca-template.md"
+
+# The shared record writer lives in evals/, two levels up from this file. Shared,
+# not copied into each case, because the record shape has to match the one
+# run-evals.ps1 appends to the same file.
+sys.path.insert(0, str(PLUGIN_ROOT / "evals"))
+from eval_record import append_script_record  # noqa: E402
 
 SLUG = "probe-exit-code"
 
@@ -244,22 +257,43 @@ def write_capture(cwd, path, extra_fields=()):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--record", action="store_true",
+                        help="append one flat record to evals/results/results.jsonl")
+    args = parser.parse_args()
+
     if shutil.which("python") is None:
         print("RESULT: ERROR - `python` is not on PATH, and the reproduction "
               "command this case asserts on is invoked by bare name.")
+        # Deliberately NOT recorded: this is an environment refusal, not a
+        # measurement of the gate chain - the same reason run-evals.ps1 quarantines
+        # an INFRA run instead of writing it to results.jsonl.
         return 2
+
+    started = time.time()
     tmp = Path(tempfile.mkdtemp(prefix="eval-bugfix-gates-adversarial-"))
     try:
         run_suite(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+    duration = round(time.time() - started, 2)
 
     print()
     failed = [n for n, ok in results if not ok]
     if failed:
         print(f"RESULT: FAIL ({len(failed)}/{len(results)} steps failed)")
+    else:
+        print(f"RESULT: PASS ({len(results)}/{len(results)} steps passed)")
+
+    if args.record:
+        detail = None
+        if failed:
+            detail = " | ".join(f"[FAIL] {name}" for name in failed)
+        append_script_record(case="bugfix-gates-adversarial", passed=(not failed),
+                             failed_criterion=detail, duration_s=duration)
+
+    if failed:
         return 1
-    print(f"RESULT: PASS ({len(results)}/{len(results)} steps passed)")
     return 0
 
 
@@ -429,6 +463,40 @@ def run_suite(repo):
            lambda d: d.get("result") == "PASS",
            "the result field is not PASS")
 
+    # --- 12b. ONLY the sidecar is edited -> sidecar_body_disagrees ----------
+    # The one forgery `capture_sha256` cannot see. The hash protects the capture
+    # FILE's bytes; nothing protects the sidecar's own fields. So take an HONEST
+    # capture of the probe while it is broken (its body records `- Exit code: 22`)
+    # and edit only the sidecar's `exit_code` to 0 -- "the fix didn't work, so I
+    # said it did". Every older term stays green: the sidecar exists, the capture
+    # still hashes to it, the argv matches the RED's exactly, and the capture is
+    # strictly newer. Only the capture's own hash-protected header contradicts the
+    # sidecar's claim, which is the term under test.
+    (repo / "state.txt").write_text("broken\n", encoding="utf-8")
+    forged_green = f".docs/bugfix/{SLUG}/evidence/green/{SLUG}-forged.md"
+    proc = write_capture(repo, forged_green)
+    forged_taken = (proc.returncode == 22)
+    (repo / "state.txt").write_text("fixed\n", encoding="utf-8")
+
+    forged_meta = root / "evidence" / "green" / f"{SLUG}-forged.md.meta.json"
+    meta = json.loads(forged_meta.read_text(encoding="utf-8"))
+    recorded_exit = meta.get("exit_code")
+    meta["exit_code"] = 0
+    forged_meta.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+
+    proc = run_py(CHECK_RED_GREEN, ["--red", red_rel, "--green", forged_green,
+                                    "--milestone", SLUG, "--ledger", ledger], repo)
+    expect("12b. red/green: GREEN sidecar exit_code edited 22 -> 0 -> exit 1 "
+           "(sidecar_body_disagrees)", proc, 1,
+           lambda d: forged_taken and recorded_exit == 22
+           and "sidecar_body_disagrees" in codes(d)
+           # Not caught by an older term: a step that passes because the sidecar
+           # was missing or the hash broke proves nothing about this one.
+           and "sidecar_missing" not in codes(d)
+           and "sidecar_hash_mismatch" not in codes(d)
+           and "command_mismatch" not in codes(d),
+           "it did not name sidecar_body_disagrees on its own")
+
     # --- 13. 4 of 5 green is not fixed -------------------------------------
     flaky = []
     for index in range(1, 5):
@@ -444,6 +512,65 @@ def run_suite(repo):
            proc, 1,
            lambda d: "green_runs_short" in codes(d),
            "it did not name green_runs_short")
+
+    # --- 13b (2.6.1): 5 green captures, but only ONE run --------------------
+    # `--green-runs 5` counted --green OCCURRENCES, so the same capture path
+    # cited five times satisfied it: the one flag in this gate that speaks
+    # about repeated execution proved nothing about it. The lane's own rule is
+    # "4 of 5 green is not fixed"; 1 of 1 was passing as 5 of 5.
+    args = ["--red", red_rel] + ["--green", green_rel] * 5
+    args += ["--green-runs", "5", "--milestone", SLUG, "--ledger", ledger]
+    proc = run_py(CHECK_RED_GREEN, args, repo)
+    expect("13b. red/green: one GREEN capture cited 5x under --green-runs 5 "
+           "-> exit 1 (green_runs_not_distinct)", proc, 1,
+           lambda d: "green_runs_not_distinct" in codes(d)
+           # Not caught by the older term: five were supplied.
+           and "green_runs_short" not in codes(d)
+           and d.get("green_distinct_runs") == 1,
+           "it did not name green_runs_not_distinct on its own")
+
+    # --- 13c (2.6.1): 5 byte-identical COPIES under five names --------------
+    # Copy the capture AND its sidecar together and every hash still matches,
+    # because copying preserves exactly what the hashes protect. Distinctness
+    # therefore needs the OUTPUT key as well as the process key.
+    copies = []
+    for index in range(1, 6):
+        rel = f".docs/bugfix/{SLUG}/evidence/green/{SLUG}-copy{index}.md"
+        shutil.copy(str(repo / green_rel), str(repo / rel))
+        shutil.copy(str(repo / (green_rel + ".meta.json")),
+                    str(repo / (rel + ".meta.json")))
+        copies.append(rel)
+    args = ["--red", red_rel]
+    for rel in copies:
+        args += ["--green", rel]
+    args += ["--green-runs", "5", "--milestone", SLUG, "--ledger", ledger]
+    proc = run_py(CHECK_RED_GREEN, args, repo)
+    expect("13c. red/green: 5 byte-identical copies under --green-runs 5 "
+           "-> exit 1 (green_runs_not_distinct)", proc, 1,
+           lambda d: "green_runs_not_distinct" in codes(d)
+           # The point of the case: every copy still hashes to its sidecar.
+           and "sidecar_hash_mismatch" not in codes(d)
+           and "sidecar_missing" not in codes(d)
+           and d.get("green_distinct_bodies") == 1,
+           "it did not name green_runs_not_distinct over intact hashes")
+
+    # --- 13d (2.6.1): five REAL runs still pass -----------------------------
+    # A distinctness rule that also refused honest evidence would be worse than
+    # none, so the clearing case runs the probe five more times for real.
+    real_runs = []
+    for index in range(1, 6):
+        rel = f".docs/bugfix/{SLUG}/evidence/green/{SLUG}-real{index}.md"
+        write_capture(repo, rel)
+        real_runs.append(rel)
+    args = ["--red", red_rel]
+    for rel in real_runs:
+        args += ["--green", rel]
+    args += ["--green-runs", "5", "--milestone", SLUG, "--ledger", ledger]
+    proc = run_py(CHECK_RED_GREEN, args, repo)
+    expect("13d. red/green: 5 REAL runs under --green-runs 5 -> exit 0", proc, 0,
+           lambda d: d.get("result") == "PASS"
+           and d.get("green_distinct_runs") == 5,
+           "five genuine runs were not accepted as five distinct runs")
 
     # --- Commit-gate fixtures: 6 declared files, all real ------------------
     declared = []

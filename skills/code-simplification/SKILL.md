@@ -13,9 +13,23 @@ Reduce complexity while preserving exact behavior — not fewer lines, but code 
 
 A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no editing tests to pass, no unobserved claims (`base-persona.md`, Evidence Integrity). Over three files, or shared behaviour: route via `/bg` to a lane.
 
+## Quick card
+
+Derived from the contract below for a ≤ 3-file change; no new rules (convention #8 — deliberately narrower than the full contract, which binds inside any lane).
+
+1. Run the suite first — a green baseline before you touch anything (§ Rules).
+2. Preserve behaviour exactly; every existing test passes unmodified (§ The Five Principles, 1).
+3. Can't say why the code exists? Don't simplify it (§ Chesterton's Fence).
+4. One kind of change; no drive-by refactor of code you did not already touch (§ Rules).
+5. It only passes by modifying a test → revert and escalate (§ Escalate When).
+
+- Brief → the quick note (What / Where / How verified)
+- Artifact → the capture at `{quick-root}/evidence/check.md`
+- Handoff → the `## Result` bullet in `note.md`
+
 ## Worker Execution Contract
 
-This is the operational spine. Follow it as written.
+This is the operational spine. Follow it as written. For a change of ≤ 3 files outside a pipeline, the Quick card above is the contract; the full contract applies inside a lane.
 
 ### The Five Principles
 

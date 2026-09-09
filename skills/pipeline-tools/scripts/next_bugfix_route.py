@@ -201,6 +201,42 @@ def sha256_file(path):
         return None
 
 
+def ledger_line_hash(raw):
+    """sha256 of one ledger LINE's bytes, ignoring its terminator.
+
+    Surrounding whitespace (CR included) is stripped so a ledger written on
+    Windows chains identically to the same file read on POSIX. Byte-identical
+    in every gate in this family and in check_ledger.py, which verifies the
+    chain (family convention: one file each, no shared module).
+    """
+    return hashlib.sha256(raw.strip()).hexdigest()
+
+
+def ledger_prev_hash(ledger_path):
+    """The `prev` value for the next record: hash of the last line on disk.
+
+    `"genesis"` when the ledger is missing or holds no non-blank line.
+    """
+    try:
+        with open(ledger_path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return "genesis"
+    last = None
+    for raw in data.splitlines():
+        if raw.strip():
+            last = raw
+    return "genesis" if last is None else ledger_line_hash(last)
+
+
+def ledger_self_hash(record):
+    """sha256 of the record serialized canonically WITHOUT its `self` field."""
+    body = {k: v for k, v in record.items() if k != "self"}
+    return hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":"))
+        .encode("utf-8")).hexdigest()
+
+
 def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code,
                   extra=None):
     """Append ONE JSON line recording this run. Best-effort by design."""
@@ -221,6 +257,8 @@ def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code,
         p = Path(ledger_path)
         if str(p.parent):
             p.parent.mkdir(parents=True, exist_ok=True)
+        record["prev"] = ledger_prev_hash(p)
+        record["self"] = ledger_self_hash(record)
         with open(p, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record) + "\n")
     except OSError as exc:
@@ -248,27 +286,46 @@ def read_ledger(ledger_path):
     return records
 
 
-def intake_backing(ledger_path, report_path):
+def intake_backing(ledger_path, report_path, milestone=None):
     """(ok, detail) — does the ledger hold a PASS over THIS report's bytes?
 
     Matches on the recorded input HASH rather than on the path string: the
     ledger records the path exactly as the earlier invocation gave it, which
     is legitimately a different string (relative vs absolute) from the one
     handed to this script.
+
+    SCOPED BY `--milestone` when one is given. The lookup used to take the
+    globally latest intake record, so two interleaved bugs sharing one ledger
+    produced a false `intake_unbacked` on the older one: bug A's report was
+    linted, bug B's intake landed after it, and A's route then read B's record
+    and reported that A's report had been edited since it passed. Fallback,
+    deliberately narrow: records carrying NO milestone at all (an unscoped
+    invocation), never another bug's.
     """
     current = sha256_file(report_path)
     if current is None:
         return False, f"cannot hash {report_path}"
     records = [r for r in read_ledger(ledger_path)
                if r.get("gate") == INTAKE_GATE.name]
+    scope_note = ""
+    if milestone and records:
+        scoped = [r for r in records if r.get("milestone") == milestone]
+        if scoped:
+            scope_note = f" scoped to milestone {milestone!r}"
+        else:
+            scoped = [r for r in records if not r.get("milestone")]
+            scope_note = (f" (no entry names milestone {milestone!r}; falling "
+                          "back to the unscoped entries)")
+        records = scoped
     if not records:
-        return False, (f"no {INTAKE_GATE.name} entry in {ledger_path} — run the "
-                       "intake gate before routing; a route decided off an "
+        return False, (f"no {INTAKE_GATE.name} entry{scope_note} in "
+                       f"{ledger_path} — run the intake gate before routing "
+                       "(with the same --milestone); a route decided off an "
                        "unlinted report is a guess")
     latest = records[-1]
     if latest.get("verdict") != "PASS":
-        return False, (f"the latest {INTAKE_GATE.name} ledger entry records "
-                       f"verdict {latest.get('verdict')!r} (exit "
+        return False, (f"the latest {INTAKE_GATE.name} ledger entry{scope_note} "
+                       f"records verdict {latest.get('verdict')!r} (exit "
                        f"{latest.get('exit')}) — the bug report has not passed "
                        "intake")
     hashes = [v for v in (latest.get("inputs") or {}).values() if v]
@@ -406,7 +463,8 @@ def build_report(args):
         "error": None,
     }
 
-    ok, detail = intake_backing(args.ledger, args.report)
+    ok, detail = intake_backing(args.ledger, args.report,
+                                 getattr(args, "milestone", None))
     report["intake_backed"] = ok
     if not ok:
         raise GateError(f"intake_unbacked: {detail}")
@@ -1042,6 +1100,52 @@ def run_self_test():
             self._setup()
             self._back_intake(verdict="FAIL")
             self.assertEqual(self._main()[0], 2)
+
+        def test_another_bugs_later_intake_does_not_unback_this_one(self):
+            """Two interleaved bugs, one ledger: the lookup is milestone-scoped.
+
+            Unscoped, this read bug B's record (the globally latest) and
+            reported that bug A's report had been edited since it passed.
+            """
+            self._setup()                      # bug A, milestone coupon-500
+            other = self.dir / "other-bug-report.md"
+            other.write_text(REPORT_OK.replace("coupon", "tax"),
+                             encoding="utf-8")
+            rec = {"ts": "2026-09-03T10:00:00Z",
+                   "gate": "check_bugfix_intake.py", "argv": [],
+                   "milestone": "tax-401",
+                   "inputs": {str(other): sha256_file(other)},
+                   "verdict": "PASS", "exit": 0}
+            with open(self.ledger, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(rec) + "\n")
+            # Unscoped: bug B's record is the latest, so A reads as edited.
+            self.assertEqual(self._main()[0], 2)
+            # Scoped to A's own milestone: A's own PASS is found.
+            code, out = self._main(["--milestone", "coupon-500"])
+            self.assertEqual(code, 0, out)
+
+        def test_a_scoped_fail_for_this_bug_still_blocks(self):
+            """Scoping must not become a way to skip past one's own FAIL."""
+            self._setup()
+            self._back_intake(verdict="FAIL")
+            code, out = self._main(["--milestone", "coupon-500"])
+            self.assertEqual(code, 2)
+            self.assertIn("has not passed intake", out)
+
+        def test_scoped_lookup_falls_back_only_to_unscoped_records(self):
+            """A milestone-less intake PASS still backs a scoped route."""
+            self.report.write_text(REPORT_OK, encoding="utf-8")
+            self.red = self._write_red()
+            self.rca.write_text(rca_text(), encoding="utf-8")
+            rec = {"ts": "2026-09-03T09:00:00Z",
+                   "gate": "check_bugfix_intake.py", "argv": [],
+                   "milestone": None,
+                   "inputs": {str(self.report): sha256_file(self.report)},
+                   "verdict": "PASS", "exit": 0}
+            with open(self.ledger, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(rec) + "\n")
+            code, out = self._main(["--milestone", "coupon-500"])
+            self.assertEqual(code, 0, out)
 
         def test_intake_pass_recorded_with_a_different_path_string_is_accepted(self):
             """The ledger records the path as GIVEN; matching is on the hash."""

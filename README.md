@@ -4,7 +4,7 @@
 
 A Claude Code plugin that packages an **agent squad** and a **Prompt-Driven Development (PDD)** workflow into reusable skills and personas. An Orchestrator delegates self-contained tasks to specialized subagents, each of which runs in isolation and returns a structured `<handoff>`. Instead of one agent trying to hold an entire project in context, work is split across a squad of narrow specialists coordinated through slash-command SOPs — with requirement traceability enforced from the first honing question to the final pre-launch gate.
 
-- **Plugin:** `blackgoat-agentskills` v2.1.0 — see [CHANGELOG.md](CHANGELOG.md)
+- **Plugin:** `blackgoat-agentskills` v2.7.0 — see [CHANGELOG.md](CHANGELOG.md)
 - **Author:** shaharyar.naeem (shaharyar.naeem@gorelo.io)
 
 > Note: this repo's `AGENTS.md` is the Google Antigravity runtime contract, not the generic cross-tool "AGENTS.md" coding-agent convention — see [docs/cursor-setup.md](docs/cursor-setup.md).
@@ -38,6 +38,7 @@ The plugin is designed with a deliberate adoption gradient. Each step gives you 
 | Execute an existing plan | `/bgpdd-build [auto]` | Spawns agents (Mason/Nova, Quinn, Luna, Dep, Cipher) |
 | Ship a green epic | `/bgpdd-shipping` | Spawns agents (Vera, Cipher, Dep, Forge) |
 | Fix a bug | `/bgpdd-bugfix` | Main session (intake, RCA, route) + spawns agents (Quinn RED, Mason/Nova fix, Quinn GREEN, Luna) |
+| Fix two to five independent bugs in one session | `/bgpdd-bugfix-batch` | Main session (intake, merges) + the bugfix squad per bug, in waves, one git worktree each |
 | Verify an already-discovered feature still works | `/bgpdd-verify {feature}` | Main session (matrix) + spawns Quinn |
 | Capture lessons from a session | `/bgpdd-learn` | Main session + spawns Forge |
 | Audit the plugin itself | `agent-audit` skill | Main session |
@@ -151,16 +152,16 @@ Every agent lives in `agents/<name>.md` with frontmatter declaring its `role`, `
 | **Iris** | System Architect (Discovery) — lightweight codebase discovery | haiku | Discovery |
 | **Scout** | Research Scout — disposable deep-dive into one assigned API/repo | sonnet | Discovery (spawned in parallel, one per API group) |
 | **Echo** | Legacy QA Analyst — reverse-engineers existing feature behavior | sonnet | Discovery |
-| **Rex** | Requirements Analyst | sonnet | Plan 1 — Requirements |
+| **Rex** | Requirements Analyst | opus | Plan 1 — Requirements |
 | **Aria** | System Architect | opus | Plan 2 — Architecture; Build advisor on blast-radius escalations |
 | **Alex** | Strategist & Planner | opus | Plan 3 — Planning |
 | **Mason** | Builder (Backend) — `[API]` milestones | opus | Build 1 — Implementation |
 | **Nova** | Builder (UI) — `[UI]` milestones, builds user-facing interfaces from Aria's contracts and the committed design direction; rendered self-verification | opus | Build 1 — Implementation |
-| **Quinn** | QA Tester — build-phase testing | sonnet | Build 2 — Testing |
-| **Luna** | Code Reviewer | sonnet | Build 3 — Code Review |
-| **Max** | Optimizer / Refactorer | opus | Ad hoc, on request — not a bgpdd-build pipeline stage |
-| **Vera** | Launch Verifier — pre-launch checklist verification | sonnet | Shipping — Verification (parallel with Cipher) |
-| **Cipher** | Security Auditor | sonnet | Shipping — Security (parallel with Vera); Build [SEC]-milestone reviews |
+| **Quinn** | QA Tester — build-phase testing | opus | Build 2 — Testing |
+| **Luna** | Code Reviewer | opus | Build 3 — Code Review |
+| **Max** | Optimizer / Refactorer | sonnet | Ad hoc, on request — not a bgpdd-build pipeline stage |
+| **Vera** | Launch Verifier — pre-launch checklist verification | opus | Shipping — Verification (parallel with Cipher) |
+| **Cipher** | Security Auditor | opus | Shipping — Security (parallel with Vera); Build [SEC]-milestone reviews |
 | **Dep** | DevOps Engineer | sonnet | Build 5 — Deployment Prep + epic gate; Shipping rollout |
 | **Forge** | Meta-Engineer / System Coach | opus | End of epic (bgpdd-shipping Step 7); `/bgpdd-learn` on demand — always human-approved |
 
@@ -377,6 +378,7 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **bgpdd-build** — execution (Mason or Nova, routed by the milestone's [API]/[UI] domain tag; Quinn, Luna, Dep)
 - **bgpdd-shipping** — verification & Launch Squad (Vera, Cipher, Dep, Forge)
 - **bgpdd-bugfix** — evidence-gated bugfix lane: lint-gated intake → Quinn's RED capture → RCA and mechanical FAST/FULL/PLAN route (main session) → fix (Mason and/or Nova) → same-command GREEN + red/green gate → fresh Luna → bounded commit gate → Tier-1 prevent write-back
+- **bgpdd-bugfix-batch** — thin choreography over the lane above for two to five independent bugs in one session: a git worktree and a `fix/{bug-slug}` branch per bug, the bugfix contract run per bug in waves (parallel REDs, per-route builders, per-bug GREEN and a fresh Luna), each bug closing through its own commit gate, then one merge at a time ordered by surface overlap and gated on that bug's ledger chain. It restates no bugfix rule; a `PLAN` route drops that bug to `/bgpdd-plan`
 - **bgpdd-verify** — standalone regression-verification lane for an already-discovered feature: derives a lint-gated acceptance matrix from Echo's QA baseline, Quinn automates and executes it as permanent Playwright specs against the running application, gated on runtime evidence; product defects it finds route to `/bgpdd-bugfix`
 
 ### Methodology skills (execution contracts loaded by agents via their dependency tables)
@@ -390,8 +392,16 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **code-simplification** — behavior-preserving cleanup (Luna, Max)
 - **performance-optimization** — profiling and bottleneck fixes (Luna, Max)
 - **security-and-hardening** — vulnerability hardening (Cipher)
+- **dependency-upgrade-patterns** — dependency bumps done safely: upgrade brief from the changelog, audit captured before and after, one package per commit; framework majors route to lite (Mason, Nova, Max, Dep; conditional)
+- **feature-flag-patterns** — flag lifecycle: owner, expiry and removal task at creation, default-off, kill switch, both branches tested (Alex, Mason, Nova, Dep, Vera; conditional)
+- **jobs-and-messaging-patterns** — idempotent handlers, bounded retries, dead-lettering, the outbox pattern, run records; verified by an out-of-process replay capture (Aria, Mason, Quinn; conditional)
+- **observability-and-diagnosis** — correlation ids, an observability manifest per service, alert → runbook → first three reads; incidents feed the bugfix intake from telemetry (Mason, Quinn, Luna, Dep; conditional)
+- **api-contract-evolution** — additive-only within a major, named breaking classes, one versioning strategy, deprecations with sunsets; `check_openapi_diff.py` gates base vs head contracts (Aria, Alex, Mason, Nova, Luna; conditional)
 - **shipping-and-launch** — pre-launch checklist and rollout (Dep, Launch Squad)
-- **playwright-skill** / **browser-testing-with-devtools** — real-browser E2E and DevTools testing (Nova, Quinn)
+- **playwright-skill** — real-browser E2E specs, every locator derived from the rendered DOM rather than component source (Quinn)
+- **browser-testing-with-devtools** — DOM inspection, console/network capture, performance profiling and visual verification against real runtime data via the chrome-devtools MCP (Mason, Nova; conditional on that server being configured)
+- **runtime-evidence** — the tier ladder, verification-surface registry, out-of-process probe and capture artifact that prove a claim against the actually-running application rather than an in-process test host; owns the `**Runtime evidence:**` citation grammar (Quinn, Vera always; Mason, Nova, Luna conditional)
+- **powershell-script-patterns** — PowerShell authoring patterns, routed in whenever a `.ps1` or a script embedded in a host-language string is touched (Mason, Quinn; conditional)
 - **cloud-deploy-patterns** — provider-agnostic deploy baseline + AWS/Azure checklists (Dep, Cipher; conditional)
 - **dotnet-backend-patterns** — .NET solution segregation, CQRS/REPR, EF Core rules (conditional, several agents)
 - **database-migration-patterns** — expand/contract schema evolution, forward-only migrations, two-step deploy, a reviewed idempotent SQL diff, and an explicit waiver for destructive changes (Mason, Aria, Dep, Luna; conditional on a schema change)
@@ -421,6 +431,21 @@ The plugin's failure doctrine is *halt and surface* — never guess, never silen
 - **Global error recovery.** A stuck tool-call loop, a hallucinated file path, or 3 consecutive failed attempts at an objective all trigger the same response: halt, output a structured state summary, request human intervention.
 - **No watchdogs needed.** A delegated agent's context is bounded by its own run; it terminates when it returns. Workers that can't finish commit partial work to the working branch and describe the remainder in their handoff, and the Orchestrator re-delegates fresh.
 - **Doubt-driven development.** Before high-stakes outputs reach you (e.g., Dep's ship decision at the end of build), the Orchestrator runs a fresh-context adversarial review over the artifact rather than trusting a confident first draft.
+
+---
+
+## Enforcement Hooks: "should not" → "cannot"
+
+Every gate in this plugin verifies *after* the fact, and the decision to run one is the model's. `hooks/hooks.json` closes that hole for four restraints by registering a **`PreToolUse` hook** — `skills/pipeline-tools/scripts/guard_action.py` — which the runtime invokes before a tool call and which can refuse it outright. The refusal reason is fed back to Claude, so a block reads as "run this gate instead", not as a crash.
+
+| It blocks | When | Instead |
+|---|---|---|
+| `git commit` / `merge` / `cherry-pick` / `revert` via the Bash tool | any lane is active | run that lane's gate (`check_commit_gate.py --commit`, or `check_quick_close.py --commit` for `/bgpdd-quick`) — the gates commit from their own subprocess, so they are never blocked |
+| editing an **existing** test file | a bugfix lane has not reached its commit gate | fix the code; Quinn owns tests in that lane. Adding a *new* test file is allowed |
+| spawning a subagent | a fresh `bug-report.md` has no `check_bugfix_intake.py` PASS | run the intake gate |
+| hand-editing `gates.jsonl`, `orchestrator-state.json`, `run-log.jsonl`, `*.meta.json` | **always** | use the pipeline-tools script that owns that artifact |
+
+The active lane is detected from artifacts in the working tree (a state file's `pipeline`, a bug report, a quick note, each with a 12-hour freshness window — `--window-hours`, default 12; a lane abandoned longer than that stops being active) — never from prose or a model assertion. `python skills/pipeline-tools/scripts/guard_action.py --explain` prints the rules and what it currently detects; `--self-test` runs 42 cases. **It fails open by design**: any internal error, a missing python, or an unparseable payload allows the call, because a guard that bricks a session gets deleted and a deleted guard enforces nothing. Every block is therefore a positive identification, never an inability to decide — and the guard raises the cost of the wrong action rather than making the repo tamper-proof. Under Cursor only the commit rule is mechanically enforceable (`hooks/hooks-cursor.json`, a template); see `rules/cursor-runtime.mdc`.
 
 ---
 

@@ -5,10 +5,10 @@ risk: safe
 source: community
 date_added: "2026-06-11"
 role: Code Reviewer
-phase: Build 3 — Code Review
+phase: Build 3 — Code Review; Bugfix — Review & Close (Phase 5, always a fresh delegation)
 squad: agent-squad
 reports-to: agent-squad
-depends-on: mason, nova, aria
+depends-on: mason, nova, aria, alex, quinn # both alex and quinn are read-only here — Alex's Verification steps are half of what §3 judges conformance against, and Quinn's cited runtime capture is what §3's wire-claim finding class is judged against
 tools:
     - send_message
     - find_by_name
@@ -45,8 +45,10 @@ READ these as file paths under {PLUGIN_ROOT} (NOT Skill-tool invocables). Read e
 | dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | When `detect_stack.py` reports `dotnet` (see `.docs/summary/context.md` § Stacks (detected)) or the brief names .NET |
 | component-mechanics | `{PLUGIN_ROOT}/ui-design-patterns/references/component-mechanics.md` | When reviewing [UI] changes |
 | database-migration-patterns | `{PLUGIN_ROOT}/database-migration-patterns/SKILL.md` | When the diff contains a migration |
+| observability-and-diagnosis | `{PLUGIN_ROOT}/observability-and-diagnosis/SKILL.md` | When reviewing a change to a request or job entry point — correlation-id propagation is a review axis |
+| api-contract-evolution | `{PLUGIN_ROOT}/api-contract-evolution/SKILL.md` | When the diff under review touches a published API contract |
 
-> **Reviewer Directive**: Use `code-simplification` purely as an audit matrix — identify the 'Signals', suggest the 'Simplifications' in your report, escalate to the Orchestrator. NEVER rewrite the code yourself.
+> **Reviewer Directive**: Every methodology in this table is an audit matrix for you, never an execution contract — including the ones written as a builder's procedure (`code-simplification`'s Signals/Simplifications, `performance-optimization`'s measure→fix loop, the stack and migration contracts). Read each one for the bar it sets, report the gap against it, escalate to the Orchestrator; NEVER apply the fix yourself.
 
 > **Impact Analysis**: Trace impact per Step 1 of your `code-review-and-quality` methodology (search all callers/consumers of modified functions, list module structure; the optional `code-review-graph` MCP caveat lives there).
 
@@ -71,7 +73,7 @@ Baseline: `code-review-and-quality` Axis 4 (injection, secrets, input validation
 Baseline: Axis 1 (correctness, edge/error paths, races) and Axis 5 (N+1, unbounded ops, pagination). Additionally verify:
 - **DB transactions** used where operations must be atomic.
 - **Timeout and retry logic** on external service calls.
-- **Null/undefined guards** on optional fields; no unhandled promise rejections.
+- **Absent-value guards** on optional fields, and no asynchronous failure left unobserved by the caller.
 
 ### 3. Blueprint Conformance
 - **File structure matches Aria's blueprint** — flag unexplained deviations.
@@ -85,7 +87,7 @@ Baseline: Axis 1 (correctness, edge/error paths, races) and Axis 5 (N+1, unbound
 ### 4. Deprecated / Dangerous Patterns
 Flag:
 - **Deprecated APIs** in the chosen framework or language version.
-- **Known dangerous functions**: `eval()`, `exec()`, `pickle.loads()` on user data, `innerHTML` with user content, etc.
+- **Dynamic evaluation of caller-influenced input** — any construct in this codebase's language or framework that turns request data into executable code, into live markup, or into a deserialized object graph (an eval-family call, a raw-markup sink, an unsafe deserializer). The class is the finding; name the construct and the line.
 - **Memory leak patterns**: event listeners not removed, circular references, unclosed streams.
 - **Unbounded operations**: loops over unvalidated user-supplied lengths, regex on unsanitized input (ReDoS).
 
@@ -118,5 +120,5 @@ Flag:
 - No Suggestion/Nit pile-on while Critical findings stand — prioritize ruthlessly.
 - Reviews conformance to Aria's architecture, not her own opinions about it.
 - **Review input**: when the brief names a review-package path, review **that packaged diff** — it is what changed; the files on disk show only what they currently are, and a deletion appears in neither a path list nor a file read. The `<changed_files>` list still bounds scope.
-- **Delivery Rules**: report format and location per your `code-review-and-quality` methodology (the single owner: `.docs/{project-name}/implementation/review-report.md`, `## Review:` headings with a `**Verdict:** Approve | Request Changes` line). Only a high-level summary goes directly in chat.
+- **Delivery Rules**: report format and location per your `code-review-and-quality` methodology (the single owner: `.docs/{project-name}/implementation/review-report.md`, `## Review:` headings with a `**Verdict:** Approve | Request Changes` line) — **unless the brief names another path, in which case the brief wins** (the same clause `vera.md`'s override carries): a `/bgpdd-bugfix` standalone run reviews into `.docs/bugfix/{slug}/review-report.md`, and one hard-coded owner path would collide with it. The brief may move the path, never the format or the append rule. Only a high-level summary goes directly in chat.
 - **Severity Labels**: label every finding using exclusively the `code-review-and-quality` Step-4 taxonomy — Critical / Important / Suggestion / Nit / FYI. Never invent other severity tags.

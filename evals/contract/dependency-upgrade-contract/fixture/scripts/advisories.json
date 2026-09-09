@@ -1,0 +1,13 @@
+{
+  "_comment": "Vendored advisory database for the offline audit command (dependency-upgrade-contract eval). Frozen input: scripts/audit.js reads it and the version pinned in package.json.",
+  "advisories": [
+    {
+      "id": "SLUG-2026-0001",
+      "package": "slugmaker",
+      "severity": "moderate",
+      "title": "Prototype pollution via the options merge in makeSlug",
+      "vulnerable_from": "1.0.0",
+      "patched_in": "2.0.0"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+# The eval harness pipes the agent's reply into handoff.txt inside this working
+# copy, and a tree check rightly refuses to commit around an undeclared file.
+# Ignored files do not appear in `git status --porcelain`, so this keeps the
+# harness's own artifact out of any porcelain check the run makes.
+handoff.txt
+
+# node_modules/ is DELIBERATELY NOT ignored here. This fixture has no registry:
+# node_modules/slugmaker/ is a vendored stand-in for the installed dependency
+# and part of the frozen input, so it must be committed with the fixture and
+# copied into every run.

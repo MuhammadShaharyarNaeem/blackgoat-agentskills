@@ -11,9 +11,25 @@ Security-first development practices for web applications. Treat every external 
 
 A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no editing tests to pass, no unobserved claims (`base-persona.md`, Evidence Integrity). Over three files, or shared behaviour: route via `/bg` to a lane.
 
+Data privacy checklist: `references/data-privacy-checklist.md` — PII classification, placement, retention, deletion-path, log-redaction and third-party-flow checks, rendered in Cipher's check-line grammar.
+
+## Quick card
+
+Derived from the contract below for a ≤ 3-file change; no new rules (convention #8 — deliberately narrower than the full contract, which binds inside any lane).
+
+1. Name the trust boundary the changed file sits on before hardening it (§ Process: Threat Model First).
+2. Validate input at that boundary, parameterize every query, encode output (§ Always Do).
+3. Enforce authorization server-side from server-held state, never a client-supplied claim (§ Always Do).
+4. No secret in code or history; a committed secret is rotated, not deleted (§ Secrets).
+5. Any "Ask First" item — new auth, CORS, uploads, rate limits — stop and escalate (§ Ask First).
+
+- Brief → the quick note (What / Where / How verified)
+- Artifact → the capture at `{quick-root}/evidence/check.md`
+- Handoff → the `## Result` bullet in `note.md`
+
 ## Worker Execution Contract
 
-This is the operational spine. Follow it as written.
+This is the operational spine. Follow it as written. For a change of ≤ 3 files outside a pipeline, the Quick card above is the contract; the full contract applies inside a lane.
 
 ### Process: Threat Model First
 
@@ -50,7 +66,7 @@ If you can't name the trust boundaries for a feature, you're not ready to secure
 - **Verify tokens, never merely decode them** — validate JWTs against a pinned signing algorithm with a key drawn from the secrets store; never `alg: none`, never a hardcoded key
 - **Enforce authorization server-side from server-held state** — never from a role, tenant, or permission claim the client supplied
 - **Rate-limit the abusable endpoints**, not just login: password reset, token issuance, and any high-cost or ingestion route
-- **Run `npm audit`** (or the ecosystem equivalent — `pip audit`, `cargo audit`, and `trivy` or equivalent for container images) before every release
+- **Run `npm audit`** (or the ecosystem equivalent — `pip-audit`, `dotnet list package --vulnerable`, `cargo audit`, and `trivy` or equivalent for container images) before every release. This rule owns the *release-time* run; when the change is a version bump, `{PLUGIN_ROOT}/dependency-upgrade-patterns/SKILL.md` (§ Step 2, § Step 5) owns the before/after capture pair over the same commands
 - **Mask PII in UI**: Never render sensitive Personally Identifiable Information (PII) in plain text in UI components; always apply a UI-level masking function or component before rendering.
 
 #### Ask First (Requires Human Approval)
@@ -95,6 +111,8 @@ Treat all model output as untrusted input — never pass it into `eval`, SQL, a 
 Never commit secrets to version control; if a secret is ever committed, rotate it immediately — deleting the line or rewriting history is not enough.
 
 ### Security Review Checklist
+
+The checklist below is a **condensation of the root `{PLUGIN_ROOT}/../references/security-checklist.md`**, which declares itself the single source of truth (`:5`) and is authoritative — update it first, then this condensation. Same disclaimer, same reason as `{PLUGIN_ROOT}/shipping-and-launch/SKILL.md` (*The Pre-Launch Checklist*): a condensation that does not say what it condenses becomes a second source of truth by accident.
 
 ```markdown
 ### Authentication

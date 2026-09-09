@@ -13,9 +13,23 @@ This is not `/review`. `/review` is a verdict on a finished artifact. This is an
 
 A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Orchestrator Execution Contract below inline, in the main session (where it already runs): no editing tests to pass, no unobserved claims (`base-persona.md`, Evidence Integrity). Over three files, or shared behaviour: route via `/bg` to a lane.
 
+## Quick card
+
+Derived from the contract below for a ≤ 3-file change; no new rules (convention #8 — deliberately narrower than the full contract, which binds inside any lane).
+
+1. Skip the cycle for a rename, a format pass, or an obvious one-liner (§ When to Use).
+2. Run it when the change branches, crosses a boundary, or outruns the compiler (§ When to Use).
+3. Write the CLAIM in two or three lines before it stands (§ Step 1).
+4. Hand the reviewer ARTIFACT + CONTRACT only — never the CLAIM (§ Step 2).
+5. Classify each finding against the artifact text; stop at trivial findings or 3 cycles (§ Step 4).
+
+- Brief → the quick note (What / Where / How verified)
+- Artifact → the capture at `{quick-root}/evidence/check.md`
+- Handoff → the `## Result` bullet in `note.md`
+
 ## Orchestrator Execution Contract
 
-This is the operational spine. Follow it as written. This skill runs in the main session, not inside a delegated worker.
+This is the operational spine. Follow it as written. This skill runs in the main session, not inside a delegated worker. For a change of ≤ 3 files outside a pipeline, the Quick card above is the contract; the full contract applies inside a lane.
 
 ### When to Use
 
@@ -102,6 +116,10 @@ Assume the author is overconfident. Look for:
 - Ways the contract could be violated
 - Existing conventions this might break
 - Failure modes under unexpected input
+- Duplicate delivery — the same message arrives twice; what happens twice that should not?
+- Out-of-order delivery — a later message is processed before an earlier one
+- A crash between the effect and the acknowledgement — the work landed, the ack did not
+  (The three above apply when the artifact is a job, consumer, or scheduled handler — `{PLUGIN_ROOT}/jobs-and-messaging-patterns/SKILL.md` owns the patterns.)
 
 Do NOT validate. Do NOT summarize. Find issues, or state
 explicitly that you cannot find any after thorough examination.

@@ -32,6 +32,116 @@ The log file is UTF-8 with `ensure_ascii=False`, so a note carrying an em dash o
 
 A failed write is **exit 2, not a warning** — a deliberate divergence from the best-effort gate ledger (convention #8). The ledger is an audit trail for later gates, so losing one line degrades a signal; here the record IS the artifact, and a silently dropped record is the whole telemetry surface going quiet.
 
+## A verifier never runs below the producer it judges
+
+The agent-audit's model-assignment-fit heuristic ("a verifier never runs below the producer it judges") was a finding a human read after the fact. The run log already held the evidence — one delegation record per agent, each carrying its tier — so this is where the finding becomes a refusal (convention #9).
+
+On `--event delegation` with `--agent` in `quinn|luna|vera|cipher`, the script reads back the most recent **producer** delegation (`mason|nova|max`) in the **same `--unit`** and exits **1** with `verifier_below_producer` when this verifier's tier is lower. Tier order is `haiku < sonnet < opus`.
+
+Three deliberate non-refusals, each of which would otherwise turn the check into noise:
+
+- **An unknown tier is never compared.** The tier is matched by name appearing in the model string, so `claude-opus-4-1` resolves to `opus`; a value naming no tier, or two, resolves to `None` and the check stands down. Refusing on a guess about a model string this tool does not recognize is worse than not refusing — the same Evidence Integrity rule that makes an unmeasured token count `null` rather than `0`.
+- **No producer in the unit yet is not an inversion.** A verifier legitimately runs first: the bugfix lane's pre-fix RED capture is Quinn before any builder.
+- **Scoping is exact on `--unit`.** M2's cheap verifier is not judged against M1's opus builder; the comparison only means anything between a producer and the verifier of *that* work.
+
+**`--allow-tier-inversion "<reason>"`** overrides it and records `"tier_inversion_reason"` on the record — an extra key, present only on an inverted record. An empty or whitespace-only reason is exit **2**: an inversion nobody justified in writing is precisely the one this check exists to stop, and a flag that accepts `""` is a flag that gets pasted in.
+
+This introduces exit **1** to a script that previously had only 0 and 2. A refused delegation writes nothing.
+
 ## Self-test inventory
 
-`python scripts/record_run.py --self-test` runs **15** cases: append plus parent-directory creation, unknowns staying `null`, an explicit `0` preserved, `tokens_total` derivation, field order, `--from-json` mapping including a nested `usage` object and the cache-token exclusion, an unmapped payload key leaving the field `null`, an explicit flag overriding the payload, a malformed and a missing `--from-json` file (exit 2), a missing required flag (exit 2), a bad `--event`/`--status`/count value (exit 2), a UTF-8 round trip, and an unwritable path (exit 2).
+`python scripts/record_run.py --self-test` runs **31** cases: append plus parent-directory creation, unknowns staying `null`, an explicit `0` preserved, `tokens_total` derivation, field order, `--from-json` mapping including a nested `usage` object and the cache-token exclusion, an unmapped payload key leaving the field `null`, an explicit flag overriding the payload, a malformed and a missing `--from-json` file (exit 2), a missing required flag (exit 2), a bad `--event`/`--status`/count value (exit 2), a UTF-8 round trip, an unwritable path (exit 2), the four mandatory-`--model` cases, and the twelve tier-inversion cases (refused and blocking the write; equal and higher tiers passing; `--allow-tier-inversion` recording its reason; an empty reason as exit 2; a clean record carrying no inversion key; unit scoping; a verifier running first; latest-producer-wins; an unknown tier on either side; a full model id resolving to its tier; non-verifier and non-delegation records ungated; and the `model_tier` helper).
+
+## `model_unknown`, and `dep` as a producer (2.6.1)
+
+**An unresolvable `--model` is exit 2, not a null tier.** The tier-inversion
+check reads the tier out of the model string, and `model_tier()` returns
+`None` for a value naming no tier or two. The 2026-09-07 audit found that
+`Sonnet`, `sonnet[1m]` and `haiku` all correctly reported
+`verifier_below_producer` for a Luna record after a `claude-opus-4-1` Mason,
+while `gpt-4o` landed `tier: null`, exit 0, no warning. **A typo silently
+deleted the check** for that delegation, and nothing in the record said the
+check had not run.
+
+A mistyped flag must not be able to disable a gate, so a delegation whose
+`--model` resolves to no tier is refused with `problem: "model_unknown"` and
+nothing is written. Resolvable means the value contains exactly one of
+`haiku`/`sonnet`/`opus`, case-insensitively -- `opus`, `Opus`, `opus-4.1` and
+`claude-opus-4-20250514` all pass; `gpt-4o` and `sonnet-or-opus` do not. Only
+`--event delegation` is checked: a gate, phase or note record has no model,
+and demanding one there would invite a fabrication.
+
+**`PRODUCER_AGENTS` gained `dep`.** Dep produces the deployment artifacts Vera
+and Cipher judge at shipping, so a verifier running below Dep is the same
+inversion as one running below Mason. Its absence made that single pairing
+unmeasurable -- recorded in the audit as a latent Metric-14 nit
+(`record_run.py:66 PRODUCER_AGENTS omits dep`), and cheaper to close than to
+keep explaining.
+
+The self-test grew to **35**: the five `model_unknown` strings (with nothing
+written), the error's shape and content, the end-to-end case proving a typo
+can no longer disable the inversion check, a non-delegation event still
+needing no resolvable model, and the `dep`-as-producer pairing.
+
+## `fable`, and one delegation one record (2.6.2)
+
+**`TIER_ORDER` gained `fable` at the top: `haiku < sonnet < opus < fable`.**
+Claude Fable 5.1 is the current top model and its ids look like
+`claude-fable-5-1`. Absent from the tier map, `model_tier()` resolved every
+such id to `None` — which since 2.6.1 means `model_unknown`, exit 2 — so a
+delegation at the *highest* tier was the one delegation the run log could not
+record at all. Placing it correctly also makes the two real pairings resolve
+the way the rule means them: a **fable** verifier over an **opus** producer is
+not an inversion, and an **opus** verifier over a **fable** producer is
+`verifier_below_producer`. `claude-opus-5`, `claude-sonnet-5` and
+`claude-haiku-4-5-20251001` all continue to normalise by name, and anything
+naming no tier or two tiers is still `model_unknown`.
+
+**`duplicate_delegation` — one delegation, one record.** Orchestrator Contract
+section 4: *"A second completion notification for an agent that has already
+returned is a re-wake — a background task it started finishing after its
+handoff — not a new delegation. Do not append a second record, and do not take
+the later notification's cumulative duration as the delegation's cost: the
+first completion is the measurement. A run log that double-counts re-wakes
+overstates exactly the fan-out phases an improvement run reads most closely."*
+
+Convention #9's shape again: the restraint is asked for while a notification
+carrying a bigger, more recent-looking number sits in the transcript, and the
+tempting act is to record it. So an `--event delegation` record whose
+(`--pipeline`, `--unit`, `--agent`, `--rounds`) tuple already appears in the
+log is refused with `problem: "duplicate_delegation"`, exit **1**, and nothing
+is written. The first completion stays the measurement.
+
+Four design choices:
+
+- **`--rounds N` is the discriminator, and the existing field is reused.** The
+  record already carried `rounds` (builder-to-verifier cycles), so a
+  legitimate fix round 2 of the same agent on the same unit records
+  `--rounds 2` and is a different tuple. No new field was added for this; the
+  refusal message names the flag, so the way out is in the error rather than
+  only on this page.
+- **There is no `--rewake` flag.** The lesson is that a re-wake is *not
+  recorded*, so a flag meaning "record this re-wake anyway" would be the thing
+  being prevented. This is the one refusal in the family with no waiver, and
+  deliberately so — a divergence from `--allow-tier-inversion` and
+  `--allow-drift` (convention #8): those waive a *judgment*, where this one
+  would waive a *fact*.
+- **`--phase` is outside the tuple.** A re-wake commonly lands after the
+  Orchestrator has moved on to the next phase; including `--phase` would let a
+  re-labelled phase mint a fresh record and leave exactly the double-count
+  this refuses.
+- **Two skips.** A delegation with no `--agent` is not gated — nothing
+  identifies it to be a duplicate *of* — and neither is any non-delegation
+  event, since a `gate`, `phase` or `note` record is legitimately repeated.
+
+The duplicate check runs **before** the tier-inversion check: the tuple
+decides whether the record should exist at all, where the tier only judges the
+content of one that should. A record that is both is refused as the duplicate.
+
+The self-test grew to **48**: five `fable` cases (the tier order, both
+pairings, the current model ids normalising, and a fable delegation recording
+cleanly) and eight duplicate cases (the re-wake refused with the first
+duration preserved, the error naming the problem and `--rounds`, a genuine
+round 2 accepted, a different unit or pipeline not colliding, a re-labelled
+phase not minting a record, an agentless delegation ungated, non-delegation
+events ungated, and duplicate-before-inversion ordering).

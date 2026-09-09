@@ -13,6 +13,13 @@ has to exist on disk. Reads a durable agent report, collects its
     hand-typed capture has no sidecar, an edited one fails the hash, and a
     probe whose client exited non-zero (connection refused, DNS failure)
     observed nothing regardless of what its body says
+  * carries a sidecar that AGREES with the capture's own header: `exit_code`
+    equals the body's `- Exit code:` and `finished` equals its `- Captured:`.
+    The hash protects the capture FILE and nothing protects the sidecar, so
+    editing the sidecar alone -- exit_code 3 -> 0, or `finished` pushed forward
+    past a changed file to fake freshness -- left every other check green
+    (`sidecar_body_disagrees`; a capture with no header pair at all is
+    `capture_header_missing` and must be re-taken)
   * was taken by a real probe CLIENT (allowlist), not by `python -c`,
     `echo`, `printf` or `cat` printing a plausible transcript
   * names an OUT-OF-PROCESS transport (an in-process test client is a
@@ -455,6 +462,88 @@ def load_sidecar(path):
     return meta, None
 
 
+# --- body-vs-sidecar agreement ---------------------------------------------
+# `capture_sha256` protects the capture FILE's bytes; NOTHING protects the
+# sidecar's own fields. So the hash-checked body is the witness and the sidecar
+# is the claim under test. Flipping a sidecar's `exit_code` from 3 to 0, or
+# pushing its `finished` forward to defeat the freshness check below, leaves
+# every hash intact -- and did, until this comparison existed: a GREEN whose
+# own body read `- Exit code: 3` passed.
+#
+# `- Captured:` is compared against `finished`, which is what run_quiet.py now
+# stamps it FROM. The window is one-sided (never EARLIER than `finished`) and
+# two seconds wide, solely so a capture written by the pre-2.4 build path --
+# which called `now()` again while rendering, landing 0-1s after `finished` --
+# is not accused of forgery. A stamp moved to fake freshness or backdate a run
+# moves it far outside the window. Duplicated in the three sibling gates that
+# read a sidecar, per this family's one-file convention.
+CAPTURED_SKEW_SECONDS = 2
+SIDECAR_TIMESTAMP_FMT = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def parse_utc_stamp(raw):
+    """A `%Y-%m-%dT%H:%M:%SZ` string as a naive UTC datetime, or None."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        return datetime.datetime.strptime(raw.strip(), SIDECAR_TIMESTAMP_FMT)
+    except ValueError:
+        return None
+
+
+def sidecar_body_disagreement(fields, meta):
+    """(problem-code, detail) when the capture's header and sidecar disagree.
+
+    `fields` is parse_capture()'s header dict (read from the FENCE-MASKED head,
+    so a probe that printed `- Exit code: 0` supplied nothing). Returns
+    (None, None) when they agree.
+    """
+    body_exit = (fields.get("exit code") or "").strip()
+    body_stamp = (fields.get("captured") or "").strip()
+    if not body_exit or not body_stamp:
+        return ("capture_header_missing",
+                "the capture carries no readable '- Exit code:' and "
+                "'- Captured:' header pair, so the sidecar's exit_code and "
+                "finished stamp cannot be checked against anything -- a "
+                "capture predating run_quiet.py's header contract must be "
+                "re-taken with `run_quiet.py --capture`")
+    try:
+        body_exit_n = int(body_exit.split()[0])
+    except (ValueError, IndexError):
+        return ("capture_header_missing",
+                f"the capture's '- Exit code: {body_exit}' is not an integer, "
+                "so the sidecar's exit_code cannot be checked against it")
+    side_exit = meta.get("exit_code")
+    if isinstance(side_exit, int) and side_exit != body_exit_n:
+        return ("sidecar_body_disagrees",
+                f"the sidecar records exit_code {side_exit} but the capture's "
+                f"own hash-protected body records '- Exit code: {body_exit_n}' "
+                "-- the sidecar was edited after the run (the capture file's "
+                "hash still matches, because only the sidecar was touched)")
+    body_dt = parse_utc_stamp(body_stamp)
+    side_dt = parse_utc_stamp(meta.get("finished"))
+    if body_dt is None:
+        return ("capture_header_missing",
+                f"the capture's '- Captured: {body_stamp}' is not an ISO-8601 "
+                f"UTC instant ({SIDECAR_TIMESTAMP_FMT})")
+    if side_dt is None:
+        return ("sidecar_body_disagrees",
+                "the sidecar records no parseable 'finished' instant to check "
+                f"against the capture's '- Captured: {body_stamp}'")
+    skew = (body_dt - side_dt).total_seconds()
+    if not 0 <= skew <= CAPTURED_SKEW_SECONDS:
+        return ("sidecar_body_disagrees",
+                f"the sidecar records finished {meta.get('finished')!r} but the "
+                f"capture's own hash-protected body records '- Captured: "
+                f"{body_stamp}' ({skew:+.0f}s apart; allowed 0.."
+                f"{CAPTURED_SKEW_SECONDS}s) -- run_quiet.py stamps "
+                "'- Captured:' FROM 'finished', so a pair this far apart was "
+                "not written by it: either the sidecar's timestamp was edited "
+                "(a stale capture made to look fresh) or the capture was "
+                "authored by hand")
+    return None, None
+
+
 # ---------------------------------------------------------------------------
 # Provenance: was the probe taken by a real client?
 # ---------------------------------------------------------------------------
@@ -765,7 +854,8 @@ def evaluate_capture(candidate, args, patterns, newest_mtime, schema_ctx=None):
         "body_parsed": False, "body_keys": [], "missing_keys": [],
         "build_marker": None,
         "sidecar": None, "sidecar_present": None, "sidecar_exit_code": None,
-        "sidecar_capture_sha256_ok": None, "sidecar_waived": False,
+        "sidecar_capture_sha256_ok": None, "sidecar_body_agrees": None,
+        "sidecar_waived": False,
         "probe_client": None, "probe_exempt_reason": None,
         "openapi_url": None, "openapi_status": None, "openapi_reachable": None,
         "schema_compared": None, "schema_skipped_reason": None,
@@ -842,6 +932,12 @@ def evaluate_capture(candidate, args, patterns, newest_mtime, schema_ctx=None):
                  f"sidecar's capture_sha256 ({declared_hash}) — the artifact was "
                  "edited after it was recorded, so its contents are authored, "
                  "not observed")
+        # The sidecar's own fields are unprotected; the capture's body is not.
+        # Compare them BEFORE trusting either exit_code or freshness below.
+        code, detail = sidecar_body_disagreement(fields, meta)
+        res["sidecar_body_agrees"] = code is None
+        if code:
+            fail(code, detail)
         exit_code = meta.get("exit_code")
         res["sidecar_exit_code"] = exit_code if isinstance(exit_code, int) else None
         if not isinstance(exit_code, int):
@@ -1046,6 +1142,7 @@ def build_report(args):
         "citations": [], "captures": [], "accepted": [], "rejected": [],
         "missing_keys": [], "stale": [], "in_process_transport": [],
         "sidecar_missing": [], "sidecar_hash_mismatch": [],
+        "sidecar_body_disagrees": [], "capture_header_missing": [],
         "probe_failed_exit": [], "probe_not_client": [], "probe_exempt": [],
         "allow_missing_sidecar": bool(args.allow_missing_sidecar),
         "openapi_unreachable": [],
@@ -1090,6 +1187,7 @@ def build_report(args):
                 "--allow-missing-sidecar — this capture's contents are "
                 "unverified and could have been typed by hand")
         for code in ("sidecar_missing", "sidecar_hash_mismatch",
+                      "sidecar_body_disagrees", "capture_header_missing",
                       "probe_failed_exit", "probe_not_client"):
             if code in res["problem_codes"]:
                 report[code].append(res["path"])
@@ -1202,6 +1300,42 @@ def ledger_key(path):
         return str(p)
 
 
+def ledger_line_hash(raw):
+    """sha256 of one ledger LINE's bytes, ignoring its terminator.
+
+    Surrounding whitespace (CR included) is stripped so a ledger written on
+    Windows chains identically to the same file read on POSIX. Byte-identical
+    in every gate in this family and in check_ledger.py, which verifies the
+    chain (family convention: one file each, no shared module).
+    """
+    return hashlib.sha256(raw.strip()).hexdigest()
+
+
+def ledger_prev_hash(ledger_path):
+    """The `prev` value for the next record: hash of the last line on disk.
+
+    `"genesis"` when the ledger is missing or holds no non-blank line.
+    """
+    try:
+        with open(ledger_path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return "genesis"
+    last = None
+    for raw in data.splitlines():
+        if raw.strip():
+            last = raw
+    return "genesis" if last is None else ledger_line_hash(last)
+
+
+def ledger_self_hash(record):
+    """sha256 of the record serialized canonically WITHOUT its `self` field."""
+    body = {k: v for k, v in record.items() if k != "self"}
+    return hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":"))
+        .encode("utf-8")).hexdigest()
+
+
 def append_ledger(path, record):
     """Append one JSON line. Returns a warning string on failure, else None.
 
@@ -1212,6 +1346,8 @@ def append_ledger(path, record):
         p = Path(path)
         if str(p.parent) not in ("", "."):
             p.parent.mkdir(parents=True, exist_ok=True)
+        record["prev"] = ledger_prev_hash(p)
+        record["self"] = ledger_self_hash(record)
         with open(p, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record) + "\n")
         return None
@@ -1319,7 +1455,8 @@ def run_self_test():
     def capture(milestone="M3 — Order envelope", transport="out-of-process HTTP",
                 probe="curl -sS -i http://localhost:5142/api/orders",
                 body=ENVELOPE, status="200 OK", base_url="http://localhost:5142",
-                surface="api", extra=(), captured_section=True):
+                surface="api", extra=(), captured_section=True,
+                exit_code=0, captured="2026-08-12T14:03:11Z"):
         head = [
             "# Runtime capture: POST /api/orders", "",
             f"- Milestone: {milestone}",
@@ -1327,8 +1464,8 @@ def run_self_test():
             f"- Transport: {transport}",
             f"- Base URL: {base_url}",
             f"- Probe command: `{probe}`",
-            "- Captured: 2026-08-12T14:03:11Z",
-            "- Exit code: 0",
+            f"- Captured: {captured}",
+            f"- Exit code: {exit_code}",
         ]
         head += list(extra)
         if not captured_section:
@@ -1354,6 +1491,10 @@ def run_self_test():
         def _write(self, name="m3-orders.md", sidecar=True, sidecar_exit=0,
                     sidecar_hash=None, encoding="utf-8", **kw):
             p = self.impl / "evidence" / "runtime" / name
+            # run_quiet.py writes the body's `- Exit code:` FROM the same
+            # value it records in the sidecar, so a fixture keeps them in
+            # sync unless the test is specifically about a flipped sidecar.
+            kw.setdefault("exit_code", sidecar_exit)
             p.write_text(capture(**kw), encoding=encoding)
             if sidecar:
                 self._write_sidecar(p, exit_code=sidecar_exit,
@@ -1992,6 +2133,63 @@ def run_self_test():
             self.assertEqual(r["probe_failed_exit"], [cited])
             self.assertEqual(r["captures"][0]["sidecar_exit_code"], 7)
             self.assertEqual(r["missing_keys"], [])   # body was fine; probe was not
+
+        # ---- the sidecar is the mutable half: it must agree with the body ----
+
+        def test_flipped_sidecar_exit_code_is_caught_by_the_body(self):
+            """The attack: sidecar exit_code 3 -> 0. The hash still matches."""
+            cited = self._write(exit_code=3, sidecar_exit=3)
+            p = self.impl / "evidence" / "runtime" / "m3-orders.md"
+            self._write_sidecar(p, exit_code=0)   # forge only the sidecar
+            self._order(self.changed, p)
+            self._report(cited)
+            r = build_report(self._args())
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["sidecar_body_disagrees"], [cited])
+            self.assertEqual(r["sidecar_hash_mismatch"], [])  # hash is intact
+            self.assertFalse(r["captures"][0]["sidecar_body_agrees"])
+
+        def test_edited_sidecar_timestamp_is_caught_by_the_body(self):
+            """Pushing `finished` forward is how a stale capture reads fresh."""
+            cited = self._write()
+            p = self.impl / "evidence" / "runtime" / "m3-orders.md"
+            meta = json.loads(sidecar_path_for(p).read_text(encoding="utf-8"))
+            meta["finished"] = "2026-08-19T09:00:00Z"
+            sidecar_path_for(p).write_text(json.dumps(meta), encoding="utf-8")
+            self._report(cited)
+            r = build_report(self._args())
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["sidecar_body_disagrees"], [cited])
+
+        def test_agreeing_pair_passes(self):
+            cited = self._write()
+            self._report(cited)
+            r = build_report(self._args())
+            self.assertEqual(r["result"], "PASS", r["captures"])
+            self.assertTrue(r["captures"][0]["sidecar_body_agrees"])
+
+        def test_one_second_render_skew_still_passes(self):
+            """The pre-2.4 build path stamped `Captured` just after `finished`."""
+            cited = self._write(captured="2026-08-12T14:03:12Z")
+            self._report(cited)
+            r = build_report(self._args())
+            self.assertEqual(r["result"], "PASS", r["captures"])
+
+        def test_legacy_capture_without_header_lines_fails_closed(self):
+            cited = self._write(extra=("- NOTE: legacy capture",))
+            p = self.impl / "evidence" / "runtime" / "m3-orders.md"
+            text = p.read_text(encoding="utf-8")
+            for line in ("- Captured: 2026-08-12T14:03:11Z\n",
+                          "- Exit code: 0\n"):
+                text = text.replace(line, "")
+            p.write_text(text, encoding="utf-8")
+            self._write_sidecar(p)          # re-hash: only the header is gone
+            self._order(self.changed, p)
+            self._report(cited)
+            r = build_report(self._args())
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["capture_header_missing"], [cited])
+            self.assertEqual(r["sidecar_body_disagrees"], [])
 
         def test_sidecar_without_integer_exit_code_rejected(self):
             cited = self._write()

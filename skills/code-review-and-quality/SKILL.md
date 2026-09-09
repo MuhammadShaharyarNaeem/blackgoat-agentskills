@@ -13,9 +13,23 @@ Multi-axis review before merge — no change merges unreviewed. Five axes: corre
 
 A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no editing tests to pass, no unobserved claims (`base-persona.md`, Evidence Integrity). Over three files, or shared behaviour: route via `/bg` to a lane.
 
+## Quick card
+
+Derived from the contract below for a ≤ 3-file change; no new rules (convention #8 — deliberately narrower than the full contract, which binds inside any lane).
+
+1. Read the tests first and write down what they do **not** cover (§ Review Workflow, Step 2).
+2. Per changed file, name each authz comparison's trusted source and each fallible call's failure path (§ Review Workflow, Step 3).
+3. Label every finding Critical / Important / Suggestion / Nit / FYI (§ Review Workflow, Step 4).
+4. The verdict is arithmetic over the findings — no `Approve` while a Critical or Important stands (§ The Review Report).
+5. List the dead code your change orphans and ask before deleting (§ Rules).
+
+- Brief → the quick note (What / Where / How verified)
+- Artifact → the capture at `{quick-root}/evidence/check.md`
+- Handoff → the `## Result` bullet in `note.md`
+
 ## Worker Execution Contract
 
-This is the operational spine. Follow it as written.
+This is the operational spine. Follow it as written. For a change of ≤ 3 files outside a pipeline, the Quick card above is the contract; the full contract applies inside a lane.
 
 ### The Five Axes
 
@@ -56,7 +70,7 @@ This is the operational spine. Follow it as written.
      - Optional: if a `code-review-graph` MCP server happens to be available (it is NOT wired in this plugin's `.mcp.json`), its `get_review_context_tool` computes impact radius, coupling, and affected system boundaries instead.
 2. Answer: what is this change trying to accomplish? Which spec or task does it implement? What behavior changes?
 
-**Step 2: Review the tests first.** Tests reveal intent and coverage: do tests exist, do they test behavior (not implementation details), are edge cases covered, are names descriptive, would they catch a regression? **A green suite is a claim about what the tests exercise, never about what they omit.** Finish this step by writing down what the suite does *not* cover — those untested paths are your Step 3 reading list, and a verifier's sign-off resting on the suite inherits exactly its blind spots.
+**Step 2: Review the tests first.** Tests reveal intent and coverage: do tests exist, do they test behavior (not implementation details), are edge cases covered, are names descriptive, would they catch a regression? **A green suite is a claim about what the tests exercise, never about what they omit.** Finish this step by writing down what the suite does *not* cover — those untested paths are your Step 3 reading list, and a verifier's sign-off resting on the suite inherits exactly its blind spots. A test that would still pass with the production code it names deleted is a **Critical** finding — the deletion test (`test-driven-development/SKILL.md` § Rules; `check_test_authenticity.py`).
 
 **Step 3: Review the implementation.** Walk every changed file through the five axes above. Two interrogations are mandatory **per changed file**, answered in the report's Files-reviewed log — they target the defect classes a green suite is structurally blind to, the ones that *look like* working checks:
 - **Identity provenance.** For every authorization, tenancy, or ownership comparison: name where each compared value originates. If the trusted side of the comparison originates in the request (body, query, header, path) rather than the authenticated session/token context, that is a **Critical** finding — the check passing its tests *is* the attack working, because any caller can type a different string.

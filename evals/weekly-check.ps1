@@ -3,10 +3,11 @@
     Zero-token change detector for the blackgoat-agentskills eval suite.
 
 .DESCRIPTION
-    Looks at what changed in agents/, skills/ and evals/trigger/fixture/ since the last
-    eval run (or a reasonable fallback), maps those changes to the evals they affect,
-    and prints the run-evals.ps1 command to run them. Never invokes run-evals.ps1 itself
-    and never spends a token - this script only reads files and (if available) git.
+    Looks at what changed in agents/, skills/, evals/trigger/fixture/ and the harness
+    itself since the last eval run (or a reasonable fallback), maps those changes to the
+    evals they affect, and prints the run-evals.ps1 command to run them. Never invokes
+    run-evals.ps1 itself and never spends a token - this script only reads files and (if
+    available) git.
 
     Detection strategy, in order of preference:
       1. If the plugin dir is a git repo: diff those paths since the newest timestamp
@@ -77,7 +78,11 @@ if ($isGitRepo) {
         # trigger suite, not scaffolding: harness 3 runs every trigger prompt against a
         # copy of it, so changing what the fixture contains can change where a prompt
         # routes exactly the way changing a SKILL.md description can.
-        $gitOutput = git log "--since=$sinceArg" --name-only --pretty=format: -- agents/ skills/ evals/trigger/fixture/ 2>&1
+        # The harness FILES are in it for a blunter reason: without them, an edit to
+        # run-evals.ps1's judge or INFRA classifier was invisible to this script - it
+        # flagged nothing, so nothing told you to re-run -SelfTest, and the one check
+        # that proves the judge still works was the one change nobody was reminded of.
+        $gitOutput = git log "--since=$sinceArg" --name-only --pretty=format: -- agents/ skills/ evals/trigger/fixture/ evals/run-evals.ps1 evals/eval_record.py evals/contract/mechanical-pipeline/run.py evals/contract/bugfix-gates-adversarial/run.py evals/contract/openapi-diff-adversarial/run.py evals/contract/test-authenticity-adversarial/run.py 2>&1
         $changedFiles = @($gitOutput | Where-Object { $_ -and $_.Trim() -ne '' } | Sort-Object -Unique)
     } finally {
         Pop-Location
@@ -98,6 +103,21 @@ if ($isGitRepo) {
                 ForEach-Object { $_.FullName.Substring($PluginRoot.Length + 1).Replace('\', '/') }
         }
     }
+    # The harness files themselves, matching the git pathspec above.
+    foreach ($harnessFile in @(
+            (Join-Path $EvalsRoot 'run-evals.ps1'),
+            (Join-Path $EvalsRoot 'eval_record.py'),
+            (Join-Path $EvalsRoot 'contract\mechanical-pipeline\run.py'),
+            (Join-Path $EvalsRoot 'contract\bugfix-gates-adversarial\run.py'),
+            (Join-Path $EvalsRoot 'contract\openapi-diff-adversarial\run.py'),
+            (Join-Path $EvalsRoot 'contract\test-authenticity-adversarial\run.py'))) {
+        if (Test-Path $harnessFile) {
+            $item = Get-Item -Path $harnessFile
+            if ($item.LastWriteTime -gt $cutoff) {
+                $changedFiles += $item.FullName.Substring($PluginRoot.Length + 1).Replace('\', '/')
+            }
+        }
+    }
 }
 
 Write-Output '=== Weekly Change Check ==='
@@ -105,7 +125,7 @@ Write-Output "Detection method: $detectionMethod"
 Write-Output ''
 
 if (-not $changedFiles -or $changedFiles.Count -eq 0) {
-    Write-Output 'No changes detected in agents/, skills/ or evals/trigger/fixture/. Nothing to run.'
+    Write-Output 'No changes detected in agents/, skills/, evals/trigger/fixture/ or the harness files. Nothing to run.'
     exit 0
 }
 
@@ -183,8 +203,12 @@ foreach ($f in $changedFiles) {
         # Quinn-owned RED before any builder, RED/GREEN sidecar agreement, the
         # gated commit's flags, and the wire result. Any of these files can move
         # it. Its zero-token twin, bugfix-gates-adversarial/run.py, is run
-        # directly like mechanical-pipeline (see below).
+        # directly like mechanical-pipeline - surfaced HERE as well as under the
+        # pipeline-tools rule, because a change to skills/bgpdd-bugfix/ alone (whose
+        # shipped bug-report and RCA templates are two of that case's asserted
+        # inputs) previously flagged only the paid case and never the free one.
         [void]$affectedEvals.Add('contract:bgpdd-bugfix-lane')
+        [void]$mechanicalChecks.Add('python evals/contract/bugfix-gates-adversarial/run.py --record')
     }
     if ($f -match 'skills/bgpdd-bugfix/' -or $f -match 'skills/agent-squad/orchestrator-contract\.md$' -or $f -match 'scripts/check_commit_gate\.py$') {
         # pressure-bugfix-skip-red reuses bgpdd-bugfix-lane's fixture byte for byte
@@ -203,6 +227,20 @@ foreach ($f in $changedFiles) {
         # test-driven-development/SKILL.md - so a change to either file can move it.
         [void]$affectedEvals.Add('contract:pressure-bugfix-edit-test')
     }
+    if ($f -match 'skills/bgpdd-bugfix-batch/' -or $f -match 'skills/bgpdd-bugfix/' -or
+        $f -match 'skills/agent-squad/pipeline-skeleton\.md$' -or
+        $f -match 'scripts/(check_commit_gate|check_ledger|guard_action)\.py$') {
+        # bugfix-batch-two-bugs runs the batch choreography over TWO bugs in two
+        # git worktrees. skills/bgpdd-bugfix/ is named because that lane IS the
+        # per-bug contract the batch runs unchanged, and pipeline-skeleton.md
+        # because Phase 1 and 3 read its Branch close section. The three scripts
+        # are the ones the batch's own terms rest on: check_commit_gate.py (each
+        # bug closes through its own, and its `.docs/` exemption is why the
+        # evidence needs its own commit), check_ledger.py (the merge precondition
+        # the spine binds), and guard_action.py (whose cwd-rooted lane detector is
+        # the reason one worktree per bug works at all).
+        [void]$affectedEvals.Add('contract:bugfix-batch-two-bugs')
+    }
     if ($f -match 'skills/bgpdd-quick/' -or $f -match 'scripts/(check_quick_close|run_quiet)\.py$' -or $f -match 'skills/agent-squad/always-on\.md$') {
         # pressure-quick-skip-gate asks for a two-file rename with the capture and
         # the close gate explicitly waived off. check_quick_close.py IS that lane's
@@ -210,6 +248,17 @@ foreach ($f in $changedFiles) {
         # the gate reads, so both move the case. always-on.md rule 3 ("a commit goes
         # through a gate") is the out-of-lane statement of the same rule.
         [void]$affectedEvals.Add('contract:pressure-quick-skip-gate')
+    }
+    if ($f -match 'skills/bgpdd-quick/' -or $f -match 'skills/test-driven-development/' -or $f -match 'scripts/(check_quick_close|run_quiet|check_ledger)\.py$') {
+        # quick-lane is pressure-quick-skip-gate's cooperative twin: the same
+        # lane, a prompt that argues for nothing, and a change that ADDS
+        # behaviour (a rename plus a new unit test, three files at the bound).
+        # That makes test-driven-development the methodology the lane loads
+        # inline per SKILL.md section 1, so its Quick card moves this case as
+        # surely as the lane file does - criterion 6 is a sidecar-backed RED
+        # produced by the quick lane itself. check_ledger.py is named because
+        # criterion 3 runs it: the gated commit must sit on an intact chain.
+        [void]$affectedEvals.Add('contract:quick-lane')
     }
     if ($f -match 'skills/test-driven-development/' -or $f -match 'skills/agent-squad/always-on\.md$') {
         # pressure-direct-tdd-fake-green invokes the TDD contract DIRECTLY - the one
@@ -305,10 +354,15 @@ foreach ($f in $changedFiles) {
         # (run-evals.ps1 discovers contract suites by case.md + grade.ps1, which
         # that dir has neither of), so surface it as a direct command instead.
         # Routing surface is covered separately by the SKILL.md rule below.
-        [void]$mechanicalChecks.Add('python evals/contract/mechanical-pipeline/run.py')
-        # Every script carrying a --self-test. check_dependency_tables.py is
-        # deliberately absent: it has no --self-test flag (it takes a positional
-        # dir) and exits 2 if handed one, so it gets its own line below.
+        # --record because it is free and, until it was added, neither zero-LLM case
+        # left any history at all - "has this suite ever run?" was unanswerable.
+        [void]$mechanicalChecks.Add('python evals/contract/mechanical-pipeline/run.py --record')
+        [void]$mechanicalChecks.Add('python evals/contract/bugfix-gates-adversarial/run.py --record')
+        [void]$mechanicalChecks.Add('python evals/contract/openapi-diff-adversarial/run.py --record')
+        [void]$mechanicalChecks.Add('python evals/contract/test-authenticity-adversarial/run.py --record')
+        # Every script carrying a --self-test. check_dependency_tables.py gets
+        # its own line below because its ordinary invocation takes a positional
+        # dir -- that line is the real lint against this tree, not a self-test.
         # $LASTEXITCODE, not $? - PS 5.1 sets $? false on any native stderr write,
         # and unittest always reports to stderr even when it passes.
         [void]$mechanicalChecks.Add("@('check_acceptance_suite','check_agent_report','check_blockers','check_commit_gate','check_coverage','check_runtime_evidence','check_ship_decision','next_milestone','update_state','run_quiet') | ForEach-Object { python skills/pipeline-tools/scripts/`$_.py --self-test *> `$null; `"`$_ -> exit `$LASTEXITCODE`" }")
@@ -317,6 +371,45 @@ foreach ($f in $changedFiles) {
     if ($f -match 'SKILL\.md$') {
         # Any SKILL.md's frontmatter `description` is what drives skill routing.
         [void]$affectedEvals.Add('trigger')
+    }
+    if ($f -match 'evals/run-evals\.ps1$') {
+        # A change to the harness is a change to the INSTRUMENT, not to what it
+        # measures - so it flags no LLM case, and flags the one check that proves the
+        # instrument still reads correctly. -SelfTest covers both halves of
+        # run-evals.ps1 that can silently zero the suite: the trigger judge
+        # (including the two-hop expected_chain rule) and the INFRA classifier, which
+        # decides whether a run becomes evidence in results.jsonl or noise in
+        # results-invalid-infra-<date>.jsonl. Two whole generations of trigger records
+        # are invalid because a judge broke quietly and nothing re-checked it.
+        [void]$mechanicalChecks.Add('powershell -File evals/run-evals.ps1 -SelfTest')
+        # Discovery and case parsing are not covered by -SelfTest, so also confirm
+        # both suites still enumerate. Zero tokens without -Confirm, by contract.
+        [void]$mechanicalChecks.Add('powershell -File evals/run-evals.ps1 -Suite contract')
+        [void]$mechanicalChecks.Add('powershell -File evals/run-evals.ps1 -Suite trigger')
+    }
+    if ($f -match 'evals/eval_record\.py$' -or $f -match 'evals/contract/mechanical-pipeline/run\.py$') {
+        # mechanical-pipeline is dispatched directly (no case.md/grade.ps1), and
+        # eval_record.py is the shape its record is written in.
+        [void]$mechanicalChecks.Add('python evals/contract/mechanical-pipeline/run.py --record')
+    }
+    if ($f -match 'evals/eval_record\.py$' -or $f -match 'evals/contract/bugfix-gates-adversarial/run\.py$') {
+        [void]$mechanicalChecks.Add('python evals/contract/bugfix-gates-adversarial/run.py --record')
+    }
+    if ($f -match 'evals/eval_record\.py$' -or $f -match 'evals/contract/openapi-diff-adversarial/run\.py$' -or $f -match 'scripts/check_openapi_diff\.py$' -or $f -match 'skills/api-contract-evolution/') {
+        # The third zero-LLM case, and the last one wired here: it has been in
+        # run-evals.ps1's $ZeroLlmCases since it landed but was in neither this
+        # mapping nor evals/README.md, so a change to check_openapi_diff.py
+        # flagged nothing at all (2026-09-07 audit, Metric 21a). Same shape as
+        # its two siblings: free, and --record so "has this suite ever run?"
+        # is answerable.
+        [void]$mechanicalChecks.Add('python evals/contract/openapi-diff-adversarial/run.py --record')
+    }
+    if ($f -match 'evals/eval_record\.py$' -or $f -match 'evals/contract/test-authenticity-adversarial/run\.py$' -or $f -match 'scripts/check_test_authenticity\.py$') {
+        # The fourth zero-LLM case, wired here at the same time it landed in
+        # run-evals.ps1's $ZeroLlmCases and evals/README.md - so a change to the
+        # gate flags the suite that judges it. The omission the 2026-09-07 audit
+        # found for openapi-diff-adversarial (Metric 21a) does not get to repeat.
+        [void]$mechanicalChecks.Add('python evals/contract/test-authenticity-adversarial/run.py --record')
     }
     if ($f -match 'evals/trigger/fixture/') {
         # The trigger fixture is the working directory every trigger prompt is judged

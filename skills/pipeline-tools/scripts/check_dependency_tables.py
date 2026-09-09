@@ -20,12 +20,14 @@ violation (exit 1) rather than something silently skipped.
 Usage:
     python check_dependency_tables.py <skills_dir>
     python check_dependency_tables.py --self-test
+    python check_dependency_tables.py --help
 
 <skills_dir> is the plugin's skills/ directory (i.e. {PLUGIN_ROOT}).
 agents/ is located as the sibling directory of <skills_dir>.
 
 Pure standard library. See ../SKILL.md for usage notes.
 """
+import argparse
 import sys
 import re
 import tempfile
@@ -117,15 +119,43 @@ def check_all(skills_dir):
     return violations
 
 
+def build_parser():
+    """Real argparse, so `-h`/`--help` works like every sibling script.
+
+    Before 2.6.1 this was the one script in the family with a hand-rolled
+    argv walk: `--help` was treated as the positional and died with
+    "error: --help is not a directory". Behaviour and exit codes are
+    unchanged -- only the parsing and the help text are new.
+    """
+    parser = argparse.ArgumentParser(
+        prog="check_dependency_tables.py",
+        description="Validate the Methodology Dependencies tables in agents/*.md.",
+        epilog="Exit 0 PASS, 1 violations found, 2 usage error or unreadable "
+               "agents/ directory.")
+    parser.add_argument(
+        "skills_dir", nargs="?",
+        help="the plugin's skills/ directory (i.e. {PLUGIN_ROOT}); agents/ is "
+             "located as its sibling directory")
+    parser.add_argument("--self-test", action="store_true",
+                        help="run the built-in test suite and exit")
+    return parser
+
+
 def main(argv):
-    if len(argv) == 1 and argv[0] == "--self-test":
+    parser = build_parser()
+    # argparse exits 2 on an unknown flag -- already this script's usage code.
+    args = parser.parse_args(argv)
+
+    if args.self_test:
         return run_self_test()
 
-    if len(argv) != 1:
-        print("usage: check_dependency_tables.py <skills_dir>", file=sys.stderr)
+    if args.skills_dir is None:
+        parser.print_usage(sys.stderr)
+        print("error: skills_dir is required (or pass --self-test)",
+              file=sys.stderr)
         return 2
 
-    skills_dir = Path(argv[0])
+    skills_dir = Path(args.skills_dir)
     if not skills_dir.is_dir():
         print(f"error: {skills_dir} is not a directory", file=sys.stderr)
         return 2
@@ -252,7 +282,66 @@ def run_self_test():
             violations = check_all(self.skills_dir)
             self.assertEqual(violations, [])
 
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(DependencyTableTests)
+    class CliTests(unittest.TestCase):
+        """The CLI surface itself: `--help` works, exit codes unchanged."""
+
+        def test_help_exits_zero_and_prints_usage(self):
+            import contextlib
+            import io
+            out = io.StringIO()
+            with self.assertRaises(SystemExit) as ctx, \
+                    contextlib.redirect_stdout(out):
+                main(["--help"])
+            self.assertEqual(ctx.exception.code, 0)
+            text = out.getvalue()
+            self.assertIn("check_dependency_tables.py", text)
+            self.assertIn("skills_dir", text)
+            self.assertIn("--self-test", text)
+
+        def test_short_help_flag_also_works(self):
+            import contextlib
+            import io
+            out = io.StringIO()
+            with self.assertRaises(SystemExit) as ctx, \
+                    contextlib.redirect_stdout(out):
+                main(["-h"])
+            self.assertEqual(ctx.exception.code, 0)
+            self.assertIn("usage:", out.getvalue())
+
+        def test_no_argument_is_exit_2(self):
+            import contextlib
+            import io
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(main([]), 2)
+            self.assertIn("skills_dir is required", err.getvalue())
+
+        def test_nonexistent_directory_is_exit_2(self):
+            import contextlib
+            import io
+            root = Path(tempfile.mkdtemp())
+            err = io.StringIO()
+            try:
+                with contextlib.redirect_stderr(err):
+                    self.assertEqual(main([str(root / "nope")]), 2)
+                self.assertIn("is not a directory", err.getvalue())
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+
+        def test_unknown_flag_is_exit_2(self):
+            import contextlib
+            import io
+            err = io.StringIO()
+            with self.assertRaises(SystemExit) as ctx, \
+                    contextlib.redirect_stderr(err):
+                main(["--no-such-flag"])
+            self.assertEqual(ctx.exception.code, 2)
+
+    loader = unittest.defaultTestLoader
+    suite = unittest.TestSuite([
+        loader.loadTestsFromTestCase(DependencyTableTests),
+        loader.loadTestsFromTestCase(CliTests),
+    ])
     result = unittest.TextTestRunner(verbosity=1).run(suite)
     return 0 if result.wasSuccessful() else 1
 

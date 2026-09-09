@@ -19,7 +19,10 @@ least wants to (CLAUDE.md convention #9). Specifically:
 2. **"The check passed, I ran it."** A narrated result is a claim. The sidecar
    is the difference between a capture and a sentence; `sidecar_missing` and
    `sidecar_hash_mismatch` are copied verbatim from `check_red_green.py` for
-   exactly the reason that gate has them.
+   exactly the reason that gate has them — as is
+   `sidecar_body_disagrees`, which covers the one thing the hash does not:
+   the sidecar's own `exit_code` and `finished`, both of which this gate reads
+   and either of which a one-line edit could set.
 3. **"I ran it, then made one more tweak."** `capture_stale`. The single most
    likely honest error in this lane, because the whole lane is fast enough for
    the check and the edit to blur together.
@@ -80,6 +83,37 @@ invisible to `git status`. This lane's gate performs the commit itself, so the
 only way to reach that state is to commit by hand — which also skips the gate
 entirely, and no flag can defend against not being run.
 
+## Why `--frozen` takes globs, and why it still has no default
+
+`--frozen tests/` only works in a repo that keeps its tests in a directory.
+Several stacks the plugin supports do not: a Vue SPA colocates `Foo.spec.ts`
+beside `Foo.vue`, a .NET solution scatters `*.Tests` projects, a Node package
+colocates `*.test.js`. In those repos the operator either froze nothing — and
+the oldest way to turn red green was open again — or froze `src/`, which also
+forbids the change. Neither is a rule anyone keeps. So a `--frozen` value
+carrying `*`, `?` or `[` is now matched as a glob against the repo-relative
+forward-slash path; anything else is still a path or directory prefix, so every
+existing `--frozen tests/` caller is untouched.
+
+The matcher is hand-rolled rather than `fnmatch`, for one reason worth naming:
+`fnmatch`'s `*` crosses `/`, so `tests/*.py` would silently mean
+`tests/**/*.py`. A freeze *wider* than written is the failure mode that gets a
+flag distrusted — the operator narrows the pattern, sees it still catch
+everything, and drops the flag. Segment semantics instead: `**/` is zero or more
+leading segments, a trailing `**` is the rest of the path, `*` and `?` stop at
+`/`, `[...]`/`[!...]` are character classes. Patterns are folded to forward
+slashes and `normcase`d exactly as the candidate paths are, so a Windows-typed
+`tests\**\test_*.py` matches and a case-insensitive platform compares like one.
+
+**There is still no default, and that is the point.** `detect_stack.py` can now
+name the right globs per stack, so the temptation is to bake them in here. A
+gate that guesses what is frozen and guesses wrong produces the same output as a
+change with genuinely no test to protect: a clean pass. That is the
+silent-no-op class convention #9 exists to prevent, and it would be worse here
+than a missing flag — a missing flag is visible in `gates.jsonl` under `argv`,
+a wrong guess is not. The detector proposes, the spine passes the globs
+explicitly, the ledger records exactly which ones fired.
+
 ## Two operational residuals, found in the shipping smoke
 
 1. **A repo that does not gitignore its build detritus blocks itself.** In the
@@ -112,7 +146,7 @@ from `check_commit_gate.py`, `check_red_green.py` and
 intentional differences (freshness comparison, the status-letter filter in the
 frozen check) are the divergences above, both asserted by a named self-test.
 
-## Self-test inventory (33 cases)
+## Self-test inventory (46 cases)
 
 Every case builds a real temp git repo (`git init`, one base commit) so the
 tree, staging and commit checks run against real `git`, not a mock.
@@ -131,11 +165,29 @@ non-integer `exit_code`; a capture older than the edit; a capture in the *same
 second* as the edit passing (`test_capture_in_the_same_second_as_the_edit_is_fresh`
 — the freshness divergence above); an unparseable `finished`.
 
+**The sidecar's own fields** — the hash covers the capture FILE, so the six
+agreement cases cover what it cannot: a flipped `exit_code` (a check that
+FAILED, sidecar set to 0) caught by the body; a `finished` pushed past the
+edit's mtime, caught *before* `capture_stale` can be satisfied; an agreeing
+pair recording `capture_body_agrees`; a 1s pre-2.4 render skew still passing;
+a capture with no header pair (`capture_header_missing`); and a command
+transcript that PRINTS `- Exit code: 1` inside the fence supplying nothing.
+
 **The tree** — a declared path that does not exist; a fourth file slipped in
 undeclared; an edited test caught by `--frozen`; a declared test edit caught
 anyway; a *staged* frozen edit caught anyway; a newly added test passing
 (`test_a_newly_added_test_passes_the_frozen_check`); a clean run leaving
 `frozen_modified` empty.
+
+**`--frozen` as a glob** — a colocated `src/widget.spec.ts` caught by
+`**/*.spec.ts` where `tests/` sees nothing; `tests/*.py` NOT matching
+`tests/deep/test_b.py` while `tests/**` does (the anti-`fnmatch` case); a
+leading `**/` matching zero segments; a Windows-separator pattern
+(`tests\**\test_*.py`) matching; a NEW file matching a glob still passing; a
+metacharacter-free value still behaving as a prefix; and
+`test_glob_to_regex_unit_cases`, a seventeen-row table over the translator
+itself (`**/*.test.*`, `**/*.Tests/**`, `**/test_*.py`, `**/__tests__/**`,
+`**/*.Tests.ps1`, `?`, `[ab]`, `[!ab]`).
 
 **The size bound** — an overrun whose message names both `/bgpdd-bugfix` and
 `/bgpdd-lite`; `test_the_size_bound_applies_without_the_flag` (the default-on
@@ -151,3 +203,57 @@ note's and the sidecar's hashes and the verbatim `argv`; FAIL and ERROR records.
 **End to end** — `test_real_run_quiet_capture_passes` drives the real
 `run_quiet.py` to produce the capture and sidecar, proving the composition
 rather than the fixture.
+
+## `capture_command_mismatch`: the capture must be of the DECLARED check (2.6.1)
+
+The 2026-09-07 gate-adversarial audit closed this lane with one legitimate
+tool call and no forgery: a real
+`run_quiet.py --capture … -- cmd /c exit 0` cited by a note whose
+`- How verified:` said `npm test`. Everything this gate checked held — the
+capture existed, was structurally a capture, carried its sidecar, still hashed
+to it, agreed with its own header, exited 0, and was newer than the edit. What
+none of it said was that the capture was a recording of THE DECLARED CHECK.
+
+`next_bugfix_route.py --red` had implemented the missing term since 2.5.0: the
+RED sidecar's `argv` must equal a legitimate tokenization of the report's
+`- Command:`. The quick lane's only gate omitted its sibling's strongest term.
+It is now the same code, in all three of `next_bugfix_route.py`,
+`check_quick_close.py` and `check_agent_report.py`, and
+`test_the_matcher_agrees_with_next_bugfix_route` compares the three functions'
+parsed bodies (docstrings dropped, since each names its own field) so a
+reworded rationale is free and a changed candidate list is not. Three gates
+disagreeing about what "the same command" means would be worse than one gate
+not asking.
+
+**Why token lists and not strings.** The sidecar records what the process
+actually received; the shell already removed the quoting. A note saying
+`curl --fail -X POST http://h/o -d '{}'` produces argv
+`[…, '-d', '{}']`, whose join is `-d {}` and never equals the note's `-d '{}'`.
+A string compare rejected precisely the carefully quoted commands — every
+`-d '{…}'` and every `-H "Content-Type: …"`. Three candidates, tried in order,
+any match passes: `shlex.split(posix=True)`; the same with backslashes doubled
+first, so a Windows path survives posix mode instead of having its separators
+eaten as escapes; and a raw whitespace split, which an unquoted command
+satisfies identically and which a shlex parse error cannot defeat. Nothing
+fuzzier: no case-folding, no reordering, no dropped tokens.
+
+**What it does not cover.** The exit code and the body still disagree freely
+about pass/fail: a capture whose sidecar says `exit_code 0` while the body
+reads `FAIL 3 tests failing` still passes. That is deliberate (the audit's
+recommendation 14) — argv equality plus the exit code is the checkable term,
+and parsing arbitrary test-runner output for a verdict is a losing game that
+would make this gate stack-specific. And the forgeable-sidecar limit is
+unchanged: see `../SKILL.md` § *The unkeyed-sidecar limit*.
+
+## The `frozen_path_modified` escape
+
+The message used to end at "take the change to /bgpdd-bugfix", which is the
+wrong destination for the lane's own most common case. `bgpdd-quick` advertises
+a rename as a use case, and a rename legitimately touches the spec beside the
+code; routing it to a lane that demands a RED capture *proving the test was
+wrong* asks for evidence that does not exist. The message now names the escape
+the lane actually has: **narrow the `--frozen` glob so it still covers the
+tests this change must not touch, and record why in the note's `## Result`
+section.** Only a defect whose test was genuinely wrong goes to
+`/bgpdd-bugfix`. The narrowing is a written act in the note, which is what
+keeps it from being a silent opt-out.

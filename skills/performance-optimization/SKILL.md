@@ -11,9 +11,23 @@ Measure before optimizing. Performance work without measurement is guessing — 
 
 A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no editing tests to pass, no unobserved claims (`base-persona.md`, Evidence Integrity). Over three files, or shared behaviour: route via `/bg` to a lane.
 
+## Quick card
+
+Derived from the contract below for a ≤ 3-file change; no new rules (convention #8 — deliberately narrower than the full contract, which binds inside any lane).
+
+1. Take a baseline measurement with real numbers before changing anything (§ Workflow, MEASURE).
+2. Fix only the bottleneck the measurement named, never the one you assumed (§ Workflow, IDENTIFY/FIX).
+3. Measure again afterwards and record both numbers (§ Workflow, VERIFY).
+4. Existing tests still pass — you changed speed, not behaviour (§ Verification Checklist).
+5. No measurement possible here → escalate; never optimize blind (§ Escalate When).
+
+- Brief → the quick note (What / Where / How verified)
+- Artifact → the capture at `{quick-root}/evidence/check.md`
+- Handoff → the `## Result` bullet in `note.md`
+
 ## Worker Execution Contract
 
-This is the operational spine. Follow it as written.
+This is the operational spine. Follow it as written. For a change of ≤ 3 files outside a pipeline, the Quick card above is the contract; the full contract applies inside a lane.
 
 ### Core Web Vitals Targets
 

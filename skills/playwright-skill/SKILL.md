@@ -18,14 +18,19 @@ Drive real user flows through a browser using the Playwright **MCP tool surface*
 
 The governing test, applied to every step you write: **could a QA on a fresh login perform this step by hand, and would they observe what it asserts?** If not, that step is not evidence about the product — it is evidence about your fixture.
 
-Two specs are therefore never authored. Both pass against a broken product, and both are *reported* as coverage, which makes them worse than absent coverage:
+Five specs are therefore never authored. All five pass against a broken product, and all five are *reported* as coverage, which makes them worse than absent coverage:
 
 | Anti-pattern | The tell |
 |---|---|
 | **It mocks what it asserts** | a `route`/`fulfill` whose URL matches the endpoint the requirement is about. A QA cannot hand the app its own answer |
 | **It teleports** | `goto('/<entity>-detail/<hard-coded-id>')`. A QA reaches a record through the menu, the list and a click — never by typing an id they were handed |
+| **It re-implements what it asserts** | the function/class asserted is defined in the spec or in `page.evaluate`, not imported from `src/`. A QA cannot check the app against a copy of itself (`test_no_production_import`/`test_inline_reimplementation`) |
+| **It tests the source text** | `readFileSync` on a `.ts`/`.js` file, sliced with a regex or run through `new Function()`. A QA never reads code — they use the app (`test_source_eval`) |
+| **It renders its own HTML** | `page.setContent(...)` in place of `page.goto(...)`. A QA cannot open a page only your test authored (`test_synthetic_dom`) |
 
-A third failure mode outranks both, because it hides them: **a step that silently does nothing still reports green.** A route matcher on a path the app never serves, a guarded branch whose predicate is false, a negative assertion in an environment that satisfies it anyway. Prove every predicate fired.
+This principle is `test-driven-development/SKILL.md`'s (§ Rules) — not restated here.
+
+A sixth failure mode outranks all five, because it hides them: **a step that silently does nothing still reports green.** A route matcher on a path the app never serves, a guarded branch whose predicate is false, a negative assertion in an environment that satisfies it anyway. Prove every predicate fired.
 
 E2E tests are slow and expensive — write them only for critical paths that unit/integration tests cannot cover. One user flow per test; don't chain unrelated flows.
 
@@ -66,6 +71,7 @@ E2E tests are slow and expensive — write them only for critical paths that uni
 - [ ] Tests use accessible selectors (not brittle CSS)
 - [ ] Every predicate-activated thing proves it fired — guarded branches, route matchers, stubs, injections (marker asserted); matchers keyed on a path tail, not a base-URL shape; every negative assertion paired with a positive control
 - [ ] No spec stubs the endpoint whose behavior its requirement asserts
+- [ ] No spec fails `check_test_authenticity.py` — re-implemented logic, source-text evaluation, or synthetic DOM (`test-driven-development/SKILL.md` § Rules)
 - [ ] Every step is one a manual QA could perform by hand, and every assertion one they could observe
 - [ ] The target is reached through real navigation and located by user-visible name — no deep link, no hard-coded id
 - [ ] Any deep-link test is labelled as a deliberate cold-load case, not used as a shortcut

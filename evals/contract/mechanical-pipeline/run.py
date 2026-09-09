@@ -14,19 +14,27 @@ works or doesn't.
 See README.md in this directory for what this proves and when to re-run it.
 
 Usage:
-    python run.py
+    python run.py               # run, print, record nothing
+    python run.py --record      # ... and append one record to results/results.jsonl
 
 Exit 0 only if every step below passes. Prints a PASS/FAIL table and cleans
 up its temp directory unconditionally (even on failure).
+
+--record is OFF by default so an iteration loop on this file does not pollute the
+run log, and `run-evals.ps1` passes it at the start of every confirmed contract
+batch: the case is free, and until that landed it left no history at all.
 """
+import argparse
 import hashlib
 import itertools
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 # evals/contract/mechanical-pipeline/run.py -> plugin root is 3 levels up.
@@ -38,6 +46,20 @@ CHECK_COMMIT_GATE = SCRIPTS / "check_commit_gate.py"
 RUN_QUIET = SCRIPTS / "run_quiet.py"
 CHECK_RUNTIME_EVIDENCE = SCRIPTS / "check_runtime_evidence.py"
 CHECK_ACCEPTANCE_SUITE = SCRIPTS / "check_acceptance_suite.py"
+CHECK_AGENT_REPORT = SCRIPTS / "check_agent_report.py"
+CHECK_HANDOFF = SCRIPTS / "check_handoff.py"
+CHECK_ALWAYS_ON = SCRIPTS / "check_always_on.py"
+CHECK_TIER1_PROVENANCE = SCRIPTS / "check_tier1_provenance.py"
+CHECK_RUNTIME_RECIPE = SCRIPTS / "check_runtime_recipe.py"
+MARK_MILESTONE = SCRIPTS / "mark_milestone.py"
+RECORD_RUN = SCRIPTS / "record_run.py"
+GUARD_ACTION = SCRIPTS / "guard_action.py"
+
+# The shared record writer lives in evals/, two levels up from this file. Shared,
+# not copied into each case, because the record shape has to match the one
+# run-evals.ps1 appends to the same file.
+sys.path.insert(0, str(PLUGIN_ROOT / "evals"))
+from eval_record import append_script_record  # noqa: E402
 
 # The TOKEN used for --milestone / --set-cursor: deliberately untagged. Cursor
 # and milestone matching are word-boundary token tests, so a cursor written
@@ -97,6 +119,17 @@ ENVELOPE_BODY = ('{"statusCode":200,"isSuccess":true,"notifications":[],'
                  '"data":{"id":1,"total":9}}')
 BARE_BODY = '{"id":1,"total":9}'
 
+# The capture header's `- Captured:` and the sidecar's `finished` are ONE fact
+# recorded twice, and check_runtime_evidence.py's `sidecar_body_disagrees` term now
+# requires them to agree (0 <= captured - finished <= CAPTURED_SKEW_SECONDS). They
+# are constants here so the honest fixture cannot drift into looking forged: before
+# this, the capture said 2026-08-12 and write_sidecar() said 2026-01-01, 223 days
+# apart, and step 10a began failing the moment that term landed. The same pair is
+# what an ATTACK moves - see step 10c.
+CAPTURE_STARTED = "2026-08-12T09:59:59Z"
+CAPTURE_FINISHED = "2026-08-12T10:00:00Z"
+CAPTURED_STAMP = CAPTURE_FINISHED
+
 CAPTURE_TEMPLATE = """# Runtime capture: GET /api/contacts
 
 - Milestone: {milestone}
@@ -105,7 +138,7 @@ CAPTURE_TEMPLATE = """# Runtime capture: GET /api/contacts
 - Transport: out-of-process HTTP (curl)
 - Base URL: http://localhost:5142
 - Probe command: `curl -sS -i http://localhost:5142/api/contacts`
-- Captured: 2026-08-12T10:00:00Z
+- Captured: {captured}
 - Exit code: 0
 
 ## Captured output
@@ -202,8 +235,8 @@ def write_sidecar(capture_path, exit_code=0):
         "cwd": str(capture_path.parent),
         "host": "eval-fixture",
         "pid": 0,
-        "started": "2026-01-01T00:00:00Z",
-        "finished": "2026-01-01T00:00:01Z",
+        "started": CAPTURE_STARTED,
+        "finished": CAPTURE_FINISHED,
         "exit_code": int(exit_code),
         "body_sha256": hashlib.sha256(b"").hexdigest(),
         "capture_sha256": hashlib.sha256(capture_path.read_bytes()).hexdigest(),
@@ -248,18 +281,35 @@ def parse_json(proc, step_name):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--record", action="store_true",
+                        help="append one flat record to evals/results/results.jsonl")
+    args = parser.parse_args()
+
+    started = time.time()
     tmp = Path(tempfile.mkdtemp(prefix="eval-mechanical-pipeline-"))
     try:
         run_lifecycle(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+    duration = round(time.time() - started, 2)
 
     print()
     failed = [n for n, ok in results if not ok]
     if failed:
         print(f"RESULT: FAIL ({len(failed)}/{len(results)} steps failed)")
+    else:
+        print(f"RESULT: PASS ({len(results)}/{len(results)} steps passed)")
+
+    if args.record:
+        detail = None
+        if failed:
+            detail = " | ".join(f"[FAIL] {name}" for name in failed)
+        append_script_record(case="mechanical-pipeline", passed=(not failed),
+                             failed_criterion=detail, duration_s=duration)
+
+    if failed:
         return 1
-    print(f"RESULT: PASS ({len(results)}/{len(results)} steps passed)")
     return 0
 
 
@@ -518,7 +568,8 @@ def run_lifecycle(repo):
 
     good_capture = runtime_dir / "m2-contacts-get.md"
     good_capture.write_text(
-        CAPTURE_TEMPLATE.format(milestone=MILESTONE2_HEADING, body=ENVELOPE_BODY),
+        CAPTURE_TEMPLATE.format(milestone=MILESTONE2_HEADING, body=ENVELOPE_BODY,
+                                captured=CAPTURED_STAMP),
         encoding="utf-8")
     set_mtime(good_capture)
     set_mtime(write_sidecar(good_capture))
@@ -550,7 +601,8 @@ def run_lifecycle(repo):
     # The 2026-08 incident, mechanically: everything honest except the body.
     bare_capture = runtime_dir / "m2-contacts-get-bare.md"
     bare_capture.write_text(
-        CAPTURE_TEMPLATE.format(milestone=MILESTONE2_HEADING, body=BARE_BODY),
+        CAPTURE_TEMPLATE.format(milestone=MILESTONE2_HEADING, body=BARE_BODY,
+                                captured=CAPTURED_STAMP),
         encoding="utf-8")
     set_mtime(bare_capture)
     set_mtime(write_sidecar(bare_capture))
@@ -570,6 +622,50 @@ def run_lifecycle(repo):
               and data.get("in_process_transport") == []
               and data.get("stale") == [])
         record("10b. check_runtime_evidence: envelope keys absent -> exit 1", ok,
+               "" if ok else json.dumps(data))
+
+    # --- Step 10c: ONLY the sidecar is edited -> sidecar_body_disagrees ------
+    # The forgery the `capture_sha256` term alone cannot see. The hash protects
+    # the capture FILE; nothing protects the sidecar. So: take an honest capture
+    # of a probe that FAILED (its body records `- Exit code: 3`), then edit the
+    # sidecar's `exit_code` to 0. Every older term stays green -- the file exists,
+    # is under evidence/runtime/, is fresh, hashes to the sidecar, and the sidecar
+    # now claims a clean exit. Only the capture's own hash-protected header
+    # contradicts it, which is what this term reads.
+    forged_capture = runtime_dir / "m2-contacts-get-forged.md"
+    forged_capture.write_text(
+        CAPTURE_TEMPLATE.format(milestone=MILESTONE2_HEADING, body=ENVELOPE_BODY,
+                                captured=CAPTURED_STAMP)
+        .replace("- Exit code: 0", "- Exit code: 3"),
+        encoding="utf-8")
+    set_mtime(forged_capture)
+    # exit_code=0 over a body that says 3. The hash is computed AFTER the body is
+    # written, so it still matches: the capture was never touched.
+    set_mtime(write_sidecar(forged_capture, exit_code=0))
+
+    forged_report = impl_dir / "test-report-forged.md"
+    forged_report.write_text(
+        RUNTIME_REPORT_TEMPLATE.format(
+            capture="evidence/runtime/m2-contacts-get-forged.md"),
+        encoding="utf-8")
+
+    proc = run_py(CHECK_RUNTIME_EVIDENCE, ["--report", forged_report] + evidence_common)
+    data = parse_json(proc, "10c. check_runtime_evidence: sidecar exit_code edited to 0 -> exit 1")
+    if data is not None:
+        captures = data.get("captures", [])
+        codes = []
+        if captures:
+            codes = list(captures[0].get("problem_codes") or [])
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and data.get("sidecar_body_disagrees")
+                  == ["evidence/runtime/m2-contacts-get-forged.md"]
+              and "sidecar_body_disagrees" in codes
+              # The older terms must NOT be what caught it, or this step would
+              # pass for a reason that predates the check being asserted.
+              and data.get("sidecar_missing") == []
+              and data.get("sidecar_hash_mismatch") == []
+              and data.get("stale") == [])
+        record("10c. check_runtime_evidence: sidecar exit_code edited to 0 -> exit 1", ok,
                "" if ok else json.dumps(data))
 
     # --- Step 11a: check_acceptance_suite, green walkthrough -> exit 0 -------
@@ -612,6 +708,779 @@ def run_lifecycle(repo):
               and data.get("missing_results") == [])
         record("11b. check_acceptance_suite: unevidenced manual PASS -> exit 1", ok,
                "" if ok else json.dumps(data))
+
+    # --- Step 12: check_agent_report's capture term -------------------------
+    # The gate that used to read NOTHING unforgeable. Every term it checked was
+    # text an agent types, so a wholly invented security report whose check lines
+    # carried plausible exit codes passed. 12a is that report; 12b is the same
+    # report with the same two checks actually run through run_quiet.py --capture,
+    # so the step proves the term fires on a typed report AND clears on an
+    # executed one -- a gate proven only against failure is a gate that fails
+    # closed on everything.
+    security_dir = impl_dir / "evidence" / "security"
+    security_dir.mkdir(parents=True, exist_ok=True)
+
+    TYPED_REPORT = (
+        "# Security Report\n\n"
+        "## Security Audit: proj — 2026-08-12\n\n"
+        "- Dependency audit: PASS — `npm audit --audit-level=high` — exit 0 — 0 high, 0 critical\n"
+        "- Secrets scan: PASS — `git grep -nE \"(api_key|secret)\"` — exit 1 — 0 matches\n\n"
+        "**Verdict:** Pass\n")
+    typed_report_path = impl_dir / "security-report-typed.md"
+    typed_report_path.write_text(TYPED_REPORT, encoding="utf-8")
+
+    proc = run_py(CHECK_AGENT_REPORT, ["--report", typed_report_path,
+                                       "--milestone", MILESTONE2_TITLE,
+                                       "--repo", repo])
+    data = parse_json(proc, "12a. check_agent_report: a wholly TYPED report -> exit 1 (check_uncaptured)")
+    if data is not None:
+        problems = [p.get("problem") for p in (data.get("capture_problems") or [])]
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              # The verdict token and the exit codes are all correct: the report
+              # is refused for citing nothing, not for a grammar slip.
+              and data.get("verdict") == "Pass"
+              and data.get("unevidenced") == []
+              and sorted(data.get("uncaptured") or [])
+                  == ["Dependency audit", "Secrets scan"]
+              and set(problems) == {"check_uncaptured"})
+        record("12a. check_agent_report: a wholly TYPED report -> exit 1 (check_uncaptured)", ok,
+               "" if ok else json.dumps(data))
+
+    # 12b: the SAME two checks, actually executed through run_quiet.py --capture,
+    # each line citing its own artifact, claiming the exit code the sidecar
+    # recorded AND naming the command the sidecar recorded. The `exit 1` line is
+    # deliberate: a clean `git grep` for secrets exits 1 (no matches), so the
+    # gate must tie a line to its capture by exit-code EQUALITY rather than by
+    # "was it zero" -- and, since 2.6.1, by the command as well.
+    #
+    # The lines name the real argv (shlex-joined) rather than a plausible
+    # `npm audit` string. That is the point of `capture_command_mismatch`: a
+    # line may only claim the command its capture recorded, and this eval is not
+    # allowed to model a report that lies about it.
+    audit_capture = security_dir / "npm-audit.md"
+    secrets_capture = security_dir / "secrets-scan.md"
+    audit_argv = [sys.executable, "-c", "print('0 high, 0 critical')"]
+    secrets_argv = [sys.executable, "-c",
+                    "import sys; print('no matches'); sys.exit(1)"]
+    run_py(RUN_QUIET, ["--capture", audit_capture, "--"] + audit_argv)
+    run_py(RUN_QUIET, ["--capture", secrets_capture, "--"] + secrets_argv)
+
+    EXECUTED_REPORT = (
+        "# Security Report\n\n"
+        "## Security Audit: proj — 2026-08-12\n\n"
+        "- Dependency audit: PASS — `" + shlex.join(audit_argv) + "` — exit 0"
+        " — 0 high, 0 critical — capture: evidence/security/npm-audit.md\n"
+        "- Secrets scan: PASS — `" + shlex.join(secrets_argv) + "` — exit 1"
+        " — 0 matches — capture: evidence/security/secrets-scan.md\n\n"
+        "**Verdict:** Pass\n")
+    executed_report_path = impl_dir / "security-report-executed.md"
+    executed_report_path.write_text(EXECUTED_REPORT, encoding="utf-8")
+
+    proc = run_py(CHECK_AGENT_REPORT, ["--report", executed_report_path,
+                                       "--milestone", MILESTONE2_TITLE,
+                                       "--repo", repo])
+    data = parse_json(proc, "12b. check_agent_report: the same checks, really captured -> exit 0")
+    if data is not None:
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and data.get("verdict") == "Pass"
+              and data.get("uncaptured") == []
+              and data.get("capture_disagrees") == []
+              and data.get("capture_command_mismatches") == []
+              and data.get("capture_problems") == []
+              and data.get("allow_uncaptured") is False)
+        record("12b. check_agent_report: the same checks, really captured -> exit 0", ok,
+               "" if ok else json.dumps(data))
+
+    # 12c (2.6.1): ONE real capture cited by three unrelated check lines, each
+    # claiming the exit code that capture recorded. Exit-code equality alone
+    # cleared all three -- every clean scan claims 0 or 1 -- and the report
+    # passed with verdict Pass. The command tie is what refuses it now, and the
+    # first line (which DOES name the captured command) must still clear, so the
+    # step proves the term is per-line rather than a blanket refusal.
+    REUSED_REPORT = (
+        "# Security Report\n\n"
+        "## Security Audit: proj — 2026-09-07\n\n"
+        "- Secrets scan: PASS — `" + shlex.join(secrets_argv) + "` — exit 1"
+        " — 0 matches — capture: evidence/security/secrets-scan.md\n"
+        "- Dependency audit: PASS — `npm audit --production` — exit 1"
+        " — 0 high — capture: evidence/security/secrets-scan.md\n"
+        "- Auth boundary review: PASS — `dotnet test Auth.Tests` — exit 1"
+        " — 12 passed — capture: evidence/security/secrets-scan.md\n\n"
+        "**Verdict:** Pass\n")
+    reused_report_path = impl_dir / "security-report-reused.md"
+    reused_report_path.write_text(REUSED_REPORT, encoding="utf-8")
+
+    proc = run_py(CHECK_AGENT_REPORT, ["--report", reused_report_path,
+                                       "--milestone", MILESTONE2_TITLE,
+                                       "--repo", repo])
+    data = parse_json(
+        proc,
+        "12c. check_agent_report: ONE capture cited by three unrelated lines "
+        "-> exit 1 (capture_command_mismatch)")
+    if data is not None:
+        problems = [p.get("problem") for p in (data.get("capture_problems") or [])]
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and data.get("verdict") == "Pass"
+              and data.get("uncaptured") == []
+              and data.get("capture_disagrees") == []
+              and sorted(data.get("capture_command_mismatches") or [])
+                  == ["Auth boundary review", "Dependency audit"]
+              and set(problems) == {"capture_command_mismatch"})
+        record("12c. check_agent_report: ONE capture cited by three unrelated "
+               "lines -> exit 1 (capture_command_mismatch)", ok,
+               "" if ok else json.dumps(data))
+
+    # 12d (2.6.1): --allow-uncaptured waives the CITATION, never the command
+    # tie. A flag for grading a pre-contract archive must not become a way to
+    # cite somebody else's capture.
+    proc = run_py(CHECK_AGENT_REPORT, ["--report", reused_report_path,
+                                       "--milestone", MILESTONE2_TITLE,
+                                       "--repo", repo, "--allow-uncaptured"])
+    data = parse_json(
+        proc,
+        "12d. check_agent_report: --allow-uncaptured does not waive the "
+        "command tie -> exit 1")
+    if data is not None:
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and data.get("allow_uncaptured") is True
+              and sorted(data.get("capture_command_mismatches") or [])
+                  == ["Auth boundary review", "Dependency audit"])
+        record("12d. check_agent_report: --allow-uncaptured does not waive the "
+               "command tie -> exit 1", ok, "" if ok else json.dumps(data))
+
+    # --- Steps 13-16: the H3 interface gates, composed against this repo ----
+    # Each ships its own --self-test against synthetic fixtures. What is new
+    # here is the composition: the same real git repo the milestone lifecycle
+    # above built, the same on-disk artifacts, and the exit code AND naming
+    # JSON field asserted on both an honest and a fabricated input.
+
+    # 13: check_handoff.py against a real diff. `src/pristine.py` is committed
+    # FIRST and never touched again, so it exists on disk while being provably
+    # outside the `--since head` window; `src/contacts.py` is written after,
+    # so the window is non-empty and precisely known.
+    pristine = repo / "src" / "pristine.py"
+    pristine.parent.mkdir(parents=True, exist_ok=True)
+    pristine.write_text("# committed, then never touched\n", encoding="utf-8")
+    run_git(["add", "src/pristine.py"], repo)
+    run_git(["commit", "-qm", "handoff-step baseline"], repo)
+    head = run_git(["rev-parse", "HEAD"], repo).stdout.strip()
+    touched = repo / "src" / "contacts.py"
+    touched.write_text("# added after HEAD\n", encoding="utf-8")
+
+    handoff_dir = impl_dir / "handoffs"
+    handoff_dir.mkdir(parents=True, exist_ok=True)
+
+    honest_handoff = handoff_dir / "mason-m2.md"
+    honest_handoff.write_text(
+        "<handoff><status>COMPLETE</status>"
+        "<changed_files>src/contacts.py</changed_files>"
+        "<blockers>None</blockers></handoff>\n", encoding="utf-8")
+    proc = run_py(CHECK_HANDOFF, ["--handoff", honest_handoff, "--persona", "mason",
+                                  "--repo", repo, "--since", head])
+    data = parse_json(proc, "13a. check_handoff: builder handoff matching the real diff -> exit 0")
+    if data is not None:
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and data.get("findings") == []
+              and data.get("changed_files") == ["src/contacts.py"])
+        record("13a. check_handoff: builder handoff matching the real diff -> exit 0", ok,
+               "" if ok else json.dumps(data))
+
+    # 13b: the same handoff, plus a path that exists on disk but that git does
+    # NOT report as changed since `head`. Existence alone must not satisfy the
+    # subset check -- that is the whole difference between "a file is there"
+    # and "this agent changed it".
+    inflated = handoff_dir / "mason-m2-inflated.md"
+    inflated.write_text(
+        "<handoff><status>COMPLETE</status>"
+        "<changed_files>src/contacts.py, src/pristine.py"
+        "</changed_files><blockers>None</blockers></handoff>\n", encoding="utf-8")
+    proc = run_py(CHECK_HANDOFF, ["--handoff", inflated, "--persona", "mason",
+                                  "--repo", repo, "--since", head])
+    data = parse_json(proc, "13b. check_handoff: a changed_files entry git never saw -> exit 1")
+    if data is not None:
+        codes = sorted({f.get("code") for f in (data.get("findings") or [])})
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and codes == ["changed_files_not_in_diff"])
+        record("13b. check_handoff: a changed_files entry git never saw -> exit 1", ok,
+               "" if ok else json.dumps(data))
+
+    # 13c: a handoff that exists ONLY inside a fence. The adversarial case the
+    # gate was written for: a template shown in prose reads as a report.
+    fenced = handoff_dir / "mason-fenced.md"
+    fenced.write_text(
+        "I will report like this when I am done:\n\n```\n"
+        "<handoff><status>COMPLETE</status>"
+        "<changed_files>src/contacts.py</changed_files>"
+        "<blockers>None</blockers></handoff>\n```\n", encoding="utf-8")
+    proc = run_py(CHECK_HANDOFF, ["--handoff", fenced, "--persona", "mason",
+                                  "--repo", repo])
+    data = parse_json(proc, "13c. check_handoff: a fenced template is not a handoff -> exit 1")
+    if data is not None:
+        codes = sorted({f.get("code") for f in (data.get("findings") or [])})
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and codes == ["handoff_missing"])
+        record("13c. check_handoff: a fenced template is not a handoff -> exit 1", ok,
+               "" if ok else json.dumps(data))
+
+    # 14: check_always_on.py against the REAL plugin tree, not a fixture --
+    # the shipped index has to be true of the shipped lanes.
+    proc = run_py(CHECK_ALWAYS_ON, [])
+    data = parse_json(proc, "14. check_always_on: the shipped index matches the shipped lanes -> exit 0")
+    if data is not None:
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and data.get("findings") == []
+              and sorted(data.get("lanes_in_table") or [])
+                  == sorted(data.get("lanes_on_disk") or []))
+        record("14. check_always_on: the shipped index matches the shipped lanes -> exit 0", ok,
+               "" if ok else json.dumps(data))
+
+    # 15: check_tier1_provenance.py against a Tier-1 tree in this same repo,
+    # stamped with a sha this repo really contains -- and then with one it
+    # does not, which is the fabricated-stamp case.
+    summary = repo / ".docs" / "summary"
+    (summary / "contacts").mkdir(parents=True, exist_ok=True)
+    stamp = f"# Context\n\n> Provenance — 2026-08-12\n> `{head}`\n\n## Stacks (detected)\n\nnone\n"
+    (summary / "context.md").write_text(stamp, encoding="utf-8")
+    (summary / "contacts" / "overview.md").write_text(
+        f"# Contacts — overview\n\n> Provenance — 2026-08-12\n> `{head}`\n\n"
+        "## Owning services\n\napi\n", encoding="utf-8")
+    proc = run_py(CHECK_TIER1_PROVENANCE, ["--summary-root", summary,
+                                           "--feature", "contacts",
+                                           "--repo", f"proj={repo}"])
+    data = parse_json(proc, "15a. check_tier1_provenance: both artifacts stamped with a real sha -> exit 0")
+    if data is not None:
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and data.get("findings") == [] and data.get("drift") == [])
+        record("15a. check_tier1_provenance: both artifacts stamped with a real sha -> exit 0", ok,
+               "" if ok else json.dumps(data))
+
+    (summary / "contacts" / "overview.md").write_text(
+        "# Contacts — overview\n\n> Provenance — 2026-08-12\n> `"
+        + "0" * 40 + "`\n\n## Owning services\n\napi\n", encoding="utf-8")
+    proc = run_py(CHECK_TIER1_PROVENANCE, ["--summary-root", summary,
+                                           "--feature", "contacts",
+                                           "--repo", f"proj={repo}"])
+    data = parse_json(proc, "15b. check_tier1_provenance: a sha this repo never had -> exit 1")
+    if data is not None:
+        codes = sorted({f.get("code") for f in (data.get("findings") or [])})
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and codes == ["sha_unknown"])
+        record("15b. check_tier1_provenance: a sha this repo never had -> exit 1", ok,
+               "" if ok else json.dumps(data))
+
+    # 16: check_runtime_recipe.py -- a filled manifest, then the same file with
+    # its only start command and readiness check replaced by placeholders. The
+    # blocks are identical in both; only the facts differ.
+    qa_dir = summary / "contacts" / "QA"
+    qa_dir.mkdir(parents=True, exist_ok=True)
+    recipe = qa_dir / "runtime-environment.md"
+    FILLED_RECIPE = (
+        "# Runtime Environment — contacts\n\n"
+        "## Bring-up sequence\n\n1. Start the API. Needed for: api.\n\n"
+        "## Services\n\n"
+        "| Service | Start command | Local base URL | Readiness check |\n"
+        "|---|---|---|---|\n"
+        "| api | `dotnet run --project src/Api` | http://localhost:5142 | "
+        "`curl -sS http://localhost:5142/health` |\n\n"
+        "## Repointing map\n\n| Key | Service | Ships as | Local |\n|---|---|---|---|\n"
+        "| Api:BaseUrl | web | https://dev.example | http://localhost:5142 |\n\n"
+        "## Forbidden hosts\n\n- `dev.example`\n\n"
+        "## Test identities & fixtures\n\n- login `qa@example.test`, password from the vault\n\n"
+        "## Capabilities\n\n- out-of-process HTTP client\n")
+    recipe.write_text(FILLED_RECIPE, encoding="utf-8")
+    proc = run_py(CHECK_RUNTIME_RECIPE, ["--recipe", recipe])
+    data = parse_json(proc, "16a. check_runtime_recipe: a filled manifest -> exit 0")
+    if data is not None:
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and data.get("blocks_missing") == []
+              and len(data.get("start_commands") or []) == 1
+              and len(data.get("readiness_checks") or []) == 1)
+        record("16a. check_runtime_recipe: a filled manifest -> exit 0", ok,
+               "" if ok else json.dumps(data))
+
+    hollow = FILLED_RECIPE.replace("`dotnet run --project src/Api`", "TBD")
+    hollow = hollow.replace("`curl -sS http://localhost:5142/health`", "TODO")
+    recipe.write_text(hollow, encoding="utf-8")
+    proc = run_py(CHECK_RUNTIME_RECIPE, ["--recipe", recipe])
+    data = parse_json(proc, "16b. check_runtime_recipe: every block present, both facts TBD -> exit 1")
+    if data is not None:
+        codes = sorted({f.get("code") for f in (data.get("findings") or [])})
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and data.get("blocks_missing") == []
+              and codes == ["readiness_check_missing", "start_command_missing"])
+        record("16b. check_runtime_recipe: every block present, both facts TBD -> exit 1", ok,
+               "" if ok else json.dumps(data))
+
+    # --- Step 17 (2.6.1): check_handoff --advisory --------------------------
+    # bgpdd-learn's Forge propose handoff and bgpdd-build's Aria Mode 2 advisory
+    # both return a RECOMMENDATION and no artifact, and both failed this gate
+    # exit 1 -- so the Orchestrator's mandatory validation was contradicted by
+    # the pipelines twice per epic. The pair below is the point: the SAME
+    # handoff, refused without the flag and accepted with it, and the flag
+    # recorded in the chained ledger line so the waiver is attributable.
+    advisory_handoff = handoff_dir / "forge-propose.md"
+    advisory_handoff.write_text(
+        "<handoff><status>COMPLETE</status>"
+        "<blockers>None</blockers></handoff>\n", encoding="utf-8")
+    proc = run_py(CHECK_HANDOFF, ["--handoff", advisory_handoff,
+                                  "--persona", "forge", "--repo", repo])
+    data = parse_json(proc, "17a. check_handoff: Forge's propose handoff without --advisory -> exit 1")
+    if data is not None:
+        elements = [f.get("element") for f in (data.get("findings") or [])]
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and elements == ["changed_skills"])
+        record("17a. check_handoff: Forge's propose handoff without --advisory -> exit 1",
+               ok, "" if ok else json.dumps(data))
+
+    handoff_ledger = impl_dir / "handoff-gates.jsonl"
+    proc = run_py(CHECK_HANDOFF, ["--handoff", advisory_handoff,
+                                  "--persona", "forge", "--repo", repo,
+                                  "--advisory", "--ledger", handoff_ledger])
+    data = parse_json(proc, "17b. check_handoff --advisory: the same handoff -> exit 0, advisory recorded")
+    if data is not None:
+        records = [json.loads(l) for l in
+                   handoff_ledger.read_text(encoding="utf-8").splitlines() if l.strip()]
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and data.get("advisory") is True
+              and data.get("advisory_waived_elements") == ["changed_skills"]
+              and bool(records) and records[-1].get("advisory") is True
+              and records[-1].get("verdict") == "PASS")
+        record("17b. check_handoff --advisory: the same handoff -> exit 0, advisory recorded",
+               ok, "" if ok else json.dumps(data))
+
+    # 17c: the flag waives the ARTIFACT and nothing else. A builder handoff with
+    # no <changed_files> is still refused with --advisory, because an agent that
+    # wrote code has an artifact whether or not the brief asked for one.
+    proc = run_py(CHECK_HANDOFF, ["--handoff", advisory_handoff,
+                                  "--persona", "mason", "--repo", repo,
+                                  "--advisory"])
+    data = parse_json(proc, "17c. check_handoff --advisory does not waive <changed_files> -> exit 1")
+    if data is not None:
+        elements = [f.get("element") for f in (data.get("findings") or [])]
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and elements == ["changed_files"])
+        record("17c. check_handoff --advisory does not waive <changed_files> -> exit 1",
+               ok, "" if ok else json.dumps(data))
+
+    # --- Step 18 (2.6.1): mark_milestone --reopen ---------------------------
+    # Completion was a one-way door: a shipping finding against a milestone
+    # whose [x] was written had nowhere to go. This runs the real round trip on
+    # the plan this suite has been building -- reopen M2, then read it back out
+    # of the real next_milestone.py.
+    finding = impl_dir / "shipping-finding.md"
+    finding.write_text("p95 regressed 40% under the canary\n", encoding="utf-8")
+    reopen_ledger = impl_dir / "reopen-gates.jsonl"
+    proc = run_py(MARK_MILESTONE, ["--plan", plan_path, "--reopen",
+                                   MILESTONE2_HEADING, "--evidence", finding,
+                                   "--reason", "shipping found a p95 regression",
+                                   "--ledger", reopen_ledger])
+    data = parse_json(proc, "18a. mark_milestone --reopen: removes the [x] -> exit 0")
+    if data is not None:
+        text = plan_path.read_text(encoding="utf-8")
+        records = [json.loads(l) for l in
+                   reopen_ledger.read_text(encoding="utf-8").splitlines() if l.strip()]
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and data.get("reopened") is True
+              and f"## {MILESTONE2_HEADING}\n" in text
+              and f"{MILESTONE2_HEADING} [x]" not in text
+              and "[ ]" not in text
+              and bool(records) and records[-1].get("action") == "reopen"
+              and records[-1].get("reason") == "shipping found a p95 regression")
+        record("18a. mark_milestone --reopen: removes the [x] -> exit 0", ok,
+               "" if ok else json.dumps(data))
+
+    proc = run_py(NEXT_MILESTONE, ["--plan", plan_path, "--state", state_path])
+    data = parse_json(proc, "18b. next_milestone returns the reopened milestone as NEXT")
+    if data is not None:
+        ok = (proc.returncode == 0 and data.get("result") == "NEXT"
+              and data.get("next_milestone", {}).get("title") == MILESTONE2_HEADING)
+        record("18b. next_milestone returns the reopened milestone as NEXT", ok,
+               "" if ok else json.dumps(data))
+
+    # 18c: the three mandatory flags. A reopen is the one write here that
+    # destroys a recorded verdict, so an unevidenced, unreasoned or unrecorded
+    # one is a usage error and the plan is left alone.
+    reopen_refusals = [
+        ("no --evidence", ["--plan", plan_path, "--reopen", MILESTONE3_HEADING,
+                           "--reason", "x", "--ledger", reopen_ledger]),
+        ("empty --reason", ["--plan", plan_path, "--reopen", MILESTONE3_HEADING,
+                            "--evidence", finding, "--reason", "   ",
+                            "--ledger", reopen_ledger]),
+        ("no --ledger", ["--plan", plan_path, "--reopen", MILESTONE3_HEADING,
+                         "--evidence", finding, "--reason", "x"]),
+        ("--evidence that does not exist",
+         ["--plan", plan_path, "--reopen", MILESTONE3_HEADING, "--evidence",
+          impl_dir / "nope.md", "--reason", "x", "--ledger", reopen_ledger]),
+    ]
+    codes = [run_py(MARK_MILESTONE, argv).returncode for _n, argv in reopen_refusals]
+    ok = codes == [2, 2, 2, 2]
+    record("18c. mark_milestone --reopen without evidence/reason/ledger -> exit 2 (x4)",
+           ok, "" if ok else f"exit codes {codes} for "
+                             f"{[n for n, _a in reopen_refusals]}")
+
+    # --- Step 19 (2.6.1): the Tier-1 consumer end ---------------------------
+    # 15a/15b prove the producer half. These two are the consumer half the
+    # audit found had no consumers at all: a stamp dated in the future, and
+    # --verify-current against a repo whose HEAD has moved on.
+    (summary / "contacts" / "overview.md").write_text(
+        f"# Contacts — overview\n\n> Provenance — 2031-01-01\n> `{head}`\n\n"
+        "## Owning services\n\napi\n", encoding="utf-8")
+    proc = run_py(CHECK_TIER1_PROVENANCE, ["--summary-root", summary,
+                                           "--feature", "contacts",
+                                           "--repo", f"proj={repo}"])
+    data = parse_json(proc, "19a. check_tier1_provenance: a stamp dated in the future -> exit 1")
+    if data is not None:
+        codes = sorted({f.get("code") for f in (data.get("findings") or [])})
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and codes == ["stamp_date_future"])
+        record("19a. check_tier1_provenance: a stamp dated in the future -> exit 1",
+               ok, "" if ok else json.dumps(data))
+
+    # Restore an honest stamp, then move HEAD on. Drift is still a warning by
+    # default (bgpdd-discovery section 1) and a finding under --verify-current.
+    (summary / "contacts" / "overview.md").write_text(
+        f"# Contacts — overview\n\n> Provenance — 2026-08-12\n> `{head}`\n\n"
+        "## Owning services\n\napi\n", encoding="utf-8")
+    (repo / "src" / "drifted.py").write_text("# moves HEAD\n", encoding="utf-8")
+    run_git(["add", "src/drifted.py"], repo)
+    run_git(["commit", "-qm", "tier1 drift step"], repo)
+    t1_common = ["--summary-root", summary, "--feature", "contacts",
+                 "--repo", f"proj={repo}"]
+
+    proc = run_py(CHECK_TIER1_PROVENANCE, t1_common)
+    data = parse_json(proc, "19b. check_tier1_provenance: drift alone is still exit 0")
+    if data is not None:
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and len(data.get("drift") or []) >= 1
+              and data.get("findings") == [])
+        record("19b. check_tier1_provenance: drift alone is still exit 0", ok,
+               "" if ok else json.dumps(data))
+
+    proc = run_py(CHECK_TIER1_PROVENANCE, t1_common + ["--verify-current"])
+    data = parse_json(proc, "19c. check_tier1_provenance --verify-current: drift -> exit 1 (tier1_drift)")
+    if data is not None:
+        codes = sorted({f.get("code") for f in (data.get("findings") or [])})
+        drifted = [f for f in (data.get("findings") or [])
+                   if f.get("code") == "tier1_drift"]
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and codes == ["tier1_drift"]
+              and bool(drifted) and drifted[0].get("stamped") == head
+              and drifted[0].get("head") != head)
+        record("19c. check_tier1_provenance --verify-current: drift -> exit 1 (tier1_drift)",
+               ok, "" if ok else json.dumps(data))
+
+    t1_ledger = impl_dir / "tier1-gates.jsonl"
+    proc = run_py(CHECK_TIER1_PROVENANCE, t1_common + [
+        "--verify-current", "--allow-drift", "the commit touched only CI",
+        "--ledger", t1_ledger])
+    data = parse_json(proc, "19d. --allow-drift: exit 0 and the reason in the ledger")
+    if data is not None:
+        records = [json.loads(l) for l in
+                   t1_ledger.read_text(encoding="utf-8").splitlines() if l.strip()]
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and data.get("allow_drift") == "the commit touched only CI"
+              and bool(records)
+              and records[-1].get("allow_drift_reason") == "the commit touched only CI")
+        record("19d. --allow-drift: exit 0 and the reason in the ledger", ok,
+               "" if ok else json.dumps(data))
+
+    empty = run_py(CHECK_TIER1_PROVENANCE,
+                   t1_common + ["--verify-current", "--allow-drift", "   "])
+    orphan = run_py(CHECK_TIER1_PROVENANCE,
+                    t1_common + ["--allow-drift", "no --verify-current"])
+    ok = empty.returncode == 2 and orphan.returncode == 2
+    record("19e. --allow-drift empty, or without --verify-current -> exit 2", ok,
+           "" if ok else f"empty={empty.returncode} orphan={orphan.returncode}")
+
+    # --- Step 20 (2.6.1): record_run refuses an unresolvable tier -----------
+    # An unrecognised --model recorded cleanly with tier: null and silently
+    # deleted the verifier-below-producer check for that delegation. A mistyped
+    # flag must not be able to disable a gate.
+    run_log = impl_dir / "run-log-2611.jsonl"
+    log_common = ["--log", run_log, "--pipeline", "bgpdd-build",
+                  "--phase", "Phase 2", "--event", "delegation",
+                  "--unit", MILESTONE2_TITLE]
+    producer = run_py(RECORD_RUN, log_common + ["--agent", "mason",
+                                                "--model", "claude-opus-4-1"])
+    typo = run_py(RECORD_RUN, log_common + ["--agent", "luna",
+                                            "--model", "gpt-4o"])
+    inversion = run_py(RECORD_RUN, log_common + ["--agent", "luna",
+                                                 "--model", "haiku"])
+    typo_data = None
+    try:
+        typo_data = json.loads(typo.stdout)
+    except ValueError:
+        pass
+    lines = [json.loads(l) for l in
+             run_log.read_text(encoding="utf-8").splitlines() if l.strip()]
+    ok = (producer.returncode == 0 and typo.returncode == 2
+          and typo_data is not None
+          and typo_data.get("problem") == "model_unknown"
+          and inversion.returncode == 1
+          # The producer record is the only one written: the typo wrote
+          # nothing, and the inversion was refused before the write.
+          and [r.get("agent") for r in lines] == ["mason"])
+    record("20. record_run: an unresolvable --model is exit 2 (model_unknown), "
+           "and the inversion check still fires after it", ok,
+           "" if ok else f"producer={producer.returncode} typo={typo.returncode} "
+                         f"inversion={inversion.returncode} log={lines!r}")
+
+    # 20b: dep is a producer, so a verifier below Dep is the same inversion.
+    dep_log = impl_dir / "run-log-dep.jsonl"
+    dep_common = ["--log", dep_log, "--pipeline", "bgpdd-shipping",
+                  "--phase", "Step 2", "--event", "delegation",
+                  "--unit", "Launch"]
+    dep = run_py(RECORD_RUN, dep_common + ["--agent", "dep", "--model", "opus"])
+    below = run_py(RECORD_RUN, dep_common + ["--agent", "vera", "--model", "haiku"])
+    ok = dep.returncode == 0 and below.returncode == 1
+    record("20b. record_run: a verifier below `dep` is an inversion -> exit 1",
+           ok, "" if ok else f"dep={dep.returncode} vera={below.returncode}")
+
+    # --- Step 21 (2.6.1): the guard hook sees Bash ---------------------------
+    # Rules 2 and 4 tested `tool_name in WRITE_TOOLS`, so one `>>` rewrote any
+    # ledger while Edit on the same path was denied. Driven through real stdin,
+    # the way the runtime drives it, so the payload shape is exercised too.
+    guard_root = impl_dir / "guard-scratch"
+    (guard_root / ".docs" / "bugfix" / "login-500").mkdir(parents=True, exist_ok=True)
+    (guard_root / ".docs" / "bugfix" / "login-500" / "bug-report.md").write_text(
+        "# Bug\n", encoding="utf-8")
+    (guard_root / ".docs" / "bugfix" / "login-500" / "gates.jsonl").write_text(
+        json.dumps({"gate": "check_bugfix_intake.py", "verdict": "PASS",
+                    "argv": [], "milestone": "login-500"}) + "\n",
+        encoding="utf-8")
+    (guard_root / "tests").mkdir(parents=True, exist_ok=True)
+    (guard_root / "tests" / "orders.test.js").write_text("t\n", encoding="utf-8")
+
+    def guard(tool, tool_input):
+        payload = json.dumps({"hook_event_name": "PreToolUse",
+                              "tool_name": tool, "tool_input": tool_input,
+                              "cwd": str(guard_root)})
+        proc = subprocess.run([sys.executable, str(GUARD_ACTION)],
+                              input=payload, capture_output=True, text=True,
+                              timeout=120)
+        if not proc.stdout.strip():
+            return None
+        return (json.loads(proc.stdout)["hookSpecificOutput"]
+                ["permissionDecisionReason"])
+
+    ledger_rel = ".docs/bugfix/login-500/gates.jsonl"
+    denied_writes = [
+        "echo '{}' >> " + ledger_rel,
+        "echo '{}' | tee -a " + ledger_rel,
+        "Set-Content " + ledger_rel + " '{}'",
+        "rm " + ledger_rel,
+        "python -c \"open('" + ledger_rel + "','a').write('{}')\"",
+    ]
+    denied_tests = [
+        "sed -i s/a/b/ tests/orders.test.js",
+        "mv tests/orders.test.js tests/orders.test.js.old",
+        "git checkout -- tests/",
+    ]
+    allowed = ["cat " + ledger_rel, "npm test", "git status"]
+    write_reasons = [guard("Bash", {"command": c}) for c in denied_writes]
+    test_reasons = [guard("Bash", {"command": c}) for c in denied_tests]
+    allow_reasons = [guard("Bash", {"command": c}) for c in allowed]
+    ok = (all(r and "gate artifact" in r for r in write_reasons)
+          and all(r and "test path" in r for r in test_reasons)
+          and all(r is None for r in allow_reasons))
+    record("21. guard_action: Bash redirection/tee/cmdlet/rm/python -c into a "
+           "ledger, and sed/mv/git-checkout of a frozen test, all DENY", ok,
+           "" if ok else f"writes={write_reasons} tests={test_reasons} "
+                         f"allowed={allow_reasons}")
+
+    # 21b: the sanctioned close. bgpdd-bugfix Phase 5 ends in a local merge,
+    # which rule 1 denied. A commit-gate --commit PASS for this lane's own
+    # milestone un-arms it; one for a DIFFERENT milestone does not.
+    lane_ledger = guard_root / ".docs" / "bugfix" / "login-500" / "gates.jsonl"
+    before = guard("Bash", {"command": "git merge --no-ff bugfix/login-500"})
+    with lane_ledger.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"gate": "check_commit_gate.py", "verdict": "PASS",
+                             "argv": ["--commit"], "milestone": "other-bug"}) + "\n")
+    wrong = guard("Bash", {"command": "git merge --no-ff bugfix/login-500"})
+    with lane_ledger.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"gate": "check_commit_gate.py", "verdict": "PASS",
+                             "argv": ["--commit"], "milestone": "login-500"}) + "\n")
+    after = guard("Bash", {"command": "git merge --no-ff bugfix/login-500"})
+    ok = (before is not None and wrong is not None and after is None)
+    record("21b. guard_action: the lane's own --commit PASS un-arms rule 1; "
+           "another milestone's does not", ok,
+           "" if ok else f"before={bool(before)} wrong={bool(wrong)} "
+                         f"after={bool(after)}")
+
+    # --- Step 22 (2.6.2): the sweep before COMPLETE -------------------------
+    # base-persona: "Sweep the scaffolding before you return COMPLETE." The
+    # pair is the point -- the SAME artifact, accepted while the handoff says
+    # PARTIAL and refused the moment it says COMPLETE.
+    swept = handoff_dir / "luna-clean.md"
+    unswept = handoff_dir / "luna-skeleton.md"
+    report_rel = ".docs/proj/implementation/handoffs/luna-report.md"
+    report_path = repo / report_rel
+    report_path.write_text(
+        "# Review — M2\n\n## Findings\n\nTwo naming nits, both fixed.\n",
+        encoding="utf-8")
+    swept.write_text("<handoff><status>COMPLETE</status>"
+                     f"<artifact>{report_rel}</artifact>"
+                     "<blockers>None</blockers></handoff>\n", encoding="utf-8")
+    proc = run_py(CHECK_HANDOFF, ["--handoff", swept, "--persona", "luna",
+                                  "--repo", repo])
+    data = parse_json(proc, "22a. check_handoff: a swept COMPLETE artifact -> exit 0")
+    if data is not None:
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and data.get("scaffolding_scanned") == [report_rel])
+        record("22a. check_handoff: a swept COMPLETE artifact -> exit 0", ok,
+               "" if ok else json.dumps(data))
+
+    # The skeleton left in place: the marker, and the note that explains it.
+    report_path.write_text(
+        "# Review — M2\n\n> Note: the placeholder sections below are filled "
+        "in on the second pass\n\n## Findings\n\nTwo naming nits, both "
+        "fixed.\n\n## Security\n\n_TODO: pending_\n", encoding="utf-8")
+    proc = run_py(CHECK_HANDOFF, ["--handoff", swept, "--persona", "luna",
+                                  "--repo", repo])
+    data = parse_json(proc, "22b. check_handoff: scaffolding left in a COMPLETE artifact -> exit 1")
+    if data is not None:
+        findings = [f for f in (data.get("findings") or [])
+                    if f.get("code") == "artifact_scaffolding_left"]
+        markers = sorted(f.get("marker") for f in findings)
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and len(findings) == len(data.get("findings") or [])
+              and markers == ["scaffolding_note", "skeleton_marker"]
+              and all(f.get("path") == report_rel for f in findings))
+        record("22b. check_handoff: scaffolding left in a COMPLETE artifact -> exit 1",
+               ok, "" if ok else json.dumps(data))
+
+    # 22c: the SAME artifact under PARTIAL. Incremental Persistence hands
+    # unfinished work back WITH its markers, so this must pass -- a gate that
+    # punished an honest PARTIAL would push agents toward a false COMPLETE.
+    unswept.write_text("<handoff><status>PARTIAL</status>"
+                       f"<artifact>{report_rel}</artifact>"
+                       "<blockers>security section needs Cipher's scan"
+                       "</blockers></handoff>\n", encoding="utf-8")
+    scaffold_ledger = impl_dir / "scaffold-gates.jsonl"
+    partial = run_py(CHECK_HANDOFF, ["--handoff", unswept, "--persona", "luna",
+                                     "--repo", repo])
+    waived = run_py(CHECK_HANDOFF, ["--handoff", swept, "--persona", "luna",
+                                    "--repo", repo, "--ledger", scaffold_ledger,
+                                    "--allow-scaffolding",
+                                    "the report QUOTES the convention"])
+    blank = run_py(CHECK_HANDOFF, ["--handoff", swept, "--persona", "luna",
+                                   "--repo", repo, "--allow-scaffolding", "  "])
+    records = [json.loads(l) for l in
+               scaffold_ledger.read_text(encoding="utf-8").splitlines()
+               if l.strip()]
+    ok = (partial.returncode == 0 and waived.returncode == 0
+          and blank.returncode == 2 and bool(records)
+          and records[-1].get("allow_scaffolding_reason")
+          == "the report QUOTES the convention"
+          and len(records[-1].get("scaffolding_waived") or []) == 2)
+    record("22c. check_handoff: PARTIAL keeps its markers; --allow-scaffolding "
+           "waives with a reason in the ledger, blank is exit 2", ok,
+           "" if ok else f"partial={partial.returncode} "
+                         f"waived={waived.returncode} blank={blank.returncode} "
+                         f"records={records[-1:]!r}")
+
+    # --- Step 23 (2.6.2): one delegation, one record; fable is the top tier -
+    # A re-wake is a SECOND completion notification for an agent that already
+    # returned, carrying a bigger cumulative duration. The first completion is
+    # the measurement, so the second is refused and nothing is written.
+    rewake_log = impl_dir / "run-log-2612.jsonl"
+    rw_common = ["--log", rewake_log, "--pipeline", "bgpdd-build",
+                 "--phase", "Phase 3", "--event", "delegation",
+                 "--unit", MILESTONE3_TITLE]
+    fable_producer = run_py(RECORD_RUN, rw_common + [
+        "--agent", "mason", "--model", "claude-fable-5-1",
+        "--duration-s", "88"])
+    # opus below fable IS an inversion; the same verifier at fable is not.
+    opus_verifier = run_py(RECORD_RUN, rw_common + ["--agent", "luna",
+                                                    "--model", "claude-opus-5"])
+    fable_verifier = run_py(RECORD_RUN, rw_common + [
+        "--agent", "luna", "--model", "claude-fable-5-1", "--duration-s", "40"])
+    rewake = run_py(RECORD_RUN, rw_common + [
+        "--agent", "luna", "--model", "claude-fable-5-1", "--duration-s", "600"])
+    round2 = run_py(RECORD_RUN, rw_common + [
+        "--agent", "luna", "--model", "claude-fable-5-1", "--rounds", "2"])
+    rewake_data = None
+    try:
+        rewake_data = json.loads(rewake.stdout)
+    except ValueError:
+        pass
+    lines = [json.loads(l) for l in
+             rewake_log.read_text(encoding="utf-8").splitlines() if l.strip()]
+    ok = (fable_producer.returncode == 0 and opus_verifier.returncode == 1
+          and fable_verifier.returncode == 0 and rewake.returncode == 1
+          and round2.returncode == 0
+          and rewake_data is not None
+          and rewake_data.get("problem") == "duplicate_delegation"
+          # Three records: the producer, Luna's FIRST completion (40s, not the
+          # re-wake's cumulative 600s), and the genuine round 2.
+          and [(r.get("agent"), r.get("duration_s"), r.get("rounds"))
+               for r in lines] == [("mason", 88.0, None),
+                                   ("luna", 40.0, None),
+                                   ("luna", None, 2)])
+    record("23. record_run: an opus verifier under a fable producer is an "
+           "inversion, a re-wake is duplicate_delegation, --rounds 2 is not",
+           ok, "" if ok else f"producer={fable_producer.returncode} "
+                             f"opus={opus_verifier.returncode} "
+                             f"fable={fable_verifier.returncode} "
+                             f"rewake={rewake.returncode} "
+                             f"round2={round2.returncode} log={lines!r}")
+
+    # --- Step 24 (2.6.2): Tier-1 context.md is cumulative -------------------
+    # The lesson's exact shape: a second session, scoped to `proj` only,
+    # rewrites the whole file. Every check this run can make passes -- and the
+    # repo the PREVIOUS session recorded is gone, with no diff and no history.
+    t1_scope = impl_dir / "t1-scope"
+    t1_scope.mkdir(parents=True, exist_ok=True)
+    cumulative = (f"# Context\n\n> Provenance — 2026-08-12\n"
+                  f"> proj: `{head}`\n> web: `{'b' * 40}`\n\n"
+                  "## Stacks (detected)\n\nnone\n")
+    (t1_scope / "context.md").write_text(cumulative, encoding="utf-8")
+    t1_backup = impl_dir / "context.2026-08-12T0900.md"
+    t1_backup.write_text(cumulative, encoding="utf-8")
+    prev_common = ["--summary-root", t1_scope, "--repo", f"proj={repo}",
+                   "--previous", t1_backup]
+
+    proc = run_py(CHECK_TIER1_PROVENANCE, prev_common)
+    data = parse_json(proc, "24a. check_tier1_provenance --previous: every prior repo still stamped -> exit 0")
+    if data is not None:
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and data.get("previous") == str(t1_backup))
+        record("24a. check_tier1_provenance --previous: every prior repo still stamped -> exit 0",
+               ok, "" if ok else json.dumps(data))
+
+    # This session's whole-file rewrite: its own scope, correctly stamped.
+    (t1_scope / "context.md").write_text(
+        f"# Context\n\n> Provenance — 2026-08-12\n> proj: `{head}`\n\n"
+        "## Stacks (detected)\n\nnone\n", encoding="utf-8")
+    proc = run_py(CHECK_TIER1_PROVENANCE, prev_common)
+    data = parse_json(proc, "24b. check_tier1_provenance --previous: a repo the rewrite dropped -> exit 1")
+    if data is not None:
+        codes = sorted({f.get("code") for f in (data.get("findings") or [])})
+        dropped = [f for f in (data.get("findings") or [])
+                   if f.get("code") == "tier1_repo_dropped"]
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and codes == ["tier1_repo_dropped"]
+              and len(dropped) == 1 and dropped[0].get("repo") == "web"
+              and dropped[0].get("previous") == str(t1_backup)
+              and "context.md" in dropped[0].get("artifact", ""))
+        record("24b. check_tier1_provenance --previous: a repo the rewrite dropped -> exit 1",
+               ok, "" if ok else json.dumps(data))
+
+    # 24c: a REFRESHED sha for a repo that is still there is the whole point
+    # of re-running Phase 1, and must not fail. A missing backup is exit 2.
+    (t1_scope / "context.md").write_text(
+        f"# Context\n\n> Provenance — 2026-08-12\n> proj: `{head}`\n"
+        f"> web: `{'c' * 40}`\n\n## Stacks (detected)\n\nnone\n",
+        encoding="utf-8")
+    refreshed = run_py(CHECK_TIER1_PROVENANCE, prev_common)
+    absent = run_py(CHECK_TIER1_PROVENANCE,
+                    ["--summary-root", t1_scope, "--repo", f"proj={repo}",
+                     "--previous", impl_dir / "no-such-backup.md"])
+    ok = refreshed.returncode == 0 and absent.returncode == 2
+    record("24c. check_tier1_provenance --previous: a refreshed sha is not a "
+           "drop; a backup that does not exist is exit 2", ok,
+           "" if ok else f"refreshed={refreshed.returncode} "
+                         f"absent={absent.returncode}")
 
 
 if __name__ == "__main__":

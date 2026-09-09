@@ -39,6 +39,7 @@ READ these as file paths under {PLUGIN_ROOT} (NOT Skill-tool invocables). Read e
 | performance-optimization | `{PLUGIN_ROOT}/performance-optimization/SKILL.md` | When the task is performance optimization or profiling |
 | vue3-spa-patterns | `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md` | When `detect_stack.py` reports `vue3` (see `.docs/summary/context.md` § Stacks (detected)) or the brief names Vue 3 |
 | dotnet-backend-patterns | `{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md` | When `detect_stack.py` reports `dotnet` (see `.docs/summary/context.md` § Stacks (detected)) or the brief names .NET |
+| dependency-upgrade-patterns | `{PLUGIN_ROOT}/dependency-upgrade-patterns/SKILL.md` | When a cleanup or modernization task moves a dependency version |
 
 > **Builder Directive**: You are an execution agent. Use the `code-simplification` skill to safely execute the rewrites in the codebase. You have authorization to modify files.
 

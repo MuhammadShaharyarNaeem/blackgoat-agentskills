@@ -4,13 +4,14 @@ Injected at session start so an ordinary chat — one that never types a lane co
 
 ## The lanes
 
-Pick one and invoke it. Each line is that lane's own `description` frontmatter, trimmed.
+Pick one and invoke it. Each line summarises that lane's `description` frontmatter; the description is canonical and this line is only the pointer (`check_always_on.py --require-row-agreement` is the strict trim check, unarmed by default because these rows paraphrase).
 
 | Lane | What it is for |
 |---|---|
 | `/bg` | Front door: classifies the request and invokes exactly one lane below. Routes only; never does the work. |
 | `/bgpdd-quick` | One small contained change, main session only: no delegation, no plan. One captured check, one close gate that commits. |
 | `/bgpdd-bugfix` | A localized bug fixed on written evidence: bug report, RED capture, routed fix, GREEN re-run, review, commit gate. |
+| `/bgpdd-bugfix-batch` | Two to five independent bugs in one session: the bugfix contract per bug, each in its own worktree. |
 | `/bgpdd-lite` | Mid-weight PDD for well-specified work: mini-requirements with you, Alex plans, coverage gate, then `/bgpdd-build`. |
 | `/bgpdd-plan` | Phase 1, Design & Architecture: refines the idea, researches, produces an implementation plan (Rex, Aria, Alex). |
 | `/bgpdd-discovery` | Phase 0, Global Context Discovery: Iris, Scout and Echo map stacks, APIs and the legacy QA baseline. |
@@ -25,7 +26,9 @@ Four rules bind in ordinary chat too, with no pipeline running. Each names its o
 
 1. **Evidence over claims.** A verification you did not perform is `BLOCKED`, never `PASS`; evidence cites the executed command and its output, and "verified" is an adjective, not evidence. Owner: `skills/agent-squad/base-persona.md` § Evidence Integrity.
 2. **Never edit a test to make it pass.** A red test is a finding about the code, not an obstacle in front of it: fix the code, or report the test as wrong and say why. Weakening an assertion, deleting a case, or loosening a gate to reach green is the defect the RED/GREEN discipline exists to catch. Owner: `skills/test-driven-development/SKILL.md`.
-3. **A commit goes through a gate.** Inside a lane the lane's gate commits (`check_commit_gate.py`, or `check_quick_close.py` for `/bgpdd-quick`) — a verdict, a clean-tree check and a size bound, run rather than asserted. Outside any lane, the smallest gated path for a change is `/bgpdd-quick`; a hand commit is the user's call, made knowingly. Owner: `skills/pipeline-tools/SKILL.md`.
+3. **A commit goes through a gate.** Inside a lane the lane's gate commits (`check_commit_gate.py`, or `check_quick_close.py` for `/bgpdd-quick`) — a verdict, a clean-tree check and a size bound, run rather than asserted. Outside any lane — including a lane idle over 12 hours, which stops counting as active — the smallest gated path is `/bgpdd-quick`; a hand commit is then the user's call, made knowingly. Owner: `skills/pipeline-tools/SKILL.md`.
 4. **Ask before anything irreversible.** Phase transitions, force-pushes, deletes, deploys, schema changes and anything the user cannot undo need explicit confirmation first; interactive steps run in the main session and are never delegated. Owner: `skills/agent-squad/orchestrator-contract.md` § 1.
+
+**Some of these are enforced, not only stated.** Under Claude Code this plugin registers a `PreToolUse` hook that can refuse a tool call *before* it runs: a hand `git commit`/`merge`/`cherry-pick`/`revert` while a lane is active (rule 3 above), a write to an existing test file during an unfinished bugfix (rule 2 above), a delegation before the bugfix intake gate, and any hand edit to `gates.jsonl`, `orchestrator-state.json`, `run-log.jsonl` or a `*.meta.json` sidecar. It detects the lane from the working tree — **active means a gate or state write in the last 12 hours**, so a stale lane disarms itself — names the gate to run instead, and **fails open on any error** (no interpreter, an unreadable state file): a refusal is always a positive finding, never a malfunction, and silence is never proof the hook ran. `python skills/pipeline-tools/scripts/guard_action.py --explain` shows what it currently detects. Owner: `skills/pipeline-tools/SKILL.md` § `guard_action.py`.
 
 Unsure which lane the request belongs to → `/bg`.

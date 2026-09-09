@@ -11,9 +11,23 @@ Every framework-specific code decision must be backed by official documentation.
 
 A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no editing tests to pass, no unobserved claims (`base-persona.md`, Evidence Integrity). Over three files, or shared behaviour: route via `/bg` to a lane.
 
+## Quick card
+
+Derived from the contract below for a ≤ 3-file change; no new rules (convention #8 — deliberately narrower than the full contract, which binds inside any lane).
+
+1. State the stack and exact versions read from the dependency file before writing code (§ Step 1).
+2. Fetch the specific doc page for the API you touch — not the homepage (§ Step 2).
+3. Official docs only; never Stack Overflow, a blog, or your memory (§ Step 2).
+4. Put a full URL beside every framework-specific decision (§ Step 4).
+5. No doc found → label it `UNVERIFIED` rather than shipping confidence (§ Step 4).
+
+- Brief → the quick note (What / Where / How verified)
+- Artifact → the capture at `{quick-root}/evidence/check.md`
+- Handoff → the `## Result` bullet in `note.md`
+
 ## Worker Execution Contract
 
-This is the operational spine. Follow it as written.
+This is the operational spine. Follow it as written. For a change of ≤ 3 files outside a pipeline, the Quick card above is the contract; the full contract applies inside a lane.
 
 ### The Process
 
