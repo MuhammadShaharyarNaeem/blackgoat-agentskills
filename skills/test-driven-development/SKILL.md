@@ -19,7 +19,7 @@ Derived from the contract below for a ≤ 3-file change; no new rules (conventio
 1. Capture the new test failing — a second `evidence/` capture through the lane's wrapper — before the code exists (§ The Iron Law).
 2. Write the minimum code to pass — no speculative options or abstractions (§ Workflow, GREEN).
 3. One behaviour per test, AAA, named for the behaviour (§ Rules).
-4. Real code; mock only true external boundaries you do not own (§ Rules).
+4. Real code the test imports; mock only true external boundaries (§ Rules).
 5. Full suite green with pristine output before closing; three RED-RED cycles → escalate (§ Escalate When).
 
 - Brief → the quick note (What / Where / How verified)
@@ -54,6 +54,8 @@ NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST
 - NEVER test implementation details (private methods, internal state).
 - NEVER write dummy assertions (`expect(true).toBe(true)`) or stub tests: tests must rigorously mount, exercise, and assert the full state, style variations, and behavior of the target component or function.
 - Prefer real code. Mock ONLY true external boundaries you don't own — network APIs, databases, the filesystem, clock/randomness. NEVER mock your own code under test.
+- **A test must fail when the production code it names is deleted** — the deletion test. A test that defines the logic it asserts (in the file or inside a browser `evaluate`), reads production source as text and evaluates a slice of it, or renders stub HTML instead of the application proves nothing and is rejected by `check_test_authenticity.py` (codes `test_no_production_import`, `test_inline_reimplementation`, `test_source_eval`, `test_synthetic_dom`) at every lane's gate. When the real surface cannot run — environment down, login blocked, data missing — the honest result is `BLOCKED` with the reason (`base-persona.md` § Evidence Integrity), never a simulation that goes green.
+  - Refines "Prefer real code; mock only true external boundaries" above (convention #8): mocking nothing is not testing the product.
 - Stack execution contracts (e.g. `dotnet-backend-patterns`) take precedence over the boundary list above where they conflict — e.g. on .NET, integration tests never mock the database.
 - **Negative-half proof — no gate or test is trusted until it has been observed FAILING on a deliberate violation.** This is RED applied to everything that renders a verdict, including checks that are not TDD output: a lint or contract-check script, an accessibility scan, a state-matrix assertion, a CI job. Introduce the violation the gate exists to catch, run it, capture the non-zero exit or failure output, revert, and record that capture alongside the passing run. Until then, a hollow assertion and a real one are indistinguishable — both are green. (Failure modes and rationale: [deep dive](references/tdd-deep-dive.md).)
 - **Permanent regression test for permanent invariants**: a hard invariant or Must-Have NFR that must hold permanently (a stable wire/serialization format, byte-for-byte compatibility, a public-API surface) MUST be covered by a PERMANENT automated regression test committed to the suite. A throwaway harness may supplement, never replace it — this overrides any plan or checklist step that says "manual check", "temporary check", or "verify once".

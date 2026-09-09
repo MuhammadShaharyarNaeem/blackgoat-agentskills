@@ -78,6 +78,9 @@ The sections below carry ONLY this pipeline's refinements on top of that contrac
   3. Instruct her explicitly that this run is **verify-only** (§1): a failing step is `FAIL` with its evidence and the exact failing assertion — she does not fix product code, and her Out-of-Scope Failure Bound (reproduce once, document, stop) applies to every product defect. If the application will not start, every dependent step is `<status>BLOCKED</status>` naming what was missing — never a `COMPLETE` claiming a run she did not get, never omitted.
   4. Read her dual handoff; extract `<changed_files>` (her spec files) and `<artifact>` paths.
   5. **Validate the handoff before acting on it** (Contract §1's rule, bound to this lane's one delegation): save it to a file and run `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona quinn --repo . --since <the sha HEAD held when you launched her> --ledger .docs/{project-name}/implementation/gates.jsonl`. **`--since` is always passed** — it checks her `<changed_files>` against the tree rather than reading them. Exit 1 = a delta-only follow-up under §2's bound, not a Phase 3 gate run.
+  6. **Test Authenticity Gate — before Phase 3's acceptance gate**, on Quinn's permanent specs:
+     `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_test_authenticity.py --repo . --changed-files <Quinn's spec-file union> --milestone "<run title>" --ledger .docs/{project-name}/implementation/gates.jsonl`
+     Principle: `test-driven-development/SKILL.md` § Rules — not restated here; a permanent spec is graded exactly as a build-phase one is. Exit 0 = Phase 3. Exit 1 = a delta-only follow-up to Quinn (§2's 2-round bound). Exit 2 = artifact defect.
 
 ### Phase 3: Mechanical Gates (Orchestrator)
 - **Delegated Agent**: None — the Orchestrator runs both gates directly, under the Orchestrator Contract §1 interpreter rule (not restated here, and not softened by either gate).
