@@ -3,6 +3,23 @@
 All notable changes to the `blackgoat-agentskills` plugin are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [2.6.2] — 2026-09-09
+
+Three lessons captured by `/bgpdd-learn` from a real project, converted to gates before they were committed (convention #9), plus the harness fix and the `/bgpdd-bugfix-batch` lane that landed on main after 2.6.1.
+
+### Migration notes — gate-contract changes
+- **`check_handoff.py` — `artifact_scaffolding_left`.** On `<status>COMPLETE</status>` every existing text file cited in `<artifact>` or `<changed_skills>` is swept for the skeleton's vocabulary: the `_TODO` placeholder marker, `TODO: pending`, a `<!-- TODO`/`<!-- skeleton` comment, and any `Note:`/`NB:` line explaining the markers. A hit is exit 1 naming `file:line` and the marker. `PARTIAL`/`BLOCKED` are exempt, `<changed_files>` is not swept, a marker in an inline code span is documentation and not a hit, a marker in a fenced block is. `--allow-scaffolding "<reason>"` waives this one code and records the reason in the chained ledger. A 2.6.1 artifact that shipped COMPLETE with its skeleton intact now fails its handoff gate. Self-test 36 → 50.
+- **`record_run.py` — `duplicate_delegation`, and `fable` is the top tier.** An `--event delegation` record whose (pipeline, unit, agent, rounds) already exists in the run log is refused (exit 1, nothing written): a second completion notification is a re-wake, and the first completion is the measurement. `--rounds N` distinguishes a genuine fix round. The tier map is `haiku < sonnet < opus < fable`; Claude Fable ids used to be `model_unknown`, so a delegation at the highest tier could not be recorded. Self-test 35 → 48.
+- **`check_tier1_provenance.py --previous <path>`** compares the current Tier-1 artifact against the backup discovery now takes before re-running Phase 1 (step 2b): a repo stamped in the backup that appears in neither the keys nor the shas of the new file is `tier1_repo_dropped` (exit 1) naming the repo and both files. A refreshed sha or an added repo is not a drop; a missing backup path is exit 2. Self-test 27 → 39.
+- **`/bgpdd-bugfix-batch`** (44 skills): two to five independent bugs in one session, the bugfix contract per bug in its own git worktree, phases in waves, each bug closing through its own commit gate, merges one at a time in overlap order behind `check_ledger.py`; PLAN-route bugs drop to `/bgpdd-plan`. Eval case `bugfix-batch-two-bugs` (fixture port 5194). Routed from `/bg` row 1a.
+- **Eval harness**: an Out-File case's empty stdout is no longer INFRA when `handoff.txt` carries the reply (`Resolve-AgentOutputText`; `-SelfTest` infra 2b–2e). The first live batch under harness 4 had quarantined 10 of 10 completed quick-lane runs.
+
+### Added
+- The three lessons as prose, each naming its gate: `base-persona.md` § Incremental Persistence (sweep the scaffolding before COMPLETE); `orchestrator-contract.md` §1 (copy the constraint, not the document — a subagent never reads the pipeline SOP) and §4 (a recorded scope is a hypothesis; a refused run-log record is preserved as a `note`, and a refusal on an unknown model id is a normaliser gap to report; one delegation, one record); `bgpdd-discovery` §1 and Phase 1 (Tier-1 `context.md` is cumulative — back it up, extend it, never rewrite it); `agent-orchestration-improve-agent` step 2 (establish which contract version was in force before attributing a deviation to an actor). `mechanical-pipeline` steps 22–24 (52/52).
+
+### Known, not fixed
+- Batch-lane merges run in the main tree and are hook-unguarded (the per-bug `check_ledger.py` precondition is the gate); N ≤ 5 is prose under convention #9's counting exemption; the wave-9 eval sweep remains unrun by decision (cost).
+
 ## [2.6.1] — 2026-09-08
 
 The audit-fix release. The 2026-09-07 whole-plugin audit (nine lenses, 21 metrics) found 23 confirmed Blockers on the 2.6.0 tree; every one is closed here. Six gates that passed fabricated input now fail closed, the hook covers the shell writes and the bugfix route it missed, two dead pipeline routes are wired, four one-ended contracts in the 2.6.0 skills are documented at both ends, and the eval instrument is decontaminated.

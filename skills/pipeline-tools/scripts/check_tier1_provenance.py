@@ -39,6 +39,40 @@ records that decision in the ledger rather than leaving it to a flag nobody
 passed. `--allow-drift` without `--verify-current` is exit 2: it would
 otherwise read as a waiver of something that was never checked.
 
+`--previous`: A CUMULATIVE FILE IS NOT A REWRITE (`tier1_repo_dropped`)
+-----------------------------------------------------------------------
+`bgpdd-discovery/SKILL.md` § 1: "Tier-1 `context.md` is cumulative and
+project-wide; a run's Target Scope is a subset view recorded inside it, never
+the file's whole content." Sessions in one workspace are each scoped to their
+own repos, so a whole-file rewrite silently deletes every repo the previous
+run recorded -- last write wins, no diff, no conflict marker, and `.docs/`
+carries no version history to recover from. The SKILL therefore tells the
+Orchestrator to back the file up before re-running Phase 1 and to confirm
+afterwards that every previously recorded repo still appears.
+
+That confirmation is asked for at the moment the phase most wants to close --
+this run's own repos all check out -- so convention #9 makes it a command.
+`--previous <path>` is that backup, and every repo stamped in it must still be
+stamped in the current artifact: a repo that vanished is `tier1_repo_dropped`,
+exit 1, naming the repo and BOTH files. Restore from the backup, merge the two
+scopes, re-delegate.
+
+What it does NOT fail: a repo present in both with a DIFFERENT sha (that is
+this run's refresh, which is the whole point of re-running Phase 1), or a repo
+the current artifact adds (that is this run's scope). Only removal fails, and
+it fails whether or not the current run was ever scoped to the vanished repo
+-- a user's "yes, update it" authorizes adding this run's scope, never
+removing another's.
+
+A repo counts as "still stamped" when its key OR its sha reappears, so a
+single-repo header that grew a repo name, and a repo whose line was reworded,
+are refreshes rather than drops. `--previous` may be a FILE (compared against
+`context.md`, the one cumulative artifact) or a DIRECTORY mirroring
+`--summary-root` (each checked artifact compared against its counterpart
+there; a counterpart that does not exist is a warning, since there is nothing
+to compare). A `--previous` path that does not exist at all is exit 2 -- an
+unperformable check is never a PASS.
+
 Stamp grammar (the gate's half of the contract; the writing agent's half is the
 SKILL step). In the artifact's header -- everything above its first `## `
 heading -- there must be an ISO date (YYYY-MM-DD) and, per in-scope repo, a
@@ -50,6 +84,7 @@ Usage:
     python check_tier1_provenance.py --summary-root .docs/summary \
         [--feature <id>] --repo [<name>=]<path> [--repo ...] \
         [--warn-on-drift] [--verify-current [--allow-drift "<reason>"]] \
+        [--previous <path>] \
         [--milestone "<title>"] [--ledger <path>]
     python check_tier1_provenance.py --self-test
 
@@ -207,6 +242,97 @@ def stamp_lines(header):
     return [line for line in header.splitlines() if SHA_RE.search(line)]
 
 
+# Words that decorate a stamp line without naming a repo. Stripped so
+# `> commit: <sha>` and `> <sha>` key alike -- the key only has to be
+# DETERMINISTIC and applied identically to both copies for the comparison to
+# be sound; a wording change between the copies falls back to the sha match.
+STAMP_NOISE_RE = re.compile(
+    r"(?i)\b(provenance|derived|from|commit|sha|head|stamp(?:ed)?|as of|at|on|"
+    r"repo(?:sitory)?)\b")
+STAMP_SPLIT_SEPARATORS = ("—", "–", "|", "--")
+
+
+def stamp_key(prefix):
+    """The repo name a stamp line keys its sha to, normalized, or "".
+
+    `prefix` is the part of the line BEFORE the sha. `> app: ` -> "app";
+    `> ` -> "" (the bare single-repo form). Markdown decoration, blockquote
+    markers, dates and the noise words above are removed.
+    """
+    text = prefix
+    for sep in STAMP_SPLIT_SEPARATORS:
+        if sep in text:
+            text = text.rsplit(sep, 1)[-1]
+    text = re.sub(r"^[\s>*+\-#]+", "", text)
+    text = DATE_RE.sub(" ", text)
+    text = STAMP_NOISE_RE.sub(" ", text)
+    text = re.sub(r"[`*_]", "", text)
+    text = re.sub(r"[\s:=,\-]+$", "", text)
+    return re.sub(r"\s+", " ", text).strip().casefold()
+
+
+def stamped_repos(header):
+    """{key: {"name": <as written>, "sha": <sha>}} for a header's stamps.
+
+    Keyed on `stamp_key` of everything left of each sha, so the SAME parse is
+    applied to the previous copy and the current one. The first line to claim
+    a key wins; the display name is the key or "(unnamed)" for the bare form.
+    """
+    found = {}
+    for line in header.splitlines():
+        match = SHA_RE.search(line)
+        if not match:
+            continue
+        key = stamp_key(line[:match.start()])
+        found.setdefault(key, {"name": key or "(unnamed)",
+                               "sha": match.group(1)})
+    return found
+
+
+def check_previous_scope(path, previous_path, findings, warnings):
+    """Assert every repo stamped in `previous_path` is still stamped in `path`.
+
+    A repo survives when its KEY or its SHA reappears -- a reworded or newly
+    named line is a refresh, not a drop. Appends `tier1_repo_dropped` findings.
+    """
+    try:
+        previous_text = previous_path.read_text(encoding="utf-8-sig",
+                                                errors="replace")
+    except OSError as exc:
+        warnings.append(f"could not read --previous {previous_path}: {exc}")
+        return
+    previous = stamped_repos(header_of(previous_text))
+    if not previous:
+        warnings.append(
+            f"--previous {previous_path} carries no stamped repo in its "
+            "header; there is nothing to compare against")
+        return
+    try:
+        current_text = path.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError as exc:
+        warnings.append(f"could not re-read {path}: {exc}")
+        return
+    current = stamped_repos(header_of(current_text))
+    current_shas = {entry["sha"].lower() for entry in current.values()}
+    for key, entry in previous.items():
+        if key in current or entry["sha"].lower() in current_shas:
+            continue
+        findings.append({
+            "code": "tier1_repo_dropped", "artifact": str(path),
+            "previous": str(previous_path), "repo": entry["name"],
+            "stamped": entry["sha"],
+            "detail": f"repo '{entry['name']}' is stamped in the previous "
+                      f"copy {previous_path} (as {entry['sha'][:12]}) but "
+                      f"appears in neither the repo keys nor the shas of "
+                      f"{path}. Tier-1 context.md is CUMULATIVE and "
+                      "project-wide: a whole-file rewrite deletes another "
+                      "session's scope with no diff and no version history "
+                      "to recover from (bgpdd-discovery section 1). Restore "
+                      "from the backup, merge the two scopes, and "
+                      "re-delegate — never accept the shrunk file because "
+                      "this run's own repos all check out"})
+
+
 def latest_header_date(header):
     """The newest YYYY-MM-DD in the header as a date, or None if there is none.
 
@@ -226,13 +352,15 @@ def latest_header_date(header):
 
 
 def check_artifact(path, repos, findings, warnings, drift, tier,
-                   today=None, verify_current=False):
+                   today=None, verify_current=False, previous=None):
     """Assert one Tier-1 root artifact's stamp. Appends to the given lists."""
     rel = str(path)
     if not path.is_file():
         findings.append({"code": "artifact_missing", "artifact": rel,
                          "detail": f"{tier} artifact does not exist: {rel}"})
         return
+    if previous is not None:
+        check_previous_scope(path, previous, findings, warnings)
     text = path.read_text(encoding="utf-8-sig", errors="replace")
     header = header_of(text)
     lines = stamp_lines(header)
@@ -311,13 +439,39 @@ def check_artifact(path, repos, findings, warnings, drift, tier,
                               "--allow-drift \"<reason>\""})
 
 
+def previous_for(previous, root, artifact, warnings):
+    """The prior copy of `artifact`, or None when there is nothing to compare.
+
+    A FILE `--previous` is the backup of `context.md` -- the one cumulative,
+    project-wide artifact the lesson is about -- and applies to nothing else.
+    A DIRECTORY is a mirror of `--summary-root`, applied per artifact.
+    """
+    if previous is None:
+        return None
+    if previous.is_dir():
+        try:
+            counterpart = previous / artifact.relative_to(root)
+        except ValueError:              # not under the root; nothing to map
+            return None
+        if counterpart.is_file():
+            return counterpart
+        warnings.append(
+            f"--previous {previous} holds no counterpart for {artifact}; "
+            "nothing to compare for this artifact")
+        return None
+    return previous if artifact.name == CONTEXT_ARTIFACT else None
+
+
 def build_report(summary_root, repos, feature=None, today=None,
-                 verify_current=False, allow_drift=None):
+                 verify_current=False, allow_drift=None, previous=None):
     root = Path(summary_root)
     if not root.is_dir():
         raise GateError(f"--summary-root is not a directory: {summary_root}")
     if not repos:
         raise GateError("at least one --repo is required")
+    previous_path = Path(previous) if previous else None
+    if previous_path is not None and not previous_path.exists():
+        raise GateError(f"--previous does not exist: {previous}")
 
     findings, warnings, drift = [], [], []
     checked = []
@@ -325,7 +479,8 @@ def build_report(summary_root, repos, feature=None, today=None,
     context = root / CONTEXT_ARTIFACT
     checked.append(str(context))
     check_artifact(context, repos, findings, warnings, drift, "Tier-1 root",
-                   today, verify_current)
+                   today, verify_current,
+                   previous_for(previous_path, root, context, warnings))
 
     if feature:
         features = [feature]
@@ -336,7 +491,8 @@ def build_report(summary_root, repos, feature=None, today=None,
         overview = root / name / FEATURE_ARTIFACT
         checked.append(str(overview))
         check_artifact(overview, repos, findings, warnings, drift,
-                       f"Tier-1 feature '{name}'", today, verify_current)
+                       f"Tier-1 feature '{name}'", today, verify_current,
+                       previous_for(previous_path, root, overview, warnings))
 
     waived = []
     if verify_current and allow_drift:
@@ -354,6 +510,7 @@ def build_report(summary_root, repos, feature=None, today=None,
         "feature": feature,
         "features_checked": features,
         "artifacts_checked": checked,
+        "previous": str(previous_path) if previous_path else None,
         "repos": [{"name": n, "path": str(p)} for n, p in repos],
         "verify_current": bool(verify_current),
         "allow_drift": allow_drift.strip() if (verify_current and allow_drift
@@ -385,6 +542,14 @@ def main(argv):
                         help="--verify-current only: accept the drift with a "
                              "written reason, recorded in the ledger. An "
                              "empty reason is exit 2.")
+    parser.add_argument("--previous",
+                        help="the prior copy of this Tier-1 artifact (the "
+                             "backup discovery takes before re-running Phase "
+                             "1): a FILE compares against context.md, a "
+                             "DIRECTORY mirrors --summary-root. Every repo "
+                             "stamped there must still be stamped here "
+                             "(tier1_repo_dropped). A path that does not "
+                             "exist is exit 2.")
     parser.add_argument("--milestone", help="recorded in the ledger line")
     parser.add_argument("--ledger", help="append one JSON record per run to this path")
     parser.add_argument("--self-test", action="store_true")
@@ -419,7 +584,8 @@ def main(argv):
         repos = [parse_repo_arg(raw) for raw in (args.repo or ["."])]
         report = build_report(args.summary_root, repos, args.feature,
                               verify_current=args.verify_current,
-                              allow_drift=args.allow_drift)
+                              allow_drift=args.allow_drift,
+                              previous=args.previous)
     except GateError as exc:
         print(json.dumps({"result": "ERROR", "error": str(exc)}))
         return finish(2, "ERROR")
@@ -727,6 +893,128 @@ def run_self_test():
             self.write_overview()
             r = self.report([("app", self.dir / "gone")])
             self.assertEqual(self.codes(r), ["sha_unknown"])
+
+        # --- --previous: a cumulative file is not a rewrite -----------------
+
+        def two_repo_stamp(self, first, second, date="2026-09-07"):
+            return (f"# Context\n\n> Provenance — {date}\n"
+                    f"> app: `{first}`\n> web: `{second}`\n\n## Stacks\n")
+
+        def backup(self, body):
+            path = self.dir / "context.2026-09-07T0900.md"
+            path.write_text(body, encoding="utf-8")
+            return path
+
+        def test_previous_with_the_same_repos_passes(self):
+            body = self.two_repo_stamp(self.sha, self.sha)
+            prior = self.backup(body)
+            self.write_context(body)
+            self.write_overview()
+            r = self.report(previous=str(prior))
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertEqual(r["previous"], str(prior))
+
+        def test_a_dropped_repo_fails_and_names_both_files(self):
+            """The lesson's exact shape: this run is scoped to `app` only, so
+            every check passes -- and `web` is silently gone."""
+            prior = self.backup(self.two_repo_stamp(self.sha, "b" * 40))
+            self.write_context(self.stamp(name="app"))
+            self.write_overview()
+            r = self.report(previous=str(prior))
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(self.codes(r), ["tier1_repo_dropped"])
+            finding = r["findings"][0]
+            self.assertEqual(finding["repo"], "web")
+            self.assertEqual(finding["previous"], str(prior))
+            self.assertIn("context.md", finding["artifact"])
+            self.assertIn("cumulative", finding["detail"].lower())
+
+        def test_a_refreshed_sha_for_the_same_repo_is_not_a_drop(self):
+            prior = self.backup(self.two_repo_stamp("a" * 40, "b" * 40))
+            self.write_context(self.two_repo_stamp(self.sha, self.sha))
+            self.write_overview()
+            r = self.report(previous=str(prior))
+            self.assertEqual(self.codes(r), [])
+
+        def test_a_newly_added_repo_is_not_a_drop(self):
+            prior = self.backup(self.stamp(name="app"))
+            self.write_context(self.two_repo_stamp(self.sha, self.sha))
+            self.write_overview()
+            r = self.report(previous=str(prior))
+            self.assertEqual(self.codes(r), [])
+
+        def test_a_bare_previous_stamp_that_gained_a_name_is_not_a_drop(self):
+            """Key OR sha: an unnamed single-repo stamp survives being keyed."""
+            prior = self.backup(self.stamp())
+            self.write_context(self.stamp(name="app"))
+            self.write_overview()
+            self.assertEqual(self.codes(self.report(previous=str(prior))), [])
+
+        def test_previous_applies_to_context_not_to_a_feature_overview(self):
+            """A FILE --previous is context.md's backup and nothing else's."""
+            prior = self.backup(self.two_repo_stamp(self.sha, "b" * 40))
+            self.write_context(self.two_repo_stamp(self.sha, "b" * 40))
+            self.write_overview(self.stamp(name="app"))
+            r = self.report(previous=str(prior))
+            self.assertEqual(self.codes(r), [])
+
+        def test_a_previous_directory_is_compared_per_artifact(self):
+            mirror = self.dir / "backup"
+            (mirror / "slide").mkdir(parents=True)
+            (mirror / "context.md").write_text(
+                self.two_repo_stamp(self.sha, "b" * 40), encoding="utf-8")
+            (mirror / "slide" / "overview.md").write_text(
+                self.two_repo_stamp(self.sha, "b" * 40), encoding="utf-8")
+            self.write_context(self.stamp(name="app"))
+            self.write_overview(self.stamp(name="app"))
+            r = self.report(previous=str(mirror))
+            self.assertEqual(self.codes(r), ["tier1_repo_dropped"])
+            self.assertEqual(len(r["findings"]), 2)   # both artifacts shrank
+
+        def test_a_previous_directory_without_a_counterpart_only_warns(self):
+            mirror = self.dir / "backup"
+            mirror.mkdir()
+            (mirror / "context.md").write_text(self.stamp(name="app"),
+                                               encoding="utf-8")
+            self.write_context(self.stamp(name="app"))
+            self.write_overview()
+            r = self.report(previous=str(mirror))
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertTrue(any("no counterpart" in w for w in r["warnings"]))
+
+        def test_a_previous_with_no_stamp_warns_rather_than_failing(self):
+            prior = self.backup("# Context\n\nnothing stamped yet\n")
+            self.write_context()
+            self.write_overview()
+            r = self.report(previous=str(prior))
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertTrue(any("nothing to compare" in w
+                                for w in r["warnings"]))
+
+        def test_a_missing_previous_path_is_exit_2(self):
+            self.write_context()
+            self.write_overview()
+            with self.assertRaises(GateError):
+                self.report(previous=str(self.dir / "no-such-backup.md"))
+            self.assertEqual(main(["--summary-root", str(self.summary),
+                                   "--repo", f"app={self.repo}",
+                                   "--previous",
+                                   str(self.dir / "no-such-backup.md")]), 2)
+
+        def test_the_dropped_repo_exit_code_is_one_through_main(self):
+            prior = self.backup(self.two_repo_stamp(self.sha, "b" * 40))
+            self.write_context(self.stamp(name="app"))
+            self.write_overview()
+            self.assertEqual(main(["--summary-root", str(self.summary),
+                                   "--repo", f"app={self.repo}",
+                                   "--previous", str(prior)]), 1)
+
+        def test_stamp_key_parsing(self):
+            self.assertEqual(stamp_key("> app: "), "app")
+            self.assertEqual(stamp_key("> "), "")
+            self.assertEqual(stamp_key("- web-frontend = "), "web-frontend")
+            self.assertEqual(stamp_key("> Provenance — 2026-09-07 "), "")
+            self.assertEqual(stamp_key("> commit: "), "")
 
         # --- plumbing -------------------------------------------------------
         def test_bad_summary_root_and_no_repo_are_errors(self):

@@ -94,3 +94,84 @@ not raising, and the exit code through `main`) and six `--verify-current` /
 `--allow-drift` cases (drift as a finding with all three values in the detail,
 HEAD still matching, the waiver, the waiver not covering a real finding, all
 three exit codes with the ledger record, and both misuse refusals).
+
+## `--previous` — a cumulative file is not a rewrite (2.6.2)
+
+`bgpdd-discovery/SKILL.md` section 1: *"Tier-1 `context.md` is cumulative and
+project-wide; a run's Target Scope is a subset view recorded inside it, never
+the file's whole content."* Sessions in one workspace run days or minutes
+apart and each is scoped to its own repos, so a whole-file rewrite silently
+deletes every repo the previous run recorded — last write wins, no diff, no
+conflict marker, and `.docs/` carries no version history to recover from.
+
+The SKILL therefore tells the Orchestrator to (a) copy the file to a
+timestamped sibling backup before delegating Phase 1, (b) record its repo
+inventory, and (c) confirm after Iris returns that every previously recorded
+repo still appears. Step (c) is convention #9's shape precisely: it is asked
+for at the moment the phase most wants to close, and the reason it feels safe
+to skip is the trap — *this* run's own repos all check out.
+
+`--previous <path>` is that backup, and the confirmation becomes a command.
+
+### What fails, and what deliberately does not
+
+**Fails (`tier1_repo_dropped`, exit 1):** a repo stamped in the previous copy
+that appears in neither the repo keys nor the shas of the current artifact.
+The finding names the repo, its previous sha, **both** file paths, and the
+remedy the SKILL gives: restore from the backup, merge the two scopes,
+re-delegate.
+
+**Does not fail:**
+
+- **A different sha for the same repo.** That is this run's refresh, which is
+  the whole point of re-running Phase 1.
+- **A repo the current artifact adds.** That is this run's scope.
+- **A repo whose line was reworded, or a bare single-repo stamp that gained a
+  repo name.** A repo counts as still stamped when its **key or its sha**
+  reappears, so a re-keyed line is a refresh rather than a drop.
+
+Removal fails **whether or not this run was ever scoped to the vanished
+repo**. That asymmetry is the lesson: a user's "yes, update it" authorizes
+adding this run's scope, never removing another's.
+
+### How a repo key is read
+
+`stamped_repos()` takes every header line carrying a 40-hex sha and keys it on
+`stamp_key()` of everything to the left of that sha: heavy separators split
+(the last segment wins), blockquote and list markers, markdown decoration, ISO
+dates and a short noise list (`provenance`, `derived`, `from`, `commit`,
+`sha`, `head`, `stamped`, `as of`, `at`, `on`, `repo`) are stripped, and a
+trailing separator run is trimmed. A line reading `> app:` before its sha keys
+as `app`; a bare `>` before its sha keys as the empty string, the single-repo
+form.
+
+The parse only has to be **deterministic and identical on both copies** for
+the comparison to be sound: a repo whose line is untouched yields the same key
+in both files, so it cannot produce a false drop. A repo whose wording changed
+falls back to the sha match. And a false positive here says "check the merge",
+which is the conservative direction for a rule about silent data loss.
+
+### File or directory
+
+`--previous` may be:
+
+- a **file** — the timestamped backup of `context.md`, the one cumulative,
+  project-wide artifact the lesson is about. It applies to `context.md` and to
+  nothing else, so a feature `overview.md` (which is not cumulative across
+  sessions) is untouched by it;
+- a **directory** mirroring `--summary-root` — each checked artifact is
+  compared against its counterpart there, which is how a run that backed up
+  the whole tree gets the same check per artifact. A counterpart that does not
+  exist is a warning, not a finding: there is nothing to compare.
+
+A `--previous` path that does not exist at all is **exit 2**, and a previous
+copy carrying no stamp is a warning — an unperformable check is never a PASS
+and never a silent one.
+
+The self-test grew to **39**: twelve `--previous` cases — same repos passing,
+one dropped failing with both files named, a refreshed sha, a newly added
+repo, a bare stamp that gained a name, a file `--previous` not applying to a
+feature overview, a directory mirror finding the drop in both artifacts, a
+missing counterpart warning only, an unstamped previous warning only, the
+missing path as exit 2 through both `build_report` and `main`, the exit code
+through `main`, and the `stamp_key` parser itself.

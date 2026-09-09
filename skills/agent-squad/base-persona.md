@@ -29,6 +29,7 @@ Do NOT "hand off" tasks to the next agent — the Orchestrator handles all routi
 - Mark unfinished sections in the file itself (e.g. `_TODO: pending_`) so finished work is distinguishable from gaps.
 - If the Orchestrator says files exist from an earlier interrupted attempt, **read them and resume** — never restart or silently overwrite completed sections.
 - This does not license shipping a knowingly incomplete artifact as final: report unfinished sections and return `PARTIAL`, never `COMPLETE`.
+- Sweep the scaffolding before you return COMPLETE. The skeleton, its `_TODO` markers, and any note explaining that the markers exist are working apparatus for you, not content for the reader. Before handoff, read the artifact's own text and remove every trace of them. **This is gated, not trusted** (convention #9): the Orchestrator runs `check_handoff.py` on your handoff, and a `COMPLETE` whose cited `<artifact>` still carries a `_TODO` marker or a note about the markers fails with `artifact_scaffolding_left`; `PARTIAL` is exempt, because there the markers are the truth.
 
 ## Command Timeout Discipline (Anti-Hang)
 

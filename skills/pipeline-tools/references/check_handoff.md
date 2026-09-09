@@ -56,7 +56,7 @@ Two mechanical rules, both chosen to have almost no false-positive surface:
 
 ## Self-test
 
-`python scripts/check_handoff.py --self-test` runs 26 in-process cases against a temp tree and, where `--since` is exercised, a real temp git repo (skipped rather than faked when git is absent). Beyond the four override shapes passing and failing correctly: a fenced handoff not counting, a real handoff surviving beside a fenced example, a non-existent path, a path escaping the repo, a whitespace-only element, an unclosed `<handoff>`, `<changed_files>` naming an untouched file under `--since`, a subset passing, an unresolvable ref erroring, each status value, consumers grammar both ways, `--fix-round` both ways, both honesty rules, lower-case `passed` beside `NOT VERIFIED` still passing, an unknown persona erroring, an unrecognized element warning without failing, the ledger recording all three exit paths, and the persona table matching `agents/` on disk.
+`python scripts/check_handoff.py --self-test` runs 49 in-process cases against a temp tree and, where `--since` is exercised, a real temp git repo (skipped rather than faked when git is absent). Beyond the four override shapes passing and failing correctly: a fenced handoff not counting, a real handoff surviving beside a fenced example, a non-existent path, a path escaping the repo, a whitespace-only element, an unclosed `<handoff>`, `<changed_files>` naming an untouched file under `--since`, a subset passing, an unresolvable ref erroring, each status value, consumers grammar both ways, `--fix-round` both ways, both honesty rules, lower-case `passed` beside `NOT VERIFIED` still passing, an unknown persona erroring, an unrecognized element warning without failing, the ledger recording all three exit paths, and the persona table matching `agents/` on disk.
 
 ## `--advisory`, and what `<status>` is for (2.6.1)
 
@@ -102,3 +102,92 @@ merely exist, with it a file the agent never touched is rejected. Leaving the
 choice to the gated party is what the audit flagged; the CLI keeps the flag
 optional (a handoff can legitimately be checked outside a repo), and the
 pipeline steps pass it — with `--ledger` — every time.
+
+## `artifact_scaffolding_left` — the sweep before COMPLETE (2.6.2)
+
+`base-persona.md` § Incremental Persistence closes with the rule this code
+enforces: *"Sweep the scaffolding before you return COMPLETE. The skeleton,
+its markers, and any note explaining that the markers exist are working
+apparatus for you, not content for the reader. Before handoff, read the
+artifact's own text and remove every trace of them. A COMPLETE artifact that
+still instructs its reader about its own construction reads as unfinished to
+everyone downstream, whatever its substance."*
+
+That is convention #9's shape exactly. The sweep is asked for at the one
+moment it feels like bookkeeping — the substance is written, the sections are
+filled, the agent is composing its handoff — and it is the last thing between
+the agent and returning. So it stops being prose and becomes a read.
+
+### What is scanned
+
+On `<status>COMPLETE</status>` only, every path in `<artifact>` or
+`<changed_skills>` that **exists and is a text file** is read and swept line
+by line. Five markers, tested in this order, at most one reported per line
+(the finding is "this line is apparatus", not a census of patterns):
+
+| Marker | What it matches |
+|---|---|
+| `skeleton_marker` | base-persona's placeholder marker — an underscore joined to `TODO`, as in the template's `_ TODO : pending _` (spaced throughout this page so the page is not itself a hit) |
+| `todo_pending` | the same idea in prose: `TODO`, a colon, `pending` |
+| `todo_comment` | an HTML/markdown comment opening on `TODO` |
+| `skeleton_comment` | an HTML/markdown comment opening on `skeleton` |
+| `scaffolding_note` | a line that EXPLAINS the markers — a `Note:`/`NB:` line mentioning the marker, `placeholder` or `skeleton` |
+
+`scaffolding_note` is the one base-persona names third and the one a sweep
+most often misses, because it reads like prose rather than like apparatus.
+
+The `skeleton_marker` word boundary has a documented limit: `MY_TODOS` is
+correctly not a hit, and neither is a bare italic marker whose trailing
+character is an underscore, since both sides are then word characters. The
+template's own form carries a colon and matches.
+
+Inline code spans (single backticks on one line) are stripped before the
+markers are matched. A marker in backticks is documentation — it is how
+`base-persona.md` states the convention and how this family cites it — while
+a skeleton always writes the placeholder bare. Fenced blocks are NOT
+stripped (next section): a fence in a delivered artifact is content.
+
+### Three deliberate bounds
+
+- **`PARTIAL` and `BLOCKED` are exempt.** § Incremental Persistence *tells*
+  an agent to hand unfinished work back with its markers in place. The rule
+  is about the word COMPLETE, not about markers, and a gate that punished an
+  honest `PARTIAL` would push agents toward the dishonest `COMPLETE`.
+- **`<changed_files>` is not swept.** Source code legitimately carries a
+  `TODO`, and base-persona's rule is about the artifact a *reader* reads.
+- **A marker inside a fenced block IS a hit** — the exact opposite of how the
+  handoff text is read a few sections up, and the asymmetry is the point. A
+  fenced `<handoff>` is an *illustration*, and reading it as the report would
+  let an example satisfy the gate. A fence inside a *delivered* artifact is
+  still ink on the page: the reader who scrolls past it sees an unfinished
+  document, which is the harm the rule names.
+
+A binary artifact (a NUL byte anywhere in the file) or one that cannot be read
+is skipped with a warning and never fails: "the gate could not look" is not
+"the agent left a marker".
+
+### `--allow-scaffolding "<reason>"`
+
+The escape for the page that must legitimately *quote* the marker — this
+reference doc, `../SKILL.md`, a lesson that names it, `base-persona.md`
+itself. It waives `artifact_scaffolding_left` and nothing else, is computed
+**after** the findings so the ledger records *what* was waived, requires a
+non-empty reason (blank is exit 2, matching `--allow-drift` and
+`--allow-tier-inversion`), and writes `allow_scaffolding_reason` plus the
+waived `{path, line, marker}` entries into the chained ledger record. A clean
+run carries neither key, so the field's presence is itself the signal.
+
+It is the caller's flag for the same reason `--advisory` is: an agent that
+could set it could excuse its own unswept skeleton.
+
+### Self-test
+
+`--self-test` now runs **50** cases (the fiftieth: a marker quoted in inline code is documentation, a bare one on the same page still fires). The thirteen added here: a clean COMPLETE
+artifact passing and reporting what it scanned; each of the five marker shapes
+hitting with the right `marker` name; the finding naming `file:line`; a marker
+inside a fence still hitting; `PARTIAL` and `BLOCKED` keeping their markers; a
+`<changed_files>` `TODO` going unswept; `<changed_skills>` being swept; an
+`--advisory` handoff with no artifact unaffected; a binary artifact skipped
+with a warning; multi-hit line numbering; and the `--allow-scaffolding` round
+trip — refused, blank-reason exit 2, waived with the reason and the waived
+entries inside the ledger chain, and a clean run recording neither key.

@@ -82,3 +82,66 @@ The self-test grew to **35**: the five `model_unknown` strings (with nothing
 written), the error's shape and content, the end-to-end case proving a typo
 can no longer disable the inversion check, a non-delegation event still
 needing no resolvable model, and the `dep`-as-producer pairing.
+
+## `fable`, and one delegation one record (2.6.2)
+
+**`TIER_ORDER` gained `fable` at the top: `haiku < sonnet < opus < fable`.**
+Claude Fable 5.1 is the current top model and its ids look like
+`claude-fable-5-1`. Absent from the tier map, `model_tier()` resolved every
+such id to `None` — which since 2.6.1 means `model_unknown`, exit 2 — so a
+delegation at the *highest* tier was the one delegation the run log could not
+record at all. Placing it correctly also makes the two real pairings resolve
+the way the rule means them: a **fable** verifier over an **opus** producer is
+not an inversion, and an **opus** verifier over a **fable** producer is
+`verifier_below_producer`. `claude-opus-5`, `claude-sonnet-5` and
+`claude-haiku-4-5-20251001` all continue to normalise by name, and anything
+naming no tier or two tiers is still `model_unknown`.
+
+**`duplicate_delegation` — one delegation, one record.** Orchestrator Contract
+section 4: *"A second completion notification for an agent that has already
+returned is a re-wake — a background task it started finishing after its
+handoff — not a new delegation. Do not append a second record, and do not take
+the later notification's cumulative duration as the delegation's cost: the
+first completion is the measurement. A run log that double-counts re-wakes
+overstates exactly the fan-out phases an improvement run reads most closely."*
+
+Convention #9's shape again: the restraint is asked for while a notification
+carrying a bigger, more recent-looking number sits in the transcript, and the
+tempting act is to record it. So an `--event delegation` record whose
+(`--pipeline`, `--unit`, `--agent`, `--rounds`) tuple already appears in the
+log is refused with `problem: "duplicate_delegation"`, exit **1**, and nothing
+is written. The first completion stays the measurement.
+
+Four design choices:
+
+- **`--rounds N` is the discriminator, and the existing field is reused.** The
+  record already carried `rounds` (builder-to-verifier cycles), so a
+  legitimate fix round 2 of the same agent on the same unit records
+  `--rounds 2` and is a different tuple. No new field was added for this; the
+  refusal message names the flag, so the way out is in the error rather than
+  only on this page.
+- **There is no `--rewake` flag.** The lesson is that a re-wake is *not
+  recorded*, so a flag meaning "record this re-wake anyway" would be the thing
+  being prevented. This is the one refusal in the family with no waiver, and
+  deliberately so — a divergence from `--allow-tier-inversion` and
+  `--allow-drift` (convention #8): those waive a *judgment*, where this one
+  would waive a *fact*.
+- **`--phase` is outside the tuple.** A re-wake commonly lands after the
+  Orchestrator has moved on to the next phase; including `--phase` would let a
+  re-labelled phase mint a fresh record and leave exactly the double-count
+  this refuses.
+- **Two skips.** A delegation with no `--agent` is not gated — nothing
+  identifies it to be a duplicate *of* — and neither is any non-delegation
+  event, since a `gate`, `phase` or `note` record is legitimately repeated.
+
+The duplicate check runs **before** the tier-inversion check: the tuple
+decides whether the record should exist at all, where the tier only judges the
+content of one that should. A record that is both is refused as the duplicate.
+
+The self-test grew to **48**: five `fable` cases (the tier order, both
+pairings, the current model ids normalising, and a fable delegation recording
+cleanly) and eight duplicate cases (the re-wake refused with the first
+duration preserved, the error naming the problem and `--rounds`, a genuine
+round 2 accepted, a different unit or pipeline not colliding, a re-labelled
+phase not minting a record, an agentless delegation ungated, non-delegation
+events ungated, and duplicate-before-inversion ordering).

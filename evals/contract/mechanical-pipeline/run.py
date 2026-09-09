@@ -1307,6 +1307,181 @@ def run_lifecycle(repo):
            "" if ok else f"before={bool(before)} wrong={bool(wrong)} "
                          f"after={bool(after)}")
 
+    # --- Step 22 (2.6.2): the sweep before COMPLETE -------------------------
+    # base-persona: "Sweep the scaffolding before you return COMPLETE." The
+    # pair is the point -- the SAME artifact, accepted while the handoff says
+    # PARTIAL and refused the moment it says COMPLETE.
+    swept = handoff_dir / "luna-clean.md"
+    unswept = handoff_dir / "luna-skeleton.md"
+    report_rel = ".docs/proj/implementation/handoffs/luna-report.md"
+    report_path = repo / report_rel
+    report_path.write_text(
+        "# Review — M2\n\n## Findings\n\nTwo naming nits, both fixed.\n",
+        encoding="utf-8")
+    swept.write_text("<handoff><status>COMPLETE</status>"
+                     f"<artifact>{report_rel}</artifact>"
+                     "<blockers>None</blockers></handoff>\n", encoding="utf-8")
+    proc = run_py(CHECK_HANDOFF, ["--handoff", swept, "--persona", "luna",
+                                  "--repo", repo])
+    data = parse_json(proc, "22a. check_handoff: a swept COMPLETE artifact -> exit 0")
+    if data is not None:
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and data.get("scaffolding_scanned") == [report_rel])
+        record("22a. check_handoff: a swept COMPLETE artifact -> exit 0", ok,
+               "" if ok else json.dumps(data))
+
+    # The skeleton left in place: the marker, and the note that explains it.
+    report_path.write_text(
+        "# Review — M2\n\n> Note: the placeholder sections below are filled "
+        "in on the second pass\n\n## Findings\n\nTwo naming nits, both "
+        "fixed.\n\n## Security\n\n_TODO: pending_\n", encoding="utf-8")
+    proc = run_py(CHECK_HANDOFF, ["--handoff", swept, "--persona", "luna",
+                                  "--repo", repo])
+    data = parse_json(proc, "22b. check_handoff: scaffolding left in a COMPLETE artifact -> exit 1")
+    if data is not None:
+        findings = [f for f in (data.get("findings") or [])
+                    if f.get("code") == "artifact_scaffolding_left"]
+        markers = sorted(f.get("marker") for f in findings)
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and len(findings) == len(data.get("findings") or [])
+              and markers == ["scaffolding_note", "skeleton_marker"]
+              and all(f.get("path") == report_rel for f in findings))
+        record("22b. check_handoff: scaffolding left in a COMPLETE artifact -> exit 1",
+               ok, "" if ok else json.dumps(data))
+
+    # 22c: the SAME artifact under PARTIAL. Incremental Persistence hands
+    # unfinished work back WITH its markers, so this must pass -- a gate that
+    # punished an honest PARTIAL would push agents toward a false COMPLETE.
+    unswept.write_text("<handoff><status>PARTIAL</status>"
+                       f"<artifact>{report_rel}</artifact>"
+                       "<blockers>security section needs Cipher's scan"
+                       "</blockers></handoff>\n", encoding="utf-8")
+    scaffold_ledger = impl_dir / "scaffold-gates.jsonl"
+    partial = run_py(CHECK_HANDOFF, ["--handoff", unswept, "--persona", "luna",
+                                     "--repo", repo])
+    waived = run_py(CHECK_HANDOFF, ["--handoff", swept, "--persona", "luna",
+                                    "--repo", repo, "--ledger", scaffold_ledger,
+                                    "--allow-scaffolding",
+                                    "the report QUOTES the convention"])
+    blank = run_py(CHECK_HANDOFF, ["--handoff", swept, "--persona", "luna",
+                                   "--repo", repo, "--allow-scaffolding", "  "])
+    records = [json.loads(l) for l in
+               scaffold_ledger.read_text(encoding="utf-8").splitlines()
+               if l.strip()]
+    ok = (partial.returncode == 0 and waived.returncode == 0
+          and blank.returncode == 2 and bool(records)
+          and records[-1].get("allow_scaffolding_reason")
+          == "the report QUOTES the convention"
+          and len(records[-1].get("scaffolding_waived") or []) == 2)
+    record("22c. check_handoff: PARTIAL keeps its markers; --allow-scaffolding "
+           "waives with a reason in the ledger, blank is exit 2", ok,
+           "" if ok else f"partial={partial.returncode} "
+                         f"waived={waived.returncode} blank={blank.returncode} "
+                         f"records={records[-1:]!r}")
+
+    # --- Step 23 (2.6.2): one delegation, one record; fable is the top tier -
+    # A re-wake is a SECOND completion notification for an agent that already
+    # returned, carrying a bigger cumulative duration. The first completion is
+    # the measurement, so the second is refused and nothing is written.
+    rewake_log = impl_dir / "run-log-2612.jsonl"
+    rw_common = ["--log", rewake_log, "--pipeline", "bgpdd-build",
+                 "--phase", "Phase 3", "--event", "delegation",
+                 "--unit", MILESTONE3_TITLE]
+    fable_producer = run_py(RECORD_RUN, rw_common + [
+        "--agent", "mason", "--model", "claude-fable-5-1",
+        "--duration-s", "88"])
+    # opus below fable IS an inversion; the same verifier at fable is not.
+    opus_verifier = run_py(RECORD_RUN, rw_common + ["--agent", "luna",
+                                                    "--model", "claude-opus-5"])
+    fable_verifier = run_py(RECORD_RUN, rw_common + [
+        "--agent", "luna", "--model", "claude-fable-5-1", "--duration-s", "40"])
+    rewake = run_py(RECORD_RUN, rw_common + [
+        "--agent", "luna", "--model", "claude-fable-5-1", "--duration-s", "600"])
+    round2 = run_py(RECORD_RUN, rw_common + [
+        "--agent", "luna", "--model", "claude-fable-5-1", "--rounds", "2"])
+    rewake_data = None
+    try:
+        rewake_data = json.loads(rewake.stdout)
+    except ValueError:
+        pass
+    lines = [json.loads(l) for l in
+             rewake_log.read_text(encoding="utf-8").splitlines() if l.strip()]
+    ok = (fable_producer.returncode == 0 and opus_verifier.returncode == 1
+          and fable_verifier.returncode == 0 and rewake.returncode == 1
+          and round2.returncode == 0
+          and rewake_data is not None
+          and rewake_data.get("problem") == "duplicate_delegation"
+          # Three records: the producer, Luna's FIRST completion (40s, not the
+          # re-wake's cumulative 600s), and the genuine round 2.
+          and [(r.get("agent"), r.get("duration_s"), r.get("rounds"))
+               for r in lines] == [("mason", 88.0, None),
+                                   ("luna", 40.0, None),
+                                   ("luna", None, 2)])
+    record("23. record_run: an opus verifier under a fable producer is an "
+           "inversion, a re-wake is duplicate_delegation, --rounds 2 is not",
+           ok, "" if ok else f"producer={fable_producer.returncode} "
+                             f"opus={opus_verifier.returncode} "
+                             f"fable={fable_verifier.returncode} "
+                             f"rewake={rewake.returncode} "
+                             f"round2={round2.returncode} log={lines!r}")
+
+    # --- Step 24 (2.6.2): Tier-1 context.md is cumulative -------------------
+    # The lesson's exact shape: a second session, scoped to `proj` only,
+    # rewrites the whole file. Every check this run can make passes -- and the
+    # repo the PREVIOUS session recorded is gone, with no diff and no history.
+    t1_scope = impl_dir / "t1-scope"
+    t1_scope.mkdir(parents=True, exist_ok=True)
+    cumulative = (f"# Context\n\n> Provenance — 2026-08-12\n"
+                  f"> proj: `{head}`\n> web: `{'b' * 40}`\n\n"
+                  "## Stacks (detected)\n\nnone\n")
+    (t1_scope / "context.md").write_text(cumulative, encoding="utf-8")
+    t1_backup = impl_dir / "context.2026-08-12T0900.md"
+    t1_backup.write_text(cumulative, encoding="utf-8")
+    prev_common = ["--summary-root", t1_scope, "--repo", f"proj={repo}",
+                   "--previous", t1_backup]
+
+    proc = run_py(CHECK_TIER1_PROVENANCE, prev_common)
+    data = parse_json(proc, "24a. check_tier1_provenance --previous: every prior repo still stamped -> exit 0")
+    if data is not None:
+        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+              and data.get("previous") == str(t1_backup))
+        record("24a. check_tier1_provenance --previous: every prior repo still stamped -> exit 0",
+               ok, "" if ok else json.dumps(data))
+
+    # This session's whole-file rewrite: its own scope, correctly stamped.
+    (t1_scope / "context.md").write_text(
+        f"# Context\n\n> Provenance — 2026-08-12\n> proj: `{head}`\n\n"
+        "## Stacks (detected)\n\nnone\n", encoding="utf-8")
+    proc = run_py(CHECK_TIER1_PROVENANCE, prev_common)
+    data = parse_json(proc, "24b. check_tier1_provenance --previous: a repo the rewrite dropped -> exit 1")
+    if data is not None:
+        codes = sorted({f.get("code") for f in (data.get("findings") or [])})
+        dropped = [f for f in (data.get("findings") or [])
+                   if f.get("code") == "tier1_repo_dropped"]
+        ok = (proc.returncode == 1 and data.get("result") == "FAIL"
+              and codes == ["tier1_repo_dropped"]
+              and len(dropped) == 1 and dropped[0].get("repo") == "web"
+              and dropped[0].get("previous") == str(t1_backup)
+              and "context.md" in dropped[0].get("artifact", ""))
+        record("24b. check_tier1_provenance --previous: a repo the rewrite dropped -> exit 1",
+               ok, "" if ok else json.dumps(data))
+
+    # 24c: a REFRESHED sha for a repo that is still there is the whole point
+    # of re-running Phase 1, and must not fail. A missing backup is exit 2.
+    (t1_scope / "context.md").write_text(
+        f"# Context\n\n> Provenance — 2026-08-12\n> proj: `{head}`\n"
+        f"> web: `{'c' * 40}`\n\n## Stacks (detected)\n\nnone\n",
+        encoding="utf-8")
+    refreshed = run_py(CHECK_TIER1_PROVENANCE, prev_common)
+    absent = run_py(CHECK_TIER1_PROVENANCE,
+                    ["--summary-root", t1_scope, "--repo", f"proj={repo}",
+                     "--previous", impl_dir / "no-such-backup.md"])
+    ok = refreshed.returncode == 0 and absent.returncode == 2
+    record("24c. check_tier1_provenance --previous: a refreshed sha is not a "
+           "drop; a backup that does not exist is exit 2", ok,
+           "" if ok else f"refreshed={refreshed.returncode} "
+                         f"absent={absent.returncode}")
+
 
 if __name__ == "__main__":
     sys.exit(main())

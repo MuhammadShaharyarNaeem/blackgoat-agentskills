@@ -39,9 +39,46 @@ different claim and belongs in the body, where the durable report the verdict
 is about can be cited. `BLOCKED` is the one token both vocabularies share, and
 it means the same thing in each.
 
+SCAFFOLDING LEFT IN A COMPLETE ARTIFACT (`artifact_scaffolding_left`)
+---------------------------------------------------------------------
+`base-persona.md` § Incremental Persistence: "Sweep the scaffolding before you
+return COMPLETE. The skeleton, its markers, and any note explaining that the
+markers exist are working apparatus for you, not content for the reader."
+That is a restraint asked for at the exact moment the agent most wants to
+return -- the substance is written, the sweep is bookkeeping -- so convention
+#9 says it becomes a command with an exit code.
+
+On `<status>COMPLETE</status>` every existing text file cited in `<artifact>`
+or `<changed_skills>` is READ and scanned for the skeleton's own vocabulary:
+the base-persona placeholder marker (an underscore joined to `TODO`, as the
+template writes it), a `TODO`-colon-`pending` phrase, an HTML/markdown
+`<!-- TODO` or `<!-- skeleton` comment, and any line that EXPLAINS the markers
+to the reader ("Note: the placeholder sections are filled in later"). A hit is
+a finding naming file:line and which marker matched.
+
+Three deliberate scoping decisions:
+
+* `PARTIAL` and `BLOCKED` are EXEMPT. A partial artifact is supposed to carry
+  its markers -- that is how § Incremental Persistence says to hand back
+  unfinished work. The rule is about the word COMPLETE, not about markers.
+* `<changed_files>` is NOT scanned. Source code legitimately carries a `TODO`,
+  and the base-persona rule is about the artifact a reader reads.
+* A marker inside a FENCED code block in the artifact IS a hit. This is the
+  opposite of how the handoff text itself is read (`strip_fenced`, below) and
+  the asymmetry is the point: a fenced `<handoff>` template is an
+  ILLUSTRATION, and reading it as the report would let an example satisfy the
+  gate -- whereas a fence inside a delivered artifact is still ink on the
+  page, and a reader who scrolls past it sees an unfinished document. The
+  escape for a page that must legitimately quote the marker (this gate's own
+  reference doc, a lesson that names the marker) is `--allow-scaffolding
+  "<reason>"`: it waives this ONE code, requires a non-empty reason, and
+  records the reason in the ledger, exactly as `--allow-drift` and
+  `--allow-tier-inversion` do elsewhere in this family.
+
 Usage:
     python check_handoff.py --handoff <file> --persona <name> --repo <dir> \
         [--since <ref>] [--advisory] [--fix-round] [--require consumers] \
+        [--allow-scaffolding "<reason>"] \
         [--milestone "<title>"] [--ledger <path>]
     ... | python check_handoff.py --persona mason --repo .      # stdin
     python check_handoff.py --self-test
@@ -116,6 +153,40 @@ CONSUMERS_PERSONAS = ("mason", "nova")
 
 # Elements whose values are file paths that must exist under --repo.
 PATH_ELEMENTS = ("changed_files", "artifact", "changed_skills")
+
+# Elements whose files are READ and swept for scaffolding on a COMPLETE
+# handoff. `changed_files` is deliberately absent: source code legitimately
+# carries a TODO, and base-persona's sweep rule is about the artifact a reader
+# reads. See SCAFFOLDING LEFT IN A COMPLETE ARTIFACT above.
+SCAFFOLD_ELEMENTS = ("artifact", "changed_skills")
+
+# The skeleton's own vocabulary, in the order a line is tested. Each entry is
+# (marker name reported in the finding, pattern). Written as escaped
+# expressions rather than pasted literals wherever possible so that this file
+# and its docs are not themselves hits.
+SCAFFOLD_MARKERS = (
+    # base-persona's placeholder marker: an underscore joined to TODO, as in
+    # the template's `_ TODO : pending _` (spaced here). `\b` so a symbol like
+    # `MY_TODOS` does not match -- and neither does a bare italic marker with
+    # a trailing underscore, since both sides are then word characters. A
+    # documented limit: the template's own form carries a colon and matches.
+    ("skeleton_marker", re.compile(r"_" + r"TODO\b")),
+    # The same idea spelled out in prose.
+    ("todo_pending", re.compile(r"(?i)\bTODO:\s*pending\b")),
+    # An HTML/markdown comment holding the scaffolding.
+    ("todo_comment", re.compile(r"(?i)<!--\s*TODO")),
+    ("skeleton_comment", re.compile(r"(?i)<!--\s*skeleton")),
+    # A line that EXPLAINS the markers to the reader -- the third thing
+    # base-persona names, and the one a sweep most often forgets because it
+    # reads like prose rather than like apparatus.
+    ("scaffolding_note", re.compile(
+        r"(?i)^\s*(?:>|<!--)?\s*(?:note|nb):?\s.*\b(?:_" + r"TODO|placeholder"
+        r"|skeleton)\b")),
+)
+
+# A file whose first block holds a NUL byte is not text. Read in one pass and
+# tested on the whole buffer: an artifact is a document, not a stream.
+NUL = b"\x00"
 
 # base-persona's status enum. COMPLETE is the template value; PARTIAL is
 # mandated by § Incremental Persistence ("report unfinished sections and return
@@ -356,6 +427,48 @@ def git_changed_since(repo, ref):
     return changed
 
 
+def resolve_under_repo(repo, rel):
+    """The on-disk path a normalized handoff path refers to."""
+    candidate = Path(rel)
+    return candidate if candidate.is_absolute() else Path(repo) / rel
+
+
+INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+
+
+def scan_scaffolding(path):
+    """(hits, warning) for one artifact file.
+
+    `hits` is [(lineno, marker_name, line_text)] in file order, at most one
+    entry per line (the first marker that matches is the one reported -- the
+    finding is "this line is apparatus", not a census of patterns). `warning`
+    is a string when the file could not be swept and None otherwise; an
+    unreadable or binary artifact is SKIPPED, never failed, because "the gate
+    could not look" is not "the agent left a marker".
+    """
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        return [], f"could not read {path} to sweep for scaffolding: {exc}"
+    if NUL in data:
+        return [], (f"{path} is not a text file (NUL byte); skipped the "
+                    "scaffolding sweep")
+    text = data.decode("utf-8-sig", errors="replace")
+    hits = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        # Inline code spans are exempt: `_TODO: pending_` inside backticks is
+        # how the convention is DOCUMENTED and cited (base-persona.md, this
+        # family's own pages), never how an agent leaves a placeholder in an
+        # artifact -- the skeleton writes the marker bare. Fenced blocks stay
+        # in scope (documented asymmetry, see the module docstring).
+        scanned = INLINE_CODE_RE.sub("", line)
+        for name, pattern in SCAFFOLD_MARKERS:
+            if pattern.search(scanned):
+                hits.append((number, name, " ".join(line.split())[:200]))
+                break
+    return hits, None
+
+
 def check_consumers(values):
     """Lines that do not match `path::symbol`."""
     bad = []
@@ -398,7 +511,8 @@ def check_honesty(elements):
 
 
 def build_report(text, persona, repo, since=None, fix_round=False,
-                 require=(), source="<stdin>", advisory=False):
+                 require=(), source="<stdin>", advisory=False,
+                 allow_scaffolding=None):
     persona_key = (persona or "").strip().lower()
     if persona_key not in PERSONA_ELEMENTS:
         known = ", ".join(sorted(PERSONA_ELEMENTS))
@@ -432,6 +546,9 @@ def build_report(text, persona, repo, since=None, fix_round=False,
         "status": None,
         "changed_files": [],
         "artifacts": [],
+        "scaffolding_scanned": [],
+        "allow_scaffolding": None,
+        "scaffolding_waived": [],
         "error": None,
     }
 
@@ -486,12 +603,15 @@ def build_report(text, persona, repo, since=None, fix_round=False,
                 f"<status>{value}</status> is not upper-case; read as {value.upper()}")
 
     declared = {}
+    scannable = []
     for name in PATH_ELEMENTS:
         if name not in elements:
             continue
         for raw in split_paths(elements[name]):
             state, rel = path_status(repo, raw)
             declared.setdefault(name, []).append(rel)
+            if state == "ok" and name in SCAFFOLD_ELEMENTS:
+                scannable.append((name, rel))
             if state == "missing":
                 finding("path_missing", f"<{name}> names a path that does not "
                                         f"exist under --repo: {rel}",
@@ -502,6 +622,29 @@ def build_report(text, persona, repo, since=None, fix_round=False,
     report["changed_files"] = declared.get("changed_files", [])
     report["artifacts"] = declared.get("artifact", [])
     report["changed_skills"] = declared.get("changed_skills", [])
+
+    # The sweep base-persona asks for, on the one status that promises it was
+    # done. PARTIAL/BLOCKED artifacts are supposed to carry their markers.
+    if (report["status"] or "").strip().upper() == "COMPLETE":
+        for element, rel in scannable:
+            target = resolve_under_repo(repo, rel)
+            if not target.is_file():
+                continue
+            hits, warning = scan_scaffolding(target)
+            if warning:
+                report["warnings"].append(warning)
+                continue
+            report["scaffolding_scanned"].append(rel)
+            for number, marker, line in hits:
+                finding("artifact_scaffolding_left",
+                        f"<{element}> {rel}:{number} still carries the "
+                        f"{marker} scaffolding marker in a COMPLETE handoff: "
+                        f"{line} — base-persona § Incremental Persistence: "
+                        "the skeleton, its markers and any note explaining "
+                        "them are working apparatus for you, not content for "
+                        "the reader. Sweep them, or return PARTIAL",
+                        element=element, path=rel, line=number,
+                        marker=marker, text=line)
 
     if since:
         touched = git_changed_since(repo, since)
@@ -522,6 +665,21 @@ def build_report(text, persona, repo, since=None, fix_round=False,
         finding("honesty_contradiction",
                 f"{problem['rule']} in <{problem['element']}>: {problem['detail']}",
                 rule=problem["rule"], element=problem["element"])
+
+    # --allow-scaffolding waives this ONE code and nothing else, and only
+    # after it has been computed -- so the ledger records WHAT was waived.
+    if allow_scaffolding and allow_scaffolding.strip():
+        waived = [f for f in report["findings"]
+                  if f["code"] == "artifact_scaffolding_left"]
+        if waived:
+            report["findings"] = [f for f in report["findings"]
+                                  if f["code"] != "artifact_scaffolding_left"]
+            report["scaffolding_waived"] = waived
+            report["allow_scaffolding"] = allow_scaffolding.strip()
+            report["warnings"].append(
+                "SCAFFOLDING WAIVED by --allow-scaffolding for {0}: {1}".format(
+                    ", ".join(sorted({f["path"] for f in waived})),
+                    allow_scaffolding.strip()))
 
     report["result"] = "FAIL" if report["findings"] else "PASS"
     return report
@@ -549,6 +707,13 @@ def main(argv):
                         help="a remediation round: <fix_verification> is required")
     parser.add_argument("--require", action="append", choices=["consumers"],
                         default=[], help="promote an optional element to required")
+    parser.add_argument("--allow-scaffolding", dest="allow_scaffolding",
+                        help="a written reason for a COMPLETE artifact that "
+                             "legitimately carries a scaffolding marker (a "
+                             "page that QUOTES the marker). Waives "
+                             "artifact_scaffolding_left and nothing else; the "
+                             "reason is recorded in the ledger. An empty "
+                             "reason is exit 2.")
     parser.add_argument("--milestone", help="recorded in the ledger line")
     parser.add_argument("--ledger", help="append one JSON record per run to this path")
     parser.add_argument("--self-test", action="store_true")
@@ -557,16 +722,29 @@ def main(argv):
     if args.self_test:
         return run_self_test()
 
+    extra = {}
+    if args.advisory:
+        extra["advisory"] = True
+
     def finish(code, verdict):
         """One exit point: EVERY return path records a ledger line."""
         append_ledger(args.ledger, argv, args.milestone,
                       [args.handoff] if args.handoff else [], verdict, code,
-                      {"advisory": True} if args.advisory else None)
+                      dict(extra) or None)
         return code
 
     if not args.persona:
         print(json.dumps({"result": "ERROR",
                           "error": "missing required argument: --persona"}))
+        return finish(2, "ERROR")
+
+    if args.allow_scaffolding is not None and not args.allow_scaffolding.strip():
+        print(json.dumps({
+            "result": "ERROR",
+            "error": "--allow-scaffolding requires a non-empty reason: an "
+                     "unreasoned waiver is indistinguishable from an "
+                     "omission, and this is the one waiver that says a "
+                     "COMPLETE artifact may keep its skeleton's vocabulary"}))
         return finish(2, "ERROR")
 
     if args.handoff:
@@ -593,10 +771,17 @@ def main(argv):
     try:
         report = build_report(text, args.persona, args.repo, since=args.since,
                               fix_round=args.fix_round, require=args.require,
-                              source=source, advisory=args.advisory)
+                              source=source, advisory=args.advisory,
+                              allow_scaffolding=args.allow_scaffolding)
     except GateError as exc:
         print(json.dumps({"result": "ERROR", "error": str(exc)}))
         return finish(2, "ERROR")
+
+    if report.get("allow_scaffolding"):
+        extra["allow_scaffolding_reason"] = report["allow_scaffolding"]
+        extra["scaffolding_waived"] = [
+            {"path": f["path"], "line": f["line"], "marker": f["marker"]}
+            for f in report["scaffolding_waived"]]
 
     print(json.dumps(report, indent=2))
     return finish(0, "PASS") if report["result"] == "PASS" else finish(1, "FAIL")
@@ -765,6 +950,171 @@ def run_self_test():
             record = json.loads(
                 ledger.read_text(encoding="utf-8").splitlines()[-1])
             self.assertNotIn("advisory", record)
+
+        # --- artifact_scaffolding_left (base-persona: sweep before COMPLETE)
+
+        def artifact_handoff(self, status="COMPLETE", path="docs.md"):
+            return (f"<handoff><status>{status}</status>"
+                    f"<artifact>{path}</artifact>"
+                    "<blockers>None</blockers></handoff>")
+
+        def write_docs(self, body):
+            (self.dir / "docs.md").write_text(body, encoding="utf-8")
+
+        def test_complete_with_a_clean_artifact_passes(self):
+            self.write_docs("# Report\n\nEverything is written.\n")
+            r = build_report(self.artifact_handoff(), "luna", self.dir)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertEqual(r["scaffolding_scanned"], ["docs.md"])
+
+        def test_complete_with_a_skeleton_marker_fails(self):
+            self.write_docs("# Report\n\n## Findings\n\n_TODO: pending_\n")
+            r = build_report(self.artifact_handoff(), "luna", self.dir)
+            self.assertEqual(self.codes(r), ["artifact_scaffolding_left"])
+            hit = r["findings"][0]
+            self.assertEqual((hit["path"], hit["line"], hit["marker"]),
+                             ("docs.md", 5, "skeleton_marker"))
+            self.assertIn("docs.md:5", hit["detail"])
+
+        def test_partial_and_blocked_keep_their_markers(self):
+            """§ Incremental Persistence hands unfinished work back WITH the
+            markers; the rule is about the word COMPLETE."""
+            self.write_docs("# Report\n\n_TODO: pending_\n")
+            for status in ("PARTIAL", "BLOCKED"):
+                r = build_report(
+                    self.artifact_handoff(status).replace(
+                        "<blockers>None</blockers>",
+                        "<blockers>section 2 needs the DB</blockers>"),
+                    "luna", self.dir)
+                self.assertEqual(r["result"], "PASS", (status, r["findings"]))
+                self.assertEqual(r["scaffolding_scanned"], [], status)
+
+        def test_every_marker_shape_is_a_hit(self):
+            bodies = {
+                "skeleton_marker": "# R\n\n_TODO: fill in_\n",
+                "todo_pending": "# R\n\nTODO: pending — fill this in\n",
+                "todo_comment": "# R\n\n<!-- TODO: write section 3 -->\n",
+                "skeleton_comment": "# R\n\n<!-- skeleton generated -->\n",
+                "scaffolding_note": "# R\n\n> Note: the placeholder sections "
+                                    "are filled in on the second pass\n",
+            }
+            for marker, body in bodies.items():
+                self.write_docs(body)
+                r = build_report(self.artifact_handoff(), "luna", self.dir)
+                self.assertEqual(self.codes(r), ["artifact_scaffolding_left"],
+                                 marker)
+                self.assertEqual(r["findings"][0]["marker"], marker, marker)
+
+        def test_a_marker_inside_a_fence_is_still_a_hit(self):
+            """Documented asymmetry: a fenced <handoff> is an ILLUSTRATION and
+            must not satisfy the gate, but a fence in a DELIVERED artifact is
+            still ink the reader scrolls past."""
+            self.write_docs("# R\n\nAs the convention says:\n\n```\n"
+                            "_TODO: pending_\n```\n")
+            r = build_report(self.artifact_handoff(), "luna", self.dir)
+            self.assertEqual(self.codes(r), ["artifact_scaffolding_left"])
+            self.assertEqual(r["findings"][0]["line"], 6)
+
+        def test_a_marker_quoted_in_inline_code_is_documentation(self):
+            """base-persona.md and this family's pages cite `_TODO: pending_`
+            in backticks; that is how the convention is documented, not a
+            placeholder left in an artifact. A bare marker on the same page
+            still fires."""
+            self.write_docs("# R\n\nMark gaps with `_TODO: pending_` while "
+                            "drafting.\n\nAll sections complete.\n")
+            r = build_report(self.artifact_handoff(), "luna", self.dir)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.write_docs("# R\n\nMark gaps with `_TODO: pending_`.\n\n"
+                            "## API\n_TODO: pending_\n")
+            r = build_report(self.artifact_handoff(), "luna", self.dir)
+            self.assertEqual(self.codes(r), ["artifact_scaffolding_left"])
+            self.assertEqual(r["findings"][0]["line"], 6)
+
+        def test_changed_files_are_not_swept(self):
+            """Source code legitimately carries a TODO."""
+            (self.dir / "src" / "a.py").write_text(
+                "# TODO: pending refactor\n", encoding="utf-8")
+            r = build_report(GOOD_MASON, "mason", self.dir)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertEqual(r["scaffolding_scanned"], [])
+
+        def test_changed_skills_are_swept(self):
+            self.write_docs("# Skill\n\n<!-- skeleton -->\n")
+            text = ("<handoff><status>COMPLETE</status>"
+                    "<changed_skills>docs.md</changed_skills>"
+                    "<blockers>None</blockers></handoff>")
+            r = build_report(text, "forge", self.dir)
+            self.assertEqual(self.codes(r), ["artifact_scaffolding_left"])
+            self.assertEqual(r["findings"][0]["element"], "changed_skills")
+
+        def test_advisory_handoff_with_no_artifact_is_unaffected(self):
+            r = build_report(self.FORGE_PROPOSE, "forge", self.dir,
+                             advisory=True)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertEqual(r["scaffolding_scanned"], [])
+
+        def test_a_binary_artifact_is_skipped_with_a_warning(self):
+            blob = self.dir / "cap.bin"
+            blob.write_bytes(b"PNG\x00\x00_TODO: pending_")
+            r = build_report(self.artifact_handoff(path="cap.bin"), "luna",
+                             self.dir)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertEqual(r["scaffolding_scanned"], [])
+            self.assertTrue(any("not a text file" in w for w in r["warnings"]))
+
+        def test_allow_scaffolding_waives_only_this_code(self):
+            self.write_docs("# R\n\n_TODO: pending_\n")
+            r = build_report(self.artifact_handoff(), "luna", self.dir,
+                             allow_scaffolding="the page QUOTES the marker")
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertEqual(r["allow_scaffolding"],
+                             "the page QUOTES the marker")
+            self.assertEqual(len(r["scaffolding_waived"]), 1)
+            self.assertTrue(any("SCAFFOLDING WAIVED" in w
+                                for w in r["warnings"]))
+            # ...and nothing else: a missing element still fails.
+            bad = ("<handoff><status>COMPLETE</status>"
+                   "<artifact>docs.md</artifact></handoff>")
+            r = build_report(bad, "luna", self.dir, allow_scaffolding="quoted")
+            self.assertEqual(self.codes(r), ["element_missing"])
+
+        def test_allow_scaffolding_exit_codes_and_ledger_through_main(self):
+            self.write_docs("# R\n\n_TODO: pending_\n")
+            path = self.dir / "h.md"
+            path.write_text(self.artifact_handoff(), encoding="utf-8")
+            ledger = self.dir / "gates.jsonl"
+            base = ["--handoff", str(path), "--persona", "luna",
+                    "--repo", str(self.dir), "--ledger", str(ledger)]
+            self.assertEqual(main(base), 1)
+            self.assertEqual(main(base + ["--allow-scaffolding", "   "]), 2)
+            self.assertEqual(
+                main(base + ["--allow-scaffolding", "quotes the marker"]), 0)
+            record = json.loads(
+                ledger.read_text(encoding="utf-8").splitlines()[-1])
+            self.assertEqual(record["allow_scaffolding_reason"],
+                             "quotes the marker")
+            self.assertEqual(record["scaffolding_waived"][0]["marker"],
+                             "skeleton_marker")
+            self.assertEqual(record["self"], ledger_self_hash(record))
+
+        def test_a_clean_run_records_no_scaffolding_keys(self):
+            self.write_docs("# R\n\nclean\n")
+            path = self.dir / "h.md"
+            path.write_text(self.artifact_handoff(), encoding="utf-8")
+            ledger = self.dir / "gates.jsonl"
+            self.assertEqual(main(["--handoff", str(path), "--persona", "luna",
+                                   "--repo", str(self.dir),
+                                   "--ledger", str(ledger),
+                                   "--allow-scaffolding", "unused"]), 0)
+            record = json.loads(
+                ledger.read_text(encoding="utf-8").splitlines()[-1])
+            self.assertNotIn("allow_scaffolding_reason", record)
+
+        def test_every_hit_line_is_reported_once(self):
+            self.write_docs("# R\n\n_TODO: a_\n\n<!-- TODO -->\n"
+                            "_TODO: pending_\n")
+            r = build_report(self.artifact_handoff(), "luna", self.dir)
+            self.assertEqual([f["line"] for f in r["findings"]], [3, 5, 6])
 
         # --- adversarial ------------------------------------------------
         def test_fenced_handoff_is_not_a_handoff(self):
