@@ -241,7 +241,12 @@ fix: a grader never gets to fail eleven criteria against an empty working copy. 
 A **contract** run is INFRA when any of these holds:
 
 1. **stdout is empty or whitespace** — the CLI exited without writing a word, so there is
-   no artifact, no handoff, nothing to grade.
+   no artifact, no handoff, nothing to grade. **Exception**: the fourteen cases whose
+   command ends in `| Out-File -FilePath handoff.txt` leave stdout empty *by design*; when
+   stdout is blank and `handoff.txt` in the working copy carries text, the harness
+   classifies that text instead (`Resolve-AgentOutputText`). The first live batch under
+   harness 4 (quick-lane, 2026-09-08) quarantined 10 of 10 completed runs before this rule
+   existed; `-SelfTest` cases infra 2b–2e pin it.
 2. **the agent's output matches a refusal signature** — `^\s*API Error` (line-anchored;
    the `API Error: Connection closed` banner), `requires approval` (a permission prompt a
    headless run cannot answer), or `usage limit|rate limit`.

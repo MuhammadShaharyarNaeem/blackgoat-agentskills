@@ -262,6 +262,26 @@ function Get-Sha256HexOfText {
 # Returns a reason string (the run is INFRA) or $null (the run is real; grade it).
 # Order matters only for which reason gets reported first; any single hit is enough.
 
+function Resolve-AgentOutputText {
+    param(
+        [AllowNull()][AllowEmptyString()][string]$OutputText,
+        [AllowNull()][string]$TempDir
+    )
+    # Fourteen contract cases end their command with `| Out-File -FilePath handoff.txt`,
+    # so the agent's whole reply lands in the working copy and stdout is EMPTY BY
+    # DESIGN. Classifying that stdout produced 10/10 INFRA on quick-lane (2026-09-08)
+    # for runs whose handoff.txt showed the lane had closed at driver exit 3 - the
+    # first live batch under harness 4, which had only ever been proven by -SelfTest.
+    # When stdout is blank and handoff.txt carries text, the handoff IS the output.
+    if (-not [string]::IsNullOrWhiteSpace($OutputText)) { return $OutputText }
+    if ([string]::IsNullOrWhiteSpace($TempDir)) { return $OutputText }
+    $handoff = Join-Path $TempDir 'handoff.txt'
+    if (-not (Test-Path $handoff)) { return $OutputText }
+    $text = Get-Content -Path $handoff -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+    if ([string]::IsNullOrWhiteSpace($text)) { return $OutputText }
+    return $text
+}
+
 function Get-InfraReason {
     param(
         [AllowNull()][AllowEmptyString()][string]$OutputText,
@@ -790,6 +810,32 @@ function Invoke-TriggerJudgeSelfTest {
     $failures += Test-InfraCase -Label 'infra 2 (whitespace-only stdout)' `
         -OutputText "  `r`n `t " -DurationSeconds 900 -MinDurationSeconds 60 `
         -ExpectInfra $true -ExpectedReasonMatch 'no output at all'
+    # infra 2b-2d: an Out-File case's stdout is empty BY DESIGN; the reply is
+    # handoff.txt in the working copy. The resolver must read it before the
+    # classifier calls "no output" (quick-lane 10/10 false INFRA, 2026-09-08).
+    $resolverDir = Join-Path ([IO.Path]::GetTempPath()) ("bg-selftest-resolver-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Force -Path $resolverDir | Out-Null
+    try {
+        Set-Content -Path (Join-Path $resolverDir 'handoff.txt') -Value "Lane closed - driver reports phase: 4, exit 3.`n## What I did`nRenamed the function." -Encoding utf8
+        $resolved = Resolve-AgentOutputText -OutputText '' -TempDir $resolverDir
+        $failures += Test-InfraCase -Label 'infra 2b (empty stdout, handoff.txt written -> NOT infra)' `
+            -OutputText $resolved -DurationSeconds 210 -MinDurationSeconds 60 `
+            -ExpectInfra $false -ExpectedReasonMatch $null
+        Set-Content -Path (Join-Path $resolverDir 'handoff.txt') -Value "   `r`n" -Encoding utf8
+        $resolved = Resolve-AgentOutputText -OutputText '' -TempDir $resolverDir
+        $failures += Test-InfraCase -Label 'infra 2c (empty stdout, blank handoff.txt -> infra)' `
+            -OutputText $resolved -DurationSeconds 210 -MinDurationSeconds 60 `
+            -ExpectInfra $true -ExpectedReasonMatch 'no output at all'
+        Remove-Item -Path (Join-Path $resolverDir 'handoff.txt') -Force
+        $resolved = Resolve-AgentOutputText -OutputText '' -TempDir $resolverDir
+        $failures += Test-InfraCase -Label 'infra 2d (empty stdout, no handoff.txt -> infra)' `
+            -OutputText $resolved -DurationSeconds 210 -MinDurationSeconds 60 `
+            -ExpectInfra $true -ExpectedReasonMatch 'no output at all'
+        $resolved = Resolve-AgentOutputText -OutputText "real stdout wins" -TempDir $resolverDir
+        if ($resolved -ne 'real stdout wins') { Write-Host 'SELFTEST FAILED: infra 2e (non-empty stdout must not be replaced)'; $failures += 1 } else { Write-Host 'SELFTEST PASSED: infra 2e (non-empty stdout is kept as-is)' }
+    } finally {
+        Remove-Item -Path $resolverDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
     $failures += Test-InfraCase -Label 'infra 3 (API Error banner, long run)' `
         -OutputText "Reading the fixture...`nAPI Error: Connection closed`n" `
         -DurationSeconds 540 -MinDurationSeconds 60 `
@@ -1424,7 +1470,9 @@ function Invoke-ContractRun {
         # 2026-09-04, each of which had to be recognised and moved out by hand.
         # An INFRA run is quarantined with `pass: null` and never reaches
         # results.jsonl, so it does not consume one of the case's N.
-        $infraReason = Get-InfraReason -OutputText $agentOutputText `
+        # An Out-File case leaves stdout empty on purpose; its reply is handoff.txt.
+        $classifiedText = Resolve-AgentOutputText -OutputText $agentOutputText -TempDir $tempDir
+        $infraReason = Get-InfraReason -OutputText $classifiedText `
             -DurationSeconds $agentDurationSeconds -MinDurationSeconds $minDurationSeconds
         if ($infraReason) {
             $outcome = 'INFRA'
