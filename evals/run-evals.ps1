@@ -149,12 +149,15 @@ $InfraOutputPatterns = @(
 #   5182-5186 bgpdd-bugfix-lane, dependency-upgrade-contract, quick-lane and the
 #             four pressure cases (5183-5186 reserved for their parallel runs)
 #   5193      jobs-idempotency-contract        5142  quinn-runtime-evidence
+#   5194      bugfix-batch-two-bugs (only the FIRST bug's worktree binds it: the
+#             second bug's reproduction is a script, deliberately, so two bugs in
+#             one wave never race for one port)
 #   5143      mason-fix-verification           5151  luna-clean-approve, luna-verdict-arithmetic
 #   5178/5179 mason-fix-verification-tier3 (fixture / grader override, case.md:88)
 #   5173      nova-ui-contract's Vite probe    5252  cipher-security-report (src/config.js)
 #   5353      scout-brief-path                 3000  dep-ship-decision-shape
 $FixturePortsToCheck = 3000, 5142, 5143, 5151, 5173, 5178, 5179, 5182, 5183, 5184,
-    5185, 5186, 5193, 5252, 5353
+    5185, 5186, 5193, 5194, 5252, 5353
 
 # The two zero-LLM cases. Invisible to Get-ContractCases by design (neither has a
 # case.md or a grade.ps1) and free to run, so a confirmed contract batch runs both

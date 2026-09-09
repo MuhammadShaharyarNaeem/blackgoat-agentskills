@@ -11,6 +11,7 @@ Pick one and invoke it. Each line summarises that lane's `description` frontmatt
 | `/bg` | Front door: classifies the request and invokes exactly one lane below. Routes only; never does the work. |
 | `/bgpdd-quick` | One small contained change, main session only: no delegation, no plan. One captured check, one close gate that commits. |
 | `/bgpdd-bugfix` | A localized bug fixed on written evidence: bug report, RED capture, routed fix, GREEN re-run, review, commit gate. |
+| `/bgpdd-bugfix-batch` | Two to five independent bugs in one session: the bugfix contract per bug, each in its own worktree. |
 | `/bgpdd-lite` | Mid-weight PDD for well-specified work: mini-requirements with you, Alex plans, coverage gate, then `/bgpdd-build`. |
 | `/bgpdd-plan` | Phase 1, Design & Architecture: refines the idea, researches, produces an implementation plan (Rex, Aria, Alex). |
 | `/bgpdd-discovery` | Phase 0, Global Context Discovery: Iris, Scout and Echo map stacks, APIs and the legacy QA baseline. |

@@ -38,6 +38,7 @@ The plugin is designed with a deliberate adoption gradient. Each step gives you 
 | Execute an existing plan | `/bgpdd-build [auto]` | Spawns agents (Mason/Nova, Quinn, Luna, Dep, Cipher) |
 | Ship a green epic | `/bgpdd-shipping` | Spawns agents (Vera, Cipher, Dep, Forge) |
 | Fix a bug | `/bgpdd-bugfix` | Main session (intake, RCA, route) + spawns agents (Quinn RED, Mason/Nova fix, Quinn GREEN, Luna) |
+| Fix two to five independent bugs in one session | `/bgpdd-bugfix-batch` | Main session (intake, merges) + the bugfix squad per bug, in waves, one git worktree each |
 | Verify an already-discovered feature still works | `/bgpdd-verify {feature}` | Main session (matrix) + spawns Quinn |
 | Capture lessons from a session | `/bgpdd-learn` | Main session + spawns Forge |
 | Audit the plugin itself | `agent-audit` skill | Main session |
@@ -377,6 +378,7 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **bgpdd-build** — execution (Mason or Nova, routed by the milestone's [API]/[UI] domain tag; Quinn, Luna, Dep)
 - **bgpdd-shipping** — verification & Launch Squad (Vera, Cipher, Dep, Forge)
 - **bgpdd-bugfix** — evidence-gated bugfix lane: lint-gated intake → Quinn's RED capture → RCA and mechanical FAST/FULL/PLAN route (main session) → fix (Mason and/or Nova) → same-command GREEN + red/green gate → fresh Luna → bounded commit gate → Tier-1 prevent write-back
+- **bgpdd-bugfix-batch** — thin choreography over the lane above for two to five independent bugs in one session: a git worktree and a `fix/{bug-slug}` branch per bug, the bugfix contract run per bug in waves (parallel REDs, per-route builders, per-bug GREEN and a fresh Luna), each bug closing through its own commit gate, then one merge at a time ordered by surface overlap and gated on that bug's ledger chain. It restates no bugfix rule; a `PLAN` route drops that bug to `/bgpdd-plan`
 - **bgpdd-verify** — standalone regression-verification lane for an already-discovered feature: derives a lint-gated acceptance matrix from Echo's QA baseline, Quinn automates and executes it as permanent Playwright specs against the running application, gated on runtime evidence; product defects it finds route to `/bgpdd-bugfix`
 
 ### Methodology skills (execution contracts loaded by agents via their dependency tables)

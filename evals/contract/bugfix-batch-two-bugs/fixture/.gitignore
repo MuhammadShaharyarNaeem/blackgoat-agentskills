@@ -1,0 +1,15 @@
+# The eval harness pipes the agent's reply into handoff.txt inside this working
+# copy, and a --verify-tree gate rightly refuses to commit around an undeclared
+# file. Ignored files do not appear in `git status --porcelain`, so this keeps
+# the harness's own artifact out of every lane's tree check.
+handoff.txt
+node_modules/
+
+# The batch lane creates one git worktree per bug. A worktree placed INSIDE this
+# working copy would otherwise show up as an untracked directory in the main
+# tree's `git status`, which is noise the graders and the gates do not need.
+# Ignored here rather than forbidden in the prompt: where the worktrees live is
+# the lane's decision, not the case's.
+wt/
+worktrees/
+.worktrees/

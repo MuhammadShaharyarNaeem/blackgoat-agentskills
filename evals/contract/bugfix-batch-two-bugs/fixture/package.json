@@ -1,0 +1,10 @@
+{
+  "name": "checkout-svc",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Frozen fixture for the bugfix-batch-two-bugs eval. TWO independent defects, both living in src/pricing.js: applyCoupon() normalizes an absent code so POST /orders answers 500 instead of pricing at full, and computeTax() truncates instead of rounding half-up so a half-cent of tax is dropped. The two defects have separate oracles (one over HTTP, one a pure assertion) but their fixes touch the SAME file, which is what makes the batch lane's overlap rule fire. src/rounding.js is a correct, really-used decoy. scripts/repro-tax.js is the second bug's exit-code oracle, supplied with its report. The node:test suite is green before AND after both fixes.",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  }
+}
