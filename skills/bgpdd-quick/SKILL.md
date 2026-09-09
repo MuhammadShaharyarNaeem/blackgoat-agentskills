@@ -84,6 +84,13 @@ Exit 0 required; non-zero → fix and re-run (one round, §1). Phase 3 reads the
 
 ### Phase 3: Close (the gate)
 **Driver:** the driver must report `phase: 3`; after the gate it reports `phase: 4` at exit 3.
+
+**When the change adds or edits a test file**, run this before `check_quick_close.py` — that gate has no knowledge of it:
+```bash
+python {PLUGIN_ROOT}/pipeline-tools/scripts/check_test_authenticity.py --repo . --changed-files <paths> --milestone "{slug}" --ledger {quick-root}/gates.jsonl
+```
+Principle: `test-driven-development/SKILL.md` § Rules — not restated here. Exit 0 = proceed; cite the ledger entry in the `## Result` bullet (§1). Exit 1 = the one round §1 allows — fix and re-run. Exit 2 = artifact defect. **`pipeline_driver.py` does not emit this step yet** — nothing enforces remembering it.
+
 ```bash
 python {PLUGIN_ROOT}/pipeline-tools/scripts/check_quick_close.py \
     --note {quick-root}/note.md --capture {quick-root}/evidence/check.md \

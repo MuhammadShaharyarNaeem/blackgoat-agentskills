@@ -82,7 +82,7 @@ if ($isGitRepo) {
         # run-evals.ps1's judge or INFRA classifier was invisible to this script - it
         # flagged nothing, so nothing told you to re-run -SelfTest, and the one check
         # that proves the judge still works was the one change nobody was reminded of.
-        $gitOutput = git log "--since=$sinceArg" --name-only --pretty=format: -- agents/ skills/ evals/trigger/fixture/ evals/run-evals.ps1 evals/eval_record.py evals/contract/mechanical-pipeline/run.py evals/contract/bugfix-gates-adversarial/run.py evals/contract/openapi-diff-adversarial/run.py 2>&1
+        $gitOutput = git log "--since=$sinceArg" --name-only --pretty=format: -- agents/ skills/ evals/trigger/fixture/ evals/run-evals.ps1 evals/eval_record.py evals/contract/mechanical-pipeline/run.py evals/contract/bugfix-gates-adversarial/run.py evals/contract/openapi-diff-adversarial/run.py evals/contract/test-authenticity-adversarial/run.py 2>&1
         $changedFiles = @($gitOutput | Where-Object { $_ -and $_.Trim() -ne '' } | Sort-Object -Unique)
     } finally {
         Pop-Location
@@ -109,7 +109,8 @@ if ($isGitRepo) {
             (Join-Path $EvalsRoot 'eval_record.py'),
             (Join-Path $EvalsRoot 'contract\mechanical-pipeline\run.py'),
             (Join-Path $EvalsRoot 'contract\bugfix-gates-adversarial\run.py'),
-            (Join-Path $EvalsRoot 'contract\openapi-diff-adversarial\run.py'))) {
+            (Join-Path $EvalsRoot 'contract\openapi-diff-adversarial\run.py'),
+            (Join-Path $EvalsRoot 'contract\test-authenticity-adversarial\run.py'))) {
         if (Test-Path $harnessFile) {
             $item = Get-Item -Path $harnessFile
             if ($item.LastWriteTime -gt $cutoff) {
@@ -358,6 +359,7 @@ foreach ($f in $changedFiles) {
         [void]$mechanicalChecks.Add('python evals/contract/mechanical-pipeline/run.py --record')
         [void]$mechanicalChecks.Add('python evals/contract/bugfix-gates-adversarial/run.py --record')
         [void]$mechanicalChecks.Add('python evals/contract/openapi-diff-adversarial/run.py --record')
+        [void]$mechanicalChecks.Add('python evals/contract/test-authenticity-adversarial/run.py --record')
         # Every script carrying a --self-test. check_dependency_tables.py gets
         # its own line below because its ordinary invocation takes a positional
         # dir -- that line is the real lint against this tree, not a self-test.
@@ -401,6 +403,13 @@ foreach ($f in $changedFiles) {
         # its two siblings: free, and --record so "has this suite ever run?"
         # is answerable.
         [void]$mechanicalChecks.Add('python evals/contract/openapi-diff-adversarial/run.py --record')
+    }
+    if ($f -match 'evals/eval_record\.py$' -or $f -match 'evals/contract/test-authenticity-adversarial/run\.py$' -or $f -match 'scripts/check_test_authenticity\.py$') {
+        # The fourth zero-LLM case, wired here at the same time it landed in
+        # run-evals.ps1's $ZeroLlmCases and evals/README.md - so a change to the
+        # gate flags the suite that judges it. The omission the 2026-09-07 audit
+        # found for openapi-diff-adversarial (Metric 21a) does not get to repeat.
+        [void]$mechanicalChecks.Add('python evals/contract/test-authenticity-adversarial/run.py --record')
     }
     if ($f -match 'evals/trigger/fixture/') {
         # The trigger fixture is the working directory every trigger prompt is judged

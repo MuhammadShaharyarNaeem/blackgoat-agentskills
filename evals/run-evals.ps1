@@ -159,13 +159,14 @@ $InfraOutputPatterns = @(
 $FixturePortsToCheck = 3000, 5142, 5143, 5151, 5173, 5178, 5179, 5182, 5183, 5184,
     5185, 5186, 5193, 5194, 5252, 5353
 
-# The two zero-LLM cases. Invisible to Get-ContractCases by design (neither has a
-# case.md or a grade.ps1) and free to run, so a confirmed contract batch runs both
-# with --record before spending a token - previously they left no history at all.
+# The zero-LLM cases. Invisible to Get-ContractCases by design (none has a
+# case.md or a grade.ps1) and free to run, so a confirmed contract batch runs them
+# all with --record before spending a token - previously they left no history at all.
 $ZeroLlmCases = @(
     @{ Name = 'mechanical-pipeline'; Script = 'contract\mechanical-pipeline\run.py' },
-    @{ Name = 'bugfix-gates-adversarial'; Script = 'contract\bugfix-gates-adversarial\run.py' }
-    @{ Name = 'openapi-diff-adversarial'; Script = 'contract\openapi-diff-adversarial\run.py' }
+    @{ Name = 'bugfix-gates-adversarial'; Script = 'contract\bugfix-gates-adversarial\run.py' },
+    @{ Name = 'openapi-diff-adversarial'; Script = 'contract\openapi-diff-adversarial\run.py' },
+    @{ Name = 'test-authenticity-adversarial'; Script = 'contract\test-authenticity-adversarial\run.py' }
 )
 
 # Bump this string whenever the result-record contract (the set of keys written to
