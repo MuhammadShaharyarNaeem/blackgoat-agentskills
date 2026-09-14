@@ -17,6 +17,16 @@ OVER_READ_LIMIT = 1
 
 def grade(workspace, transcripts):
     subagents = (transcripts or {}).get("subagents") or []
+    if workspace:
+        # Defense in depth: a worker transcript belongs to the case whose
+        # workspace its briefing names. `run.py` already scopes `transcripts`
+        # to this workspace via `find_run_transcripts(..., workspace=...)`,
+        # but re-check here too so a caller that hands this grader an
+        # unfiltered `transcripts` dict (e.g. a different case's siblings
+        # from one shared parent conversation) can't leak a sibling case's
+        # worker into this case's over-read count.
+        subagents = [c for c in subagents
+                     if transcript_tools.conversation_mentions_workspace(c["dir"], workspace)]
     if not subagents:
         return {"infra": True, "infra_reason": "no subagent transcripts found in the run window",
                 "pass": None, "metrics": {}, "failed_criterion": None}
