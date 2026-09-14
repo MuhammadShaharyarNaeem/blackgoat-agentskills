@@ -432,6 +432,18 @@ def parse_porcelain_line(line):
     return path
 
 
+def resolve_changed_file(path, repo):
+    """A `--changed-files` entry as a `Path`, relative ones against `repo`.
+
+    Checking a relative entry against the process's own working directory
+    instead let a caller running from a directory other than `--repo` (e.g.
+    a shared `.docs/` above several sibling repos) see a spurious
+    `changed_file_missing` for a path that exists fine under `--repo`.
+    """
+    p = Path(path)
+    return p if p.is_absolute() else Path(repo) / p
+
+
 def normalize_repo_path(path, repo):
     """Repo-relative, forward-slash, case-folded-on-Windows comparison form."""
     p = Path(path)
@@ -832,18 +844,20 @@ def build_report(args):
                 report["capture_finished"] = meta["finished"].strip()
 
     # --- 8. every declared file exists ------------------------------------
-    missing_files = [f for f in args.changed_files if not Path(f).exists()]
+    missing_files = [f for f in args.changed_files
+                     if not resolve_changed_file(f, repo).exists()]
     if missing_files:
         fail("changed_file_missing",
-             "--changed-files names path(s) that do not exist on disk, which "
-             "would silently disable the freshness and tree checks: {0}".format(
-                 ", ".join(str(m) for m in missing_files)))
+             "--changed-files names path(s) that do not exist on disk under "
+             "--repo ({0}), which would silently disable the freshness and "
+             "tree checks: {1}".format(
+                 repo, ", ".join(str(m) for m in missing_files)))
 
     # --- 7 (cont). freshness: the capture is newer than the edit -----------
     newest = None
     for f in args.changed_files:
         try:
-            mt = Path(f).stat().st_mtime
+            mt = resolve_changed_file(f, repo).stat().st_mtime
         except OSError:
             continue
         if newest is None or mt > newest:
@@ -1503,6 +1517,18 @@ def run_self_test():
             r = self._run(note, capture, [str(self.repo / "src" / "gone.py")])
             self.assertEqual(r["result"], "FAIL")
             self.assertIn("changed_file_missing", r["problem_codes"])
+
+        def test_relative_changed_file_resolves_against_repo(self):
+            """A relative --changed-files entry must resolve against --repo,
+            not the gate process's own working directory -- the caller may
+            run this gate from a directory that is not --repo (e.g. a shared
+            .docs/ above several sibling repos)."""
+            rel = self._edit()
+            time.sleep(0.01)
+            note = self._note()
+            capture = self._capture()
+            r = self._run(note, capture, [rel])
+            self.assertEqual(r["result"], "PASS", r["problems"])
 
         def test_a_fourth_file_slipped_into_the_tree_fails(self):
             note, capture, changed = self._happy()

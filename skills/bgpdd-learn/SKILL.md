@@ -54,7 +54,7 @@ State the hard filtered-read rule in the delegation: Forge NEVER full-reads a tr
 
 ### Step 3: PROPOSAL
 
-Forge does NOT write any proposal file. He returns the improvement plan inside his `<handoff>` — per lesson: the generalized rule, its destination file, and a one-line rationale for that layer. You read the plan from the handoff. **Validate it with `check_handoff.py --advisory`** (plus `--persona forge --repo . --since <the sha HEAD held when you launched him> --ledger <the lane's gate ledger>`): the brief declares no artifact, and `--advisory` is what lets a deliberately artifact-less handoff pass instead of failing `element_missing`. Without the flag this gate fails by design on every run of this step.
+Forge does NOT write any proposal file. He returns the improvement plan inside his `<handoff>` — per lesson: the generalized rule, its destination file, and a one-line rationale for that layer. You read the plan from the handoff. **Validate it with `check_handoff.py --advisory`** (plus `--persona forge --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched him> --ledger <the lane's gate ledger>`): the brief declares no artifact, and `--advisory` is what lets a deliberately artifact-less handoff pass instead of failing `element_missing`. Without the flag this gate fails by design on every run of this step.
 
 **One lesson, one destination, listed separately.** Reject a plan that groups several lessons under one destination line or leaves a lesson's destination implicit, and send it back for the pairing — this is what makes a later revert one file per lesson instead of an unpickable batch. A lesson that genuinely needs two files is two entries, not one.
 

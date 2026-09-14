@@ -77,6 +77,7 @@ Three deliberate scoping decisions:
 
 Usage:
     python check_handoff.py --handoff <file> --persona <name> --repo <dir> \
+        [--repo <dir> ...] [--docs-root <dir> ...] \
         [--since <ref>] [--advisory] [--fix-round] [--require consumers] \
         [--allow-scaffolding "<reason>"] \
         [--milestone "<title>"] [--ledger <path>]
@@ -88,6 +89,24 @@ the only term here that git can contradict (without it `<changed_files>` need
 merely exist; with it, a file the agent never touched is rejected). Every
 pipeline handoff step passes `--since` and `--ledger`; a call without them
 checks shape only and says nothing about what was actually written.
+
+MULTIPLE REPOS AND A SHARED DOCS ROOT (`--repo`, `--docs-root`)
+----------------------------------------------------------------
+A workspace where `.docs/` (pipeline artifacts, reports, evidence) sits ABOVE
+several separate git repos, and a milestone touches more than one of them,
+breaks a gate that only knows one `--repo`: the artifact is always "outside"
+and the other repo's changed files always "missing". `--repo` is therefore
+REPEATABLE -- a `<changed_files>` path is accepted if it resolves (relative or
+absolute, either slash style, case-insensitive drive letters) under ANY listed
+repo, and `--since` runs `git diff --name-only <ref>` in the specific repo
+that path resolved to, not the first one.
+
+`--docs-root` is also repeatable and OPTIONAL: `<artifact>` and
+`<changed_skills>` resolve under any `--repo` OR any `--docs-root`, but
+`<changed_files>` never does -- source is source, and a file sitting under the
+docs root next to the reports is not a code change. When `--docs-root` is
+omitted, it defaults to the nearest ancestor directory of `--handoff` named
+`.docs`, if any, so the common shared-docs layout needs no extra flag.
 
 Exit 0 PASS, 1 FAIL (findings against a readable handoff), 2 ERROR (usage,
 unreadable input, unusable repo). Pure standard library.
@@ -380,25 +399,42 @@ def normalize_path(raw):
     return p
 
 
-def path_status(repo, raw):
-    """('ok'|'missing'|'outside', normalized) for one handoff path."""
+def path_status(roots, raw):
+    """('ok'|'missing'|'outside', normalized, matched_root, resolved_path).
+
+    Tries `roots` in order. A relative path is joined onto each root in turn;
+    an absolute path (either slash style) resolves to the same place every
+    time and is simply tested against each root. Comparisons go through
+    `Path.resolve()` on both sides, never a string prefix, so mixed slash
+    style and Windows drive-letter case both resolve correctly.
+
+    'ok': the path lies under some root AND exists there -- `matched_root` and
+    `resolved_path` (an absolute Path) are set to where it was found.
+    'missing': it lies under at least one root (so `roots` is the right shape
+    of answer) but exists under none.
+    'outside': it escapes every root (a `..` climb, or an absolute path
+    nowhere near any of them) -- existence is not even checked.
+    """
     rel = normalize_path(raw)
     candidate = Path(rel)
-    if candidate.is_absolute():
-        resolved = candidate
-    else:
-        resolved = Path(repo) / rel
-    try:
-        resolved_abs = os.path.normpath(os.path.abspath(str(resolved)))
-        repo_abs = os.path.normpath(os.path.abspath(str(repo)))
-        if os.path.commonpath([resolved_abs, repo_abs]) != repo_abs:
-            return "outside", rel
-    except ValueError:
-        # Different drives on Windows -- definitionally outside the repo.
-        return "outside", rel
-    if not os.path.exists(resolved_abs):
-        return "missing", rel
-    return "ok", rel
+    in_some_root = False
+    for root in roots:
+        resolved = candidate if candidate.is_absolute() else Path(root) / rel
+        try:
+            resolved_abs = resolved.resolve()
+            root_abs = Path(root).resolve()
+        except OSError:
+            continue
+        try:
+            resolved_abs.relative_to(root_abs)
+        except ValueError:
+            continue
+        in_some_root = True
+        if resolved_abs.exists():
+            return "ok", rel, root, resolved_abs
+    if in_some_root:
+        return "missing", rel, None, None
+    return "outside", rel, None, None
 
 
 def git_changed_since(repo, ref):
@@ -421,16 +457,31 @@ def git_changed_since(repo, ref):
             raise GateError(f"git {args[0]} timed out after 120s")
         if proc.returncode != 0:
             raise GateError(
-                f"git {' '.join(args)} failed: {proc.stderr.strip() or proc.stdout.strip()}")
+                f"git {' '.join(args)} in {repo} failed: "
+                f"{proc.stderr.strip() or proc.stdout.strip()}")
         changed.update(normalize_path(line) for line in proc.stdout.splitlines()
                        if line.strip())
     return changed
 
 
-def resolve_under_repo(repo, rel):
-    """The on-disk path a normalized handoff path refers to."""
-    candidate = Path(rel)
-    return candidate if candidate.is_absolute() else Path(repo) / rel
+def default_docs_root(handoff_path):
+    """Nearest ancestor directory of `handoff_path` named `.docs`, or None.
+
+    This is the CLI-level default for `--docs-root`: the common shape this
+    gate was built for is an agent's handoff living somewhere under a shared
+    `.docs/` tree that sits above the repos it reports on, and that default
+    needs no extra flag on every pipeline call.
+    """
+    if not handoff_path:
+        return None
+    try:
+        here = Path(handoff_path).resolve().parent
+    except OSError:
+        return None
+    for parent in [here, *here.parents]:
+        if parent.name == ".docs":
+            return parent
+    return None
 
 
 INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
@@ -510,15 +561,36 @@ def check_honesty(elements):
     return problems
 
 
+def _as_root_list(value):
+    """Normalize a single path or an iterable of paths into a list.
+
+    Callers (tests especially) pass a single directory far more often than a
+    list; accepting both here avoids forcing every existing call site to wrap
+    its one repo in `[...]`.
+    """
+    if value is None:
+        return []
+    if isinstance(value, (str, Path)):
+        return [value]
+    return list(value)
+
+
 def build_report(text, persona, repo, since=None, fix_round=False,
                  require=(), source="<stdin>", advisory=False,
-                 allow_scaffolding=None):
+                 allow_scaffolding=None, docs_root=None):
     persona_key = (persona or "").strip().lower()
     if persona_key not in PERSONA_ELEMENTS:
         known = ", ".join(sorted(PERSONA_ELEMENTS))
         raise GateError(f"unknown persona '{persona}'; expected one of: {known}")
-    if not Path(repo).is_dir():
-        raise GateError(f"--repo is not a directory: {repo}")
+
+    repos = _as_root_list(repo) or ["."]
+    for r in repos:
+        if not Path(r).is_dir():
+            raise GateError(f"--repo is not a directory: {r}")
+    docs_roots = _as_root_list(docs_root)
+    for d in docs_roots:
+        if not Path(d).is_dir():
+            raise GateError(f"--docs-root is not a directory: {d}")
 
     required = list(PERSONA_ELEMENTS[persona_key])
     waived = []
@@ -534,7 +606,8 @@ def build_report(text, persona, repo, since=None, fix_round=False,
         "result": None,
         "source": str(source),
         "persona": persona_key,
-        "repo": str(repo),
+        "repo": [str(r) for r in repos],
+        "docs_root": [str(d) for d in docs_roots],
         "since": since,
         "fix_round": bool(fix_round),
         "advisory": bool(advisory),
@@ -604,20 +677,59 @@ def build_report(text, persona, repo, since=None, fix_round=False,
 
     declared = {}
     scannable = []
+    # <changed_files> is source: it resolves only under a --repo. <artifact>
+    # and <changed_skills> are the report ABOUT that source, so they may also
+    # live under a --docs-root that sits above the repos. Blurring this would
+    # let a report path under the shared docs tree count as evidence of a
+    # code change, which it is not.
+    changed_files_repo = {}
     for name in PATH_ELEMENTS:
         if name not in elements:
             continue
+        if name == "changed_files":
+            roots = list(repos)
+        else:
+            # A relative <artifact>/<changed_skills> path is written from
+            # wherever the Orchestrator ran the gate -- usually the workspace
+            # root ABOVE .docs (so the handoff reads `.docs/bugfix/x/report.md`,
+            # not `bugfix/x/report.md` relative to the docs-root itself). Fall
+            # back to each docs-root's own parent, then the cwd, to catch that
+            # shape. <changed_files> never gets these extra roots: it stays
+            # strict, repo-relative or absolute under a --repo.
+            roots = list(repos) + list(docs_roots)
+            roots.extend(Path(d).resolve().parent for d in docs_roots)
+            roots.append(Path.cwd())
+        # De-duplicate (by resolved identity) so the reported root list, and
+        # the search itself, is not padded with the same directory twice --
+        # the docs-root's parent is often the cwd, and sometimes a --repo.
+        seen = set()
+        unique_roots = []
+        for r in roots:
+            try:
+                key = str(Path(r).resolve())
+            except OSError:
+                key = str(r)
+            if key not in seen:
+                seen.add(key)
+                unique_roots.append(r)
+        roots = unique_roots
+        roots_label = ", ".join(str(r) for r in roots)
         for raw in split_paths(elements[name]):
-            state, rel = path_status(repo, raw)
+            state, rel, matched_root, resolved_path = path_status(roots, raw)
             declared.setdefault(name, []).append(rel)
-            if state == "ok" and name in SCAFFOLD_ELEMENTS:
-                scannable.append((name, rel))
+            if state == "ok":
+                if name in SCAFFOLD_ELEMENTS:
+                    scannable.append((name, rel, resolved_path))
+                if name == "changed_files":
+                    changed_files_repo[rel] = (matched_root, resolved_path)
             if state == "missing":
                 finding("path_missing", f"<{name}> names a path that does not "
-                                        f"exist under --repo: {rel}",
+                                        f"exist under any searched root "
+                                        f"({roots_label}): {rel}",
                         element=name, path=rel)
             elif state == "outside":
-                finding("path_missing", f"<{name}> names a path outside --repo: {rel}",
+                finding("path_missing", f"<{name}> names a path outside every "
+                                        f"searched root ({roots_label}): {rel}",
                         element=name, path=rel)
     report["changed_files"] = declared.get("changed_files", [])
     report["artifacts"] = declared.get("artifact", [])
@@ -626,8 +738,7 @@ def build_report(text, persona, repo, since=None, fix_round=False,
     # The sweep base-persona asks for, on the one status that promises it was
     # done. PARTIAL/BLOCKED artifacts are supposed to carry their markers.
     if (report["status"] or "").strip().upper() == "COMPLETE":
-        for element, rel in scannable:
-            target = resolve_under_repo(repo, rel)
+        for element, rel, target in scannable:
             if not target.is_file():
                 continue
             hits, warning = scan_scaffolding(target)
@@ -647,14 +758,28 @@ def build_report(text, persona, repo, since=None, fix_round=False,
                         marker=marker, text=line)
 
     if since:
-        touched = git_changed_since(repo, since)
-        report["git_changed_count"] = len(touched)
+        # Each path is diffed in the repo IT resolved to, not the first one
+        # listed -- a milestone that touches two repos needs both checked
+        # against their own history. A path that never resolved (already a
+        # path_missing finding above) has nothing to diff and is skipped.
+        touched_cache = {}
         for rel in report["changed_files"]:
-            if rel not in touched:
+            resolution = changed_files_repo.get(rel)
+            if resolution is None:
+                continue
+            matched_root, resolved_path = resolution
+            root_key = str(Path(matched_root).resolve())
+            if root_key not in touched_cache:
+                touched_cache[root_key] = git_changed_since(matched_root, since)
+            root_abs = Path(matched_root).resolve()
+            repo_rel = normalize_path(str(resolved_path.relative_to(root_abs)))
+            if repo_rel not in touched_cache[root_key]:
                 finding("changed_files_not_in_diff",
-                        f"<changed_files> names {rel}, which git does not report "
-                        f"as changed or committed since {since}",
+                        f"<changed_files> names {rel}, which git does not "
+                        f"report as changed or committed since {since} in "
+                        f"{matched_root}",
                         path=rel, since=since)
+        report["git_changed_count"] = sum(len(v) for v in touched_cache.values())
 
     if "consumers" in elements:
         for bad in check_consumers(elements["consumers"]):
@@ -690,8 +815,20 @@ def main(argv):
     parser.add_argument("--handoff", help="file holding the agent's handoff "
                                           "(default: read stdin)")
     parser.add_argument("--persona", help="squad persona that produced it")
-    parser.add_argument("--repo", default=".",
-                        help="repository root the handoff's paths are relative to")
+    parser.add_argument("--repo", action="append", default=None,
+                        help="repository root the handoff's paths are relative "
+                             "to. Repeatable: a <changed_files> path is "
+                             "accepted if it resolves under ANY listed repo. "
+                             "Defaults to '.' when omitted.")
+    parser.add_argument("--docs-root", dest="docs_root", action="append",
+                        default=None,
+                        help="a directory holding cross-repo artifacts/reports "
+                             "(e.g. a shared .docs/ tree above several repos). "
+                             "Repeatable. <artifact> and <changed_skills> "
+                             "additionally resolve under any --docs-root; "
+                             "<changed_files> never does. Defaults to the "
+                             "nearest ancestor of --handoff named '.docs', if "
+                             "any.")
     parser.add_argument("--since", help="git ref: <changed_files> must be a "
                                         "subset of what git reports changed "
                                         "since it. Optional here, REQUIRED by "
@@ -768,11 +905,19 @@ def main(argv):
                               "error": "no --handoff given and stdin was empty"}))
             return finish(2, "ERROR")
 
+    repos = args.repo if args.repo else ["."]
+    docs_roots = list(args.docs_root) if args.docs_root else []
+    if not docs_roots and args.handoff:
+        auto = default_docs_root(args.handoff)
+        if auto is not None:
+            docs_roots = [str(auto)]
+
     try:
-        report = build_report(text, args.persona, args.repo, since=args.since,
+        report = build_report(text, args.persona, repos, since=args.since,
                               fix_round=args.fix_round, require=args.require,
                               source=source, advisory=args.advisory,
-                              allow_scaffolding=args.allow_scaffolding)
+                              allow_scaffolding=args.allow_scaffolding,
+                              docs_root=docs_roots)
     except GateError as exc:
         print(json.dumps({"result": "ERROR", "error": str(exc)}))
         return finish(2, "ERROR")
@@ -1184,6 +1329,165 @@ def run_self_test():
             self.make_repo()
             with self.assertRaises(GateError):
                 build_report(GOOD_MASON, "mason", self.dir, since="no-such-ref")
+
+        # --- multi-repo / --docs-root (the Gorelo shape) -----------------
+        # `.docs/` sits ABOVE several independent git repos, and a milestone
+        # often touches more than one repo. Recreated here as a `.docs` dir
+        # beside two tiny git repos, each with one commit.
+
+        def make_multi_repo(self):
+            root = self.dir / "gorelo"
+            docs = root / ".docs"
+            docs.mkdir(parents=True)
+            repo1, repo2 = root / "repo1", root / "repo2"
+            for repo, fname, body in ((repo1, "one.py", "one"),
+                                      (repo2, "two.py", "two")):
+                (repo / "src").mkdir(parents=True)
+                (repo / "src" / fname).write_text(body, encoding="utf-8")
+            refs = [self._init_repo(repo) for repo in (repo1, repo2)]
+            return docs, repo1, repo2, refs[0], refs[1]
+
+        def _init_repo(self, repo):
+            def run(*args):
+                return subprocess.run(["git", "-C", str(repo)] + list(args),
+                                      capture_output=True, text=True, timeout=120)
+            try:
+                if run("init", "-q").returncode != 0:
+                    self.skipTest("git init failed")
+            except FileNotFoundError:
+                self.skipTest("git not available")
+            run("config", "user.email", "t@t.t")
+            run("config", "user.name", "t")
+            run("add", "-A")
+            run("commit", "-qm", "base")
+            return run("rev-parse", "HEAD").stdout.strip()
+
+        def test_artifact_under_docs_root_passes(self):
+            docs, repo1, repo2, ref1, ref2 = self.make_multi_repo()
+            (docs / "report.md").write_text("# Report\n\ndone\n", encoding="utf-8")
+            text = ("<handoff><status>COMPLETE</status>"
+                    f"<artifact>{docs / 'report.md'}</artifact>"
+                    "<blockers>None</blockers></handoff>")
+            r = build_report(text, "luna", [repo1, repo2], docs_root=[docs])
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertEqual(r["artifacts"], [normalize_path(str(docs / "report.md"))])
+
+        def test_changed_file_in_second_repo_passes_with_two_repo(self):
+            docs, repo1, repo2, ref1, ref2 = self.make_multi_repo()
+            text = ("<handoff><status>COMPLETE</status>"
+                    "<changed_files>src/one.py, src/two.py</changed_files>"
+                    "<blockers>None</blockers></handoff>")
+            r = build_report(text, "mason", [repo1, repo2])
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            # And confirms the non-multi-repo behavior: a single --repo can't
+            # see the other repo's file.
+            r_single = build_report(text, "mason", [repo1])
+            self.assertEqual(self.codes(r_single), ["path_missing"])
+            self.assertEqual(r_single["findings"][0]["path"], "src/two.py")
+
+        def test_changed_file_listed_under_docs_root_fails(self):
+            """<changed_files> is source, never the report -- a path under
+            --docs-root does not satisfy it even though --docs-root exists."""
+            docs, repo1, repo2, ref1, ref2 = self.make_multi_repo()
+            (docs / "report.md").write_text("done", encoding="utf-8")
+            text = ("<handoff><status>COMPLETE</status>"
+                    f"<changed_files>{docs / 'report.md'}</changed_files>"
+                    "<blockers>None</blockers></handoff>")
+            r = build_report(text, "mason", [repo1, repo2], docs_root=[docs])
+            self.assertEqual(self.codes(r), ["path_missing"])
+            self.assertIn("changed_files", r["findings"][0]["element"])
+
+        def test_since_checks_the_repo_a_file_resolved_to(self):
+            docs, repo1, repo2, ref1, ref2 = self.make_multi_repo()
+            (repo1 / "src" / "untouched.py").write_text("u", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo1), "add", "-A"],
+                           capture_output=True, text=True, timeout=120)
+            subprocess.run(["git", "-C", str(repo1), "commit", "-qm", "add"],
+                           capture_output=True, text=True, timeout=120)
+            for repo in (repo1, repo2):
+                subprocess.run(["git", "-C", str(repo), "tag", "start"],
+                               capture_output=True, text=True, timeout=120)
+            (repo1 / "src" / "one.py").write_text("one-edited", encoding="utf-8")
+            (repo2 / "src" / "two.py").write_text("two-edited", encoding="utf-8")
+
+            text = ("<handoff><status>COMPLETE</status>"
+                    "<changed_files>src/one.py, src/two.py</changed_files>"
+                    "<blockers>None</blockers></handoff>")
+            r = build_report(text, "mason", [repo1, repo2], since="start")
+            self.assertEqual(r["result"], "PASS", r["findings"])
+
+            # untouched.py resolves to repo1 (it only exists there) and was
+            # committed BEFORE the tag, so it never shows up in repo1's own
+            # diff -- proving the diff ran against the repo it resolved to,
+            # not just whichever repo happened to pass.
+            bad = text.replace("src/two.py",
+                               "src/two.py, src/untouched.py")
+            r2 = build_report(bad, "mason", [repo1, repo2], since="start")
+            self.assertEqual(self.codes(r2), ["changed_files_not_in_diff"])
+            self.assertEqual(r2["findings"][0]["path"], "src/untouched.py")
+
+        def test_default_docs_root_is_discovered_from_the_handoff_path(self):
+            docs, repo1, repo2, ref1, ref2 = self.make_multi_repo()
+            handoff_dir = docs / "milestone1"
+            handoff_dir.mkdir()
+            handoff_path = handoff_dir / "handoff.md"
+            report_path = docs / "report.md"
+            report_path.write_text("# Report\n\ndone\n", encoding="utf-8")
+            handoff_path.write_text(
+                "<handoff><status>COMPLETE</status>"
+                f"<artifact>{report_path}</artifact>"
+                "<blockers>None</blockers></handoff>", encoding="utf-8")
+            code = main(["--handoff", str(handoff_path), "--persona", "luna",
+                        "--repo", str(repo1)])
+            self.assertEqual(code, 0)
+
+        def test_relative_artifact_resolves_against_docs_root_parent_and_cwd(self):
+            """The real Gorelo shape: the Orchestrator runs the gate from the
+            WORKSPACE ROOT (the docs-root's own parent), and the handoff's
+            <artifact> is written relative to THAT -- `.docs/bugfix/x/report.md`
+            -- not relative to the docs-root itself (which would double up as
+            `.docs/.docs/bugfix/x/report.md` and never resolve)."""
+            docs, repo1, repo2, ref1, ref2 = self.make_multi_repo()
+            workspace_root = docs.parent
+            handoff_dir = docs / "bugfix" / "x"
+            handoff_dir.mkdir(parents=True)
+            report_path = handoff_dir / "review-report.md"
+            report_path.write_text("# Report\n\ndone\n", encoding="utf-8")
+            handoff_path = handoff_dir / "handoff.md"
+            handoff_path.write_text(
+                "<handoff><status>COMPLETE</status>"
+                "<artifact>.docs/bugfix/x/review-report.md</artifact>"
+                "<blockers>None</blockers></handoff>", encoding="utf-8")
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(workspace_root)
+                # No --docs-root passed: discovered from --handoff, same as
+                # every real pipeline call.
+                code = main(["--handoff", str(handoff_path), "--persona", "luna",
+                            "--repo", str(repo1), "--repo", str(repo2)])
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(code, 0)
+
+        def test_relative_changed_files_under_docs_root_still_fails(self):
+            """<changed_files> never gets the docs-root-parent/cwd fallback --
+            it stays repo-relative or absolute under a --repo, even when the
+            same relative form would resolve for <artifact>."""
+            docs, repo1, repo2, ref1, ref2 = self.make_multi_repo()
+            workspace_root = docs.parent
+            (docs / "note.md").write_text("x", encoding="utf-8")
+            text = ("<handoff><status>COMPLETE</status>"
+                    "<changed_files>.docs/note.md</changed_files>"
+                    "<blockers>None</blockers></handoff>")
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(workspace_root)
+                r = build_report(text, "mason", [repo1, repo2],
+                                 docs_root=[docs])
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(self.codes(r), ["path_missing"])
+            self.assertEqual(r["findings"][0]["element"], "changed_files")
 
         # --- status, consumers, honesty ---------------------------------
         def test_status_outside_the_enum_fails(self):
