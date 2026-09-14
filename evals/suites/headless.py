@@ -861,10 +861,11 @@ def _row(suite, case, run_index, runtime, outcome, passed, duration_s, failed_cr
             "failed_criterion": failed_criterion, "workspace": str(workspace)}
 
 
-def _update_marker_result(marker_path, outcome, passed, failed_criterion):
+def _update_marker_result(marker_path, outcome, passed, failed_criterion, left_workspace=None):
     rec = common.load_marker(marker_path)
     rec["graded_at"] = common.utc_now_iso()
-    rec["last_result"] = {"outcome": outcome, "pass": passed, "failed_criterion": failed_criterion}
+    rec["last_result"] = {"outcome": outcome, "pass": passed, "failed_criterion": failed_criterion,
+                          "left_workspace": left_workspace}
     common.save_marker(marker_path, rec)
     return rec
 
@@ -1020,7 +1021,7 @@ def _run_trigger(runtime, case, run_index, root, ts, timeout_s, model, record, s
         mentioned_only = claude_mentioned_only(proc.stdout, expected_skill, acceptable_alternatives)
         passed = (outcome == "ROUTED_OK")
         failed_criterion = None if passed else f"{outcome}: first_skill={first_skill} skills_invoked={skills_invoked}"
-        _update_marker_result(marker, outcome, passed, failed_criterion)
+        _update_marker_result(marker, outcome, passed, failed_criterion, left_workspace=left_workspace)
         if record:
             run_idx = common.infer_run_index("trigger", case, marker)
             common.eval_record.append_runtime_trigger_record(
@@ -1163,7 +1164,7 @@ def _run_antigravity(runtime, case, run_index, root, ts, timeout_s, model, recor
     passed = None if is_infra else bool(result.get("pass"))
     failed_criterion = result.get("failed_criterion")
 
-    _update_marker_result(marker, outcome, passed, failed_criterion)
+    _update_marker_result(marker, outcome, passed, failed_criterion, left_workspace=left_workspace)
 
     if is_infra:
         if record:
