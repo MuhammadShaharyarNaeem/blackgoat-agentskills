@@ -584,6 +584,27 @@ class SelfTest(unittest.TestCase):
         self.assertIsNotNone(result_b["parent"])
         self.assertEqual(result_a["parent"]["conversation_id"], result_b["parent"]["conversation_id"])
 
+    def test_find_run_transcripts_parent_ends_before_window_end(self):
+        # Regression: grade's window_end is "last artifact write + 2 min", so
+        # a parent conversation whose own last step lands within that buffer
+        # of its last gate write (i.e. BEFORE window_end, not AT OR AFTER it)
+        # must still be found -- the old "spans the whole window" rule
+        # required last_ts >= window_end and would have lost it here.
+        brain2 = self.tmp / "brain-ends-early"
+        conv_dir = brain2 / "parent-conv"
+        steps = [
+            {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE",
+             "created_at": "2026-02-01T00:00:00Z", "content": "fix the thing"},
+            {"step_index": 1, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+             "created_at": "2026-02-01T00:00:30Z", "content": "done, 60s before window_end"},
+        ]
+        _write_transcript(conv_dir, steps)
+        window_start = "2026-02-01T00:00:00Z"
+        window_end = "2026-02-01T00:01:30Z"  # parent's last_ts (00:00:30Z) is 60s before this
+        result = transcript_tools.find_run_transcripts(window_start, window_end, brain2)
+        self.assertIsNotNone(result["parent"])
+        self.assertEqual(result["parent"]["conversation_id"], "parent-conv")
+
     def test_extract_view_file_paths(self):
         steps = transcript_tools.parse_transcript(self.brain_root / "mason-conv")
         calls = transcript_tools.iter_tool_calls(steps)
@@ -812,10 +833,16 @@ class SelfTest(unittest.TestCase):
         # DeprecationWarning on every invocation -- `_utcnow()`/`utc_now_iso()`
         # must use the timezone-aware form instead.
         import warnings
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            utc_now_iso()
-            _start_one("run-log-discipline", self.tmp / "utcnow-check-ws")
+        global RUNS_DIR
+        original_runs_dir = RUNS_DIR
+        RUNS_DIR = self.tmp / "runs-utcnow"
+        try:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                utc_now_iso()
+                _start_one("run-log-discipline", self.tmp / "utcnow-check-ws")
+        finally:
+            RUNS_DIR = original_runs_dir
         self.assertFalse(any(issubclass(w.category, DeprecationWarning) and "utcnow" in str(w.message)
                               for w in caught))
 

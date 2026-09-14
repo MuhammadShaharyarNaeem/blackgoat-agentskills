@@ -311,10 +311,15 @@ def find_run_transcripts(window_start, window_end, brain_root=None, workspace=No
         if is_briefing_input(fu):
             record["persona"] = briefing_persona(fu)
             subagents.append(record)
-        elif (conv["first_ts"] or "") <= window_start and (conv["last_ts"] or "") >= window_end:
-            # Spans the whole window and isn't itself a briefing -> the
-            # human-driven parent. If several qualify, keep the tightest
-            # (latest first_ts) as parent and leave the rest in "all" only.
+        elif (conv["first_ts"] or "") <= window_start and (conv["last_ts"] or "") >= window_start:
+            # Overlaps the window's START and isn't itself a briefing -> the
+            # human-driven parent. Deliberately NOT "spans the whole window"
+            # (first_ts <= window_start AND last_ts >= window_end): grade's
+            # window_end is "last artifact write + 2 min", so a conversation
+            # that ended within that buffer of its own last gate write would
+            # otherwise lose its parent to a false INFRA. If several qualify,
+            # keep the tightest (latest first_ts) as parent and leave the
+            # rest in "all" only.
             if parent is None or conv["first_ts"] > parent["first_ts"]:
                 parent = record
     return {"parent": parent, "subagents": subagents, "all": all_active}
