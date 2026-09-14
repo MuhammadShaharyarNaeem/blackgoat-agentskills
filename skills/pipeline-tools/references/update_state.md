@@ -55,3 +55,11 @@ The near-misses are asserted too: `bgpdd`, `build`, `pdd-build` and
 `BGPDD-BUILD` are all `no-section`. The lane token is lower-case by
 convention, and a case-insensitive match would let a heading that is not a
 lane name satisfy a lane gate.
+
+## `--set-halt` / `--clear-halt` (Unreleased)
+
+`check_redelegation.py` needed a write path for the standing halt it computes: `state["halt"]` is a single object, not a list, because a unit is either halted or it isn't — a second halt on the same unit replaces the first rather than accumulating. `--set-halt` takes the halt as a JSON object (`unit`, `agent`, `code`, `reason`, all required non-empty strings) and merges it in, stamping `added`; a malformed or incomplete object is exit 2 and writes nothing, matching every other structural-failure case in this script.
+
+`--clear-halt <unit>` is deliberately narrow: it only removes `state["halt"]` when the CURRENT halt's `unit` matches the one named, and it requires a non-empty `--reason` naming what changed in the world. Both restrictions trace to the same design decision made in `check_redelegation.py`'s own contract — that script never clears its own halt, on any result, from any agent, because a blocker in the `environment`/`credentials`/`dependency` category is a fact about the unit's surroundings, not about whether the latest handoff happened to read clean. Clearing is therefore a human act with a recorded justification, and `--reason` is where that justification lives; omitting it (or passing blank) is exit 2, the same shape as `--resolve-blocker`'s mandatory `--evidence`. A `--clear-halt` naming a unit that isn't the one currently halted — or naming one when nothing is halted at all — is a no-op warning, not an error: there is no malformed state to refuse, just nothing to do.
+
+Self-test count: 47 → 60, adding the `--set-halt`/`--clear-halt` round trips (merge, malformed JSON, missing keys, blank-reason clear, matching-unit clear, mismatched-unit clear, no-op-when-absent, and the ledger record's `action`/`unit`/`code`/`reason` fields) through both `apply_updates` directly and `main`.
