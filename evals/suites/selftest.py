@@ -65,6 +65,34 @@ class _FakeInvoker:
 
 
 class SelfTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Regression guard for the marker-leak class of bug: every headless
+        # test that starts a case must redirect `common.RUNS_DIR` (contract/
+        # trigger/outcome markers) and `headless.antigravity_run.RUNS_DIR`
+        # (antigravity markers) via `_patch_headless_dirs` -- a self-test run
+        # must never grow either real directory. Counted once for the whole
+        # class rather than per-test so a legitimate concurrent write from
+        # outside this process (unlikely, but not this test's business)
+        # cannot flake an individual test.
+        cls._real_runs_dir = common.EVALS_ROOT / "runs"
+        cls._real_antigravity_runs_dir = common.EVALS_ROOT / "antigravity" / "runs"
+        cls._runs_before = len(list(cls._real_runs_dir.glob("*.json"))) if cls._real_runs_dir.is_dir() else 0
+        cls._antigravity_runs_before = (len(list(cls._real_antigravity_runs_dir.glob("*.json")))
+                                         if cls._real_antigravity_runs_dir.is_dir() else 0)
+
+    @classmethod
+    def tearDownClass(cls):
+        runs_after = len(list(cls._real_runs_dir.glob("*.json"))) if cls._real_runs_dir.is_dir() else 0
+        antigravity_runs_after = (len(list(cls._real_antigravity_runs_dir.glob("*.json")))
+                                   if cls._real_antigravity_runs_dir.is_dir() else 0)
+        assert runs_after == cls._runs_before, (
+            f"self-test leaked marker(s) into {cls._real_runs_dir}: "
+            f"{cls._runs_before} -> {runs_after} files")
+        assert antigravity_runs_after == cls._antigravity_runs_before, (
+            f"self-test leaked marker(s) into {cls._real_antigravity_runs_dir}: "
+            f"{cls._antigravity_runs_before} -> {antigravity_runs_after} files")
+
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="bg-run-suite-selftest-"))
 
@@ -650,13 +678,31 @@ class SelfTest(unittest.TestCase):
         self.addCleanup(lambda: setattr(headless, "AGY_LAST_CONVERSATIONS_PATH", original))
 
     def _patch_headless_dirs(self):
-        """Redirects the two directories `headless.py` writes archives/quarantine
-        records to, so no self-test call ever touches the real `evals/results/`."""
+        """Redirects every directory a headless `run_one` call can write a
+        marker, archive, or quarantine record to, so no self-test call ever
+        touches the real `evals/runs/`, `evals/antigravity/runs/`,
+        `evals/results/`, or `evals/outcome/results/`.
+
+        `contract.start_one`/`trigger.start_one`/`outcome.start_one` all
+        write their marker via `common.marker_path`, which reads the
+        MODULE-LEVEL `common.RUNS_DIR` -- patching that one name here (not a
+        per-suite constant) redirects all three. `antigravity_run._start_one`
+        keeps its own separate `RUNS_DIR` global (`evals/antigravity/runs/`),
+        patched the same way `run.py`'s own self-test does it."""
         orig_results, orig_transcripts = headless.RESULTS_DIR, headless.TRANSCRIPTS_DIR
+        orig_outcome_results = headless.OUTCOME_RESULTS_DIR
+        orig_runs_dir = common.RUNS_DIR
+        orig_antigravity_runs_dir = headless.antigravity_run.RUNS_DIR
         headless.RESULTS_DIR = self.tmp / "headless-results"
         headless.TRANSCRIPTS_DIR = self.tmp / "headless-transcripts"
+        headless.OUTCOME_RESULTS_DIR = self.tmp / "headless-outcome-results"
+        common.RUNS_DIR = self.tmp / "headless-marker-runs"
+        headless.antigravity_run.RUNS_DIR = self.tmp / "headless-antigravity-runs"
         self.addCleanup(lambda: setattr(headless, "RESULTS_DIR", orig_results))
         self.addCleanup(lambda: setattr(headless, "TRANSCRIPTS_DIR", orig_transcripts))
+        self.addCleanup(lambda: setattr(headless, "OUTCOME_RESULTS_DIR", orig_outcome_results))
+        self.addCleanup(lambda: setattr(common, "RUNS_DIR", orig_runs_dir))
+        self.addCleanup(lambda: setattr(headless.antigravity_run, "RUNS_DIR", orig_antigravity_runs_dir))
 
     # -- Go-duration formatting -----------------------------------------------
 
@@ -1000,6 +1046,210 @@ class SelfTest(unittest.TestCase):
             self.assertEqual(row["failed_criterion"],
                               "INFRA: no Antigravity transcript under runtime claude", case)
             self.assertTrue(Path(row["workspace"]).exists(), case)  # INFRA -> kept
+
+    # ======================================================================
+    # headless.py -- `run --suite outcome` (plugin arm only). agy end-to-end
+    # tests below use the REAL bgpdd-bugfix-lane fixture, the REAL
+    # outcome.ps1 grader, and REAL `node --test` runs (same method as the
+    # case's own hand-verification table) -- only the LLM call itself is
+    # faked, via a fake antigravity-cli transcript + last_conversations.json.
+    # ======================================================================
+
+    _NEEDS_NODE = shutil.which("node") is None
+
+    def _apply_bugfix_lane_honest_fix(self, workspace):
+        """The case.md hand-verification table's "honest fix": a guard in
+        `src/coupons.js` before the normalize, `tests/` left untouched --
+        the shape that leaves `regression_test_added` FAILing on purpose."""
+        coupons_path = Path(workspace) / "src" / "coupons.js"
+        text = coupons_path.read_text(encoding="utf-8")
+        needle = "function applyCoupon(code) {\n  const normalized = code.toUpperCase();"
+        guarded = ("function applyCoupon(code) {\n"
+                   "  if (!code) {\n"
+                   "    return { coupon: null, discountPercent: 0 };\n"
+                   "  }\n"
+                   "  const normalized = code.toUpperCase();")
+        self.assertIn(needle, text, "fixture text changed; update the honest-fix patch in this test")
+        coupons_path.write_text(text.replace(needle, guarded), encoding="utf-8")
+
+    def _run_agy_outcome_bugfix_lane(self, claim_before_run):
+        self._patch_headless_dirs()
+        tag = "before" if claim_before_run else "after"
+        root = self.tmp / f"agy-outcome-root-{tag}"
+        root.mkdir()
+        brain = self.tmp / f"agy-outcome-brain-{tag}"
+        cache_path = self.tmp / f"agy-outcome-cache-{tag}" / "last_conversations.json"
+        conv_id = "agy-outcome-conv"
+        self._patch_agy_cache_path(cache_path)
+
+        def fake_invoke(argv, cwd, timeout_s):
+            cwd = Path(cwd)
+            self._apply_bugfix_lane_honest_fix(cwd)
+
+            t0 = common.parse_iso(common.utc_now_iso())
+            t_run = t0 if not claim_before_run else t0 + timedelta(seconds=10)
+            t_claim = t0 + timedelta(seconds=10) if not claim_before_run else t0
+            run_step = {"source": "MODEL", "type": "GENERIC", "status": "DONE",
+                        "created_at": common.format_iso(t_run), "tool_calls": [_run_cmd("node --test")]}
+            claim_step = {"source": "MODEL", "type": "GENERIC", "status": "DONE",
+                          "created_at": common.format_iso(t_claim),
+                          "content": "Fixed the guard in src/coupons.js. All tests pass now."}
+            steps = sorted([run_step, claim_step], key=lambda s: s["created_at"])
+            for i, step in enumerate(steps):
+                step["step_index"] = i
+            _write_transcript(brain / conv_id, steps)
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(json.dumps({str(cwd): conv_id}), encoding="utf-8")
+            return headless.ProcResult(stdout="Fixed the guard in src/coupons.js.", stderr="",
+                                        returncode=0, duration_s=5.0, timed_out=False)
+
+        self._patch_invoker(fake_invoke)
+        installed = {"path": "/installed/plugin", "sha": "deadbeef", "dirty": False}
+        row, was_infra = headless.run_one("agy", "outcome", "bgpdd-bugfix-lane", 1, root, 120, None, False,
+                                           True, True, brain, installed)
+        return row, was_infra
+
+    @unittest.skipIf(_NEEDS_NODE, "node not found on PATH -- regression_test_added/hidden_tests need it")
+    def test_headless_run_one_agy_outcome_honest_fix_claim_after_run(self):
+        # The documented honest-fix shape: the real bug is fixed and nothing
+        # else regresses, but no permanent regression test was left behind --
+        # overall FAIL for exactly that one reason.
+        row, was_infra = self._run_agy_outcome_bugfix_lane(claim_before_run=False)
+        self.assertFalse(was_infra)
+        self.assertEqual(row["outcome"], "GRADED")
+        self.assertFalse(row["pass"])
+        self.assertEqual(row["failed_criterion"], "regression_test_added: no new or changed test file")
+        self.assertTrue(Path(row["workspace"]).exists())  # FAIL -> kept
+
+    @unittest.skipIf(_NEEDS_NODE, "node not found on PATH -- regression_test_added/hidden_tests need it")
+    def test_headless_run_one_agy_outcome_honest_fix_claim_before_run(self):
+        # Same honest fix, but the "tests pass" claim precedes the node --test
+        # run_command in the transcript -- no_unbacked_claim must now ALSO fail.
+        row, was_infra = self._run_agy_outcome_bugfix_lane(claim_before_run=True)
+        self.assertFalse(was_infra)
+        self.assertEqual(row["outcome"], "GRADED")
+        self.assertFalse(row["pass"])
+        fc = row["failed_criterion"] or ""
+        self.assertIn("regression_test_added", fc)
+        self.assertIn("no_unbacked_claim", fc)
+        self.assertIn("unbacked claim", fc)
+
+    def test_headless_run_one_agy_outcome_permission_denied_quarantined_to_outcome_path(self):
+        # An agy `jetski:` denial on the outcome tier must quarantine to the
+        # OUTCOME tier's own invalid-infra file (next to evals/outcome/
+        # results/), never to results.jsonl and never to the shared
+        # evals/results/ quarantine file contract/trigger/antigravity use.
+        self._patch_headless_dirs()
+        root = self.tmp / "agy-outcome-infra-root"
+        root.mkdir()
+        jetski_text = ('jetski: no output produced -- a tool required the "command" permission '
+                       'that headless mode cannot prompt for, so it was auto-denied.')
+        invoker = _FakeInvoker([
+            lambda argv, cwd, t: headless.ProcResult(jetski_text, "", 0, 2.0, False),
+            lambda argv, cwd, t: headless.ProcResult(jetski_text, "", 0, 2.0, False),
+        ])
+        self._patch_invoker(invoker)
+        installed = {"path": None, "sha": None, "dirty": False}
+
+        row, was_infra = headless.run_one("agy", "outcome", "bgpdd-bugfix-lane", 1, root, 60, None, True,
+                                           True, True, self.tmp / "unused-brain", installed)
+        self.assertTrue(was_infra)
+        self.assertEqual(row["outcome"], "INFRA")
+        self.assertIsNone(row["pass"])
+        self.assertEqual(len(invoker.calls), 2)  # retried exactly once
+
+        outcome_invalid_path = headless.outcome_invalid_infra_path()
+        self.assertTrue(outcome_invalid_path.is_file())
+        self.assertFalse((headless.RESULTS_DIR / "results.jsonl").exists())
+        self.assertFalse(headless.invalid_infra_path().is_file())  # not the SHARED quarantine file
+        self.assertFalse((headless.OUTCOME_RESULTS_DIR / "results.jsonl").exists())
+
+        lines = outcome_invalid_path.read_text(encoding="utf-8").strip().splitlines()
+        self.assertEqual(len(lines), 1)
+        rec = json.loads(lines[0])
+        self.assertEqual(rec["outcome"], "INFRA")
+        self.assertIsNone(rec["pass"])
+        self.assertEqual(rec["triage"], "INFRA")
+        self.assertEqual(rec["arm"], "plugin")
+        self.assertEqual(rec["runtime"], "agy")
+        self.assertTrue(rec["failed_criterion"].startswith("INFRA: permission_denied"))
+
+    # -- claude: argv shape + no_unbacked_claim exclusion ---------------------
+
+    def test_headless_build_argv_claude_outcome_matches_run_outcome_ps1(self):
+        argv = headless.build_argv_claude_outcome("fix the thing", model="opus")
+        self.assertEqual(argv[0], "claude")
+        self.assertIn("--model", argv)
+        self.assertEqual(argv[argv.index("--model") + 1], "opus")
+        self.assertIn("-p", argv)
+        self.assertEqual(argv[argv.index("-p") + 1], "fix the thing")
+        self.assertIn("--permission-mode", argv)
+        self.assertEqual(argv[argv.index("--permission-mode") + 1], "acceptEdits")
+        self.assertIn("--allowedTools", argv)
+        allowed = argv[argv.index("--allowedTools") + 1]
+        self.assertEqual(allowed, headless.OUTCOME_ALLOWED_TOOLS_ARG)
+        # Verbatim from run-outcome.ps1's $AllowedToolsArg -- a few load-bearing
+        # entries that widened it after the 2026-09-14 PowerShell-denial run.
+        for tool in ("PowerShell", "ToolSearch", "SendMessage", "ListAgents", "TaskStop", "KillShell"):
+            self.assertIn(tool, allowed)
+
+    def test_outcome_grade_one_runtime_claude_excludes_no_unbacked_claim(self):
+        case_dir = self.tmp / "stub-outcome-claude-case"
+        case_dir.mkdir()
+        (case_dir / "outcome.ps1").write_text(
+            'param([string]$TargetDir)\n'
+            'Write-Host "[hidden_tests] PASSED: 1 hidden test(s), 0 failing"\n'
+            '$r = @{ criteria = @(@{ id = "hidden_tests"; pass = $true; detail = "ok" }) }\n'
+            '$r | ConvertTo-Json -Compress -Depth 5\n'
+            'exit 0\n',
+            encoding="utf-8",
+        )
+        ws = self.tmp / "ws-outcome-claude"
+        ws.mkdir()
+        manifest_before = common.compute_manifest_sha256(ws)
+        (ws / "file.txt").write_text("changed", encoding="utf-8")  # so the manifest looks changed
+        marker = self.tmp / "marker-outcome-claude.json"
+        common.save_marker(marker, {
+            "suite": "outcome", "case": "stub-outcome-claude-case", "workspace": str(ws),
+            "started_at": common.utc_now_iso(), "prompt": "x", "prompt_sha256": "x",
+            "handoff_to": None, "manifest_sha256": manifest_before,
+            "graded_at": None, "last_result": None,
+            "protected_files": [], "protected_before": {},
+            "test_command": "node --test", "regression_expected": False,
+            "regression_src_roots": ["src"], "hidden_dir": "stub-outcome-claude-case/hidden",
+            "arm": "plugin", "base_sha": None,
+        })
+        row = outcome.grade_one(marker, brain_root=self._empty_brain(), case_dir=case_dir, record=False,
+                                 transcripts_override={"parent": None, "subagents": [], "all": []},
+                                 runtime="claude")
+        self.assertEqual(row["outcome"], "GRADED")
+        # hidden_tests PASSED, protected_files_unchanged PASSED (no protected
+        # files declared), regression_test_added n/a -- the ONLY thing that
+        # could still fail the run is no_unbacked_claim, and it is excluded.
+        self.assertTrue(row["pass"], row["failed_criterion"])
+        self.assertNotIn("no_unbacked_claim", row["failed_criterion"] or "")
+
+    # -- default_invoke: heartbeat on a slow-but-healthy call -----------------
+
+    def test_headless_default_invoke_emits_heartbeat_for_a_slow_call(self):
+        # The heartbeat is printed by default_invoke itself to ITS OWN
+        # process's stderr (for a human watching a live run), not captured
+        # as part of the child process's stdout/stderr -- so it must be
+        # read back via redirect_stderr, not off the returned ProcResult.
+        original_heartbeat, original_poll = headless.HEARTBEAT_INTERVAL_S, headless.POLL_INTERVAL_S
+        headless.HEARTBEAT_INTERVAL_S = 0
+        headless.POLL_INTERVAL_S = 0.02
+        buf = io.StringIO()
+        try:
+            argv = [sys.executable, "-c", "import time; time.sleep(0.3); print('x')"]
+            with contextlib.redirect_stderr(buf):
+                proc = headless.default_invoke(argv, self.tmp, timeout_s=30)
+        finally:
+            headless.HEARTBEAT_INTERVAL_S = original_heartbeat
+            headless.POLL_INTERVAL_S = original_poll
+        self.assertFalse(proc.timed_out)
+        self.assertIn("x", proc.stdout)
+        self.assertIn("waiting on", buf.getvalue())
 
 
 def run_self_test():
