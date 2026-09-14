@@ -75,6 +75,38 @@ Three deliberate scoping decisions:
   records the reason in the ledger, exactly as `--allow-drift` and
   `--allow-tier-inversion` do elsewhere in this family.
 
+BLOCKED_ON GRAMMAR ON A PARTIAL/BLOCKED HANDOFF (`blockers_uncategorised`)
+----------------------------------------------------------------------------
+Measured on epic slide-s5: Quinn was delegated four times on Milestone 1 and
+returned PARTIAL every time with the same blocker -- no admin shell, no
+installed Gorelo.Agent service, no dev token -- an environment wall only the
+human could clear. About 1.2M tokens re-discovered that one fact, because a
+PARTIAL/BLOCKED `<blockers>` value was free prose: honest, but nothing
+downstream could act on it. `check_redelegation.py` is the gate that now
+halts re-delegation on exactly that shape of blocker, and it can only do so
+if the reason is a value, not a paragraph.
+
+Whenever `<status>` is `PARTIAL` or `BLOCKED`, `<blockers>` must therefore
+carry at least one line of the form:
+
+    blocked_on: <category> — <one-line reason>
+
+where `<category>` is one of `environment` (missing host, service, device,
+elevation), `credentials` (token, secret, account), `dependency` (another
+team's or another milestone's output), `spec` (ambiguous or contradictory
+requirement), or `defect` (a failing test or bug the agent could not fix in
+scope). A line is recognized with its surrounding backticks and leading list
+marker stripped (the same tolerance `split_paths` gives `<changed_files>`),
+and either an em dash, en dash, or plain hyphen as the separator. Missing the
+line entirely, or naming a category outside the five, is `blockers_uncategorised`
+(exit 1); the finding's detail prints this grammar so the fix is mechanical.
+
+`COMPLETE` is EXEMPT, the same scoping `artifact_scaffolding_left` uses: this
+rule is about the words PARTIAL/BLOCKED, not about `<blockers>` in general,
+and an empty or absent `<blockers>` is already `element_missing` on every
+persona (all of them require it) -- this check only fires once `<blockers>`
+carries SOME non-blank text, so the two findings never duplicate the same gap.
+
 Usage:
     python check_handoff.py --handoff <file> --persona <name> --repo <dir> \
         [--repo <dir> ...] [--docs-root <dir> ...] \
@@ -236,6 +268,47 @@ CONSUMERS_LINE_RE = re.compile(r"^(?P<path>\S.*?)::(?P<symbol>[^\s:/\\]+)$")
 PASS_CLAIM_RE = re.compile(r"(?<![A-Za-z])(PASS|PASSED|GREEN)(?![A-Za-z])")
 MARKER_RE = re.compile(r"(?<![A-Za-z])(NOT VERIFIED|BLOCKED)(?![A-Za-z])")
 NO_BLOCKER_VALUES = ("none", "n/a", "na", "-", "nil", "")
+
+# `blocked_on:` grammar required in <blockers> whenever <status> is PARTIAL or
+# BLOCKED. See BLOCKED_ON GRAMMAR in the module docstring for the measured
+# cost this closes: `check_redelegation.py` halts re-delegation on exactly
+# this shape of category, and can only do so mechanically once the reason is
+# a value here, not prose.
+BLOCKED_ON_CATEGORIES = ("environment", "credentials", "dependency", "spec",
+                         "defect")
+BLOCKED_ON_RE = re.compile(
+    r"(?i)^blocked_on:\s*(?P<category>[A-Za-z_]+)\s*[—–-]\s*"
+    r"(?P<reason>\S.*)$")
+BLOCKED_ON_GRAMMAR = (
+    "blocked_on: <category> — <one-line reason>, where <category> is "
+    "one of environment (missing host, service, device, elevation), "
+    "credentials (token, secret, account), dependency (another team's or "
+    "milestone's output), spec (ambiguous or contradictory requirement), or "
+    "defect (a failing test or bug out of scope)")
+
+
+def parse_blocked_on_lines(blockers_text):
+    """[(category_lower, reason, raw_line)] for every recognized
+    `blocked_on:` line in `blockers_text`, in order.
+
+    A line's leading list marker and surrounding backticks are stripped
+    first -- the same tolerance `split_paths` and `check_consumers` give
+    other <blockers>/<consumers> content, so a bullet-written line is not
+    penalized. `category` is returned exactly as written, lower-cased; the
+    caller decides whether it is one of `BLOCKED_ON_CATEGORIES`.
+    """
+    out = []
+    for raw in blockers_text.splitlines():
+        # Bullet marker stripped BEFORE backticks -- a bulleted, backtick-
+        # wrapped line ("- `blocked_on: ...`") has its backtick right after
+        # the marker, not at the string's own start.
+        line = re.sub(r"^[-*+]\s+", "", raw.strip()).strip()
+        line = line.strip("`").strip()
+        m = BLOCKED_ON_RE.match(line)
+        if m:
+            out.append((m.group("category").strip().lower(),
+                        m.group("reason").strip(), line))
+    return out
 
 
 class GateError(Exception):
@@ -791,6 +864,23 @@ def build_report(text, persona, repo, since=None, fix_round=False,
                 f"{problem['rule']} in <{problem['element']}>: {problem['detail']}",
                 rule=problem["rule"], element=problem["element"])
 
+    # blocked_on: grammar (see BLOCKED_ON GRAMMAR above). COMPLETE is exempt,
+    # the same scoping artifact_scaffolding_left uses for its own word. An
+    # absent or all-blank <blockers> is already element_missing on every
+    # persona (all of them require it) -- this only fires once <blockers>
+    # carries SOME non-blank text, so the two findings never double up on the
+    # same gap.
+    if (report["status"] or "").strip().upper() in ("PARTIAL", "BLOCKED"):
+        blockers_text = "\n".join(elements.get("blockers", []))
+        if blockers_text.strip():
+            categorised = parse_blocked_on_lines(blockers_text)
+            if not any(cat in BLOCKED_ON_CATEGORIES for cat, _, _ in categorised):
+                finding("blockers_uncategorised",
+                        "<blockers> names no recognized `blocked_on:` line "
+                        f"for a {report['status'].strip().upper()} handoff -- "
+                        f"required grammar: {BLOCKED_ON_GRAMMAR}",
+                        status=report["status"])
+
     # --allow-scaffolding waives this ONE code and nothing else, and only
     # after it has been computed -- so the ledger records WHAT was waived.
     if allow_scaffolding and allow_scaffolding.strip():
@@ -1129,7 +1219,8 @@ def run_self_test():
                 r = build_report(
                     self.artifact_handoff(status).replace(
                         "<blockers>None</blockers>",
-                        "<blockers>section 2 needs the DB</blockers>"),
+                        "<blockers>blocked_on: dependency — section 2 needs "
+                        "the DB team's migration</blockers>"),
                     "luna", self.dir)
                 self.assertEqual(r["result"], "PASS", (status, r["findings"]))
                 self.assertEqual(r["scaffolding_scanned"], [], status)
@@ -1272,7 +1363,8 @@ def run_self_test():
             text = ("```\n" + GOOD_MASON + "\n```\n\n"
                     "<handoff><status>BLOCKED</status>"
                     "<changed_files>src/a.py</changed_files>"
-                    "<blockers>no test DB</blockers></handoff>")
+                    "<blockers>blocked_on: environment — no test DB in this "
+                    "environment</blockers></handoff>")
             r = build_report(text, "mason", self.dir)
             self.assertEqual(r["result"], "PASS", r["findings"])
             self.assertEqual(r["status"], "BLOCKED")
@@ -1498,7 +1590,8 @@ def run_self_test():
         def test_partial_and_blocked_are_valid_statuses(self):
             for value in ("PARTIAL", "BLOCKED"):
                 text = GOOD_MASON.replace("COMPLETE", value).replace(
-                    "<blockers>None</blockers>", "<blockers>see above</blockers>")
+                    "<blockers>None</blockers>",
+                    "<blockers>blocked_on: spec — see above</blockers>")
                 self.assertEqual(build_report(text, "mason", self.dir)["result"],
                                  "PASS", value)
 
@@ -1547,8 +1640,79 @@ def run_self_test():
 
         def test_blocked_status_with_no_blocker_named_is_a_contradiction(self):
             text = GOOD_MASON.replace("COMPLETE", "BLOCKED")
+            # "None" is both a contradiction (BLOCKED naming no blocker) and,
+            # since it carries no `blocked_on:` line either, uncategorised.
             self.assertEqual(self.codes(build_report(text, "mason", self.dir)),
-                             ["honesty_contradiction"])
+                             ["blockers_uncategorised", "honesty_contradiction"])
+
+        # --- blocked_on: grammar (blockers_uncategorised) ------------------
+
+        def _blocked(self, status, blockers):
+            return (f"<handoff><status>{status}</status>"
+                    f"<changed_files>src/a.py</changed_files>"
+                    f"<blockers>{blockers}</blockers></handoff>")
+
+        def test_blocked_on_valid_category_passes_on_partial(self):
+            text = self._blocked("PARTIAL",
+                                 "blocked_on: environment — no admin shell")
+            r = build_report(text, "mason", self.dir)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+
+        def test_blocked_on_valid_category_passes_on_blocked(self):
+            text = self._blocked("BLOCKED",
+                                 "blocked_on: credentials — no dev token")
+            r = build_report(text, "mason", self.dir)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+
+        def test_blocked_on_missing_line_fails_on_partial(self):
+            text = self._blocked("PARTIAL", "no admin shell, stuck")
+            r = build_report(text, "mason", self.dir)
+            self.assertEqual(self.codes(r), ["blockers_uncategorised"])
+            self.assertIn("blocked_on:", r["findings"][0]["detail"])
+
+        def test_blocked_on_unknown_category_fails(self):
+            text = self._blocked("BLOCKED", "blocked_on: hardware — no GPU")
+            r = build_report(text, "mason", self.dir)
+            self.assertEqual(self.codes(r), ["blockers_uncategorised"])
+
+        def test_blocked_on_every_known_category_is_accepted(self):
+            for category in BLOCKED_ON_CATEGORIES:
+                text = self._blocked(
+                    "PARTIAL", f"blocked_on: {category} — reason for {category}")
+                r = build_report(text, "mason", self.dir)
+                self.assertEqual(r["result"], "PASS", (category, r["findings"]))
+
+        def test_blocked_on_grammar_exempt_on_complete_status(self):
+            text = self._blocked("COMPLETE", "no blocked_on line here at all")
+            r = build_report(text, "mason", self.dir)
+            self.assertNotIn("blockers_uncategorised", self.codes(r))
+
+        def test_blocked_on_line_with_bullet_marker_and_backticks_still_recognized(self):
+            text = self._blocked(
+                "BLOCKED", "- `blocked_on: dependency — waiting on the DB team`")
+            r = build_report(text, "mason", self.dir)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+
+        def test_blocked_on_hyphen_separator_is_accepted(self):
+            """The grammar's dash is em/en dash OR a plain hyphen."""
+            text = self._blocked("PARTIAL", "blocked_on: spec - ambiguous NFR")
+            r = build_report(text, "mason", self.dir)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+
+        def test_blocked_on_one_valid_line_among_several_is_enough(self):
+            text = self._blocked(
+                "BLOCKED",
+                "some prose first\nblocked_on: defect — flaky test\nmore prose")
+            r = build_report(text, "mason", self.dir)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+
+        def test_blocked_on_absent_blockers_element_is_only_element_missing(self):
+            """An absent <blockers> is element_missing; the grammar check does
+            not pile a second finding onto the same gap."""
+            text = ("<handoff><status>PARTIAL</status>"
+                    "<changed_files>src/a.py</changed_files></handoff>")
+            r = build_report(text, "mason", self.dir)
+            self.assertEqual(self.codes(r), ["element_missing"])
 
         def test_unknown_persona_is_an_error(self):
             with self.assertRaises(GateError):

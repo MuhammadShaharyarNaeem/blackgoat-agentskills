@@ -54,6 +54,7 @@ CHECK_RUNTIME_RECIPE = SCRIPTS / "check_runtime_recipe.py"
 MARK_MILESTONE = SCRIPTS / "mark_milestone.py"
 RECORD_RUN = SCRIPTS / "record_run.py"
 GUARD_ACTION = SCRIPTS / "guard_action.py"
+CHECK_REDELEGATION = SCRIPTS / "check_redelegation.py"
 
 # The shared record writer lives in evals/, two levels up from this file. Shared,
 # not copied into each case, because the record shape has to match the one
@@ -1363,17 +1364,28 @@ def run_lifecycle(repo):
         "mv tests/orders.test.js tests/orders.test.js.old",
         "git checkout -- tests/",
     ]
-    allowed = ["cat " + ledger_rel, "npm test", "git status"]
+    # Rule 5 (added this wave): a raw build/test runner is denied while a
+    # lane is active unless run_quiet.py is anywhere on the command line, so
+    # the allowed fixture's bare `npm test` must be wrapped -- and a raw one
+    # is now its own denied case, asserted separately from writes/tests.
+    wrapped_npm_log = guard_root / "npm-test.log"
+    denied_runners = ["npm test"]
+    allowed = ["cat " + ledger_rel,
+               "python " + str(RUN_QUIET) + " --log " + str(wrapped_npm_log) +
+               " -- npm test",
+               "git status"]
     write_reasons = [guard("Bash", {"command": c}) for c in denied_writes]
     test_reasons = [guard("Bash", {"command": c}) for c in denied_tests]
+    runner_reasons = [guard("Bash", {"command": c}) for c in denied_runners]
     allow_reasons = [guard("Bash", {"command": c}) for c in allowed]
     ok = (all(r and "gate artifact" in r for r in write_reasons)
           and all(r and "test path" in r for r in test_reasons)
+          and all(r and "run_quiet.py" in r for r in runner_reasons)
           and all(r is None for r in allow_reasons))
     record("21. guard_action: Bash redirection/tee/cmdlet/rm/python -c into a "
            "ledger, and sed/mv/git-checkout of a frozen test, all DENY", ok,
            "" if ok else f"writes={write_reasons} tests={test_reasons} "
-                         f"allowed={allow_reasons}")
+                         f"runners={runner_reasons} allowed={allow_reasons}")
 
     # 21b: the sanctioned close. bgpdd-bugfix Phase 5 ends in a local merge,
     # which rule 1 denied. A commit-gate --commit PASS for this lane's own
@@ -1439,10 +1451,15 @@ def run_lifecycle(repo):
     # 22c: the SAME artifact under PARTIAL. Incremental Persistence hands
     # unfinished work back WITH its markers, so this must pass -- a gate that
     # punished an honest PARTIAL would push agents toward a false COMPLETE.
+    # check_handoff.py's blocked_on: grammar (Part A) requires this line on
+    # any PARTIAL/BLOCKED <blockers> -- absent, this step would now fail its
+    # own gate on blockers_uncategorised before ever reaching the scaffolding
+    # assertion below (see step 22d, which tests that grammar directly).
     unswept.write_text("<handoff><status>PARTIAL</status>"
                        f"<artifact>{report_rel}</artifact>"
-                       "<blockers>security section needs Cipher's scan"
-                       "</blockers></handoff>\n", encoding="utf-8")
+                       "<blockers>security section needs Cipher's scan\n"
+                       "blocked_on: defect — security section needs "
+                       "Cipher's scan</blockers></handoff>\n", encoding="utf-8")
     scaffold_ledger = impl_dir / "scaffold-gates.jsonl"
     partial = run_py(CHECK_HANDOFF, ["--handoff", unswept, "--persona", "luna",
                                      "--repo", repo])
@@ -1465,6 +1482,45 @@ def run_lifecycle(repo):
            "" if ok else f"partial={partial.returncode} "
                          f"waived={waived.returncode} blank={blank.returncode} "
                          f"records={records[-1:]!r}")
+
+    # 22d: the blocked_on: grammar itself (Part A) -- a PARTIAL <blockers>
+    # with no `blocked_on:` line is blockers_uncategorised; the same handoff
+    # with the line (22c's `unswept` fixture) is not.
+    no_grammar = handoff_dir / "luna-skeleton-no-grammar.md"
+    no_grammar.write_text("<handoff><status>PARTIAL</status>"
+                          f"<artifact>{report_rel}</artifact>"
+                          "<blockers>security section needs Cipher's scan"
+                          "</blockers></handoff>\n", encoding="utf-8")
+    without = run_py(CHECK_HANDOFF, ["--handoff", no_grammar, "--persona",
+                                     "luna", "--repo", repo])
+    without_data = None
+    try:
+        without_data = json.loads(without.stdout)
+    except ValueError:
+        pass
+    with_grammar = run_py(CHECK_HANDOFF, ["--handoff", unswept, "--persona",
+                                          "luna", "--repo", repo])
+    with_grammar_data = None
+    try:
+        with_grammar_data = json.loads(with_grammar.stdout)
+    except ValueError:
+        pass
+    without_codes = ({f.get("code") for f in
+                      (without_data or {}).get("findings", [])}
+                     if without_data is not None else set())
+    with_codes = ({f.get("code") for f in
+                   (with_grammar_data or {}).get("findings", [])}
+                  if with_grammar_data is not None else set())
+    ok = (without.returncode == 1
+          and "blockers_uncategorised" in without_codes
+          and with_grammar.returncode == 0
+          and "blockers_uncategorised" not in with_codes)
+    record("22d. check_handoff: PARTIAL without blocked_on: is exit 1 "
+           "(blockers_uncategorised); the same handoff with the line is not",
+           ok, "" if ok else f"without={without.returncode} "
+                             f"without_codes={without_codes!r} "
+                             f"with={with_grammar.returncode} "
+                             f"with_codes={with_codes!r}")
 
     # --- Step 23 (2.6.2): one delegation, one record; fable is the top tier -
     # A re-wake is a SECOND completion notification for an agent that already
@@ -1568,6 +1624,93 @@ def run_lifecycle(repo):
            "drop; a backup that does not exist is exit 2", ok,
            "" if ok else f"refreshed={refreshed.returncode} "
                          f"absent={absent.returncode}")
+
+    # --- Step 25 (2.6.3): check_redelegation.py, the halt-before-re-delegate
+    # gate. Three PARTIAL rounds already on record, a fourth handoff naming an
+    # environment blocker -- both the category halt and the round bound fire
+    # (they are independent, convention #8), a fresh state["halt"] is merged,
+    # and only a human clears it, with --reason.
+    redeleg_unit = "M25 — Redelegation"
+    redeleg_log = impl_dir / "run-log-redeleg.jsonl"
+    redeleg_common = ["--log", redeleg_log, "--pipeline", "bgpdd-build",
+                      "--phase", "Phase 2", "--event", "delegation",
+                      "--unit", redeleg_unit, "--agent", "quinn",
+                      "--model", "sonnet", "--tokens-total", "100"]
+    # --rounds distinguishes each round's record -- record_run.py's
+    # ONE-DELEGATION-ONE-RECORD rule (§ONE DELEGATION, ONE RECORD) would
+    # otherwise refuse rounds 2 and 3 as a re-wake of round 1's identical
+    # (pipeline, unit, agent, rounds) tuple.
+    prior_failures = []
+    for round_n in (1, 2, 3):
+        prior = run_py(RECORD_RUN, redeleg_common +
+                       ["--status", "PARTIAL", "--rounds", str(round_n)])
+        if prior.returncode != 0:
+            prior_failures.append((round_n, prior.returncode, prior.stdout))
+    ok = not prior_failures
+    record("25a. check_redelegation: three prior PARTIAL delegations "
+           "recorded via record_run.py", ok,
+           "" if ok else f"failures={prior_failures!r}")
+
+    redeleg_handoff = handoff_dir / "quinn-redeleg.md"
+    redeleg_handoff.write_text(
+        "<handoff><status>PARTIAL</status>"
+        "<changed_files>None</changed_files>"
+        "<blockers>blocked_on: environment — no admin shell, no installed "
+        "Gorelo.Agent service, no dev token</blockers></handoff>\n",
+        encoding="utf-8")
+    redeleg_state = impl_dir / "orchestrator-state-redeleg.json"
+    init_state = run_py(UPDATE_STATE, ["--state", redeleg_state, "--init",
+                                       "--project-name", "proj"])
+
+    proc = run_py(CHECK_REDELEGATION,
+                  ["--run-log", redeleg_log, "--unit", redeleg_unit,
+                   "--agent", "quinn", "--handoff", redeleg_handoff,
+                   "--state", redeleg_state])
+    data = parse_json(proc, "25b. check_redelegation: 3 prior PARTIAL + an "
+                            "environment blocker -> exit 1, halt_environment "
+                            "AND halt_round_bound")
+    state_after = None
+    if redeleg_state.is_file():
+        state_after = json.loads(redeleg_state.read_text(encoding="utf-8"))
+    if data is not None:
+        codes = sorted({f.get("code") for f in (data.get("findings") or [])})
+        ok = (init_state.returncode == 0
+              and proc.returncode == 1 and data.get("result") == "FAIL"
+              and codes == ["halt_environment", "halt_round_bound"]
+              and state_after is not None
+              and state_after.get("halt", {}).get("unit") == redeleg_unit
+              and state_after.get("halt", {}).get("code") == "halt_environment")
+        record("25b. check_redelegation: 3 prior PARTIAL + an environment "
+               "blocker -> exit 1, halt_environment AND halt_round_bound; "
+               "--state receives halt", ok,
+               "" if ok else f"init={init_state.returncode} "
+                             f"exit={proc.returncode} codes={codes!r} "
+                             f"state={state_after!r}")
+
+    # 25c: only a human clears it -- --clear-halt requires --reason.
+    clear_no_reason = run_py(UPDATE_STATE,
+                             ["--state", redeleg_state, "--clear-halt",
+                              redeleg_unit])
+    clear_ledger = impl_dir / "redeleg-clear-gates.jsonl"
+    clear_with_reason = run_py(
+        UPDATE_STATE,
+        ["--state", redeleg_state, "--clear-halt", redeleg_unit, "--reason",
+         "admin shell provisioned by IT ticket #123", "--ledger", clear_ledger])
+    state_cleared = json.loads(redeleg_state.read_text(encoding="utf-8"))
+    clear_records = [json.loads(l) for l in
+                     clear_ledger.read_text(encoding="utf-8").splitlines()
+                     if l.strip()] if clear_ledger.is_file() else []
+    ok = (clear_no_reason.returncode == 2
+          and clear_with_reason.returncode == 0
+          and "halt" not in state_cleared
+          and bool(clear_records)
+          and clear_records[-1].get("action") == "clear-halt"
+          and clear_records[-1].get("cleared_code") == "halt_environment")
+    record("25c. update_state --clear-halt without --reason -> exit 2; with "
+           "--reason clears the halt and appends a ledger line", ok,
+           "" if ok else f"no_reason={clear_no_reason.returncode} "
+                         f"with_reason={clear_with_reason.returncode} "
+                         f"state={state_cleared!r} records={clear_records!r}")
 
 
 if __name__ == "__main__":

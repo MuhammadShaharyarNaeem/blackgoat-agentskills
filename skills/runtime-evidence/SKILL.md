@@ -67,7 +67,7 @@ The manifest is what makes the capture's `Environment` and `Config repointed` fi
 1. **START** the application the way a user starts it, using the start command declared in the milestone's `RUNTIME PROBE:` line. Never invent the command — see *Escalate When*.
 2. **REPOINT** whatever configuration is needed so the surfaces under test talk to the local instances, and record exactly what you changed.
 3. **PROBE** using the declared probe command through the transport below.
-4. **CAPTURE** the output to a file under `evidence/runtime/` via `{PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture`, which writes the command, timestamp, exit code and output itself. When no Python 3 runtime is available, hand-write the capture with the complete field list from *The Capture Artifact* below; `--capture` is preferred because those fields are tool-authored and therefore cannot be faked.
+4. **CAPTURE** the output to a file under `evidence/runtime/` via `{PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture`, which writes the command, timestamp, exit code, and the output itself — an excerpt (error lines + tail) by default, with the full output always on disk at the `- Log:` path and available via `--full-body` when the whole response IS the evidence. When no Python 3 runtime is available, hand-write the capture with the complete field list from *The Capture Artifact* below; `--capture` is preferred because those fields are tool-authored and therefore cannot be faked.
 5. **CITE** the capture path in your report.
 
 **You do not author the probe you are graded on.** The probe and its expected observable come from the plan. A probe invented at verification time is invented by the party motivated to soften it.
@@ -87,7 +87,7 @@ An in-process test client is **not a transport**. Naming one in a capture is a g
 
 ### The Capture Artifact
 
-One file per probe, at `.docs/{project-name}/implementation/evidence/runtime/<milestone-slug>-<probe-slug>.md`. Header fields, then the captured output verbatim under a `## Captured output` heading.
+One file per probe, at `.docs/{project-name}/implementation/evidence/runtime/<milestone-slug>-<probe-slug>.md`. Header fields, a `## Summary` section (the recognised runner summary line(s), or `none recognised`), then the captured output under a `## Captured output` heading — an excerpt (error lines + tail) by default, the full output verbatim under `--full-body`. A content check that misses in the excerpt (a status line, a response key) falls back to the full log named by the header's `- Log:` field; `check_runtime_evidence.py`'s own provenance checks (the sidecar hash, `sidecar_body_disagrees`, `probe_failed_exit`) always read the capture's own hash-protected body, never the log.
 
 Required: `Milestone`, `Requirement IDs`, `Surface`, `Transport`, `Base URL` (or the device/sink identifier), `Probe command`, `Captured`, `Exit code`.
 Required when the surface is `web+api` or wider: `Environment` (every service and the local URL it was reached at) and `Config repointed` (what you changed, and from what).

@@ -15,8 +15,20 @@ Usage:
         [--set-artifact <name>=<path>] \
         [--add-blocker "<text>"] \
         [--resolve-blocker "<substring>" --evidence "<text>"] \
+        [--set-halt '{"unit":...,"agent":...,"code":...,"reason":...}'] \
+        [--clear-halt <unit>] \
         [--ledger <path>]
     python update_state.py --self-test
+
+`--set-halt`/`--clear-halt`: `state["halt"]` is a single standing entry so a
+future `guard_action.py` hook can deny delegation while it stands
+(`check_redelegation.py` is the gate that writes it -- see that file).
+`--set-halt` takes a JSON object with `unit`/`agent`/`code`/`reason` string
+keys, all required; a `ts` stamp is added here, the same way `--add-blocker`
+stamps `added`. `--clear-halt <unit>` removes `state["halt"]` only when it
+exists AND its `unit` matches; a halt for a different unit, or no halt at
+all, is left untouched (a warning, not an error -- clearing what one unit's
+gate run does not own must never silently erase another unit's standing halt).
 
 Pure standard library. See ../SKILL.md for the full contract.
 """
@@ -306,6 +318,8 @@ def validate_actions(args):
         bool(args.set_artifact),
         bool(args.add_blocker),
         args.resolve_blocker is not None,
+        args.set_halt is not None,
+        args.clear_halt is not None,
     ])
     if not has_action:
         raise GateError("at least one action is required (see --help)")
@@ -314,6 +328,12 @@ def validate_actions(args):
             "--resolve-blocker requires --evidence: per the ledger doctrine "
             "(orchestrator-contract §4), a blocker entry is removed only "
             "once its fix is verified")
+    if args.clear_halt is not None and not (args.reason and args.reason.strip()):
+        raise GateError(
+            "--clear-halt requires --reason: check_redelegation.py never "
+            "clears a halt itself, so this is the one place a halt is "
+            "removed -- a human's recorded word for what changed in the "
+            "world, not a re-run passing")
     if args.init and not args.project_name:
         raise GateError("--init requires --project-name")
     blocker_companions_given = any([
@@ -539,6 +559,42 @@ def apply_updates(args):
             })
             next_n += 1
 
+    if args.set_halt is not None:
+        try:
+            halt = json.loads(args.set_halt)
+        except json.JSONDecodeError as exc:
+            raise GateError(f"--set-halt is not valid JSON: {exc}")
+        if not isinstance(halt, dict):
+            raise GateError("--set-halt must be a JSON object")
+        required = ("unit", "agent", "code", "reason")
+        missing = [k for k in required
+                  if not (isinstance(halt.get(k), str) and halt.get(k).strip())]
+        if missing:
+            raise GateError(
+                "--set-halt is missing required non-empty string key(s): "
+                f"{', '.join(missing)} (expected unit/agent/code/reason)")
+        state["halt"] = {"unit": halt["unit"], "agent": halt["agent"],
+                         "code": halt["code"], "reason": halt["reason"],
+                         "ts": timestamp}
+    # Stashed on the Namespace (not returned) so main()'s ledger closure can
+    # record what was actually cleared, the same pattern --resolve-blocker
+    # uses below for its removed entries.
+    args.cleared_halt = None
+    if args.clear_halt is not None:
+        existing = state.get("halt")
+        if existing is None:
+            warnings.append(
+                f"--clear-halt {args.clear_halt!r}: no halt is set; nothing "
+                "to clear")
+        elif not isinstance(existing, dict) or existing.get("unit") != args.clear_halt:
+            current_unit = existing.get("unit") if isinstance(existing, dict) else existing
+            warnings.append(
+                f"--clear-halt {args.clear_halt!r}: current halt is for unit "
+                f"{current_unit!r}, not {args.clear_halt!r}; left untouched")
+        else:
+            args.cleared_halt = existing
+            del state["halt"]
+
     log_lines = []
     removed_entries = []
     if args.resolve_blocker is not None:
@@ -593,6 +649,26 @@ def build_parser():
                         help="an id (\"B-3\"), exact text, or a substring that "
                              "must match exactly one entry's text")
     parser.add_argument("--evidence")
+    parser.add_argument(
+        "--set-halt", dest="set_halt",
+        help='JSON object {"unit":str,"agent":str,"code":str,"reason":str} '
+             "merged into state[\"halt\"] (other keys untouched); a \"ts\" "
+             "stamp is added here. Written by check_redelegation.py so a "
+             "future guard_action.py hook can deny delegation while it "
+             "stands (CLAUDE.md convention #9).")
+    parser.add_argument(
+        "--clear-halt", dest="clear_halt",
+        help="remove state[\"halt\"] when it exists and its \"unit\" field "
+             "equals this value; a halt for a different unit, or no halt at "
+             "all, is left untouched (warning, not an error). Requires "
+             "--reason -- check_redelegation.py never clears a halt itself, "
+             "so this is a human act, recorded")
+    parser.add_argument(
+        "--reason",
+        help="required with --clear-halt: what changed in the world that "
+             "makes the blocker no longer true. Recorded in the ledger line "
+             "alongside the cleared halt's unit and code. Blank is refused "
+             "the same way --resolve-blocker's --evidence is.")
     parser.add_argument("--ledger",
                         help="append one JSON record per run to this path")
     parser.add_argument(
@@ -626,6 +702,13 @@ def main(argv):
             if resolved:
                 extra["resolved_ids"] = [e.get("id") for e in resolved]
                 extra["resolved_entries"] = resolved
+        elif args.clear_halt is not None:
+            extra = {"action": "clear-halt", "unit": args.clear_halt,
+                     "reason": args.reason}
+            cleared = getattr(args, "cleared_halt", None)
+            if cleared:
+                extra["cleared_code"] = cleared.get("code")
+                extra["cleared_halt"] = cleared
         # The cursor names the milestone this run is about, when it names one;
         # the literal "null" clears it and is recorded as JSON null.
         milestone = args.milestone or (None if args.set_cursor in (None, "null")
@@ -697,7 +780,8 @@ def run_self_test():
                     blocker_milestone=None, blocker_capability=None,
                     blocker_severity=None, blocker_source=None,
                     blocker_evidence=None,
-                    resolve_blocker=None, evidence=None)
+                    resolve_blocker=None, evidence=None,
+                    set_halt=None, clear_halt=None, reason=None)
         base.update(overrides)
         return argparse.Namespace(**base)
 
@@ -1072,6 +1156,166 @@ def run_self_test():
                 rc = main(argv_resolve_no_evidence)
             self.assertEqual(rc, 2)
             self.assertIn("error", json.loads(buf.getvalue()))
+
+        # ---- --set-halt / --clear-halt (check_redelegation.py) -----------
+
+        def _halt_json(self, **overrides):
+            base = {"unit": "M1: Auth", "agent": "quinn",
+                    "code": "halt_environment", "reason": "no admin shell"}
+            base.update(overrides)
+            return json.dumps(base)
+
+        def test_set_halt_merges_without_touching_other_keys(self):
+            apply_updates(ns(self.state_path, init=True, project_name="demo",
+                             set_pipeline="bgpdd-build", set_branch="feature/x"))
+            state, warnings = apply_updates(ns(self.state_path,
+                                              set_halt=self._halt_json()))
+            self.assertEqual(warnings, [])
+            self.assertEqual(state["halt"]["unit"], "M1: Auth")
+            self.assertEqual(state["halt"]["agent"], "quinn")
+            self.assertEqual(state["halt"]["code"], "halt_environment")
+            self.assertEqual(state["halt"]["reason"], "no admin shell")
+            self.assertIn("ts", state["halt"])
+            # Untouched.
+            self.assertEqual(state["pipeline"], "bgpdd-build")
+            self.assertEqual(state["branch"], "feature/x")
+
+        def test_set_halt_not_json_raises(self):
+            apply_updates(ns(self.state_path, init=True, project_name="demo"))
+            with self.assertRaises(GateError):
+                apply_updates(ns(self.state_path, set_halt="{not json"))
+
+        def test_set_halt_not_an_object_raises(self):
+            apply_updates(ns(self.state_path, init=True, project_name="demo"))
+            with self.assertRaises(GateError):
+                apply_updates(ns(self.state_path, set_halt="[1, 2]"))
+
+        def test_set_halt_missing_key_raises_and_writes_nothing(self):
+            apply_updates(ns(self.state_path, init=True, project_name="demo"))
+            before = self.state_path.read_text(encoding="utf-8")
+            with self.assertRaises(GateError):
+                apply_updates(ns(self.state_path,
+                                 set_halt=self._halt_json(reason="")))
+            after = self.state_path.read_text(encoding="utf-8")
+            self.assertEqual(before, after)
+
+        def test_clear_halt_without_reason_raises_and_writes_nothing(self):
+            """check_redelegation.py never clears a halt itself -- this is
+            the one place a halt is removed, and it requires a human's
+            recorded word for what changed."""
+            apply_updates(ns(self.state_path, init=True, project_name="demo",
+                             set_halt=self._halt_json()))
+            before = self.state_path.read_text(encoding="utf-8")
+            with self.assertRaises(GateError):
+                apply_updates(ns(self.state_path, clear_halt="M1: Auth"))
+            after = self.state_path.read_text(encoding="utf-8")
+            self.assertEqual(before, after)
+
+        def test_clear_halt_blank_reason_raises(self):
+            apply_updates(ns(self.state_path, init=True, project_name="demo",
+                             set_halt=self._halt_json()))
+            with self.assertRaises(GateError):
+                apply_updates(ns(self.state_path, clear_halt="M1: Auth",
+                                 reason="   "))
+
+        def test_clear_halt_matching_unit_removes(self):
+            apply_updates(ns(self.state_path, init=True, project_name="demo",
+                             set_halt=self._halt_json()))
+            state, warnings = apply_updates(ns(
+                self.state_path, clear_halt="M1: Auth",
+                reason="admin shell provisioned by IT ticket #123"))
+            self.assertEqual(warnings, [])
+            self.assertNotIn("halt", state)
+
+        def test_clear_halt_mismatched_unit_leaves_untouched(self):
+            apply_updates(ns(self.state_path, init=True, project_name="demo",
+                             set_halt=self._halt_json(unit="M2: Billing")))
+            state, warnings = apply_updates(ns(
+                self.state_path, clear_halt="M1: Auth", reason="n/a"))
+            self.assertTrue(any("left untouched" in w for w in warnings))
+            self.assertEqual(state["halt"]["unit"], "M2: Billing")
+
+        def test_clear_halt_when_absent_is_a_noop_warning(self):
+            apply_updates(ns(self.state_path, init=True, project_name="demo"))
+            state, warnings = apply_updates(ns(
+                self.state_path, clear_halt="M1: Auth", reason="n/a"))
+            self.assertTrue(any("nothing to clear" in w for w in warnings))
+            self.assertNotIn("halt", state)
+
+        def test_set_halt_then_clear_halt_round_trips_through_main(self):
+            import contextlib
+            import io
+
+            self.assertEqual(main(["--state", str(self.state_path), "--init",
+                                   "--project-name", "demo"]), 0)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = main(["--state", str(self.state_path),
+                           "--set-halt", self._halt_json()])
+            self.assertEqual(rc, 0)
+            self.assertIn("halt", json.loads(buf.getvalue()))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = main(["--state", str(self.state_path),
+                           "--clear-halt", "M1: Auth", "--reason",
+                           "admin shell provisioned by IT ticket #123"])
+            self.assertEqual(rc, 0)
+            self.assertNotIn("halt", json.loads(buf.getvalue()))
+
+        def test_clear_halt_without_reason_is_exit_2_through_main(self):
+            import contextlib
+            import io
+
+            self.assertEqual(main(["--state", str(self.state_path), "--init",
+                                   "--project-name", "demo",
+                                   "--set-halt", self._halt_json()]), 0)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = main(["--state", str(self.state_path),
+                           "--clear-halt", "M1: Auth"])
+            self.assertEqual(rc, 2)
+            self.assertIn("error", json.loads(buf.getvalue()))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = main(["--state", str(self.state_path),
+                           "--clear-halt", "M1: Auth", "--reason", "   "])
+            self.assertEqual(rc, 2)
+
+        def test_clear_halt_ledger_records_unit_code_and_reason(self):
+            ledger = self.dir / "gates.jsonl"
+            apply_updates(ns(self.state_path, init=True, project_name="demo",
+                             set_halt=self._halt_json()))
+            import contextlib
+            import io
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = main(["--state", str(self.state_path),
+                           "--clear-halt", "M1: Auth", "--reason",
+                           "admin shell provisioned by IT ticket #123",
+                           "--ledger", str(ledger)])
+            self.assertEqual(rc, 0)
+            rec = self._ledger_records(ledger)[-1]
+            self.assertEqual(rec["action"], "clear-halt")
+            self.assertEqual(rec["unit"], "M1: Auth")
+            self.assertEqual(rec["reason"],
+                             "admin shell provisioned by IT ticket #123")
+            self.assertEqual(rec["cleared_code"], "halt_environment")
+            self.assertEqual(rec["cleared_halt"]["agent"], "quinn")
+
+        def test_clear_halt_mismatch_ledger_carries_no_cleared_code(self):
+            """Nothing was actually cleared -- the ledger line says so."""
+            ledger = self.dir / "gates.jsonl"
+            apply_updates(ns(self.state_path, init=True, project_name="demo",
+                             set_halt=self._halt_json(unit="M2: Billing")))
+            import contextlib
+            import io
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = main(["--state", str(self.state_path),
+                           "--clear-halt", "M1: Auth", "--reason", "n/a",
+                           "--ledger", str(ledger)])
+            self.assertEqual(rc, 0)
+            rec = self._ledger_records(ledger)[-1]
+            self.assertEqual(rec["action"], "clear-halt")
+            self.assertNotIn("cleared_code", rec)
 
         # ---- --require-game-tape harness --------------------------------
 

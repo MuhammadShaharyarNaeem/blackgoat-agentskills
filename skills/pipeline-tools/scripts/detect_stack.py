@@ -9,12 +9,19 @@ mysql, sqlite). Used by `bgpdd-discovery` Phase 1 so a stack-specific
 methodology skill's "If the project uses X" dependency-table row has a
 mechanical floor instead of relying solely on the discovery agent's prose.
 
-For each stack it actually detected it also reports `suggested_check_commands`
-and `test_path_globs` from a table in this file, rolled up (deduped, in
-name-sorted stack order) at the report level. `bgpdd-quick` Phase 0 proposes
-the first suggested command as the note's `How verified` default and passes the
-globs to `check_quick_close.py --frozen`. Both are PROPOSALS the user confirms
-or replaces; nothing here is ever run.
+For each stack it actually detected it also reports `suggested_check_commands`,
+`test_path_globs`, and `quiet_wrapper` from a table in this file, rolled up
+(deduped, in name-sorted stack order) at the report level. Every suggested
+command is QUIET AT THE SOURCE -- `--nologo -v q`, `--reporter=dot`, `-q`,
+`--reporter=line` and the like -- because a child process writes its own
+noise straight to the transcript before any wrapper gets a chance to trim it;
+quieting the flags is what makes the wrapper's job small. `quiet_wrapper` is
+the exact `run_quiet.py --log <log> -- <command>` form for the first
+suggested command, so `bgpdd-quick` Phase 0 can propose the wrapped command
+verbatim instead of composing it by hand. `bgpdd-quick` Phase 0 proposes the
+first suggested command (or `quiet_wrapper`) as the note's `How verified`
+default and passes the globs to `check_quick_close.py --frozen`. All three
+are PROPOSALS the user confirms or replaces; nothing here is ever run.
 
 Pure standard library.
 
@@ -64,28 +71,38 @@ SKILL_MAP = {
 # proposal is read faster than it is audited.
 STACK_DEFAULTS = {
     "dotnet": {
-        "suggested_check_commands": ["dotnet test"],
+        # Test stays first (convention: element 0 is the lane's `How verified`
+        # default, and a build alone verifies nothing); build is a second,
+        # explicitly-offered alternative. `-clp:ErrorsOnly;Summary` is a build-
+        # only MSBuild console-logger flag -- omitted on `dotnet test`, whose
+        # console output is shaped by `--logger` instead.
+        "suggested_check_commands": [
+            'dotnet test --nologo -v q --logger "console;verbosity=minimal"',
+            "dotnet build --nologo -v q -clp:ErrorsOnly;Summary",
+        ],
         "test_path_globs": ["**/*.Tests/**", "**/*Tests.cs"],
     },
     "node": {
-        "suggested_check_commands": ["npm test"],
+        "suggested_check_commands": ["npm test -- --reporter=dot"],
         "test_path_globs": ["tests/**", "**/*.test.*", "**/*.spec.*"],
     },
     "react": {
-        "suggested_check_commands": ["npm test"],
+        "suggested_check_commands": ["npm test -- --reporter=dot"],
         "test_path_globs": ["tests/**", "**/__tests__/**", "**/*.test.*",
                             "**/*.spec.*"],
     },
     "angular": {
-        "suggested_check_commands": ["npm test", "ng test --watch=false"],
+        "suggested_check_commands": ["npm test -- --reporter=dot",
+                                     "ng test --watch=false"],
         "test_path_globs": ["**/*.spec.ts"],
     },
     "vue3": {
-        "suggested_check_commands": ["npm run test", "npx vitest run"],
+        "suggested_check_commands": ["npm run test -- --reporter=dot",
+                                     "npx vitest run --reporter=dot"],
         "test_path_globs": ["**/__tests__/**", "**/*.spec.ts"],
     },
     "python": {
-        "suggested_check_commands": ["pytest"],
+        "suggested_check_commands": ["pytest -q"],
         "test_path_globs": ["tests/**", "**/test_*.py"],
     },
     "powershell": {
@@ -101,7 +118,7 @@ STACK_DEFAULTS = {
         "test_path_globs": ["test/**", "tests/**", "**/test_*.gd"],
     },
     "playwright": {
-        "suggested_check_commands": ["npx playwright test"],
+        "suggested_check_commands": ["npx playwright test --reporter=line"],
         "test_path_globs": ["e2e/**", "**/*.spec.ts"],
     },
 }
@@ -383,6 +400,17 @@ def detect_db_stacks(buckets):
 # ---------------------------------------------------------------------------
 
 
+def quiet_wrapper_for(commands):
+    """The `run_quiet.py --log <log> -- <command>` form for the FIRST suggested
+    command, or "" when the stack carries no suggestion. A PROPOSAL like the
+    command it wraps -- never composed with a real log path, never run here.
+    """
+    if not commands:
+        return ""
+    return ("python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py "
+            "--log <log> -- " + commands[0])
+
+
 def build_report(repo, max_depth):
     repo = Path(repo)
     buckets = scan_repo(repo, max_depth)
@@ -393,13 +421,14 @@ def build_report(repo, max_depth):
         if not evidence:
             return
         defaults = STACK_DEFAULTS.get(name, {})
+        commands = list(defaults.get("suggested_check_commands", []))
         stacks.append({
             "name": name,
             "confidence": confidence,
             "evidence": [to_rel(p, repo) for p in evidence[:MAX_EVIDENCE]],
-            "suggested_check_commands": list(
-                defaults.get("suggested_check_commands", [])),
+            "suggested_check_commands": commands,
             "test_path_globs": list(defaults.get("test_path_globs", [])),
+            "quiet_wrapper": quiet_wrapper_for(commands),
         })
 
     dotnet_paths = buckets["csproj"] + buckets["sln"] + buckets["fsproj"] + buckets["global_json"]
@@ -478,6 +507,8 @@ def render_markdown(result):
         if stack["test_path_globs"]:
             globs = ", ".join(f"`{g}`" for g in stack["test_path_globs"])
             lines.append(f"  - test paths: {globs}")
+        if stack["quiet_wrapper"]:
+            lines.append(f"  - quiet wrapper: `{stack['quiet_wrapper']}`")
     if result["suggested_check_commands"] or result["test_path_globs"]:
         lines.append("")
         lines.append("### Defaults (proposals - confirm or replace, never run silently)")
@@ -675,23 +706,30 @@ def run_self_test():
                 {"dependencies": {"express": "^4.18.0"}}))
             result = build_report(self.repo, 6)
             node = next(s for s in result["stacks"] if s["name"] == "node")
-            self.assertEqual(node["suggested_check_commands"], ["npm test"])
+            self.assertEqual(node["suggested_check_commands"],
+                             ["npm test -- --reporter=dot"])
             self.assertEqual(node["test_path_globs"],
                              ["tests/**", "**/*.test.*", "**/*.spec.*"])
-            self.assertEqual(result["suggested_check_commands"][0], "npm test")
+            self.assertEqual(result["suggested_check_commands"][0],
+                             "npm test -- --reporter=dot")
 
         def test_dotnet_python_powershell_vue3_defaults(self):
-            for stack, first_cmd in (("dotnet", "dotnet test"),
-                                     ("python", "pytest"),
-                                     ("powershell", "Invoke-Pester"),
-                                     ("vue3", "npm run test")):
+            for stack, first_cmd in (
+                    ("dotnet",
+                     'dotnet test --nologo -v q --logger "console;verbosity=minimal"'),
+                    ("python", "pytest -q"),
+                    ("powershell", "Invoke-Pester"),
+                    ("vue3", "npm run test -- --reporter=dot")):
                 self.assertEqual(
                     STACK_DEFAULTS[stack]["suggested_check_commands"][0],
                     first_cmd)
             self._write("App/App.csproj", "<Project></Project>")
             result = build_report(self.repo, 6)
             dotnet = next(s for s in result["stacks"] if s["name"] == "dotnet")
-            self.assertEqual(dotnet["suggested_check_commands"], ["dotnet test"])
+            self.assertEqual(dotnet["suggested_check_commands"], [
+                'dotnet test --nologo -v q --logger "console;verbosity=minimal"',
+                "dotnet build --nologo -v q -clp:ErrorsOnly;Summary",
+            ])
             self.assertEqual(dotnet["test_path_globs"],
                              ["**/*.Tests/**", "**/*Tests.cs"])
 
@@ -700,7 +738,7 @@ def run_self_test():
             self._write("pyproject.toml", "[project]\nname='x'\n")
             result = build_report(self.repo, 6)
             self.assertEqual(self._names(result), {"python"})
-            self.assertEqual(result["suggested_check_commands"], ["pytest"])
+            self.assertEqual(result["suggested_check_commands"], ["pytest -q"])
             self.assertNotIn("dotnet test", result["suggested_check_commands"])
 
         def test_rollup_is_deduped_and_in_stack_order(self):
@@ -710,7 +748,9 @@ def run_self_test():
             self._write("playwright.config.ts", "export default {};")
             result = build_report(self.repo, 6)
             rollup = result["suggested_check_commands"]
-            self.assertEqual(rollup[0], "dotnet test")  # stacks sort by name
+            self.assertEqual(  # stacks sort by name
+                rollup[0],
+                'dotnet test --nologo -v q --logger "console;verbosity=minimal"')
             self.assertEqual(len(rollup), len(set(rollup)))
             globs = result["test_path_globs"]
             self.assertEqual(len(globs), len(set(globs)))
@@ -723,6 +763,7 @@ def run_self_test():
             docker = next(s for s in result["stacks"] if s["name"] == "docker")
             self.assertEqual(docker["suggested_check_commands"], [])
             self.assertEqual(docker["test_path_globs"], [])
+            self.assertEqual(docker["quiet_wrapper"], "")
             self.assertEqual(result["suggested_check_commands"], [])
 
         def test_empty_repo_rollup_is_empty(self):
@@ -734,9 +775,13 @@ def run_self_test():
             self._write("package.json", json.dumps(
                 {"dependencies": {"express": "^4.18.0"}}))
             rendered = render_markdown(build_report(self.repo, 6))
-            self.assertIn("suggested check: `npm test`", rendered)
-            self.assertIn("Suggested check commands: `npm test`", rendered)
+            self.assertIn("suggested check: `npm test -- --reporter=dot`", rendered)
+            self.assertIn(
+                "Suggested check commands: `npm test -- --reporter=dot`", rendered)
             self.assertIn("--frozen 'tests/**'", rendered)
+            self.assertIn("quiet wrapper: `python {PLUGIN_ROOT}"
+                          "/pipeline-tools/scripts/run_quiet.py --log <log> -- "
+                          "npm test -- --reporter=dot`", rendered)
             self.assertTrue(rendered.isascii())
 
         def test_every_defaults_key_is_a_known_stack_name(self):
@@ -751,6 +796,63 @@ def run_self_test():
             for name, spec in STACK_DEFAULTS.items():
                 self.assertTrue(spec["suggested_check_commands"], name)
                 self.assertTrue(spec["test_path_globs"], name)
+
+        # --- quiet-at-source commands (audit: raw build/test noise) --------
+
+        def test_dotnet_commands_are_quiet(self):
+            cmds = STACK_DEFAULTS["dotnet"]["suggested_check_commands"]
+            self.assertIn(
+                'dotnet test --nologo -v q --logger "console;verbosity=minimal"',
+                cmds)
+            self.assertIn(
+                "dotnet build --nologo -v q -clp:ErrorsOnly;Summary", cmds)
+
+        def test_node_command_is_quiet(self):
+            self.assertEqual(STACK_DEFAULTS["node"]["suggested_check_commands"],
+                             ["npm test -- --reporter=dot"])
+
+        def test_react_command_is_quiet(self):
+            self.assertEqual(STACK_DEFAULTS["react"]["suggested_check_commands"],
+                             ["npm test -- --reporter=dot"])
+
+        def test_angular_command_is_quiet(self):
+            cmds = STACK_DEFAULTS["angular"]["suggested_check_commands"]
+            self.assertEqual(cmds[0], "npm test -- --reporter=dot")
+            self.assertEqual(cmds[1], "ng test --watch=false")  # left alone
+
+        def test_vue3_commands_are_quiet(self):
+            self.assertEqual(STACK_DEFAULTS["vue3"]["suggested_check_commands"], [
+                "npm run test -- --reporter=dot",
+                "npx vitest run --reporter=dot",
+            ])
+
+        def test_python_command_is_quiet(self):
+            self.assertEqual(STACK_DEFAULTS["python"]["suggested_check_commands"],
+                             ["pytest -q"])
+
+        def test_playwright_command_is_quiet(self):
+            self.assertEqual(
+                STACK_DEFAULTS["playwright"]["suggested_check_commands"],
+                ["npx playwright test --reporter=line"])
+
+        def test_quiet_wrapper_wraps_the_first_suggested_command(self):
+            self._write("App/App.csproj", "<Project></Project>")
+            self._write("pyproject.toml", "[project]\nname='x'\n")
+            result = build_report(self.repo, 6)
+            for stack in result["stacks"]:
+                first = stack["suggested_check_commands"][0] \
+                    if stack["suggested_check_commands"] else None
+                if first is None:
+                    self.assertEqual(stack["quiet_wrapper"], "", stack["name"])
+                    continue
+                wrapper = stack["quiet_wrapper"]
+                self.assertTrue(wrapper.endswith(first), stack["name"])
+                self.assertIn("run_quiet.py --log <log> -- ", wrapper,
+                             stack["name"])
+                self.assertTrue(
+                    wrapper.startswith("python {PLUGIN_ROOT}/pipeline-tools"
+                                       "/scripts/run_quiet.py"),
+                    stack["name"])
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(DetectStackTests)
     result = unittest.TextTestRunner(verbosity=1).run(suite)

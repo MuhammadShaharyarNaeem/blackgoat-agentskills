@@ -441,6 +441,7 @@ def run_self_test():
             "check_openapi_diff.py",
             "check_quick_close.py",
             "check_red_green.py",
+            "check_redelegation.py",
             "check_runtime_evidence.py",
             "check_runtime_recipe.py",
             "check_ship_decision.py",
@@ -449,6 +450,7 @@ def run_self_test():
             "mark_milestone.py",
             "next_bugfix_route.py",
             "review_package.py",
+            "tier1_staleness.py",
             "update_state.py",
         )
 
