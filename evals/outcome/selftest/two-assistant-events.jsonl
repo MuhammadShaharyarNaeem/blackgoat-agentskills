@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","model":"claude-opus-5","plugins":[],"skills":[],"agents":[],"slash_commands":[],"tools":["Bash"]}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Starting work."}],"usage":{"input_tokens":1000,"output_tokens":200,"cache_read_input_tokens":500,"cache_creation_input_tokens":50}}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Still working."}],"usage":{"input_tokens":300,"output_tokens":150,"cache_read_input_tokens":100,"cache_creation_input_tokens":10}}}
