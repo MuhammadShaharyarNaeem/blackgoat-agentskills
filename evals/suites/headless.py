@@ -1,0 +1,820 @@
+#!/usr/bin/env python3
+"""`evals/run_suite.py run` -- headless, unattended runs of the antigravity/
+contract/trigger suites through a real runtime CLI (`agy` or `claude`),
+end to end: start a workspace, invoke the CLI non-interactively, classify
+INFRA, grade, optionally record, print one row per run and a SUMMARY table.
+
+Ports (never re-implements) the semantics of `evals/run-evals.ps1`'s
+headless `claude -p` harness -- `Invoke-ContractRun`, the trigger run,
+`Get-InfraReason`, `Invoke-BatchPreflight` -- to a runtime-neutral Python
+driver that also knows how to drive Google Antigravity's headless CLI
+(`agy`), per the 2026-09-15 probe of `agy` v1.1.3 (see each builder
+function's docstring for the exact CLI shape assumed).
+
+Sequential only, by design: evals run one at a time, never in parallel
+(MEMORY.md "Eval running rules"). `--runs` defaults to 1 -- the README's
+`runs=5` is the convention a caller opts into, not this module's default.
+
+Pure standard library. Python 3.14 on Windows; every timestamp goes through
+`datetime.now(timezone.utc)`.
+"""
+import json
+import re
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+from . import common, contract, trigger
+
+ANTIGRAVITY_DIR = common.EVALS_ROOT / "antigravity"
+if str(ANTIGRAVITY_DIR) not in sys.path:
+    sys.path.insert(0, str(ANTIGRAVITY_DIR))
+import run as antigravity_run  # noqa: E402  (evals/antigravity/run.py)
+
+RUN_SUITES = ("antigravity", "contract", "trigger")
+RUNTIMES = ("agy", "claude")
+
+TRANSCRIPTS_DIR = common.EVALS_ROOT / "results" / "transcripts" / "headless"
+# Module-level so the self-test can redirect it to a temp dir -- the INFRA
+# quarantine file must never be the real evals/results/ during a test run.
+RESULTS_DIR = common.EVALS_ROOT / "results"
+
+DEFAULT_TIMEOUT_S = 2700  # 45 minutes
+HARD_KILL_GRACE_S = 60
+
+AGY_CLI_BRAIN_ROOT = Path.home() / ".gemini" / "antigravity-cli" / "brain"
+AGY_LAST_CONVERSATIONS_PATH = Path.home() / ".gemini" / "antigravity-cli" / "cache" / "last_conversations.json"
+
+# The three evals/antigravity/ cases judged off a transcript (invoke_subagent
+# counts, skill-read discipline, ...) rather than workspace artifacts alone --
+# `run-log-discipline` is the one artifact-only case. `claude` has no
+# Antigravity-shaped transcript to judge these from at all.
+CLAUDE_ANTIGRAVITY_TRANSCRIPT_CASES = {"quiet-runner-discipline", "round-bound", "skill-load-discipline"}
+
+INSTALLED_PLUGIN_PATHS = {
+    "agy": Path.home() / ".gemini" / "config" / "plugins" / "blackgoat-agentskills",
+    "claude": Path.home() / ".claude" / "skills" / "blackgoat-agentskills",
+}
+
+
+# --------------------------------------------------------------------------
+# process invocation seam
+# --------------------------------------------------------------------------
+
+class ProcResult:
+    """Uniform result of one CLI invocation -- what `RUNTIME_INVOKER` returns."""
+
+    def __init__(self, stdout="", stderr="", returncode=0, duration_s=0.0, timed_out=False):
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = returncode
+        self.duration_s = duration_s
+        self.timed_out = timed_out
+
+
+def default_invoke(argv, cwd, timeout_s):
+    """Run `argv` with stdin closed (an empty file), capturing stdout/stderr.
+
+    The CLI's OWN timeout flag (`--print-timeout` for agy) should fire well
+    before `timeout_s`; a Python-side hard kill fires `HARD_KILL_GRACE_S`
+    seconds after it as a backstop for a CLI that ignores its own flag or
+    hangs before it starts consuming its budget.
+    """
+    started = time.time()
+    fd, empty_stdin_path = tempfile.mkstemp(prefix="bg-headless-stdin-")
+    import os
+    os.close(fd)
+    try:
+        with open(empty_stdin_path, "rb") as stdin_fh:
+            try:
+                proc = subprocess.run(
+                    argv, cwd=str(cwd), stdin=stdin_fh,
+                    capture_output=True, text=True,
+                    timeout=timeout_s + HARD_KILL_GRACE_S,
+                )
+                return ProcResult(proc.stdout, proc.stderr, proc.returncode,
+                                   time.time() - started, timed_out=False)
+            except subprocess.TimeoutExpired as exc:
+                stdout = exc.stdout.decode("utf-8", "replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+                stderr = exc.stderr.decode("utf-8", "replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+                return ProcResult(stdout, stderr, returncode=-1,
+                                   duration_s=time.time() - started, timed_out=True)
+    finally:
+        try:
+            Path(empty_stdin_path).unlink()
+        except OSError:
+            pass
+
+
+# Module-level seam -- the self-test replaces this with a fake so it never
+# invokes a real `agy`/`claude` process. Every code path below that needs to
+# run a CLI goes through this name (never `subprocess` directly), so a test
+# double sees every invocation this module makes.
+RUNTIME_INVOKER = default_invoke
+
+
+# --------------------------------------------------------------------------
+# Go-duration formatting (agy's `--print-timeout`)
+# --------------------------------------------------------------------------
+
+def to_go_duration(total_seconds):
+    """`2700` -> `"45m"`, `90` -> `"1m30s"` -- the flag format `agy
+    --print-timeout` takes (a Go `time.Duration` literal)."""
+    total_seconds = int(round(total_seconds))
+    if total_seconds <= 0:
+        return "0s"
+    hours, rem = divmod(total_seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    if secs or not parts:
+        parts.append(f"{secs}s")
+    return "".join(parts)
+
+
+# --------------------------------------------------------------------------
+# installed-plugin provenance (which tree the runtime actually loads)
+# --------------------------------------------------------------------------
+
+def _git_output(args, cwd):
+    try:
+        proc = subprocess.run(["git"] + args, cwd=str(cwd), capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def git_head(path):
+    out = _git_output(["rev-parse", "HEAD"], path)
+    return out.strip() if out else None
+
+
+def git_dirty(path):
+    out = _git_output(["status", "--porcelain"], path)
+    return bool(out and out.strip())
+
+
+def installed_plugin_info(runtime, override_path=None):
+    """`{"path", "sha", "dirty"}` for the plugin tree the RUNTIME actually
+    loads -- not necessarily the checkout `run_suite.py` lives in. `agy`
+    auto-loads its installed clone at `~/.gemini/config/plugins/
+    blackgoat-agentskills` (slash commands, always-on index, personas);
+    `claude` loads `~/.claude/skills/blackgoat-agentskills`. `override_path`
+    (the `--installed-plugin-path` CLI flag) is for a worktree checkout or
+    the self-test, where neither default applies."""
+    path = Path(override_path) if override_path else INSTALLED_PLUGIN_PATHS.get(runtime)
+    if not path or not Path(path).is_dir():
+        return {"path": str(path) if path else None, "sha": None, "dirty": False}
+    return {"path": str(path), "sha": git_head(path), "dirty": git_dirty(path)}
+
+
+def print_installed_plugin_provenance(info):
+    status = "dirty" if info["dirty"] else "clean"
+    print(f"installed plugin: {info['path']} @ {info['sha']} ({status})")
+    harness_sha = common.eval_record.plugin_sha()
+    if info["sha"] and harness_sha and info["sha"] != harness_sha:
+        print(f"WARNING: the runtime will load plugin {info['sha']} but the harness copies "
+              f"{harness_sha} into workspaces -- results measure a mix; push/merge first.")
+
+
+# --------------------------------------------------------------------------
+# INFRA classification
+# --------------------------------------------------------------------------
+
+AGY_INFRA_RE = re.compile(r"(?i)^jetski:|no output produced|auto-denied|headless mode cannot prompt")
+
+# Ported verbatim from run-evals.ps1's $InfraOutputPatterns.
+CLAUDE_INFRA_PATTERNS = [
+    (re.compile(r"(?m)^\s*API Error"), "the CLI reported an API error"),
+    (re.compile(r"(?i)requires approval"), "the run hit a permission prompt (requires approval)"),
+    (re.compile(r"(?is)(?:api error|(?:^|[^a-z])error\s*[:\-]|\b429\b|\bclaude\b)[^\r\n]{0,60}?(usage limit|rate limit)"),
+     "the run hit a usage or rate limit"),
+    (re.compile(r"(?i)(usage limit|rate limit)[^\r\n]{0,60}?(exceeded|reached|hit|will reset|resets? at|try again)"),
+     "the run hit a usage or rate limit"),
+]
+
+
+def classify_infra(runtime, text, timed_out, timeout_s=None, duration_s=None, min_duration_s=None):
+    """`None` (not INFRA), or a short reason string. `text` is the effective
+    output to judge -- see `effective_output_for_infra` for the Out-File
+    exception (runtime claude, suite contract)."""
+    if timed_out:
+        return f"the run did not finish within its {timeout_s}s timeout" if timeout_s else "the run timed out"
+    if not text or not text.strip():
+        return "the agent produced no output at all (empty or whitespace stdout)"
+    if runtime == "agy" and AGY_INFRA_RE.search(text):
+        return ("permission_denied: a tool required a permission headless mode cannot prompt "
+                "for, and it was auto-denied")
+    if runtime == "claude":
+        for pattern, reason in CLAUDE_INFRA_PATTERNS:
+            if pattern.search(text):
+                return reason
+    if min_duration_s and duration_s is not None and duration_s < min_duration_s:
+        return (f"the run finished in {duration_s}s, under this case's "
+                f"{min_duration_s}s minimum expected duration")
+    return None
+
+
+def effective_output_for_infra(runtime, suite, handoff_to, workspace, stdout):
+    """The Out-File exception: `runtime claude, suite contract` with a
+    `handoff_to` pipes the agent's whole reply to `handoff.txt` INSIDE the
+    Command block itself (`| Out-File -FilePath handoff.txt`), so the
+    driving process's own captured stdout is empty by construction -- read
+    the handoff file instead, exactly as `run-evals.ps1`'s
+    `Resolve-AgentOutputText` does."""
+    if runtime == "claude" and suite == "contract" and handoff_to:
+        handoff_path = Path(workspace) / handoff_to
+        if handoff_path.is_file():
+            text = handoff_path.read_text(encoding="utf-8", errors="replace")
+            if text.strip():
+                return text
+    return stdout
+
+
+# --------------------------------------------------------------------------
+# argv builders
+# --------------------------------------------------------------------------
+
+def build_argv_agy(prompt, model=None, timeout_s=DEFAULT_TIMEOUT_S, skip_permissions=True):
+    """`agy -p "<prompt>" --mode accept-edits [--model "<name>"]
+    --print-timeout <duration> [--dangerously-skip-permissions]` -- see the
+    module docstring for the source probe."""
+    argv = ["agy", "-p", prompt, "--mode", "accept-edits",
+            "--print-timeout", to_go_duration(timeout_s)]
+    if skip_permissions:
+        argv.append("--dangerously-skip-permissions")
+    if model:
+        argv += ["--model", model]
+    return argv
+
+
+def build_argv_claude_trigger(prompt, model=None):
+    argv = ["claude", "-p", prompt, "--permission-mode", "plan",
+            "--output-format", "stream-json", "--verbose"]
+    if model:
+        argv = [argv[0], "--model", model] + argv[1:]
+    return argv
+
+
+def build_argv_claude_antigravity(prompt, model=None):
+    argv = ["claude", "-p", prompt, "--permission-mode", "acceptEdits", "--allowedTools",
+            "Bash,PowerShell,Read,Write,Edit,MultiEdit,Glob,Grep,Agent,Task,TodoWrite,Skill"]
+    if model:
+        argv = [argv[0], "--model", model] + argv[1:]
+    return argv
+
+
+def build_claude_contract_command_text(command_text, model=None):
+    """Insert `--model "<name>"` right after the literal `claude` token that
+    precedes `-p`, when given -- otherwise the case's own Command block runs
+    verbatim (prefix, `claude -p ...`, any trailing `| Out-File -FilePath
+    handoff.txt`, all intact). PARITY with `run-evals.ps1`'s
+    `Invoke-ContractRun`, which runs this same block through
+    `Invoke-Expression`.
+
+    Also hardens a leading `git init ...;` clause for Windows long paths
+    (`common.harden_git_prefix_for_long_paths`) -- `contract.start_one`
+    applies this when IT runs a case's prefix (the agy path), and this
+    block's own `git init ...` needs the identical fix now that headless
+    runs it here instead (a no-op on a block with no such prefix)."""
+    text = command_text
+    if model:
+        m = contract.CLAUDE_P_RE.search(text)
+        if m:
+            quoted_model = model.replace('"', '`"')
+            text = text[:m.start()] + f'claude --model "{quoted_model}" -p ' + text[m.end():]
+    return common.harden_git_prefix_for_long_paths(text)
+
+
+def build_argv_powershell(command_text):
+    return ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+            "-Command", command_text]
+
+
+# --------------------------------------------------------------------------
+# claude stream-json trigger judging (port of run-evals.ps1's Invoke-TriggerJudge
+# read path -- the Skill tool_use signal, not the Antigravity skill-read signal
+# trigger.py's own extract_skills_invoked uses)
+# --------------------------------------------------------------------------
+
+def parse_claude_stream(text):
+    msgs = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line or line[0] not in "{[":
+            continue
+        try:
+            msgs.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return msgs
+
+
+def claude_skill_invocations(stream_text):
+    """Every `Skill` tool_use in stream order, plugin namespace stripped
+    (`'blackgoat-agentskills:bgpdd-plan'` -> `'bgpdd-plan'`)."""
+    out = []
+    for msg in parse_claude_stream(stream_text):
+        if not isinstance(msg, dict):
+            continue
+        content = None
+        message = msg.get("message")
+        if isinstance(message, dict) and "content" in message:
+            content = message["content"]
+        elif "content" in msg:
+            content = msg["content"]
+        if not content:
+            continue
+        blocks = content if isinstance(content, list) else [content]
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") != "tool_use" or block.get("name") != "Skill":
+                continue
+            inp = block.get("input") or {}
+            raw = inp.get("skill") or inp.get("name")
+            if not raw:
+                continue
+            out.append(re.sub(r"^.*:", "", str(raw)).strip())
+    return out
+
+
+def claude_stream_result_text(stream_text):
+    text = None
+    for msg in parse_claude_stream(stream_text):
+        if isinstance(msg, dict) and msg.get("type") == "result" and "result" in msg:
+            text = str(msg["result"])
+    return text
+
+
+def claude_mentioned_only(stream_text, expected_skill, acceptable_alternatives):
+    """Diagnostic only -- mirrors `trigger.compute_mentioned_only`, sourced
+    from the stream's final result text instead of an Antigravity transcript."""
+    text = claude_stream_result_text(stream_text) or ""
+    lowered = text.lower()
+    for skill in [expected_skill] + list(acceptable_alternatives or []):
+        if not skill:
+            continue
+        needle = skill.lower()
+        start = 0
+        while True:
+            idx = lowered.find(needle, start)
+            if idx == -1:
+                break
+            window = lowered[max(0, idx - 40):idx]
+            if not any(neg in window for neg in trigger.NEGATION_WORDS):
+                return True
+            start = idx + len(needle)
+    return False
+
+
+# --------------------------------------------------------------------------
+# agy conversation attribution
+# --------------------------------------------------------------------------
+
+def resolve_agy_conversation_id(workspace, cache_path=None):
+    """The `agy` conversation id for `workspace`'s cwd, read from
+    `~/.gemini/antigravity-cli/cache/last_conversations.json` (absolute cwd
+    -> conversation id), or `None` if the CLI never ran there / the mapping
+    file is missing. Compared via `normalize_path` on both sides."""
+    cache_path = Path(cache_path) if cache_path else AGY_LAST_CONVERSATIONS_PATH
+    if not cache_path.is_file():
+        return None
+    try:
+        mapping = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    target = common.transcript_tools.normalize_path(str(workspace))
+    for cwd_key, conversation_id in (mapping or {}).items():
+        if common.transcript_tools.normalize_path(cwd_key) == target:
+            return conversation_id
+    return None
+
+
+def resolve_agy_transcripts(workspace, window_start, window_end, brain_root=None, cache_path=None):
+    """Attribute a headless `agy` run's conversation deterministically via
+    `last_conversations.json`; fall back to the window/workspace-mention
+    heuristic (`find_run_transcripts`) when the mapping has no entry."""
+    brain_root = brain_root or AGY_CLI_BRAIN_ROOT
+    conversation_id = resolve_agy_conversation_id(workspace, cache_path=cache_path)
+    if conversation_id:
+        transcripts = common.transcript_tools.transcripts_for_conversation(
+            conversation_id, window_start, window_end, brain_root)
+        if transcripts.get("parent"):
+            return transcripts
+    return common.transcript_tools.find_run_transcripts(
+        window_start, window_end, brain_root, workspace=str(workspace))
+
+
+# --------------------------------------------------------------------------
+# preflight
+# --------------------------------------------------------------------------
+
+def preflight_agy(probe=False):
+    try:
+        proc = subprocess.run(["agy", "agents"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"could not run `agy agents`: {exc}"
+    out = proc.stdout or ""
+    if proc.returncode != 0 or "luna" not in out or "mason" not in out:
+        return False, (f"`agy agents` did not list both luna and mason -- is the plugin loaded "
+                        f"from {INSTALLED_PLUGIN_PATHS['agy']}?")
+    if probe:
+        result = RUNTIME_INVOKER(["agy", "-p", "reply with the word READY", "--print-timeout", "2m"],
+                                  Path.cwd(), 120)
+        if "READY" not in (result.stdout or ""):
+            return False, "agy preflight probe did not reply READY"
+    return True, None
+
+
+def preflight_claude(probe=False):
+    try:
+        proc = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"could not run `claude --version`: {exc}"
+    if proc.returncode != 0:
+        return False, "`claude --version` failed"
+    if probe:
+        result = RUNTIME_INVOKER(["claude", "-p", "reply with the word READY", "--output-format", "json"],
+                                  Path.cwd(), 120)
+        if "READY" not in (result.stdout or ""):
+            return False, "claude preflight probe did not reply READY"
+    return True, None
+
+
+# --------------------------------------------------------------------------
+# execution + archiving + INFRA retry
+# --------------------------------------------------------------------------
+
+def _execute_with_retry(argv_builder, cwd, timeout_s, runtime, suite, handoff_to, min_duration_s=None):
+    """Runs `argv_builder()` via `RUNTIME_INVOKER`, classifies INFRA, and
+    retries ONCE on INFRA only -- a graded FAIL is a measurement and is
+    never re-rolled (`run-evals.ps1`'s rule). Returns `(argv, proc,
+    infra_reason_or_None)`."""
+    argv = proc = reason = None
+    for attempt in (1, 2):
+        argv = argv_builder()
+        proc = RUNTIME_INVOKER(argv, cwd, timeout_s)
+        text = effective_output_for_infra(runtime, suite, handoff_to, cwd, proc.stdout)
+        reason = classify_infra(runtime, text, proc.timed_out, timeout_s=timeout_s,
+                                 duration_s=proc.duration_s, min_duration_s=min_duration_s)
+        if not reason:
+            return argv, proc, None
+        print(f"    run classified INFRA ({reason})"
+              + (" -- retrying once" if attempt == 1 else " after retry"))
+    return argv, proc, reason
+
+
+def _quote_for_display(token):
+    return token if (token and " " not in token and "\n" not in token) else json.dumps(token)
+
+
+def archive_run(suite, case, ts, argv, proc, extra_files=None):
+    d = TRANSCRIPTS_DIR / f"{suite}-{case}-{ts}"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "command.txt").write_text(" ".join(_quote_for_display(a) for a in argv), encoding="utf-8")
+    (d / "stdout.txt").write_text(proc.stdout or "", encoding="utf-8")
+    (d / "stderr.txt").write_text(proc.stderr or "", encoding="utf-8")
+    for name, content in (extra_files or {}).items():
+        (d / name).write_text(content or "", encoding="utf-8")
+    return d
+
+
+def invalid_infra_path():
+    return RESULTS_DIR / f"results-invalid-infra-{common.utc_now().strftime('%Y-%m-%d')}.jsonl"
+
+
+def write_handoff_if_needed(runtime, handoff_to, workspace, stdout):
+    """Writes `<workspace>/<handoff_to>` from the CLI's captured stdout --
+    only when the marker names a handoff file AND the runtime didn't already
+    write it itself. `claude`+contract's own Command block pipes its reply
+    to `handoff.txt` via `| Out-File` as part of the block that ran; `agy`
+    has no such redirection and always prints its final reply to stdout, so
+    headless must create the file itself. Returns whether it wrote anything."""
+    if not handoff_to or runtime == "claude":
+        return False
+    (Path(workspace) / handoff_to).write_text(stdout or "", encoding="utf-8")
+    return True
+
+
+def _write_invalid_infra(suite, case, run_index, runtime, model, workspace, reason, duration_s, installed,
+                          expected_chain=None):
+    path = invalid_infra_path()
+    common_kwargs = dict(
+        failed_criterion=f"INFRA: {reason}", duration_s=duration_s, runtime=runtime,
+        model=model, triage="INFRA", results_path=path,
+        installed_plugin_path=installed["path"], installed_plugin_sha=installed["sha"],
+        installed_plugin_dirty=installed["dirty"],
+    )
+    if suite == "contract":
+        common.eval_record.append_runtime_contract_record(
+            case=case, run_index=run_index, passed=None, outcome="INFRA",
+            workspace=workspace, **common_kwargs)
+    elif suite == "trigger":
+        common.eval_record.append_runtime_trigger_record(
+            case=case, run_index=run_index, outcome="INFRA", first_skill=None, skills_invoked=[],
+            expected_chain=expected_chain or [], mentioned_only=False, workspace=workspace,
+            **common_kwargs)
+    else:
+        common.eval_record.append_antigravity_record(
+            case=case, run_index=run_index, passed=None, outcome="INFRA", **common_kwargs)
+
+
+def _row(suite, case, run_index, runtime, outcome, passed, duration_s, failed_criterion, workspace):
+    return {"suite": suite, "case": case, "run": run_index, "runtime": runtime,
+            "outcome": outcome, "pass": passed, "duration_s": round(duration_s or 0.0, 2),
+            "failed_criterion": failed_criterion, "workspace": str(workspace)}
+
+
+def _update_marker_result(marker_path, outcome, passed, failed_criterion):
+    rec = common.load_marker(marker_path)
+    rec["graded_at"] = common.utc_now_iso()
+    rec["last_result"] = {"outcome": outcome, "pass": passed, "failed_criterion": failed_criterion}
+    common.save_marker(marker_path, rec)
+    return rec
+
+
+def _maybe_delete_workspace(workspace, outcome, passed, keep_workspaces):
+    """Deletes on a PASS, keeps otherwise -- keyed off `passed` alone (`True`),
+    not `outcome`: contract/antigravity's graded outcome is `"GRADED"`, but
+    trigger's is one of `ROUTED_OK`/`ROUTED_WRONG`/`NO_ROUTE` -- `outcome ==
+    "GRADED"` would (and, before this fix, did) never match a trigger PASS."""
+    if keep_workspaces:
+        print(f"    workspace kept: {workspace}")
+        return
+    if passed is True:
+        import shutil
+        shutil.rmtree(workspace, ignore_errors=True)
+    else:
+        print(f"    workspace kept ({outcome}, pass={passed}): {workspace}")
+
+
+# --------------------------------------------------------------------------
+# per-suite run implementations
+# --------------------------------------------------------------------------
+
+def _run_contract(runtime, case, run_index, root, ts, timeout_s, model, record, skip_permissions,
+                   keep_workspaces, brain_root, installed):
+    run_prefix = (runtime != "claude")
+    start_info = contract.start_one(case, root, ts, run_prefix=run_prefix)
+    workspace = start_info["workspace"]
+    marker = start_info["marker"]
+    handoff_to = start_info["handoff_to"]
+    marker_rec = common.load_marker(marker)
+    min_duration_s = marker_rec.get("min_duration_s")
+
+    if runtime == "agy":
+        prompt = start_info["prompt"]
+        argv_builder = lambda: build_argv_agy(prompt, model=model, timeout_s=timeout_s,
+                                               skip_permissions=skip_permissions)
+    else:
+        command_text = build_claude_contract_command_text(start_info["command_text"], model=model)
+        argv_builder = lambda: build_argv_powershell(command_text)
+
+    argv, proc, infra_reason = _execute_with_retry(argv_builder, workspace, timeout_s, runtime,
+                                                     "contract", handoff_to, min_duration_s=min_duration_s)
+    archive_run("contract", case, ts, argv, proc)
+
+    if infra_reason:
+        if record:
+            _write_invalid_infra("contract", case, run_index, runtime, model or f"{runtime}-default",
+                                  workspace, infra_reason, proc.duration_s, installed)
+        row = _row("contract", case, run_index, runtime, "INFRA", None, proc.duration_s, f"INFRA: {infra_reason}", workspace)
+        _maybe_delete_workspace(workspace, "INFRA", None, keep_workspaces)
+        return row, True
+
+    write_handoff_if_needed(runtime, handoff_to, workspace, proc.stdout)
+
+    transcripts_override = None
+    grade_brain_root = brain_root
+    if runtime == "agy":
+        window_end = common.compute_window_end(workspace, None)
+        transcripts_override = resolve_agy_transcripts(workspace, marker_rec["started_at"], window_end,
+                                                         brain_root=brain_root or AGY_CLI_BRAIN_ROOT)
+        grade_brain_root = brain_root or AGY_CLI_BRAIN_ROOT
+
+    result_row = contract.grade_one(marker, model=model or f"{runtime}-default", brain_root=grade_brain_root,
+                                     record=record, transcripts_override=transcripts_override)
+    passed = result_row["pass"]
+    outcome = result_row["outcome"]
+    row = _row("contract", case, run_index, runtime, outcome, passed, proc.duration_s,
+               result_row.get("failed_criterion"), workspace)
+    _maybe_delete_workspace(workspace, outcome, passed, keep_workspaces)
+    return row, (outcome == "INFRA")
+
+
+def _run_trigger(runtime, case, run_index, root, ts, timeout_s, model, record, skip_permissions,
+                  keep_workspaces, brain_root, installed):
+    start_info = trigger.start_one(case, root, ts)
+    workspace = start_info["workspace"]
+    marker = start_info["marker"]
+    marker_rec = common.load_marker(marker)
+    prompt = start_info["prompt"]
+
+    if runtime == "agy":
+        argv_builder = lambda: build_argv_agy(prompt, model=model, timeout_s=timeout_s,
+                                               skip_permissions=skip_permissions)
+    else:
+        argv_builder = lambda: build_argv_claude_trigger(prompt, model=model)
+
+    argv, proc, infra_reason = _execute_with_retry(argv_builder, workspace, timeout_s, runtime,
+                                                     "trigger", None)
+    archive_run("trigger", case, ts, argv, proc,
+                extra_files=({"stream.jsonl": proc.stdout} if runtime == "claude" else None))
+
+    if infra_reason:
+        if record:
+            _write_invalid_infra("trigger", case, run_index, runtime, model or f"{runtime}-default",
+                                  workspace, infra_reason, proc.duration_s, installed,
+                                  expected_chain=marker_rec.get("expected_chain"))
+        row = _row("trigger", case, run_index, runtime, "INFRA", None, proc.duration_s, f"INFRA: {infra_reason}", workspace)
+        _maybe_delete_workspace(workspace, "INFRA", None, keep_workspaces)
+        return row, True
+
+    if runtime == "agy":
+        window_end = common.compute_window_end(workspace, None)
+        transcripts = resolve_agy_transcripts(workspace, marker_rec["started_at"], window_end,
+                                               brain_root=brain_root or AGY_CLI_BRAIN_ROOT)
+        result_row = trigger.grade_one(marker, model=model or "agy-default",
+                                        brain_root=brain_root or AGY_CLI_BRAIN_ROOT,
+                                        record=record, transcripts_override=transcripts)
+        passed = result_row["pass"]
+        outcome = result_row["outcome"]
+        failed_criterion = result_row.get("failed_criterion")
+    else:
+        skills_invoked = claude_skill_invocations(proc.stdout)
+        first_skill = skills_invoked[0] if skills_invoked else None
+        expected_skill = marker_rec.get("expected_skill")
+        acceptable_alternatives = marker_rec.get("acceptable_alternatives") or []
+        expected_chain = marker_rec.get("expected_chain") or []
+        outcome = trigger.judge_outcome(skills_invoked, expected_chain, expected_skill, acceptable_alternatives)
+        mentioned_only = claude_mentioned_only(proc.stdout, expected_skill, acceptable_alternatives)
+        passed = (outcome == "ROUTED_OK")
+        failed_criterion = None if passed else f"{outcome}: first_skill={first_skill} skills_invoked={skills_invoked}"
+        _update_marker_result(marker, outcome, passed, failed_criterion)
+        if record:
+            run_idx = common.infer_run_index("trigger", case, marker)
+            common.eval_record.append_runtime_trigger_record(
+                case=case, run_index=run_idx, outcome=outcome, first_skill=first_skill,
+                skills_invoked=skills_invoked, expected_chain=expected_chain, mentioned_only=mentioned_only,
+                failed_criterion=failed_criterion, duration_s=proc.duration_s, runtime="claude",
+                model=model or "claude-default", workspace=workspace, raw_line=marker_rec.get("raw_line"),
+                judge="tool_use", installed_plugin_path=installed["path"], installed_plugin_sha=installed["sha"],
+                installed_plugin_dirty=installed["dirty"])
+
+    row = _row("trigger", case, run_index, runtime, outcome, passed, proc.duration_s, failed_criterion, workspace)
+    _maybe_delete_workspace(workspace, outcome, passed, keep_workspaces)
+    return row, (outcome == "INFRA")
+
+
+def _run_antigravity(runtime, case, run_index, root, ts, timeout_s, model, record, skip_permissions,
+                      keep_workspaces, brain_root, installed):
+    workspace = Path(root) / "eval-runs" / f"{case}-{ts}"
+    marker = antigravity_run._start_one(case, workspace, ts=ts)
+    marker_rec = common.load_marker(marker)
+    prompt = (antigravity_run.CASES_DIR / case / "prompt.md").read_text(encoding="utf-8")
+
+    if runtime == "agy":
+        argv_builder = lambda: build_argv_agy(prompt, model=model, timeout_s=timeout_s,
+                                               skip_permissions=skip_permissions)
+    else:
+        argv_builder = lambda: build_argv_claude_antigravity(prompt, model=model)
+
+    argv, proc, infra_reason = _execute_with_retry(argv_builder, workspace, timeout_s, runtime,
+                                                     "antigravity", None)
+    archive_run("antigravity", case, ts, argv, proc)
+
+    if not infra_reason and runtime == "claude" and case in CLAUDE_ANTIGRAVITY_TRANSCRIPT_CASES:
+        infra_reason = "no Antigravity transcript under runtime claude"
+
+    if infra_reason:
+        if record:
+            _write_invalid_infra("antigravity", case, run_index, runtime, model or f"{runtime}-default",
+                                  workspace, infra_reason, proc.duration_s, installed)
+        row = _row("antigravity", case, run_index, runtime, "INFRA", None, proc.duration_s, f"INFRA: {infra_reason}", workspace)
+        _maybe_delete_workspace(workspace, "INFRA", None, keep_workspaces)
+        return row, True
+
+    window_start = marker_rec["started_at"]
+    window_end = antigravity_run._artifact_window_end(workspace) or common.utc_now_iso()
+    if runtime == "agy":
+        transcripts = resolve_agy_transcripts(workspace, window_start, window_end,
+                                               brain_root=brain_root or AGY_CLI_BRAIN_ROOT)
+    else:
+        # run-log-discipline is artifact-only -- its grader ignores transcripts.
+        transcripts = {"parent": None, "subagents": [], "all": []}
+
+    grader = antigravity_run._load_grader(case)
+    result = grader(workspace, transcripts)
+    is_infra = bool(result.get("infra"))
+    outcome = "INFRA" if is_infra else "GRADED"
+    passed = None if is_infra else bool(result.get("pass"))
+    failed_criterion = result.get("failed_criterion")
+
+    _update_marker_result(marker, outcome, passed, failed_criterion)
+
+    if is_infra:
+        if record:
+            _write_invalid_infra("antigravity", case, run_index, runtime, model or f"{runtime}-default",
+                                  workspace, result.get("infra_reason") or "grader reported INFRA",
+                                  proc.duration_s, installed)
+    elif record:
+        run_idx = antigravity_run._infer_run_index(case, marker)
+        common.eval_record.append_antigravity_record(
+            case=case, run_index=run_idx, passed=passed, outcome=outcome, failed_criterion=failed_criterion,
+            metrics=result.get("metrics", {}), duration_s=proc.duration_s, runtime=runtime,
+            model=model or f"{runtime}-default", installed_plugin_path=installed["path"],
+            installed_plugin_sha=installed["sha"], installed_plugin_dirty=installed["dirty"])
+
+    row = _row("antigravity", case, run_index, runtime, outcome, passed, proc.duration_s, failed_criterion, workspace)
+    _maybe_delete_workspace(workspace, outcome, passed, keep_workspaces)
+    return row, (outcome == "INFRA")
+
+
+def discover_cases(suite):
+    if suite == "contract":
+        return contract.discover_cases()
+    if suite == "trigger":
+        return trigger.discover_cases()
+    if suite == "antigravity":
+        return antigravity_run._all_case_names()
+    return []
+
+
+def run_one(runtime, suite, case, run_index, root, timeout_s, model, record, skip_permissions,
+            keep_workspaces, brain_root, installed):
+    ts = common.utc_now().strftime("%Y%m%dT%H%M%SZ")
+    fn = {"contract": _run_contract, "trigger": _run_trigger, "antigravity": _run_antigravity}[suite]
+    return fn(runtime, case, run_index, root, ts, timeout_s, model, record, skip_permissions,
+              keep_workspaces, brain_root, installed)
+
+
+# --------------------------------------------------------------------------
+# cmd_run
+# --------------------------------------------------------------------------
+
+def cmd_run(args):
+    if args.runtime not in RUNTIMES:
+        common.fail(f"unknown --runtime {args.runtime!r} (expected one of {RUNTIMES})")
+    if args.suite not in RUN_SUITES:
+        common.fail(f"unknown --suite {args.suite!r} for run (expected one of {RUN_SUITES})")
+    if bool(args.case) == bool(args.all_cases):
+        common.fail("--case or --all-cases is required (exactly one)")
+
+    root = Path(args.root).resolve() if args.root else Path.cwd()
+    runs = args.runs or 1
+    timeout_s = args.timeout or DEFAULT_TIMEOUT_S
+    skip_permissions = not args.no_skip_permissions
+
+    if args.runtime == "agy":
+        ok, reason = preflight_agy(probe=args.preflight_probe)
+    else:
+        ok, reason = preflight_claude(probe=args.preflight_probe)
+    if not ok:
+        print(f"error: preflight failed: {reason}", file=sys.stderr)
+        return 2
+
+    installed = installed_plugin_info(args.runtime, override_path=args.installed_plugin_path)
+    print_installed_plugin_provenance(installed)
+
+    cases = [args.case] if args.case else discover_cases(args.suite)
+    if not cases:
+        common.fail(f"no {args.suite} cases found")
+
+    rows = []
+    infra_count = 0
+    for case in cases:
+        for run_index in range(1, runs + 1):
+            print(f"--- {args.suite}/{case} run {run_index}/{runs} ({args.runtime}) ---")
+            row, was_infra = run_one(args.runtime, args.suite, case, run_index, root, timeout_s,
+                                      args.model, args.record, skip_permissions, args.keep_workspaces,
+                                      args.brain_root, installed)
+            rows.append(row)
+            if was_infra:
+                infra_count += 1
+            print(f"    -> outcome={row['outcome']} pass={row['pass']} duration_s={row['duration_s']}")
+
+    print_summary(rows)
+    print()
+    print(f"INFRA: {infra_count} run(s) not counted toward any case's N "
+          f"(quarantined in {invalid_infra_path().name}).")
+    print("INFRA runs are not one of the N -- re-run the case to get a real data point.")
+
+    any_fail = any(r["outcome"] == "GRADED" and r["pass"] is False for r in rows)
+    return 1 if any_fail else 0
+
+
+def print_summary(rows):
+    print()
+    print("SUMMARY:")
+    print(f"{'suite':10} {'case':26} {'run':4} {'runtime':8} {'outcome':8} {'pass':7} "
+          f"{'duration_s':11} failed_criterion")
+    for r in rows:
+        fc = (r.get("failed_criterion") or "")[:60]
+        print(f"{r['suite']:10} {r['case']:26} {r['run']:<4} {r['runtime']:8} "
+              f"{str(r['outcome']):8} {str(r['pass']):7} {str(r['duration_s']):11} {fc}")

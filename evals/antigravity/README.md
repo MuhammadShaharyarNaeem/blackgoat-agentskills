@@ -18,6 +18,16 @@ Orchestrator itself performs the case's lane prompt in a started workspace. This
 (`run.py`, `cases/`, the manual paste-and-grade flow below) is unchanged by that; it is
 what both paths ultimately grade with.
 
+A third, headless path needs no human and no Orchestrator turn at all:
+`python evals/run_suite.py run --runtime agy --suite antigravity --all-cases --runs N
+--record` drives `agy -p "<prompt>"` itself, once per run, and grades all four cases —
+including the three transcript-based ones — because headless `agy` writes its own
+conversation transcripts under `~/.gemini/antigravity-cli/brain/`, the same shape this
+harness's `transcript_tools` already reads from the IDE's `~/.gemini/antigravity/brain/`.
+See `evals/README.md`'s "Headless: run" section for the full command, the INFRA rules, and
+the permissions flag. The manual paste-into-Antigravity flow below is unchanged and stays
+the only path for an IDE-driven run.
+
 ## How a run works
 
 1. **Start.** `python run.py start --case <case> --workspace <dir>` copies

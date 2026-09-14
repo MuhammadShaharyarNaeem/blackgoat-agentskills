@@ -1,6 +1,6 @@
 ---
 name: bg-eval
-description: "Turns one sentence into a graded run of any evals/ suite — antigravity, contract, trigger, or outcome — against the current plugin checkout: parses the case list, starts in-place workspaces via evals/run_suite.py, performs each case's prompt itself (by kind: lane, persona, or bare trigger prompt), then grades and reports the verdict tables. Trigger phrases: 'run the antigravity eval', 'run the antigravity evals', 'grade the antigravity eval', 'run the evals', 'run all the evals', 'run the eval suite', 'run the contract/trigger/outcome evals', '/bg-eval'. Main-session only, Orchestrator-run."
+description: "Turns one sentence into a graded run of any evals/ suite — antigravity, contract, trigger, or outcome — against the current plugin checkout: parses the case list, starts in-place workspaces via evals/run_suite.py, performs each case's prompt itself (by kind: lane, persona, or bare trigger prompt), then grades and reports the verdict tables. Trigger phrases: 'run the antigravity eval', 'run the antigravity evals', 'grade the antigravity eval', 'run the evals', 'run all the evals', 'run the eval suite', 'run the contract/trigger/outcome evals', 'run the evals headless', 'run the evals on agy', 'run the evals with the claude cli', '/bg-eval'. Main-session only, Orchestrator-run."
 trigger: /bg-eval
 category: execution
 risk: safe
@@ -21,7 +21,10 @@ Every suite under `evals/` assumes a human either pastes a prompt into Antigravi
 ## Worker Execution Contract
 
 ### Phase 0 — Parse
-Parse `/bg-eval [antigravity|contract|trigger|outcome|all] [<case>|all] [--parallel N]`. Suite defaults to `antigravity` (back-compatible with this skill's original trigger phrases); `all` runs all four suites, each through its own Start → Run → Grade cycle. Case defaults to `all`. `--parallel` defaults to 1. Confirm `evals/run_suite.py` resolves before doing anything else (refusal above).
+Parse `/bg-eval [antigravity|contract|trigger|outcome|all] [<case>|all] [--parallel N] [--runtime agy|claude [--runs N] [--model <name>]]`. Suite defaults to `antigravity` (back-compatible with this skill's original trigger phrases); `all` runs all four suites, each through its own Start → Run → Grade cycle, or a headless `run` call under `--runtime` (Phase 1H). Case defaults to `all`. `--parallel` defaults to 1; unused under `--runtime`. Confirm `evals/run_suite.py` resolves before doing anything else (refusal above).
+
+### Phase 1H — Headless (`--runtime` given)
+Collapses Phases 1-3 into one call per suite, deliberately refining (convention #8) Phase 2's own prompt-performing/delegation rule: the run starts, invokes, grades and records itself, so the Orchestrator performs no prompt and delegates nothing. Per selected suite: `python evals/run_suite.py run --runtime <R> --suite <S> (--case <case>|--all-cases) --runs <N> [--model <M>] --record`. `outcome` is refused under `--runtime` (reason; see Limitations). Paste each SUMMARY table verbatim and read out the INFRA count and the one-of-N reminder (`runs=5`, 4/5).
 
 ### Phase 1 — Start
 For each selected suite, once: `python evals/run_suite.py start --suite <S> --in-place (--case <case>|--all-cases)`. Read the printed `suite | case | workspace | marker` table — never guess a workspace path. Note, per case, whether a `Reply capture:` line followed its prompt block — that decides part of Phase 2. Contract cases arrive with their own git history already prefixed and outcome workspaces are already git repos at a `base` commit; the Orchestrator does not set either up.
@@ -46,6 +49,9 @@ A lane that halts (a blocker-halt gate, `check_redelegation.py`) ends **that cas
 After a suite's `start` and until its `grade` has run: do not open `evals/run_suite.py`, `evals/antigravity/run.py`, any `grade.ps1`, `outcome.ps1`, `grade.py`, a `hidden/` directory, or `cases.jsonl`. Never hand-write under `evals/runs/`, `evals/antigravity/runs/`, `evals/results/`, `evals/outcome/results/`, or a workspace, except `handoff.txt` as above.
 
 ## Limitations
+- **Headless `agy` skips permissions by default** (`--dangerously-skip-permissions`, off with `--no-skip-permissions`) — otherwise every tool is auto-denied (`jetski: no output produced`), which grades INFRA, retries once, and never counts toward `--runs`.
+- **Headless runs are sequential, never parallel.** Preflight WARNS when the installed plugin the runtime loads differs from this checkout; push and merge first.
+- **Outcome stays interactive** — `--runtime` refuses it (`run-outcome.ps1`).
 - **Outcome runs the plugin arm only.** The baseline arm needs the plugin disabled in the runtime — a manual step outside this session; see `evals/outcome/README.md`.
 - **The four zero-LLM contract cases are not started here** — see "When to Use" above.
 - **Transcript-judged verdicts grade INFRA under Claude Code.** Trigger's routing judge, antigravity's three transcript-based cases (`skill-load-discipline`, `quiet-runner-discipline`, `round-bound`), and outcome's `no_unbacked_claim` all read Antigravity's own conversation transcripts under `~/.gemini/antigravity/brain/` — a lane performed under Claude Code writes none of those, so `grade` reports `INFRA` ("no transcripts found") for those cases. Report that plainly, as a limitation of the runtime this session is in, not a pass/fail data point; re-run under Antigravity for a real verdict. Antigravity's `run-log-discipline` and contract's own artifact-graded cases are unaffected — they grade from workspace files, not transcripts.

@@ -247,7 +247,11 @@ def compute_mentioned_only(transcripts, expected_skill, acceptable_alternatives)
 # grade
 # --------------------------------------------------------------------------
 
-def grade_one(marker_path, end_override=None, model="gemini-3.8-flash", brain_root=None, record=False):
+def grade_one(marker_path, end_override=None, model="gemini-3.8-flash", brain_root=None,
+              record=False, transcripts_override=None):
+    """`transcripts_override` skips the internal `common.get_transcripts` call
+    and uses this `{"parent", "subagents", "all"}` dict instead -- see
+    `contract.grade_one`'s docstring for why (`run_suite.py run --runtime agy`)."""
     rec = common.load_marker(marker_path)
     case = rec["case"]
     workspace = Path(rec["workspace"])
@@ -259,7 +263,8 @@ def grade_one(marker_path, end_override=None, model="gemini-3.8-flash", brain_ro
     current_manifest = common.compute_manifest_sha256(workspace)
     manifest_changed = current_manifest != rec.get("manifest_sha256")
     window_end = common.compute_window_end(workspace, end_override)
-    transcripts = common.get_transcripts(started_at, window_end, brain_root, workspace)
+    transcripts = (transcripts_override if transcripts_override is not None
+                   else common.get_transcripts(started_at, window_end, brain_root, workspace))
     attributed = common.transcript_attributed(transcripts)
 
     infra = common.is_infra(manifest_changed, transcript_judged=True, attributed=attributed)
