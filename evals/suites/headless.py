@@ -26,20 +26,30 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import common, contract, trigger
+from . import common, contract, trigger, outcome
 
 ANTIGRAVITY_DIR = common.EVALS_ROOT / "antigravity"
 if str(ANTIGRAVITY_DIR) not in sys.path:
     sys.path.insert(0, str(ANTIGRAVITY_DIR))
 import run as antigravity_run  # noqa: E402  (evals/antigravity/run.py)
 
-RUN_SUITES = ("antigravity", "contract", "trigger")
+# The plugin arm ONLY -- the baseline (plugin-disabled) arm needs the runtime's
+# OWN plugin toggled off (`claude plugin disable ...`), which is a decision
+# about the user's live install, not something this headless driver may do on
+# its own (the user's decision, 2026-09-15). `evals/outcome/run-outcome.ps1`
+# remains the only way to run the baseline arm.
+RUN_SUITES = ("antigravity", "contract", "trigger", "outcome")
 RUNTIMES = ("agy", "claude")
 
 TRANSCRIPTS_DIR = common.EVALS_ROOT / "results" / "transcripts" / "headless"
 # Module-level so the self-test can redirect it to a temp dir -- the INFRA
 # quarantine file must never be the real evals/results/ during a test run.
 RESULTS_DIR = common.EVALS_ROOT / "results"
+# The outcome tier's own results/ dir (`evals/outcome/results/`) is a
+# DIFFERENT directory from the shared `evals/results/` above -- its
+# results.jsonl already lives there (`common.OUTCOME_RESULTS_PATH`), so its
+# INFRA quarantine file sits next to it rather than in the shared dir.
+OUTCOME_RESULTS_DIR = common.OUTCOME_RESULTS_PATH.parent
 
 DEFAULT_TIMEOUT_S = 2700  # 45 minutes
 HARD_KILL_GRACE_S = 60
@@ -74,8 +84,21 @@ class ProcResult:
         self.timed_out = timed_out
 
 
+# Module-level so a self-test can shrink either for a fast, deterministic
+# heartbeat assertion without waiting on a real 30 s interval.
+HEARTBEAT_INTERVAL_S = 30
+POLL_INTERVAL_S = 0.25
+
+
 def default_invoke(argv, cwd, timeout_s):
     """Run `argv` with stdin closed (an empty file), capturing stdout/stderr.
+
+    Popen + a poll loop, not one blocking `subprocess.run` call: a live
+    `run --runtime agy/claude` prints nothing for however long the agent
+    takes, which was mistaken for a hang and Ctrl+C'd mid-run on a perfectly
+    healthy multi-minute call. This prints one heartbeat line to stderr
+    every `HEARTBEAT_INTERVAL_S` seconds instead, and still returns the same
+    `ProcResult` shape the rest of this module expects.
 
     The CLI's OWN timeout flag (`--print-timeout` for agy) should fire well
     before `timeout_s`; a Python-side hard kill fires `HARD_KILL_GRACE_S`
@@ -86,21 +109,40 @@ def default_invoke(argv, cwd, timeout_s):
     fd, empty_stdin_path = tempfile.mkstemp(prefix="bg-headless-stdin-")
     import os
     os.close(fd)
+    runtime_name = argv[0] if argv else "?"
+    hard_deadline = started + timeout_s + HARD_KILL_GRACE_S
+    next_heartbeat = started + HEARTBEAT_INTERVAL_S
     try:
         with open(empty_stdin_path, "rb") as stdin_fh:
-            try:
-                proc = subprocess.run(
-                    argv, cwd=str(cwd), stdin=stdin_fh,
-                    capture_output=True, text=True,
-                    timeout=timeout_s + HARD_KILL_GRACE_S,
-                )
-                return ProcResult(proc.stdout, proc.stderr, proc.returncode,
-                                   time.time() - started, timed_out=False)
-            except subprocess.TimeoutExpired as exc:
-                stdout = exc.stdout.decode("utf-8", "replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-                stderr = exc.stderr.decode("utf-8", "replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
-                return ProcResult(stdout, stderr, returncode=-1,
-                                   duration_s=time.time() - started, timed_out=True)
+            proc = subprocess.Popen(argv, cwd=str(cwd), stdin=stdin_fh,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            timed_out = False
+            stdout = stderr = ""
+            while True:
+                try:
+                    stdout, stderr = proc.communicate(timeout=POLL_INTERVAL_S)
+                    break
+                except subprocess.TimeoutExpired:
+                    # Safe to retry communicate() after this -- it never
+                    # loses output already buffered (see the stdlib docs for
+                    # Popen.communicate's timeout parameter).
+                    now = time.time()
+                    if now >= hard_deadline:
+                        proc.kill()
+                        try:
+                            stdout, stderr = proc.communicate(timeout=HARD_KILL_GRACE_S)
+                        except subprocess.TimeoutExpired:
+                            stdout, stderr = stdout or "", stderr or ""
+                        timed_out = True
+                        break
+                    if now >= next_heartbeat:
+                        elapsed = int(now - started)
+                        print(f"  ... waiting on {runtime_name} (elapsed {elapsed}s, timeout {timeout_s}s)",
+                              file=sys.stderr)
+                        next_heartbeat = now + HEARTBEAT_INTERVAL_S
+            returncode = -1 if timed_out else proc.returncode
+            return ProcResult(stdout or "", stderr or "", returncode,
+                               time.time() - started, timed_out=timed_out)
     finally:
         try:
             Path(empty_stdin_path).unlink()
@@ -264,6 +306,29 @@ def build_argv_claude_trigger(prompt, model=None):
 def build_argv_claude_antigravity(prompt, model=None):
     argv = ["claude", "-p", prompt, "--permission-mode", "acceptEdits", "--allowedTools",
             "Bash,PowerShell,Read,Write,Edit,MultiEdit,Glob,Grep,Agent,Task,TodoWrite,Skill"]
+    if model:
+        argv = [argv[0], "--model", model] + argv[1:]
+    return argv
+
+
+# Verbatim from evals/outcome/run-outcome.ps1's $AllowedToolsArg -- both arms
+# of the interactive outcome harness get this identical list (fairness), and
+# the headless plugin-arm run below reuses it unchanged rather than drifting
+# its own subset.
+OUTCOME_ALLOWED_TOOLS_ARG = ("Bash,PowerShell,Read,Write,Edit,MultiEdit,NotebookEdit,Glob,Grep,"
+                             "Agent,Task,TaskOutput,TaskStop,KillShell,BashOutput,TodoWrite,Skill,"
+                             "ToolSearch,SendMessage,ListAgents,WebFetch,WebSearch")
+
+
+def build_argv_claude_outcome(prompt, model=None):
+    """Ports `Invoke-OutcomeClaudeRun`'s argv (run-outcome.ps1) onto
+    headless's argv-list convention: `claude [--model M] -p <prompt>
+    --permission-mode acceptEdits --allowedTools "<OUTCOME_ALLOWED_TOOLS_ARG>"
+    --output-format stream-json --verbose`. stdin is the same empty file
+    every headless argv gets (`default_invoke`)."""
+    argv = ["claude", "-p", prompt, "--permission-mode", "acceptEdits",
+            "--allowedTools", OUTCOME_ALLOWED_TOOLS_ARG,
+            "--output-format", "stream-json", "--verbose"]
     if model:
         argv = [argv[0], "--model", model] + argv[1:]
     return argv
@@ -489,6 +554,13 @@ def invalid_infra_path():
     return RESULTS_DIR / f"results-invalid-infra-{common.utc_now().strftime('%Y-%m-%d')}.jsonl"
 
 
+def outcome_invalid_infra_path():
+    """Next to the outcome tier's OWN results.jsonl (`evals/outcome/results/`),
+    not the shared `evals/results/` `invalid_infra_path()` above uses -- the
+    outcome tier's results file already lives in a different directory."""
+    return OUTCOME_RESULTS_DIR / f"results-invalid-infra-{common.utc_now().strftime('%Y-%m-%d')}.jsonl"
+
+
 def write_handoff_if_needed(runtime, handoff_to, workspace, stdout):
     """Writes `<workspace>/<handoff_to>` from the CLI's captured stdout --
     only when the marker names a handoff file AND the runtime didn't already
@@ -504,6 +576,30 @@ def write_handoff_if_needed(runtime, handoff_to, workspace, stdout):
 
 def _write_invalid_infra(suite, case, run_index, runtime, model, workspace, reason, duration_s, installed,
                           expected_chain=None):
+    if suite == "outcome":
+        # The outcome tier has no `common.eval_record.append_*` writer of its
+        # own (its results.jsonl shape is `outcome.py`'s, not eval_record's)
+        # -- build that shape directly and quarantine it next to the
+        # outcome tier's own results dir, never the shared evals/results/.
+        outcome_record = {
+            "case": case, "arm": "plugin", "outcome": "INFRA", "pass": None,
+            "criteria": [], "lane_fired": False,
+            "total_cost_usd": None, "input_tokens": None, "output_tokens": None,
+            "cache_read_tokens": None, "cache_creation_tokens": None,
+            "num_turns": None, "duration_s": duration_s, "subagent_count": None,
+            "denied_tool_calls": None, "denied_tools": [],
+            "timestamp": common.utc_now_iso(),
+            "runtime": runtime, "model": model, "workspace": str(workspace),
+            "plugin_sha": common.eval_record.plugin_sha(),
+            "harness_version": outcome.HARNESS_VERSION,
+            "failed_criterion": f"INFRA: {reason}",
+            "triage": "INFRA",
+            "installed_plugin_path": installed["path"], "installed_plugin_sha": installed["sha"],
+            "installed_plugin_dirty": installed["dirty"],
+        }
+        outcome._append_outcome_record(outcome_record, results_path=outcome_invalid_infra_path())
+        return
+
     path = invalid_infra_path()
     common_kwargs = dict(
         failed_criterion=f"INFRA: {reason}", duration_s=duration_s, runtime=runtime,
@@ -672,6 +768,61 @@ def _run_trigger(runtime, case, run_index, root, ts, timeout_s, model, record, s
     return row, (outcome == "INFRA")
 
 
+def _run_outcome(runtime, case, run_index, root, ts, timeout_s, model, record, skip_permissions,
+                  keep_workspaces, brain_root, installed):
+    """The plugin arm ONLY -- `outcome.start_one` always writes `arm:
+    "plugin"` (see `RUN_SUITES`'s comment above for why there is no
+    `--arm`/baseline here). Mirrors `_run_trigger`'s shape."""
+    start_info = outcome.start_one(case, root, ts)
+    workspace = start_info["workspace"]
+    marker = start_info["marker"]
+    marker_rec = common.load_marker(marker)
+    prompt = start_info["prompt"]
+
+    if runtime == "agy":
+        argv_builder = lambda: build_argv_agy(prompt, model=model, timeout_s=timeout_s,
+                                               skip_permissions=skip_permissions)
+    else:
+        argv_builder = lambda: build_argv_claude_outcome(prompt, model=model)
+
+    argv, proc, infra_reason = _execute_with_retry(argv_builder, workspace, timeout_s, runtime,
+                                                     "outcome", None)
+    archive_run("outcome", case, ts, argv, proc,
+                extra_files=({"stream.jsonl": proc.stdout} if runtime == "claude" else None))
+
+    if infra_reason:
+        if record:
+            _write_invalid_infra("outcome", case, run_index, runtime, model or f"{runtime}-default",
+                                  workspace, infra_reason, proc.duration_s, installed)
+        row = _row("outcome", case, run_index, runtime, "INFRA", None, proc.duration_s, f"INFRA: {infra_reason}", workspace)
+        _maybe_delete_workspace(workspace, "INFRA", None, keep_workspaces)
+        return row, True
+
+    if runtime == "agy":
+        window_end = common.compute_window_end(workspace, None)
+        transcripts = resolve_agy_transcripts(workspace, marker_rec["started_at"], window_end,
+                                               brain_root=brain_root or AGY_CLI_BRAIN_ROOT)
+        grade_brain_root = brain_root or AGY_CLI_BRAIN_ROOT
+    else:
+        # claude produces a stream-json transcript, not an Antigravity
+        # transcript.jsonl -- there is nothing for compute_no_unbacked_claim/
+        # compute_lane_fired to read, so hand grade_one an explicitly empty
+        # attribution rather than letting it fall back to a window/workspace
+        # search that could never find anything real.
+        transcripts = {"parent": None, "subagents": [], "all": []}
+        grade_brain_root = brain_root
+
+    result_row = outcome.grade_one(marker, model=model or f"{runtime}-default", brain_root=grade_brain_root,
+                                    record=record, transcripts_override=transcripts, runtime=runtime,
+                                    installed_plugin=installed)
+    passed = result_row["pass"]
+    outcome_result = result_row["outcome"]
+    row = _row("outcome", case, run_index, runtime, outcome_result, passed, proc.duration_s,
+               result_row.get("failed_criterion"), workspace)
+    _maybe_delete_workspace(workspace, outcome_result, passed, keep_workspaces)
+    return row, (outcome_result == "INFRA")
+
+
 def _run_antigravity(runtime, case, run_index, root, ts, timeout_s, model, record, skip_permissions,
                       keep_workspaces, brain_root, installed):
     workspace = Path(root) / "eval-runs" / f"{case}-{ts}"
@@ -741,6 +892,8 @@ def discover_cases(suite):
         return contract.discover_cases()
     if suite == "trigger":
         return trigger.discover_cases()
+    if suite == "outcome":
+        return outcome.discover_cases()
     if suite == "antigravity":
         return antigravity_run._all_case_names()
     return []
@@ -749,7 +902,8 @@ def discover_cases(suite):
 def run_one(runtime, suite, case, run_index, root, timeout_s, model, record, skip_permissions,
             keep_workspaces, brain_root, installed):
     ts = common.utc_now().strftime("%Y%m%dT%H%M%SZ")
-    fn = {"contract": _run_contract, "trigger": _run_trigger, "antigravity": _run_antigravity}[suite]
+    fn = {"contract": _run_contract, "trigger": _run_trigger, "outcome": _run_outcome,
+          "antigravity": _run_antigravity}[suite]
     return fn(runtime, case, run_index, root, ts, timeout_s, model, record, skip_permissions,
               keep_workspaces, brain_root, installed)
 

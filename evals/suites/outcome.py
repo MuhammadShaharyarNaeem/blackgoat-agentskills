@@ -432,10 +432,26 @@ def _append_outcome_record(record, results_path=None):
 
 
 def grade_one(marker_path, end_override=None, model="gemini-3.8-flash", brain_root=None,
-              record=False, case_dir=None):
+              record=False, case_dir=None, transcripts_override=None, runtime="antigravity",
+              installed_plugin=None):
     """`case_dir` overrides `OUTCOME_ROOT / case` -- used only by the
     self-test, to grade against a synthetic stub `outcome.ps1` without
-    writing anything under the real `evals/outcome/`."""
+    writing anything under the real `evals/outcome/`.
+
+    `transcripts_override` skips the internal `common.get_transcripts` call
+    entirely and uses this `{"parent", "subagents", "all"}` dict instead --
+    same seam as `contract.grade_one`/`trigger.grade_one`, used by
+    `headless.py`'s `run --runtime agy`, which resolves the run's
+    conversation deterministically via `last_conversations.json`.
+
+    `runtime`/`installed_plugin` are headless-only additions (default
+    `"antigravity"`/`None` preserve the interactive `cmd_grade` path
+    unchanged). `runtime == "claude"` cannot be judged for
+    `no_unbacked_claim` -- `claude` produces a stream-json transcript, not an
+    Antigravity `transcript.jsonl`, so that criterion is recorded as
+    `pass: None` (excluded from the overall `passed` computation, and never
+    listed in `failed_criterion`) rather than silently defaulting to a PASS
+    a real Antigravity transcript would have had to earn."""
     rec = common.load_marker(marker_path)
     case = rec["case"]
     workspace = Path(rec["workspace"])
@@ -444,7 +460,8 @@ def grade_one(marker_path, end_override=None, model="gemini-3.8-flash", brain_ro
     current_manifest = common.compute_manifest_sha256(workspace)
     manifest_changed = current_manifest != rec.get("manifest_sha256")
     window_end = common.compute_window_end(workspace, end_override)
-    transcripts = common.get_transcripts(started_at, window_end, brain_root, workspace)
+    transcripts = (transcripts_override if transcripts_override is not None
+                   else common.get_transcripts(started_at, window_end, brain_root, workspace))
     attributed = common.transcript_attributed(transcripts)
 
     infra = common.is_infra(manifest_changed, transcript_judged=True, attributed=attributed)
@@ -483,12 +500,20 @@ def grade_one(marker_path, end_override=None, model="gemini-3.8-flash", brain_ro
         else:
             criteria.append({"id": "regression_test_added", "pass": True, "detail": "n/a"})
 
-        criteria.append(compute_no_unbacked_claim(transcripts))
+        if runtime == "claude":
+            criteria.append({"id": "no_unbacked_claim", "pass": None,
+                              "detail": "not judged under runtime claude (no Antigravity transcript)"})
+        else:
+            criteria.append(compute_no_unbacked_claim(transcripts))
 
         lane_fired = compute_lane_fired(transcripts)
-        passed = all(bool(c.get("pass")) for c in criteria)
+        # A `pass: None` criterion (currently only no_unbacked_claim under
+        # runtime claude) is excluded from BOTH the overall verdict and the
+        # failed_criterion listing -- "not judged" must never read as either
+        # a PASS or a FAIL.
+        passed = all(bool(c.get("pass")) for c in criteria if c.get("pass") is not None)
         if not passed:
-            failed_criterion = "; ".join(f"{c['id']}: {c['detail']}" for c in criteria if not c.get("pass"))
+            failed_criterion = "; ".join(f"{c['id']}: {c['detail']}" for c in criteria if c.get("pass") is False)
         outcome = "GRADED"
 
     duration_s = common.parent_span_seconds(transcripts, started_at, window_end)
@@ -505,7 +530,7 @@ def grade_one(marker_path, end_override=None, model="gemini-3.8-flash", brain_ro
     if record:
         result_record = {
             "case": case, "arm": rec.get("arm", "plugin"), "outcome": outcome, "pass": passed,
-            "criteria": [{"id": c.get("id"), "pass": bool(c.get("pass")), "detail": c.get("detail")}
+            "criteria": [{"id": c.get("id"), "pass": c.get("pass"), "detail": c.get("detail")}
                          for c in criteria],
             "lane_fired": lane_fired,
             "total_cost_usd": None, "input_tokens": None, "output_tokens": None,
@@ -514,10 +539,14 @@ def grade_one(marker_path, end_override=None, model="gemini-3.8-flash", brain_ro
             "subagent_count": subagent_count,
             "denied_tool_calls": None, "denied_tools": [],
             "timestamp": common.utc_now_iso(),
-            "runtime": "antigravity", "model": model, "workspace": str(workspace),
+            "runtime": runtime, "model": model, "workspace": str(workspace),
             "plugin_sha": common.eval_record.plugin_sha(),
             "harness_version": HARNESS_VERSION,
         }
+        if installed_plugin:
+            result_record["installed_plugin_path"] = installed_plugin.get("path")
+            result_record["installed_plugin_sha"] = installed_plugin.get("sha")
+            result_record["installed_plugin_dirty"] = installed_plugin.get("dirty")
         _append_outcome_record(result_record)
 
     return {"marker": Path(marker_path).name, "suite": "outcome", "case": case,
