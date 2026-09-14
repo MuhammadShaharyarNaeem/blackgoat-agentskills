@@ -993,6 +993,32 @@ class SelfTest(unittest.TestCase):
             "2026-01-01T00:00:00Z")
         self.assertFalse(result)
 
+    def test_transcripts_for_conversation_excludes_non_briefing_neighbour(self):
+        # Two headless parents active in one window: pinning to one must not
+        # pull the other (a non-briefing conversation) into "all".
+        root = self.tmp / "brain-neighbours"
+        wa = str(self.tmp / "ws-a")
+        _write_transcript(root / "run-a", [
+            {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE",
+             "created_at": "2026-01-01T00:00:10Z", "content": f"fix it in {wa}"},
+            {"step_index": 1, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+             "created_at": "2026-01-01T00:05:00Z", "content": "done"}])
+        _write_transcript(root / "run-b", [
+            {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE",
+             "created_at": "2026-01-01T00:00:20Z", "content": "another bare prompt"},
+            {"step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+             "created_at": "2026-01-01T00:01:00Z",
+             "tool_calls": [{"name": "view_file", "args": {"AbsolutePath": _q("C:\\elsewhere\\x.md")}}]}])
+        _write_transcript(root / "worker-a", [
+            {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE",
+             "created_at": "2026-01-01T00:00:30Z", "content": "You are Quinn, the QA Tester.\nWorkspace: " + wa}])
+        tr = transcript_tools.transcripts_for_conversation(
+            "run-a", "2026-01-01T00:00:00Z", "2026-01-01T00:10:00Z", brain_root=root)
+        ids = sorted(c["conversation_id"] for c in tr["all"])
+        self.assertEqual(tr["parent"]["conversation_id"], "run-a")
+        self.assertEqual([s["conversation_id"] for s in tr["subagents"]], ["worker-a"])
+        self.assertEqual(ids, ["run-a", "worker-a"])
+
     def test_eval_record_append_antigravity_record(self):
         target = self.tmp / "results.jsonl"
         rec = eval_record.append_antigravity_record(

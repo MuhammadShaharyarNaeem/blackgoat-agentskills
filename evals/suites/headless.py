@@ -279,14 +279,62 @@ def effective_output_for_infra(runtime, suite, handoff_to, workspace, stdout):
 
 
 # --------------------------------------------------------------------------
+# workspace-scope preamble (guard 1 -- the 2026-09-15 incident)
+# --------------------------------------------------------------------------
+
+def scope_preamble(workspace):
+    """Exact text prepended to every prompt this runner composes for a
+    headless CLI, naming `workspace` as the entire project and forbidding
+    any excursion outside it. Mirrors what the interactive path already does
+    (`skills/bg-eval/SKILL.md` Phase 2: "Your working copy is <workspace>.")
+    -- headless now says the same thing, just more explicitly, since there is
+    no human in the loop to notice a runaway.
+
+    NEVER applied to `build_claude_contract_command_text`'s output: that path
+    runs a case's own `## Command` block verbatim for parity with
+    `run-evals.ps1`, and that block IS the measurement -- altering it would
+    change what is being graded, not just what is being guarded."""
+    return (f"Your working copy is {workspace}. Treat it as the entire project: every "
+            "relative path resolves there. Do not read, search, or modify anything "
+            "outside it; do not look for other repositories or projects on this "
+            "machine; do not call external services, issue trackers, MCP tools, or "
+            "the network. If something the task needs is not inside the working "
+            "copy, stop and say so.")
+
+
+def apply_scope_preamble(prompt, workspace):
+    """`scope_preamble(workspace)` + two newlines + `prompt` verbatim."""
+    return f"{scope_preamble(workspace)}\n\n{prompt}"
+
+
+def _record_prompt_scope(marker_path, prompt_scoped, prompt_sent_sha256):
+    """Adds `prompt_scoped`/`prompt_sent_sha256` to a start marker already on
+    disk. Safe for any suite's marker (`common.save_marker`/`load_marker` are
+    generic JSON read/write) -- including antigravity's, whose marker has no
+    `prompt` field of its own at all. Written before the CLI is invoked, so a
+    later fresh `load_marker` (`grade_one`, `_update_marker_result`) carries
+    these two fields through untouched, exactly as it already carries every
+    other pre-existing key."""
+    rec = common.load_marker(marker_path)
+    rec["prompt_scoped"] = prompt_scoped
+    rec["prompt_sent_sha256"] = prompt_sent_sha256
+    common.save_marker(marker_path, rec)
+
+
+# --------------------------------------------------------------------------
 # argv builders
 # --------------------------------------------------------------------------
 
-def build_argv_agy(prompt, model=None, timeout_s=DEFAULT_TIMEOUT_S, skip_permissions=True):
-    """`agy -p "<prompt>" --mode accept-edits [--model "<name>"]
+def build_argv_agy(prompt, model=None, timeout_s=DEFAULT_TIMEOUT_S, skip_permissions=True,
+                    mode="accept-edits"):
+    """`agy -p "<prompt>" --mode <mode> [--model "<name>"]
     --print-timeout <duration> [--dangerously-skip-permissions]` -- see the
-    module docstring for the source probe."""
-    argv = ["agy", "-p", prompt, "--mode", "accept-edits",
+    module docstring for the source probe. `mode` defaults to
+    `"accept-edits"` for every suite except trigger under agy, which passes
+    `"plan"` (guard 2 -- parity with the claude trigger run's own
+    `--permission-mode plan`: a trigger case only needs to observe which
+    skill gets read, never to let the model actually edit or run anything)."""
+    argv = ["agy", "-p", prompt, "--mode", mode,
             "--print-timeout", to_go_duration(timeout_s)]
     if skip_permissions:
         argv.append("--dangerously-skip-permissions")
@@ -477,6 +525,169 @@ def resolve_agy_transcripts(workspace, window_start, window_end, brain_root=None
 
 
 # --------------------------------------------------------------------------
+# workspace-scope tripwire (guard 3 -- the 2026-09-15 incident)
+# --------------------------------------------------------------------------
+
+# Antigravity/agy tool names whose path-like argument must resolve inside an
+# allowed root. Checked in this order against each call's own `args` dict --
+# whichever key is present wins (a call carries exactly one of these).
+_SCOPE_GUARD_PATH_TOOLS = ("view_file", "list_dir", "find_by_name", "grep_search",
+                           "write_to_file", "replace_file_content", "multi_replace_file_content")
+_SCOPE_GUARD_PATH_ARG_KEYS = ("AbsolutePath", "DirectoryPath", "SearchDirectory", "TargetFile", "Path")
+
+# Any call to one of these is a flag regardless of its arguments -- the
+# incident's four `call_mcp_tool` calls to `linear` had no in-workspace
+# reading at all; the point is that a headless run must never reach an
+# external service, full stop.
+_SCOPE_GUARD_NETWORK_TOOLS = ("read_url_content", "search_web", "call_mcp_tool")
+
+_WINDOWS_ABS_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
+_WINDOWS_ABS_PATH_TOKEN_RE = re.compile(r"[A-Za-z]:[\\/][^\s\"']*")
+
+
+def _is_absolute_windows_path(path):
+    if not path:
+        return False
+    return bool(_WINDOWS_ABS_PATH_RE.match(path.strip().strip('"').strip("'")))
+
+
+def _path_within_roots(path, normalized_roots):
+    """True if `path`'s normalized segments start with one allowed root's
+    segments -- a prefix match on path SEGMENTS (`C:/Gorelo` must not match
+    an allowed root `C:/Go`), never a bare string prefix."""
+    norm = common.transcript_tools.normalize_path(path)
+    segs = [p for p in norm.split("/") if p]
+    for root in normalized_roots:
+        root_segs = [p for p in root.split("/") if p]
+        if root_segs and segs[:len(root_segs)] == root_segs:
+            return True
+    return False
+
+
+def scope_guard_allowed_roots(workspace, installed_plugin_path, brain_root=None):
+    """Every root a headless run's own tool calls may legitimately touch:
+    the workspace itself, the installed plugin tree, the Antigravity CLI's
+    own scratch/brain dirs (`~/.gemini/antigravity-cli/`, `~/.gemini/
+    antigravity/`), the resolved `brain_root` (when it differs), the system
+    temp dir, and the running interpreter's own installation dir(s) -- a
+    headless run legitimately shells out to `python`/`pip` from its
+    workspace, but `python`/its stdlib living outside the workspace is not
+    itself an escape."""
+    roots = [str(workspace)]
+    if installed_plugin_path:
+        roots.append(str(installed_plugin_path))
+    roots.append(str(Path.home() / ".gemini" / "antigravity-cli"))
+    roots.append(str(Path.home() / ".gemini" / "antigravity"))
+    if brain_root:
+        roots.append(str(brain_root))
+    roots.append(str(Path(tempfile.gettempdir())))
+    roots.append(str(Path(sys.exec_prefix)))
+    if sys.prefix != sys.exec_prefix:
+        roots.append(str(Path(sys.prefix)))
+    return [common.transcript_tools.normalize_path(r) for r in roots if r]
+
+
+def _scope_guard_path_arg(call):
+    args = call.get("args") or {}
+    for key in _SCOPE_GUARD_PATH_ARG_KEYS:
+        if key in args:
+            return common.transcript_tools.unwrap_arg(args.get(key))
+    return None
+
+
+def _scope_guard_mcp_argument(call):
+    """Best-effort human-readable label for a `call_mcp_tool` call -- the
+    exact arg-key names an installed MCP client uses aren't part of this
+    repo's documented transcript shape, so this reads whichever of the
+    plausible keys is present rather than assuming one."""
+    args = call.get("args") or {}
+    server = common.transcript_tools.unwrap_arg(
+        args.get("ServerName") or args.get("Server") or args.get("server"))
+    tool = common.transcript_tools.unwrap_arg(
+        args.get("ToolName") or args.get("Tool") or args.get("tool"))
+    if server or tool:
+        return " ".join(p for p in (server, tool) if p)
+    return "call_mcp_tool"
+
+
+def detect_workspace_escape(transcripts, workspace, installed_plugin_path, brain_root=None):
+    """Post-run tripwire for the 2026-09-15 incident: a headless run that
+    wanders outside its fixture workspace while permissions are skipped --
+    searching the machine for a "real" repository, grepping another project,
+    calling an issue tracker over MCP. Meaningful only for `agy`'s own
+    Antigravity-shaped transcripts (`view_file`/`run_command`/`call_mcp_tool`
+    are agy's tool vocabulary, not `claude`'s); a caller with no such
+    transcript should not call this at all -- see each `_run_*`'s
+    `left_workspace: null` handling for `runtime == "claude"`.
+
+    Walks every attributed conversation (`transcripts["all"]`, chronological
+    by `first_ts` -- the same "lives only in transcripts['all']" case
+    `trigger.py`'s module docstring rule 2 documents: a bare-prompt headless
+    run has no `"You are <Name>, the ..."` briefing opener, so it is neither
+    `parent` nor a `subagent`), and within each, its steps/tool calls in file
+    order. Flags:
+
+      - a path-arg tool (`view_file`, `list_dir`, `find_by_name`,
+        `grep_search`, `write_to_file`, `replace_file_content`,
+        `multi_replace_file_content`) whose path argument is an absolute
+        Windows path outside every allowed root;
+      - a `run_command` whose `Cwd` is an absolute path outside every
+        allowed root, OR whose `CommandLine` contains an absolute-path
+        token (`[A-Za-z]:\\` / `[A-Za-z]:/`) outside every allowed root --
+        `git -C C:\\Gorelo\\X grep ...` run from inside the workspace is
+        still an escape;
+      - any `call_mcp_tool` at all;
+      - any `read_url_content`/`search_web` call, or a tool whose name
+        contains "browser".
+
+    Returns `{"escaped": bool, "first": {"tool", "argument", "created_at",
+    "conversation_id"} | None, "count": int}` -- `first` is always the FIRST
+    escaping call encountered in the walk order above, never the worst or
+    the last."""
+    roots = scope_guard_allowed_roots(workspace, installed_plugin_path, brain_root)
+    convs = sorted((transcripts or {}).get("all") or [], key=lambda c: c.get("first_ts") or "")
+    first = None
+    count = 0
+    for conv in convs:
+        steps = common.transcript_tools.parse_transcript(conv["dir"])
+        for call in common.transcript_tools.iter_tool_calls(steps):
+            name = call.get("name")
+            argument = None
+            if name in _SCOPE_GUARD_PATH_TOOLS:
+                path = _scope_guard_path_arg(call)
+                if path and _is_absolute_windows_path(path) and not _path_within_roots(path, roots):
+                    argument = path
+            elif name == "run_command":
+                args = call.get("args") or {}
+                cwd = common.transcript_tools.unwrap_arg(args.get("Cwd"))
+                cmdline = common.transcript_tools.unwrap_arg(args.get("CommandLine")) or ""
+                if cwd and _is_absolute_windows_path(cwd) and not _path_within_roots(cwd, roots):
+                    argument = cmdline or cwd
+                else:
+                    for token in _WINDOWS_ABS_PATH_TOKEN_RE.findall(cmdline):
+                        if not _path_within_roots(token, roots):
+                            argument = cmdline
+                            break
+            elif name == "call_mcp_tool":
+                argument = _scope_guard_mcp_argument(call)
+            elif name in ("read_url_content", "search_web") or (name and "browser" in name.lower()):
+                argument = name
+            if argument is not None:
+                count += 1
+                if first is None:
+                    first = {"tool": name, "argument": argument,
+                             "created_at": call.get("created_at"),
+                             "conversation_id": conv.get("conversation_id")}
+    return {"escaped": first is not None, "first": first, "count": count}
+
+
+def _report_workspace_escape(escape_result):
+    first = escape_result["first"]
+    print(f"LEFT WORKSPACE: {first['tool']} {first['argument']} at {first['created_at']} "
+          f"({escape_result['count']} call(s) outside the workspace)")
+
+
+# --------------------------------------------------------------------------
 # preflight
 # --------------------------------------------------------------------------
 
@@ -516,23 +727,44 @@ def preflight_claude(probe=False):
 # execution + archiving + INFRA retry
 # --------------------------------------------------------------------------
 
-def _execute_with_retry(argv_builder, cwd, timeout_s, runtime, suite, handoff_to, min_duration_s=None):
+def _execute_with_retry(argv_builder, cwd, timeout_s, runtime, suite, handoff_to, min_duration_s=None,
+                         transcripts_resolver=None, installed_plugin_path=None, brain_root=None):
     """Runs `argv_builder()` via `RUNTIME_INVOKER`, classifies INFRA, and
     retries ONCE on INFRA only -- a graded FAIL is a measurement and is
-    never re-rolled (`run-evals.ps1`'s rule). Returns `(argv, proc,
-    infra_reason_or_None)`."""
+    never re-rolled (`run-evals.ps1`'s rule).
+
+    Guard 3 extension: when `transcripts_resolver` is given (every `_run_*`
+    passes one only for `runtime == "agy"` -- `claude` has no
+    Antigravity-shaped transcript to check), a text-clean attempt is ALSO
+    run through `detect_workspace_escape` before being accepted; an escape
+    is classified INFRA with reason `"left_workspace"` and retried exactly
+    like any other INFRA reason (one retry total, not one retry per cause).
+    `transcripts_resolver` is called only after the CLI has actually run
+    (it needs a live conversation to attribute).
+
+    Returns `(argv, proc, infra_reason_or_None, transcripts_or_None,
+    escape_result_or_None)` -- the last two are `None` whenever
+    `transcripts_resolver` was not given or was never reached."""
     argv = proc = reason = None
+    transcripts = escape_result = None
     for attempt in (1, 2):
         argv = argv_builder()
         proc = RUNTIME_INVOKER(argv, cwd, timeout_s)
         text = effective_output_for_infra(runtime, suite, handoff_to, cwd, proc.stdout)
         reason = classify_infra(runtime, text, proc.timed_out, timeout_s=timeout_s,
                                  duration_s=proc.duration_s, min_duration_s=min_duration_s)
+        transcripts = escape_result = None
+        if not reason and transcripts_resolver is not None:
+            transcripts = transcripts_resolver()
+            escape_result = detect_workspace_escape(transcripts, cwd, installed_plugin_path, brain_root)
+            if escape_result["escaped"]:
+                _report_workspace_escape(escape_result)
+                reason = "left_workspace"
         if not reason:
-            return argv, proc, None
+            return argv, proc, None, transcripts, escape_result
         print(f"    run classified INFRA ({reason})"
               + (" -- retrying once" if attempt == 1 else " after retry"))
-    return argv, proc, reason
+    return argv, proc, reason, transcripts, escape_result
 
 
 def _quote_for_display(token):
@@ -575,7 +807,7 @@ def write_handoff_if_needed(runtime, handoff_to, workspace, stdout):
 
 
 def _write_invalid_infra(suite, case, run_index, runtime, model, workspace, reason, duration_s, installed,
-                          expected_chain=None):
+                          expected_chain=None, left_workspace=None, left_workspace_first=None):
     if suite == "outcome":
         # The outcome tier has no `common.eval_record.append_*` writer of its
         # own (its results.jsonl shape is `outcome.py`'s, not eval_record's)
@@ -596,6 +828,7 @@ def _write_invalid_infra(suite, case, run_index, runtime, model, workspace, reas
             "triage": "INFRA",
             "installed_plugin_path": installed["path"], "installed_plugin_sha": installed["sha"],
             "installed_plugin_dirty": installed["dirty"],
+            "left_workspace": left_workspace, "left_workspace_first": left_workspace_first,
         }
         outcome._append_outcome_record(outcome_record, results_path=outcome_invalid_infra_path())
         return
@@ -606,6 +839,7 @@ def _write_invalid_infra(suite, case, run_index, runtime, model, workspace, reas
         model=model, triage="INFRA", results_path=path,
         installed_plugin_path=installed["path"], installed_plugin_sha=installed["sha"],
         installed_plugin_dirty=installed["dirty"],
+        left_workspace=left_workspace, left_workspace_first=left_workspace_first,
     )
     if suite == "contract":
         common.eval_record.append_runtime_contract_record(
@@ -665,41 +899,57 @@ def _run_contract(runtime, case, run_index, root, ts, timeout_s, model, record, 
     min_duration_s = marker_rec.get("min_duration_s")
 
     if runtime == "agy":
-        prompt = start_info["prompt"]
-        argv_builder = lambda: build_argv_agy(prompt, model=model, timeout_s=timeout_s,
+        scoped_prompt = apply_scope_preamble(start_info["prompt"], workspace)
+        prompt_scoped, prompt_sent_sha256 = True, common.sha256_text(scoped_prompt)
+        argv_builder = lambda: build_argv_agy(scoped_prompt, model=model, timeout_s=timeout_s,
                                                skip_permissions=skip_permissions)
-    else:
-        command_text = build_claude_contract_command_text(start_info["command_text"], model=model)
-        argv_builder = lambda: build_argv_powershell(command_text)
 
-    argv, proc, infra_reason = _execute_with_retry(argv_builder, workspace, timeout_s, runtime,
-                                                     "contract", handoff_to, min_duration_s=min_duration_s)
+        def _resolve_transcripts():
+            window_end = common.compute_window_end(workspace, None)
+            return resolve_agy_transcripts(workspace, marker_rec["started_at"], window_end,
+                                            brain_root=brain_root or AGY_CLI_BRAIN_ROOT)
+    else:
+        # NOT scoped -- build_claude_contract_command_text runs the case's own
+        # `## Command` block verbatim for parity with run-evals.ps1 (guard 1's
+        # docstring explains why).
+        command_text = build_claude_contract_command_text(start_info["command_text"], model=model)
+        prompt_scoped, prompt_sent_sha256 = False, common.sha256_text(command_text)
+        argv_builder = lambda: build_argv_powershell(command_text)
+        _resolve_transcripts = None
+
+    _record_prompt_scope(marker, prompt_scoped, prompt_sent_sha256)
+
+    argv, proc, infra_reason, transcripts, escape_result = _execute_with_retry(
+        argv_builder, workspace, timeout_s, runtime, "contract", handoff_to,
+        min_duration_s=min_duration_s, transcripts_resolver=_resolve_transcripts,
+        installed_plugin_path=installed["path"],
+        brain_root=(brain_root or AGY_CLI_BRAIN_ROOT) if runtime == "agy" else None)
     archive_run("contract", case, ts, argv, proc)
+    left_workspace = escape_result["escaped"] if escape_result is not None else None
+    left_workspace_first = escape_result["first"] if escape_result else None
 
     if infra_reason:
         if record:
             _write_invalid_infra("contract", case, run_index, runtime, model or f"{runtime}-default",
-                                  workspace, infra_reason, proc.duration_s, installed)
+                                  workspace, infra_reason, proc.duration_s, installed,
+                                  left_workspace=left_workspace, left_workspace_first=left_workspace_first)
         row = _row("contract", case, run_index, runtime, "INFRA", None, proc.duration_s, f"INFRA: {infra_reason}", workspace)
+        row.update(prompt_scoped=prompt_scoped, prompt_sent_sha256=prompt_sent_sha256,
+                   left_workspace=left_workspace, left_workspace_first=left_workspace_first)
         _maybe_delete_workspace(workspace, "INFRA", None, keep_workspaces)
         return row, True
 
     write_handoff_if_needed(runtime, handoff_to, workspace, proc.stdout)
 
-    transcripts_override = None
-    grade_brain_root = brain_root
-    if runtime == "agy":
-        window_end = common.compute_window_end(workspace, None)
-        transcripts_override = resolve_agy_transcripts(workspace, marker_rec["started_at"], window_end,
-                                                         brain_root=brain_root or AGY_CLI_BRAIN_ROOT)
-        grade_brain_root = brain_root or AGY_CLI_BRAIN_ROOT
-
+    grade_brain_root = (brain_root or AGY_CLI_BRAIN_ROOT) if runtime == "agy" else brain_root
     result_row = contract.grade_one(marker, model=model or f"{runtime}-default", brain_root=grade_brain_root,
-                                     record=record, transcripts_override=transcripts_override)
+                                     record=record, transcripts_override=transcripts)
     passed = result_row["pass"]
     outcome = result_row["outcome"]
     row = _row("contract", case, run_index, runtime, outcome, passed, proc.duration_s,
                result_row.get("failed_criterion"), workspace)
+    row.update(prompt_scoped=prompt_scoped, prompt_sent_sha256=prompt_sent_sha256,
+               left_workspace=left_workspace)
     _maybe_delete_workspace(workspace, outcome, passed, keep_workspaces)
     return row, (outcome == "INFRA")
 
@@ -712,30 +962,48 @@ def _run_trigger(runtime, case, run_index, root, ts, timeout_s, model, record, s
     marker_rec = common.load_marker(marker)
     prompt = start_info["prompt"]
 
-    if runtime == "agy":
-        argv_builder = lambda: build_argv_agy(prompt, model=model, timeout_s=timeout_s,
-                                               skip_permissions=skip_permissions)
-    else:
-        argv_builder = lambda: build_argv_claude_trigger(prompt, model=model)
+    scoped_prompt = apply_scope_preamble(prompt, workspace)
+    prompt_sent_sha256 = common.sha256_text(scoped_prompt)
+    _record_prompt_scope(marker, True, prompt_sent_sha256)
 
-    argv, proc, infra_reason = _execute_with_retry(argv_builder, workspace, timeout_s, runtime,
-                                                     "trigger", None)
+    if runtime == "agy":
+        # Guard 2: a trigger run only needs to observe which skill gets read,
+        # never to let the model actually edit or run anything -- `--mode
+        # plan`, parity with the claude trigger run's own `--permission-mode
+        # plan` below.
+        argv_builder = lambda: build_argv_agy(scoped_prompt, model=model, timeout_s=timeout_s,
+                                               skip_permissions=skip_permissions, mode="plan")
+
+        def _resolve_transcripts():
+            window_end = common.compute_window_end(workspace, None)
+            return resolve_agy_transcripts(workspace, marker_rec["started_at"], window_end,
+                                            brain_root=brain_root or AGY_CLI_BRAIN_ROOT)
+    else:
+        argv_builder = lambda: build_argv_claude_trigger(scoped_prompt, model=model)
+        _resolve_transcripts = None
+
+    argv, proc, infra_reason, transcripts, escape_result = _execute_with_retry(
+        argv_builder, workspace, timeout_s, runtime, "trigger", None,
+        transcripts_resolver=_resolve_transcripts, installed_plugin_path=installed["path"],
+        brain_root=(brain_root or AGY_CLI_BRAIN_ROOT) if runtime == "agy" else None)
     archive_run("trigger", case, ts, argv, proc,
                 extra_files=({"stream.jsonl": proc.stdout} if runtime == "claude" else None))
+    left_workspace = escape_result["escaped"] if escape_result is not None else None
+    left_workspace_first = escape_result["first"] if escape_result else None
 
     if infra_reason:
         if record:
             _write_invalid_infra("trigger", case, run_index, runtime, model or f"{runtime}-default",
                                   workspace, infra_reason, proc.duration_s, installed,
-                                  expected_chain=marker_rec.get("expected_chain"))
+                                  expected_chain=marker_rec.get("expected_chain"),
+                                  left_workspace=left_workspace, left_workspace_first=left_workspace_first)
         row = _row("trigger", case, run_index, runtime, "INFRA", None, proc.duration_s, f"INFRA: {infra_reason}", workspace)
+        row.update(prompt_scoped=True, prompt_sent_sha256=prompt_sent_sha256,
+                   left_workspace=left_workspace, left_workspace_first=left_workspace_first)
         _maybe_delete_workspace(workspace, "INFRA", None, keep_workspaces)
         return row, True
 
     if runtime == "agy":
-        window_end = common.compute_window_end(workspace, None)
-        transcripts = resolve_agy_transcripts(workspace, marker_rec["started_at"], window_end,
-                                               brain_root=brain_root or AGY_CLI_BRAIN_ROOT)
         result_row = trigger.grade_one(marker, model=model or "agy-default",
                                         brain_root=brain_root or AGY_CLI_BRAIN_ROOT,
                                         record=record, transcripts_override=transcripts)
@@ -764,6 +1032,7 @@ def _run_trigger(runtime, case, run_index, root, ts, timeout_s, model, record, s
                 installed_plugin_dirty=installed["dirty"])
 
     row = _row("trigger", case, run_index, runtime, outcome, passed, proc.duration_s, failed_criterion, workspace)
+    row.update(prompt_scoped=True, prompt_sent_sha256=prompt_sent_sha256, left_workspace=left_workspace)
     _maybe_delete_workspace(workspace, outcome, passed, keep_workspaces)
     return row, (outcome == "INFRA")
 
@@ -779,29 +1048,43 @@ def _run_outcome(runtime, case, run_index, root, ts, timeout_s, model, record, s
     marker_rec = common.load_marker(marker)
     prompt = start_info["prompt"]
 
-    if runtime == "agy":
-        argv_builder = lambda: build_argv_agy(prompt, model=model, timeout_s=timeout_s,
-                                               skip_permissions=skip_permissions)
-    else:
-        argv_builder = lambda: build_argv_claude_outcome(prompt, model=model)
+    scoped_prompt = apply_scope_preamble(prompt, workspace)
+    prompt_sent_sha256 = common.sha256_text(scoped_prompt)
+    _record_prompt_scope(marker, True, prompt_sent_sha256)
 
-    argv, proc, infra_reason = _execute_with_retry(argv_builder, workspace, timeout_s, runtime,
-                                                     "outcome", None)
+    if runtime == "agy":
+        argv_builder = lambda: build_argv_agy(scoped_prompt, model=model, timeout_s=timeout_s,
+                                               skip_permissions=skip_permissions)
+
+        def _resolve_transcripts():
+            window_end = common.compute_window_end(workspace, None)
+            return resolve_agy_transcripts(workspace, marker_rec["started_at"], window_end,
+                                            brain_root=brain_root or AGY_CLI_BRAIN_ROOT)
+    else:
+        argv_builder = lambda: build_argv_claude_outcome(scoped_prompt, model=model)
+        _resolve_transcripts = None
+
+    argv, proc, infra_reason, transcripts, escape_result = _execute_with_retry(
+        argv_builder, workspace, timeout_s, runtime, "outcome", None,
+        transcripts_resolver=_resolve_transcripts, installed_plugin_path=installed["path"],
+        brain_root=(brain_root or AGY_CLI_BRAIN_ROOT) if runtime == "agy" else None)
     archive_run("outcome", case, ts, argv, proc,
                 extra_files=({"stream.jsonl": proc.stdout} if runtime == "claude" else None))
+    left_workspace = escape_result["escaped"] if escape_result is not None else None
+    left_workspace_first = escape_result["first"] if escape_result else None
 
     if infra_reason:
         if record:
             _write_invalid_infra("outcome", case, run_index, runtime, model or f"{runtime}-default",
-                                  workspace, infra_reason, proc.duration_s, installed)
+                                  workspace, infra_reason, proc.duration_s, installed,
+                                  left_workspace=left_workspace, left_workspace_first=left_workspace_first)
         row = _row("outcome", case, run_index, runtime, "INFRA", None, proc.duration_s, f"INFRA: {infra_reason}", workspace)
+        row.update(prompt_scoped=True, prompt_sent_sha256=prompt_sent_sha256,
+                   left_workspace=left_workspace, left_workspace_first=left_workspace_first)
         _maybe_delete_workspace(workspace, "INFRA", None, keep_workspaces)
         return row, True
 
     if runtime == "agy":
-        window_end = common.compute_window_end(workspace, None)
-        transcripts = resolve_agy_transcripts(workspace, marker_rec["started_at"], window_end,
-                                               brain_root=brain_root or AGY_CLI_BRAIN_ROOT)
         grade_brain_root = brain_root or AGY_CLI_BRAIN_ROOT
     else:
         # claude produces a stream-json transcript, not an Antigravity
@@ -819,6 +1102,7 @@ def _run_outcome(runtime, case, run_index, root, ts, timeout_s, model, record, s
     outcome_result = result_row["outcome"]
     row = _row("outcome", case, run_index, runtime, outcome_result, passed, proc.duration_s,
                result_row.get("failed_criterion"), workspace)
+    row.update(prompt_scoped=True, prompt_sent_sha256=prompt_sent_sha256, left_workspace=left_workspace)
     _maybe_delete_workspace(workspace, outcome_result, passed, keep_workspaces)
     return row, (outcome_result == "INFRA")
 
@@ -830,15 +1114,29 @@ def _run_antigravity(runtime, case, run_index, root, ts, timeout_s, model, recor
     marker_rec = common.load_marker(marker)
     prompt = (antigravity_run.CASES_DIR / case / "prompt.md").read_text(encoding="utf-8")
 
-    if runtime == "agy":
-        argv_builder = lambda: build_argv_agy(prompt, model=model, timeout_s=timeout_s,
-                                               skip_permissions=skip_permissions)
-    else:
-        argv_builder = lambda: build_argv_claude_antigravity(prompt, model=model)
+    scoped_prompt = apply_scope_preamble(prompt, workspace)
+    prompt_sent_sha256 = common.sha256_text(scoped_prompt)
+    _record_prompt_scope(marker, True, prompt_sent_sha256)
 
-    argv, proc, infra_reason = _execute_with_retry(argv_builder, workspace, timeout_s, runtime,
-                                                     "antigravity", None)
+    if runtime == "agy":
+        argv_builder = lambda: build_argv_agy(scoped_prompt, model=model, timeout_s=timeout_s,
+                                               skip_permissions=skip_permissions)
+
+        def _resolve_transcripts():
+            window_end = antigravity_run._artifact_window_end(workspace) or common.utc_now_iso()
+            return resolve_agy_transcripts(workspace, marker_rec["started_at"], window_end,
+                                            brain_root=brain_root or AGY_CLI_BRAIN_ROOT)
+    else:
+        argv_builder = lambda: build_argv_claude_antigravity(scoped_prompt, model=model)
+        _resolve_transcripts = None
+
+    argv, proc, infra_reason, transcripts, escape_result = _execute_with_retry(
+        argv_builder, workspace, timeout_s, runtime, "antigravity", None,
+        transcripts_resolver=_resolve_transcripts, installed_plugin_path=installed["path"],
+        brain_root=(brain_root or AGY_CLI_BRAIN_ROOT) if runtime == "agy" else None)
     archive_run("antigravity", case, ts, argv, proc)
+    left_workspace = escape_result["escaped"] if escape_result is not None else None
+    left_workspace_first = escape_result["first"] if escape_result else None
 
     if not infra_reason and runtime == "claude" and case in CLAUDE_ANTIGRAVITY_TRANSCRIPT_CASES:
         infra_reason = "no Antigravity transcript under runtime claude"
@@ -846,17 +1144,15 @@ def _run_antigravity(runtime, case, run_index, root, ts, timeout_s, model, recor
     if infra_reason:
         if record:
             _write_invalid_infra("antigravity", case, run_index, runtime, model or f"{runtime}-default",
-                                  workspace, infra_reason, proc.duration_s, installed)
+                                  workspace, infra_reason, proc.duration_s, installed,
+                                  left_workspace=left_workspace, left_workspace_first=left_workspace_first)
         row = _row("antigravity", case, run_index, runtime, "INFRA", None, proc.duration_s, f"INFRA: {infra_reason}", workspace)
+        row.update(prompt_scoped=True, prompt_sent_sha256=prompt_sent_sha256,
+                   left_workspace=left_workspace, left_workspace_first=left_workspace_first)
         _maybe_delete_workspace(workspace, "INFRA", None, keep_workspaces)
         return row, True
 
-    window_start = marker_rec["started_at"]
-    window_end = antigravity_run._artifact_window_end(workspace) or common.utc_now_iso()
-    if runtime == "agy":
-        transcripts = resolve_agy_transcripts(workspace, window_start, window_end,
-                                               brain_root=brain_root or AGY_CLI_BRAIN_ROOT)
-    else:
+    if runtime != "agy":
         # run-log-discipline is artifact-only -- its grader ignores transcripts.
         transcripts = {"parent": None, "subagents": [], "all": []}
 
@@ -873,7 +1169,8 @@ def _run_antigravity(runtime, case, run_index, root, ts, timeout_s, model, recor
         if record:
             _write_invalid_infra("antigravity", case, run_index, runtime, model or f"{runtime}-default",
                                   workspace, result.get("infra_reason") or "grader reported INFRA",
-                                  proc.duration_s, installed)
+                                  proc.duration_s, installed,
+                                  left_workspace=left_workspace, left_workspace_first=left_workspace_first)
     elif record:
         run_idx = antigravity_run._infer_run_index(case, marker)
         common.eval_record.append_antigravity_record(
@@ -883,6 +1180,7 @@ def _run_antigravity(runtime, case, run_index, root, ts, timeout_s, model, recor
             installed_plugin_sha=installed["sha"], installed_plugin_dirty=installed["dirty"])
 
     row = _row("antigravity", case, run_index, runtime, outcome, passed, proc.duration_s, failed_criterion, workspace)
+    row.update(prompt_scoped=True, prompt_sent_sha256=prompt_sent_sha256, left_workspace=left_workspace)
     _maybe_delete_workspace(workspace, outcome, passed, keep_workspaces)
     return row, (outcome == "INFRA")
 

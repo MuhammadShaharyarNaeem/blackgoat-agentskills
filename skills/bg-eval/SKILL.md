@@ -9,7 +9,7 @@ risk: safe
 # bg-eval — Eval Suite Runner
 
 ## Purpose
-Every suite under `evals/` assumes a human either pastes a prompt into Antigravity by hand (`evals/antigravity/`) or spends real tokens on a headless `claude -p` batch (`evals/README.md`'s `run-evals.ps1`, `evals/outcome/run-outcome.ps1`). This skill drives a third, cheaper path — `evals/run_suite.py` — that starts a real workspace per case and lets the Orchestrator itself perform the prompt, in this session, then grades from the same artifacts a headless run would leave behind. It is not a substitute for the cost-gated headless batches; it exercises the plugin's own contract through this session's own execution.
+Every suite under `evals/` assumes a human either pastes a prompt into Antigravity by hand (`evals/antigravity/`) or spends real tokens on a headless `claude -p` batch (`evals/README.md`'s `run-evals.ps1`, `evals/outcome/run-outcome.ps1`). This skill drives a third, cheaper path — `evals/run_suite.py` — that starts a real workspace per case and lets the Orchestrator itself perform the prompt, in this session, then grades from the same artifacts a headless run leaves. It is not a substitute for the cost-gated headless batches; it exercises the plugin's own contract through this session's own execution.
 
 ## When to Use This Skill
 - "run the antigravity eval(s)", "grade the antigravity eval", "run the evals", "run all the evals", "run the eval suite", "run the contract/trigger/outcome evals", or `/bg-eval`.
@@ -49,8 +49,9 @@ A lane that halts (a blocker-halt gate, `check_redelegation.py`) ends **that cas
 After a suite's `start` and until its `grade` has run: do not open `evals/run_suite.py`, `evals/antigravity/run.py`, any `grade.ps1`, `outcome.ps1`, `grade.py`, a `hidden/` directory, or `cases.jsonl`. Never hand-write under `evals/runs/`, `evals/antigravity/runs/`, `evals/results/`, `evals/outcome/results/`, or a workspace, except `handoff.txt` as above.
 
 ## Limitations
-- **Headless `agy` skips permissions by default** (`--dangerously-skip-permissions`, off with `--no-skip-permissions`) — otherwise every tool is auto-denied (`jetski: no output produced`), which grades INFRA, retries once, and never counts toward `--runs`.
-- **Headless runs are sequential, never parallel.** Preflight prints which installed plugin the runtime loads; records carry its sha.
-- **Outcome runs the plugin arm only; the baseline arm needs the runtime's plugin disabled and stays on `run-outcome.ps1`** — see `evals/outcome/README.md`. Under `--runtime claude`, `no_unbacked_claim` is not judged (`pass: null`, excluded) — `claude` has no Antigravity transcript for it.
+- **Headless `agy` skips permissions by default** (`--dangerously-skip-permissions`, off with `--no-skip-permissions`) — otherwise every tool is auto-denied (`jetski: no output produced`), which grades INFRA and never counts toward `--runs`.
+- **Headless runs are sequential, never parallel.** Preflight prints the installed plugin; records carry its sha.
+- **A headless run that leaves its workspace grades INFRA `left_workspace`, never a verdict.**
+- **Outcome runs the plugin arm only; the baseline arm needs the runtime's plugin disabled and stays on `run-outcome.ps1`** — see `evals/outcome/README.md`. Under `--runtime claude`, `no_unbacked_claim` is excluded (`pass: null`) — no Antigravity transcript exists.
 - **The four zero-LLM contract cases are not started here** — see "When to Use" above.
 - **Transcript-judged verdicts grade INFRA under Claude Code.** Trigger's routing judge, antigravity's three transcript-based cases (`skill-load-discipline`, `quiet-runner-discipline`, `round-bound`), and outcome's `no_unbacked_claim` all read Antigravity's own conversation transcripts under `~/.gemini/antigravity/brain/` — a lane performed under Claude Code writes none of those, so `grade` reports `INFRA` ("no transcripts found") for those cases. Report that plainly, as a limitation of the runtime this session is in, not a pass/fail data point; re-run under Antigravity for a real verdict. Antigravity's `run-log-discipline` and contract's own artifact-graded cases are unaffected — they grade from workspace files, not transcripts.
