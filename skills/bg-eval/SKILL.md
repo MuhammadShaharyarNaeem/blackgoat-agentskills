@@ -50,7 +50,7 @@ After a suite's `start` and until its `grade` has run: do not open `evals/run_su
 
 ## Limitations
 - **Headless `agy` skips permissions by default** (`--dangerously-skip-permissions`, off with `--no-skip-permissions`) — otherwise every tool is auto-denied (`jetski: no output produced`), which grades INFRA, retries once, and never counts toward `--runs`.
-- **Headless runs are sequential, never parallel.** Preflight WARNS when the installed plugin the runtime loads differs from this checkout; push and merge first.
+- **Headless runs are sequential, never parallel.** Preflight prints which installed plugin the runtime loads; records carry its sha.
 - **Outcome stays interactive** — `--runtime` refuses it (`run-outcome.ps1`).
 - **Outcome runs the plugin arm only.** The baseline arm needs the plugin disabled in the runtime — a manual step outside this session; see `evals/outcome/README.md`.
 - **The four zero-LLM contract cases are not started here** — see "When to Use" above.

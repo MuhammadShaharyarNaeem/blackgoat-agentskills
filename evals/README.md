@@ -193,7 +193,9 @@ while the harness copies `agents/`/`skills/`/`references/` from the checkout `ru
 lives in, so a trigger or antigravity run under agy measures the installed clone's skills.
 Every `run` record therefore carries `installed_plugin_path`/`installed_plugin_sha`/
 `installed_plugin_dirty` next to the harness's own `plugin_sha`/`plugin_dirty`, and preflight
-prints a loud WARNING when the two shas differ — push and merge before reading a number.
+prints the installed path and sha. No warning is raised when they differ: the installed tree may
+differ on purpose (the Antigravity clone keeps its own `record_run.py` shape and explicit agent
+tools), so the fields record the fact and a reader compares them when it matters.
 INFRA quarantine rows are written only with `--record`, like every other write here (a
 deliberate divergence from `run-evals.ps1`, which quarantines unconditionally).
 
