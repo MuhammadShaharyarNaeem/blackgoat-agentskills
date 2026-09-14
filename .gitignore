@@ -25,4 +25,5 @@ evals/results/transcripts/
 # copies made by `evals/antigravity/run.py start --in-place` (results.jsonl is the
 # record of truth; both are disposable per-machine data)
 evals/antigravity/runs/
+evals/runs/
 eval-runs/
