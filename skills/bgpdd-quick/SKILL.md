@@ -59,7 +59,7 @@ Four phases; do not skip or reorder.
    ```bash
    python {PLUGIN_ROOT}/pipeline-tools/scripts/detect_stack.py --repo . --json
    ```
-   Offer its first `suggested_check_commands` entry as the `How verified` default — the user confirms or replaces it, never you silently. `test_path_globs` goes to Phase 3's `--frozen`. A detected stack with a `skills` entry contributes **only** its `## Quick card` (§1); without a card it contributes nothing here (e.g. `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md § Quick card`).
+   Offer its first `suggested_check_commands` entry — already quiet at the source — as the `How verified` default, or its `quiet_wrapper` verbatim if the Phase 2 capture wrapper is being written out now instead of composed by hand. The user confirms or replaces it, never you silently. `test_path_globs` goes to Phase 3's `--frozen`. A detected stack with a `skills` entry contributes **only** its `## Quick card` (§1); without a card it contributes nothing here (e.g. `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md § Quick card`). Note: Phase 2 already runs the `How verified` command through `run_quiet.py --capture`, which satisfies `guard_action.py` rule 5 on its own — `quiet_wrapper`'s `--log` form only matters if a raw run is needed outside that capture.
 4. **Write `{quick-root}/note.md`** — three labelled lines, no placeholders:
    - `- What:` the one sentence.
    - `- Where:` every file you will touch, comma-separated, **≤ 3**. Phase 3 requires it to equal what changed.

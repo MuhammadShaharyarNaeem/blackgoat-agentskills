@@ -946,11 +946,21 @@ def build_quick_report(root, ledger, milestone_override):
         if detect_warning:
             out["warnings"].append(detect_warning)
         if suggested and (not note_md.is_file() or "how verified" in absent):
-            detail += (" Detected stack suggests `%s` for 'How verified' "
+            # `suggested` is already quiet at the source (detect_stack.py);
+            # wrap it the same way Phase 2 will actually run it -- through
+            # the capture wrapper, at the check_md path this lane already
+            # uses (bgpdd-quick/SKILL.md Phase 2; check_quick_close.py's
+            # own `--capture`) -- so the proposal is copy-paste ready rather
+            # than something the user re-derives by hand at Phase 2.
+            wrapped = ("%s --capture %s -- %s"
+                      % (_script("run_quiet.py"), rp(check_md), suggested))
+            detail += (" Detected stack suggests `%s` for 'How verified'; "
+                       "Phase 2's capture step then becomes `%s` verbatim "
                        "(%s --repo . --json for the full set, including the "
                        "test_path_globs Phase 3 passes as --frozen); confirm "
-                       "or replace it with the user -- never adopt it "
-                       "silently." % (suggested, _script("detect_stack.py")))
+                       "or replace either with the user -- never adopt it "
+                       "silently." % (suggested, wrapped,
+                                      _script("detect_stack.py")))
         return emit(0, detail)
 
     where = parse_where(fields.get("where", ""))
@@ -1657,7 +1667,10 @@ def run_self_test():
                            json.dumps({"dependencies": {"express": "^4.18.0"}})))
             rep, code = self.run_driver(lane="quick")
             self.assertEqual((rep["phase"], code), (0, EXIT_NEXT))
-            self.assertIn("`npm test`", rep["next_action"])
+            self.assertIn("`npm test -- --reporter=dot`", rep["next_action"])
+            self.assertIn("run_quiet.py --capture", rep["next_action"])
+            self.assertIn("evidence/check.md", rep["next_action"])
+            self.assertIn("-- npm test -- --reporter=dot", rep["next_action"])
             self.assertIn("never adopt it silently", rep["next_action"])
 
         def test_phase0_says_nothing_when_no_stack_matches(self):
@@ -1665,6 +1678,17 @@ def run_self_test():
             rep, _ = self.run_driver(lane="quick")
             self.assertNotIn("Detected stack suggests", rep["next_action"])
             self.assertEqual(rep["warnings"], [])
+
+        def test_phase0_generic_instruction_stays_usable_with_no_detected_stack(self):
+            # No stack detected must not leave Phase 0 with a broken or empty
+            # instruction -- the base "write the three lines" guidance has to
+            # stand on its own.
+            self._in_repo(("README.md", "# nothing detectable\n"))
+            rep, code = self.run_driver(lane="quick")
+            self.assertEqual((rep["phase"], code), (0, EXIT_NEXT))
+            self.assertIn("How verified", rep["next_action"])
+            self.assertIn("three labelled", rep["next_action"])
+            self.assertNotIn("Detected stack suggests", rep["next_action"])
 
         def test_phase0_suggestion_is_absent_once_how_verified_is_written(self):
             self._in_repo(("package.json",
