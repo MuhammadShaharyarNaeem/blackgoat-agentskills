@@ -525,24 +525,97 @@ def check_rendered_evidence(candidates, review_report, repo, newest_changed=None
     return ok, problems
 
 
-def check_staleness(review_report, changed_files):
+def resolve_changed_files(changed_files, repo):
+    """Resolve each `--changed-files` entry to its canonical, existing,
+    REPO-RELATIVE path string (forward-slash, original case) under `--repo`.
+    Every downstream use of `--changed-files` (staleness mtimes, the
+    runtime-evidence delegation, git pathspecs, the undeclared-tree
+    comparison) reads this normalized form, not the original argv strings,
+    so a cwd-relative entry is treated identically to its repo-relative twin
+    everywhere after this point.
+
+    A relative entry resolves against `--repo` first, same as every other
+    path this gate reads relative to it. When that does not exist, it is
+    retried against the process's own working directory -- observed: an
+    Orchestrator running from a workspace root ABOVE `--repo` (one shared
+    `.docs/` over several sibling repos) types a cwd-relative path that
+    happens to carry `--repo`'s own name as a leading segment
+    (`gorelo_rmm/Gorelo_RMMAPI/...` with `--repo gorelo_rmm/Gorelo_RMMAPI`).
+    That form is unambiguous once confirmed to exist AND lie under `--repo`
+    -- containment is `Path.resolve()` containment, never a string prefix,
+    so a look-alike path that actually belongs to a sibling repo cannot slip
+    through as this repo's. An absolute entry must lie under `--repo`
+    outright -- there is no cwd ambiguity for it to fall back on, and an
+    absolute path from a DIFFERENT repo (the original failure this fix
+    guards) is a structural mistake, not something to reinterpret: run the
+    gate once per repo instead.
+    """
+    repo_dir = Path(repo).resolve()
+
+    def to_repo_relative(real):
+        return str(real.relative_to(repo_dir)).replace("\\", "/")
+
+    resolved = []
+    outside = []
+    missing = []
+    for f in changed_files:
+        p = Path(f)
+        if p.is_absolute():
+            real = p.resolve()
+            try:
+                rel = to_repo_relative(real)
+            except ValueError:
+                outside.append(f)
+                continue
+            if not real.exists():
+                missing.append(f)
+                continue
+            resolved.append(rel)
+            continue
+        repo_relative = Path(repo) / p
+        if repo_relative.exists():
+            resolved.append(to_repo_relative(repo_relative.resolve()))
+            continue
+        cwd_relative = Path(f)
+        if cwd_relative.exists():
+            real = cwd_relative.resolve()
+            try:
+                rel = to_repo_relative(real)
+            except ValueError:
+                outside.append(f)
+                continue
+            resolved.append(rel)
+            continue
+        missing.append(f)
+    if outside:
+        raise GateError(
+            "changed_file_outside_repo: --changed-files path(s) do not lie "
+            f"under --repo ({repo}): "
+            + ", ".join(str(o) for o in outside)
+            + " -- run the gate once per repo instead of naming a path from "
+              "a different repo in the same invocation")
+    if missing:
+        raise GateError(
+            "changed_file_missing: --changed-files names path(s) that do "
+            f"not exist under --repo ({repo}) nor under the current "
+            "directory, which would silently disable the staleness and "
+            "tree checks: " + ", ".join(str(m) for m in missing))
+    return resolved
+
+
+def check_staleness(review_report, resolved_changed_files, repo):
     """Review file must be at least as new as the newest changed file.
 
-    A `--changed-files` path that does not exist is a STRUCTURAL failure
-    (exit 2), not a warning: an unresolvable path contributes no mtime, so a
-    typo'd or absent path silently removed the diff from the staleness
-    comparison — the whole check disabled itself and still reported PASS.
+    Takes the already-resolved, already-validated, repo-relative paths from
+    `resolve_changed_files` -- existence and repo-scoping are checked once,
+    before this runs, so an unresolvable or out-of-repo path never silently
+    disables this comparison (the whole check used to disable itself and
+    still report PASS).
     """
     review_mtime = Path(review_report).stat().st_mtime
     newest = None
-    missing = [f for f in changed_files if not Path(f).exists()]
-    if missing:
-        raise GateError(
-            "changed_file_missing: --changed-files names path(s) that do not "
-            "exist on disk, which would silently disable the staleness check: "
-            + ", ".join(str(m) for m in missing))
-    for f in changed_files:
-        mt = Path(f).stat().st_mtime
+    for rel in resolved_changed_files:
+        mt = (Path(repo) / rel).stat().st_mtime
         if newest is None or mt > newest:
             newest = mt
     stale = newest is not None and newest > review_mtime
@@ -658,23 +731,78 @@ def normalize_repo_path(path, repo):
     return normalized.replace("\\", "/")
 
 
-def check_undeclared_tree(changed_files, repo):
+def find_docs_ancestor(path):
+    """The nearest ancestor of `path` named `.docs`, or None.
+
+    `.docs` need not be inside any of the repos it holds artifacts for (the
+    Gorelo layout: one `.docs/` above six sibling repos) -- walking up from a
+    known artifact (`--review-report` or `--state`) finds it regardless of
+    where it sits relative to `--repo`.
+    """
+    p = Path(path).resolve()
+    for ancestor in (p.parent, *p.parent.parents):
+        if ancestor.name == ".docs":
+            return ancestor
+    return None
+
+
+def resolve_docs_root(args):
+    """The effective docs root: `--docs-root`, else derived, else `--repo/.docs`.
+
+    Derivation order: an explicit `--docs-root` wins outright. Otherwise, walk
+    up from `--review-report` (then `--state`) looking for an ancestor named
+    `.docs` -- this is what finds a `.docs/` that sits ABOVE `--repo` rather
+    than inside it. Only when neither artifact path has such an ancestor does
+    this fall back to the old assumption, `--repo/.docs`.
+    """
+    if args.docs_root:
+        return Path(args.docs_root)
+    for anchor in (args.review_report, args.state):
+        if anchor:
+            found = find_docs_ancestor(anchor)
+            if found is not None:
+                return found
+    return Path(args.repo) / ".docs"
+
+
+def docs_root_repo_prefix(repo, docs_root):
+    """Repo-relative, normalized, trailing-slash prefix for `docs_root`.
+
+    Returns None when `docs_root` does not lie inside `repo` -- e.g. the
+    Gorelo layout, where `.docs` sits above every repo. `git status` run in
+    `repo` can never report a path outside `repo`'s own working tree, so
+    there is nothing for such a docs_root to exclude there; the exclusion is
+    already implicit.
+    """
+    try:
+        rel = Path(docs_root).resolve().relative_to(Path(repo).resolve())
+    except ValueError:
+        return None
+    normalized = os.path.normcase(str(rel).replace("\\", "/")).rstrip("/")
+    return normalized + "/"
+
+
+def check_undeclared_tree(changed_files, repo, docs_root):
     """Return repo-relative paths dirty in the working tree but not declared.
 
-    Anything under `.docs/` is allowed regardless of declaration — pipeline
-    artifacts (test reports, review reports, state, evidence) legitimately
-    change during a milestone without being a builder code change.
+    Anything under the docs root is allowed regardless of declaration --
+    pipeline artifacts (test reports, review reports, state, evidence)
+    legitimately change during a milestone without being a builder code
+    change. The docs root may sit inside `repo` (the historical `.docs/`
+    default) or above it (`docs_root_repo_prefix` returns None in that case,
+    since nothing under `repo`'s own tree could match it anyway).
 
     `git status --porcelain` collapses an entirely-untracked directory into a
     single `?? <dir>/` line rather than listing the files inside it. A
     porcelain path ending in `/` is therefore a DIRECTORY entry, not a file,
     and is normalized/compared as one: it is allowed iff its normalized form
-    (trailing slash restored) is `.docs/` or begins with `.docs/`, or at
+    (trailing slash restored) is the docs root or begins with it, or at
     least one declared `--changed-files` path lies under that directory
     prefix (a declared file's own never-before-tracked directory collapses
     the same way). Otherwise it is undeclared, reported WITH its trailing
     slash so the report is honest about it naming a directory, not a file.
     """
+    docs_prefix = docs_root_repo_prefix(repo, docs_root)
     output = run_git(["status", "--porcelain"], repo)
     declared = {normalize_repo_path(f, repo) for f in changed_files}
     undeclared = []
@@ -684,14 +812,15 @@ def check_undeclared_tree(changed_files, repo):
         raw_path = parse_porcelain_line(line)
         if raw_path.endswith("/"):
             norm_dir = normalize_repo_path(raw_path, repo) + "/"
-            if norm_dir.startswith(".docs/"):
+            if docs_prefix is not None and norm_dir.startswith(docs_prefix):
                 continue
             if any(d == norm_dir or d.startswith(norm_dir) for d in declared):
                 continue
             undeclared.append(norm_dir)
             continue
         norm = normalize_repo_path(raw_path, repo)
-        if norm in declared or norm.startswith(".docs/"):
+        if norm in declared or (docs_prefix is not None
+                                 and norm.startswith(docs_prefix)):
             continue
         undeclared.append(norm)
     return undeclared
@@ -1004,13 +1133,19 @@ def _runtime_gate_supports(flag):
         return False
 
 
-def run_runtime_gate(args):
+def run_runtime_gate(args, resolved_changed_files):
     """Delegate to check_runtime_evidence.py. Returns (ok, its JSON payload).
 
     Subprocess rather than import: this family has no shared module by
     convention, and duplicating existence/provenance/freshness/content logic
     into a second file is the worse cost. `sys.executable` keeps the child on
     the same interpreter, and the file already shells out for git.
+
+    Forwards the already-resolved, absolute `--changed-files` paths, not the
+    original argv strings: a cwd-relative entry this gate accepted via its
+    own cwd fallback (`resolve_changed_files`) is unambiguous once resolved,
+    and forwarding it as-typed would make the child re-derive the same
+    resolution independently, or reject a path this gate already validated.
     """
     if not RUNTIME_GATE.is_file():
         raise GateError(f"runtime-evidence gate not found at {RUNTIME_GATE}")
@@ -1018,8 +1153,8 @@ def run_runtime_gate(args):
            "--report", args.runtime_report,
            "--milestone", args.milestone,
            "--repo", args.repo]
-    if args.changed_files:
-        cmd += ["--changed-files"] + [str(p) for p in args.changed_files]
+    if resolved_changed_files:
+        cmd += ["--changed-files"] + [str(p) for p in resolved_changed_files]
     if args.surface:
         cmd += ["--surface", args.surface]
     for key in args.require_key:
@@ -1068,10 +1203,18 @@ def run_runtime_gate(args):
 
 
 def build_report(args):
+    docs_root = resolve_docs_root(args)
+    # Resolved ONCE: every downstream --changed-files use (staleness, the
+    # runtime-evidence delegation, git pathspecs, the undeclared-tree
+    # comparison) reads this list, never args.changed_files directly, so a
+    # cwd-relative entry is normalized exactly once and treated identically
+    # everywhere after.
+    resolved_changed_files = resolve_changed_files(args.changed_files, args.repo)
     report = {
         "milestone": args.milestone,
         "review_report": args.review_report,
         "state_file": args.state,
+        "docs_root": str(docs_root),
         "review_found": False,
         "verdict": None,
         "ambiguous_review_section": False,
@@ -1117,7 +1260,7 @@ def build_report(args):
             f"no '## Review:' section matching milestone {args.milestone!r}")
 
     stale, _, newest_changed, w = check_staleness(args.review_report,
-                                                  args.changed_files)
+                                                  resolved_changed_files, args.repo)
     report["stale"] = stale
     report["warnings"] += w
     if stale:
@@ -1185,7 +1328,7 @@ def build_report(args):
                 "{0}: {1}".format(problem["problem"], problem["detail"]))
 
     if args.require_runtime_evidence:
-        runtime_ok, payload = run_runtime_gate(args)
+        runtime_ok, payload = run_runtime_gate(args, resolved_changed_files)
         report["runtime_evidence_ok"] = runtime_ok
         report["runtime_evidence"] = payload
         if not runtime_ok:
@@ -1206,16 +1349,18 @@ def build_report(args):
             report["warnings"].append(note)
 
     if args.verify_tree:
-        undeclared = check_undeclared_tree(args.changed_files, args.repo)
+        undeclared = check_undeclared_tree(resolved_changed_files, args.repo,
+                                           docs_root)
         report["undeclared_changes"] = undeclared
         report["tree_verified"] = not undeclared
         for path in undeclared:
             report["warnings"].append(
                 f"--verify-tree set but the working tree has an undeclared "
-                f"change outside --changed-files and .docs/: {path}")
+                f"change outside --changed-files and the docs root "
+                f"({docs_root}): {path}")
 
     if args.commit and args.changed_files:
-        pending = declared_files_uncommitted(args.changed_files, args.repo)
+        pending = declared_files_uncommitted(resolved_changed_files, args.repo)
         if not pending:
             report["already_committed"] = True
             report["warnings"].append(
@@ -1237,7 +1382,7 @@ def build_report(args):
     report["result"] = "PASS" if gate_ok else "FAIL"
 
     if gate_ok and args.commit:
-        perform_commit(args.changed_files, args.message, args.repo)
+        perform_commit(resolved_changed_files, args.message, args.repo)
         report["committed"] = True
     return report
 
@@ -1257,6 +1402,12 @@ def build_parser():
     parser.add_argument("--commit", action="store_true")
     parser.add_argument("--message")
     parser.add_argument("--repo", default=".")
+    parser.add_argument(
+        "--docs-root",
+        help="where pipeline artifacts (.docs/) live. Default: the nearest "
+             "ancestor of --review-report (or --state) named '.docs'; else "
+             "--repo/.docs. Needed when .docs is not inside --repo, e.g. one "
+             "shared .docs/ above several sibling repos")
     parser.add_argument("--ignore-unscoped", action="store_true")
     parser.add_argument("--require-rendered-evidence", action="store_true")
     parser.add_argument("--verify-tree", action="store_true")
@@ -1906,6 +2057,183 @@ def run_self_test():
                 build_report(self._ns(
                     changed=[str(self.changed), str(self.dir / "gone.py")]))
             self.assertIn("changed_file_missing", str(ctx.exception))
+
+        def test_missing_changed_file_names_the_repo_searched(self):
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            with self.assertRaises(GateError) as ctx:
+                build_report(self._ns(changed=[str(self.dir / "gone.py")]))
+            self.assertIn(str(self.dir), str(ctx.exception))
+
+        def test_relative_changed_file_resolves_against_repo(self):
+            """A relative --changed-files entry must resolve against --repo,
+            not the gate process's own working directory -- the Orchestrator
+            may run this gate from a directory that is not --repo (e.g. a
+            shared .docs/ above several sibling repos)."""
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            r = build_report(self._ns(changed=[self.changed.name]))
+            self.assertEqual(r["result"], "PASS", r["warnings"])
+
+        def test_absolute_changed_file_outside_repo_is_structural(self):
+            other_dir = Path(tempfile.mkdtemp())
+            try:
+                outside = other_dir / "outside.py"
+                outside.write_text("x\n")
+                self.review.write_text(REVIEW_OK)
+                self._order(outside, self.review)
+                with self.assertRaises(GateError) as ctx:
+                    build_report(self._ns(changed=[str(outside)]))
+                self.assertIn("changed_file_outside_repo", str(ctx.exception))
+                self.assertIn(str(self.dir), str(ctx.exception))
+            finally:
+                shutil.rmtree(other_dir, ignore_errors=True)
+
+        def test_absolute_changed_file_inside_repo_is_fine(self):
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            r = build_report(self._ns(changed=[str(self.changed.resolve())]))
+            self.assertEqual(r["result"], "PASS", r["warnings"])
+
+        def test_cwd_relative_changed_file_inside_repo_is_normalized(self):
+            """The real failure mode: an Orchestrator invoked from a
+            workspace root ABOVE --repo types a cwd-relative path that
+            carries --repo's own directory name as a leading segment
+            (observed: `gorelo_rmm/Gorelo_RMMAPI/...` from cwd `C:\\Gorelo`
+            with `--repo gorelo_rmm/Gorelo_RMMAPI`). It does not exist
+            relative to --repo (that would double the repo segment), so it
+            falls back to a check against cwd; once confirmed to exist AND
+            lie under --repo, it is accepted and normalized to the
+            repo-relative form -- the same form used as the git pathspec
+            and everywhere else downstream, not the cwd-relative string as
+            typed."""
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            workspace = self.dir.parent
+            cwd_relative = "{0}/{1}".format(self.dir.name, self.changed.name)
+            old_cwd = os.getcwd()
+            os.chdir(str(workspace))
+            try:
+                resolved = resolve_changed_files([cwd_relative], str(self.dir))
+                r = build_report(self._ns(changed=[cwd_relative]))
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(resolved, [self.changed.name])
+            self.assertEqual(r["result"], "PASS", r["warnings"])
+
+        def test_cwd_relative_changed_file_outside_repo_is_refused(self):
+            """A cwd-relative path that exists but resolves OUTSIDE --repo
+            must be refused, never silently accepted as this repo's --
+            same rule as an absolute path from a different repo. Containment
+            is checked by Path.resolve(), not a string prefix, so a
+            look-alike path belonging to a different repo cannot slip
+            through."""
+            other_dir = Path(tempfile.mkdtemp())
+            try:
+                sibling = other_dir / "other" / "file.py"
+                sibling.parent.mkdir(parents=True, exist_ok=True)
+                sibling.write_text("x\n", encoding="utf-8")
+                cwd_relative = "other/file.py"
+                old_cwd = os.getcwd()
+                os.chdir(str(other_dir))
+                try:
+                    with self.assertRaises(GateError) as ctx:
+                        resolve_changed_files([cwd_relative], str(self.dir))
+                finally:
+                    os.chdir(old_cwd)
+                self.assertIn("changed_file_outside_repo", str(ctx.exception))
+            finally:
+                shutil.rmtree(other_dir, ignore_errors=True)
+
+        # ---- --docs-root ----
+
+        def test_docs_root_defaults_to_repo_docs_with_no_ancestor(self):
+            """Neither --review-report nor --state sits under a '.docs'
+            ancestor here (self.dir has a random tempdir name) -- the
+            fallback is --repo/.docs, matching the pre-existing default."""
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            r = self._run()
+            self.assertEqual(r["docs_root"], str(self.dir / ".docs"))
+
+        def test_docs_root_explicit_flag_wins(self):
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            custom = self.dir / "artifacts"
+            r = self._run(["--docs-root", str(custom)])
+            self.assertEqual(r["docs_root"], str(custom))
+
+        def test_docs_root_derived_from_review_report_ancestor_above_repo(self):
+            """The layout this fix targets: one .docs/ ABOVE several sibling
+            repos, not inside any of them."""
+            workspace = Path(tempfile.mkdtemp())
+            try:
+                docs_dir = workspace / ".docs"
+                docs_dir.mkdir()
+                review = docs_dir / "review-report.md"
+                review.write_text(REVIEW_OK)
+                state = docs_dir / "orchestrator-state.json"
+                state.write_text(json.dumps({"blockers": []}))
+                repo_dir = workspace / "repo"
+                repo_dir.mkdir()
+                changed = repo_dir / "src_file.py"
+                changed.write_text("code\n")
+                self._order(changed, review)
+                argv = ["--review-report", str(review), "--state", str(state),
+                        "--milestone", "M3", "--changed-files", str(changed),
+                        "--repo", str(repo_dir)]
+                r = build_report(build_parser().parse_args(argv))
+                self.assertEqual(r["docs_root"], str(docs_dir))
+                self.assertEqual(r["result"], "PASS", r["warnings"])
+            finally:
+                shutil.rmtree(workspace, ignore_errors=True)
+
+        @unittest.skipUnless(shutil.which("git"), "git not on PATH")
+        def test_verify_tree_custom_docs_root_change_excluded(self):
+            """A --docs-root at a non-'.docs' path (or a '.docs' outside
+            --repo) must be excluded from --verify-tree the same way the
+            default --repo/.docs is."""
+            run_git(["init", "-q"], str(self.dir))
+            run_git(["config", "user.email", "gate@test"], str(self.dir))
+            run_git(["config", "user.name", "gate"], str(self.dir))
+            (self.dir / ".gitignore").write_text(
+                "review-report.md\norchestrator-state.json\n")
+            artifacts_dir = self.dir / "artifacts"
+            artifacts_dir.mkdir()
+            artifact_file = artifacts_dir / "state.md"
+            artifact_file.write_text("initial\n")
+            run_git(["add", "-A"], str(self.dir))
+            run_git(["commit", "-m", "init"], str(self.dir))
+            artifact_file.write_text("updated\n")
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            r = self._run(["--verify-tree", "--docs-root", str(artifacts_dir)])
+            self.assertEqual(r["result"], "PASS", r["warnings"])
+            self.assertEqual(r["undeclared_changes"], [])
+
+        @unittest.skipUnless(shutil.which("git"), "git not on PATH")
+        def test_verify_tree_same_change_undeclared_without_docs_root_flag(self):
+            """Same fixture as above, minus --docs-root: 'artifacts/' is not
+            the default docs root, so its change is reported undeclared --
+            proving the previous test's PASS came from --docs-root, not from
+            --verify-tree ignoring the directory some other way."""
+            run_git(["init", "-q"], str(self.dir))
+            run_git(["config", "user.email", "gate@test"], str(self.dir))
+            run_git(["config", "user.name", "gate"], str(self.dir))
+            (self.dir / ".gitignore").write_text(
+                "review-report.md\norchestrator-state.json\n")
+            artifacts_dir = self.dir / "artifacts"
+            artifacts_dir.mkdir()
+            artifact_file = artifacts_dir / "state.md"
+            artifact_file.write_text("initial\n")
+            run_git(["add", "-A"], str(self.dir))
+            run_git(["commit", "-m", "init"], str(self.dir))
+            artifact_file.write_text("updated\n")
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            r = self._run(["--verify-tree"])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("artifacts/state.md", r["undeclared_changes"])
 
         # ---- the shared gate ledger ----
 
@@ -2702,10 +3030,12 @@ def run_self_test():
                 docs_dir.mkdir()
                 (docs_dir / "state.md").write_text("state\n")
                 self.review.write_text(REVIEW_OK)
-                self._order(self.changed, declared_file)
                 self._order(declared_file, self.review)
+                # --changed-files must lie under --repo now (item 1 of the
+                # docs-root/multi-repo fix) -- self.changed lives outside
+                # repo_dir, so it is no longer a valid declared path here.
                 ns = self._ns(milestone="M3",
-                              changed=[str(self.changed), str(declared_file)],
+                              changed=[str(declared_file)],
                               repo=str(repo_dir), extra=["--verify-tree"])
                 r = build_report(ns)
                 self.assertEqual(r["result"], "PASS")
@@ -2721,13 +3051,18 @@ def run_self_test():
                 run_git(["init", "-q"], str(repo_dir))
                 run_git(["config", "user.email", "gate@test"], str(repo_dir))
                 run_git(["config", "user.name", "gate"], str(repo_dir))
+                # --changed-files must lie under --repo now (item 1 of the
+                # docs-root/multi-repo fix) -- self.changed lives outside
+                # repo_dir, so the declared file has to live inside it.
+                declared_file = repo_dir / "declared.py"
+                declared_file.write_text("code\n")
                 stray_dir = repo_dir / "stray"
                 stray_dir.mkdir()
                 (stray_dir / "file.py").write_text("surprise\n")
                 self.review.write_text(REVIEW_OK)
-                self._order(self.changed, self.review)
+                self._order(declared_file, self.review)
                 ns = self._ns(milestone="M3",
-                              changed=[str(self.changed)],
+                              changed=[str(declared_file)],
                               repo=str(repo_dir), extra=["--verify-tree"])
                 r = build_report(ns)
                 self.assertEqual(r["result"], "FAIL")

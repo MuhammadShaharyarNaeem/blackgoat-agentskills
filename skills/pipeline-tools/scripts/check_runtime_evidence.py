@@ -365,23 +365,32 @@ def parse_capture(text):
     return fields, (rest[:close] if close != -1 else rest).strip("\n")
 
 
-def newest_changed_mtime(changed_files):
+def newest_changed_mtime(changed_files, repo):
     """(newest mtime or None, warnings) over the declared changed files.
 
-    A path that does not exist is a STRUCTURAL error (exit 2), never a
-    warning. It used to warn and skip -- which meant one typo'd or renamed
-    path silently disabled the freshness check for the whole run and a stale
-    capture sailed through with a green result. A gate that cannot perform
-    its check must say so in its exit code, not in prose nobody reads.
+    A relative entry resolves against `--repo`, same as every other path
+    this gate reads relative to it -- checking it against the process's own
+    working directory instead let a caller running from a directory other
+    than `--repo` (e.g. a shared `.docs/` above several sibling repos) see a
+    spurious `changed_file_missing` for a path that exists fine under `--repo`.
+
+    A path that does not exist under `--repo` is a STRUCTURAL error (exit 2),
+    never a warning. It used to warn and skip -- which meant one typo'd or
+    renamed path silently disabled the freshness check for the whole run and
+    a stale capture sailed through with a green result. A gate that cannot
+    perform its check must say so in its exit code, not in prose nobody reads.
     """
     newest = None
     for f in changed_files:
         p = Path(f)
+        if not p.is_absolute():
+            p = Path(repo) / p
         if not p.exists():
             raise GateError(
-                f"declared changed file does not exist: {f} — freshness cannot "
-                "be checked against a path that is not there, and silently "
-                "skipping it is how a stale capture passes",
+                f"declared changed file does not exist: {f} under --repo "
+                f"({repo}) — freshness cannot be checked against a path "
+                "that is not there, and silently skipping it is how a stale "
+                "capture passes",
                 code="changed_file_missing")
         mt = p.stat().st_mtime
         newest = mt if newest is None else max(newest, mt)
@@ -1157,7 +1166,7 @@ def build_report(args):
     validate_openapi_args(args)
     report_text = read_text(args.report)
     report["citations"] = collect_citations(report_text)
-    newest, warnings = newest_changed_mtime(args.changed_files)
+    newest, warnings = newest_changed_mtime(args.changed_files, args.repo)
     report["warnings"].extend(warnings)
     schema_ctx = resolve_schema_context(args, report)
 
@@ -2324,6 +2333,17 @@ def run_self_test():
                 build_report(self._args(
                     changed_files=[str(self.changed), str(self.dir / "gone.cs")]))
             self.assertEqual(ctx.exception.code, "changed_file_missing")
+
+        def test_relative_changed_file_resolves_against_repo(self):
+            """A relative --changed-files entry must resolve against --repo,
+            not the gate process's own working directory -- the caller may
+            run this gate from a directory that is not --repo (e.g. a shared
+            .docs/ above several sibling repos)."""
+            cited = self._write()
+            self._report(cited)
+            rel = str(self.changed.relative_to(self.dir))
+            r = build_report(self._args(changed_files=[rel]))
+            self.assertEqual(r["result"], "PASS", r["warnings"])
 
         # ---- fenced blocks cannot gate ----
 
