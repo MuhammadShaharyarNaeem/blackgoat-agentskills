@@ -158,7 +158,7 @@ prompt in real time, so a fast, genuine completion is not a signal of anything b
 ### Headless: run
 
 ```
-python evals/run_suite.py run --runtime {agy,claude} --suite {antigravity,contract,trigger} (--case <case> | --all-cases) [--runs N] [--model <name>] [--timeout <seconds>] [--root <dir>] [--record] [--no-skip-permissions] [--preflight-probe] [--keep-workspaces]
+python evals/run_suite.py run --runtime {agy,claude} --suite {antigravity,contract,trigger,outcome} (--case <case> | --all-cases) [--runs N] [--model <name>] [--timeout <seconds>] [--root <dir>] [--record] [--no-skip-permissions] [--preflight-probe] [--keep-workspaces]
 ```
 
 A fourth way to run a suite: `run` starts a workspace itself, invokes the runtime CLI in
@@ -166,14 +166,30 @@ it (`agy -p "<prompt>"` or `claude -p "<prompt>"` — the print-mode equivalent 
 Orchestrator-performed path above), grades it with the same graders `start`/`grade` use,
 and — with `--record` — appends to the suite's results file. `--runs N` repeats this
 sequentially, never in parallel; no human pastes anything and the Orchestrator performs no
-prompt. Scope is `antigravity`/`contract`/`trigger` only — the outcome tier and the
-baseline (plugin-disabled) arm stay interactive, `evals/outcome/run-outcome.ps1` (the
-user's decision, 2026-09-15).
+prompt.
+
+**`--suite outcome` is the PLUGIN ARM ONLY — there is no `--arm` flag.** The baseline
+(plugin-disabled) arm needs the runtime's own installed plugin toggled off
+(`claude plugin disable ...`), which is a decision about the user's live install this
+headless driver does not make on its own (the user's decision, 2026-09-15);
+`evals/outcome/run-outcome.ps1` remains the only way to run the baseline arm. Grading
+reuses `outcome.py`'s own criteria (`hidden_tests`/`no_regression`/`visible_suite_green`
+from the case's `outcome.ps1`, plus `protected_files_unchanged`/`regression_test_added`/
+`no_unbacked_claim`) unchanged, except: **`--runtime claude` cannot judge
+`no_unbacked_claim`** — that criterion reads an Antigravity `transcript.jsonl`
+(`run_command` tool calls, claim text), which a `claude -p` stream-json run never
+produces. Under `claude` the record carries `{"id": "no_unbacked_claim", "pass": null,
+"detail": "not judged under runtime claude (no Antigravity transcript)"}` and it is
+**excluded** from the overall pass/fail, never defaulted to a silent PASS. An outcome-tier
+INFRA quarantine (see below) writes to `evals/outcome/results/results-invalid-infra-
+<date>.jsonl`, next to the outcome tier's own `results.jsonl` — not the shared
+`evals/results/` quarantine file the other three suites use.
 
 | Suite | `--runtime claude` | `--runtime agy` |
 |---|---|---|
 | `contract` | gradable — runs each case's `## Command` verbatim, the same measurement `run-evals.ps1` makes; rows pool with those | gradable — artifact-graded, no transcript needed |
 | `trigger` | gradable — `judge: "tool_use"`, the `Skill` tool in the stream, exactly like `run-evals.ps1` | gradable — `judge: "skill_read"`, first `SKILL.md` read, off the `~/.gemini/antigravity-cli/brain/` transcript |
+| `outcome` | gradable — plugin arm only; `no_unbacked_claim` not judged (`pass: null`, excluded) | gradable — plugin arm only, all criteria judged; `no_unbacked_claim` off the Antigravity transcript |
 | `antigravity` | INFRA on the three transcript-based cases (no Antigravity transcript exists under claude); `run-log-discipline` still gradable (artifact-only) | gradable on all four cases — transcripts land under `~/.gemini/antigravity-cli/brain/` |
 
 **`run --runtime agy` rows never pool with `claude` rows for the same case** — different
