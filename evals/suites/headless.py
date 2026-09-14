@@ -175,11 +175,11 @@ def installed_plugin_info(runtime, override_path=None):
 
 def print_installed_plugin_provenance(info):
     status = "dirty" if info["dirty"] else "clean"
+    # Factual line only. The installed tree may deliberately differ from the
+    # harness checkout (the Antigravity clone carries its own record_run
+    # shape and explicit agent tools), so no comparison or warning is made
+    # here -- the record's installed_plugin_* fields carry the facts.
     print(f"installed plugin: {info['path']} @ {info['sha']} ({status})")
-    harness_sha = common.eval_record.plugin_sha()
-    if info["sha"] and harness_sha and info["sha"] != harness_sha:
-        print(f"WARNING: the runtime will load plugin {info['sha']} but the harness copies "
-              f"{harness_sha} into workspaces -- results measure a mix; push/merge first.")
 
 
 # --------------------------------------------------------------------------

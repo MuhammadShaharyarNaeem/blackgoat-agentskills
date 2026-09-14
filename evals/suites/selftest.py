@@ -796,13 +796,10 @@ class SelfTest(unittest.TestCase):
             headless.print_installed_plugin_provenance(info)
         out = buf.getvalue()
         self.assertIn("installed plugin:", out)
-        self.assertIn("WARNING:", out)
-
-        same_info = dict(info, sha=harness_sha)
-        buf2 = io.StringIO()
-        with contextlib.redirect_stdout(buf2):
-            headless.print_installed_plugin_provenance(same_info)
-        self.assertNotIn("WARNING:", buf2.getvalue())
+        self.assertIn(info["sha"], out)
+        # Deliberately NO warning on a sha mismatch: the installed tree may
+        # differ from the harness checkout on purpose.
+        self.assertNotIn("WARNING", out)
 
     def test_headless_records_carry_installed_plugin_fields(self):
         results_path = self.tmp / "results-installed-plugin-test.jsonl"
