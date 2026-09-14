@@ -151,6 +151,17 @@ class SelfTest(unittest.TestCase):
         self.assertEqual(prompt, "it's a test")
         self.assertEqual("'it''s a test'"[0:end], "'it''s a test'")
 
+    def test_default_run_root_is_outside_checkout_and_allowed(self):
+        from suites import headless as h
+        import tempfile
+        root = h.DEFAULT_RUN_ROOT
+        self.assertTrue(str(root).lower().startswith(str(Path(tempfile.gettempdir())).lower()))
+        self.assertNotIn("blackgoat-agentskills", str(root).lower())
+        ws = root / "eval-runs" / "contract-x-20260101T000000Z"
+        roots = h.scope_guard_allowed_roots(ws, None)
+        parent = h.common.transcript_tools.normalize_path(str(ws.parent))
+        self.assertTrue(any(parent.startswith(r) for r in roots), roots)
+
     def test_abs_path_token_ignores_urls(self):
         # Regression: `http://localhost:5182/orders` must not read as drive `p:/`.
         from suites import headless as h
