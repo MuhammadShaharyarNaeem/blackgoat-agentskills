@@ -225,8 +225,9 @@ permissions skipped once found no `.git` in its fixture, searched the whole mach
 querying the `linear` MCP server — nothing was modified, but the graded transcript measured
 a runaway, not the plugin. Three guards close that: every composed prompt is prefixed with
 `scope_preamble()`, naming the workspace as the entire project and forbidding any excursion
-outside it; a trigger run under agy passes `--mode plan` (read-only, parity with the claude
-trigger run's `--permission-mode plan`); and after each agy run, `detect_workspace_escape()`
+outside it; a trigger run under agy passes `--mode plan` (parity with the claude trigger run's
+`--permission-mode plan`; agy does NOT enforce plan mode as read-only — the first live run edited
+fixture files under it — so the tripwire below, not the mode, is the guard); and after each agy run, `detect_workspace_escape()`
 walks its attributed transcript for a `view_file`/`run_command`/etc. outside every allowed
 root (the workspace, the installed plugin, `~/.gemini/antigravity-cli/`,
 `~/.gemini/antigravity/`, the system temp dir, the interpreter's own install dir) or any
