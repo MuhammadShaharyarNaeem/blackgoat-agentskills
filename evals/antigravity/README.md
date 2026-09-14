@@ -11,6 +11,13 @@ grader that reads both of those back. Same statistical philosophy as `evals/READ
 `runs=5`, judged on a 4/5 pass rate, and a run that produced no evidence to grade is
 **INFRA**, not a data point.
 
+`evals/run_suite.py --suite antigravity` (`evals/README.md`'s "Running any suite from
+Antigravity" section) and `/bg-eval antigravity` (`skills/bg-eval/SKILL.md`) are the
+one-command way to run these four cases without hand-pasting `prompt.md` — the
+Orchestrator itself performs the case's lane prompt in a started workspace. This harness
+(`run.py`, `cases/`, the manual paste-and-grade flow below) is unchanged by that; it is
+what both paths ultimately grade with.
+
 ## How a run works
 
 1. **Start.** `python run.py start --case <case> --workspace <dir>` copies

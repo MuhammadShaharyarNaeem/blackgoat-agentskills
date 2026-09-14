@@ -119,6 +119,42 @@ three scripts rather than copy-pasted, and it reads `$HarnessVersion` out of
 moved past. `case_sha256` is computed inside `append_script_record` from the case name
 (`contract/<case>/run.py`), so a case's `run.py` needs no change to gain it.
 
+## Running any suite from Antigravity (run_suite.py)
+
+`evals/run_suite.py` is a third way to run a suite, alongside `run-evals.ps1`'s headless
+`claude -p` batch and `evals/antigravity/run.py`'s paste-into-Antigravity flow above: it
+starts a real workspace per case and lets whatever agent is driving the session — the
+Orchestrator, under either runtime — perform the case's own prompt directly, then grades
+from the artifacts that run left behind using the existing graders. `/bg-eval` is the
+one-sentence way to drive it; see `skills/bg-eval/SKILL.md`.
+
+```
+python evals/run_suite.py start --suite {contract,trigger,outcome,antigravity} (--case <case> | --all-cases) --in-place [--root <dir>]
+python evals/run_suite.py grade (--run <marker> | --all-runs <ts-or-glob>) [--record] [--brain-root <dir>] [--end <iso>] [--model <name>]
+python evals/run_suite.py list
+```
+
+`start` prints a `suite | case | workspace | marker` table; workspaces land under
+`<root>/eval-runs/<suite>-<case>-<ts>/`, one shared timestamp per call. `grade
+--all-runs --record` prints one `SUMMARY` table per suite and appends to that suite's
+own results file (`results/results.jsonl` for contract, trigger and antigravity,
+`outcome/results/results.jsonl` for outcome) — see each suite's own
+section above and `evals/outcome/README.md`.
+
+**The trigger equivalence.** Under Antigravity there is no `Skill` tool: a skill "fires"
+when its `skills/<name>/SKILL.md` is read. A `run_suite.py` trigger run therefore records
+`judge: "skill_read"` where a `run-evals.ps1` trigger run records `judge: "tool_use"` (see
+"Trigger judging" above) — a first-SKILL.md-read stands in for a first-`Skill`-invocation.
+The two judges measure the same thing over different runtimes' evidence, but **must never
+be pooled into one pass rate for the same case**: a `skill_read` row and a `tool_use` row
+are different instruments, exactly the reason `judge: "script"` rows are kept out of the
+LLM cases' pass rates above.
+
+**No minimum-duration floor applies.** `run-evals.ps1`'s INFRA classifier's duration floor
+(see "INFRA classification" below) exists to catch a headless CLI that exited in seconds
+with nothing to grade; a `run_suite.py` run is paced by whichever agent is performing the
+prompt in real time, so a fast, genuine completion is not a signal of anything broken.
+
 ## Layout
 
 ```

@@ -62,6 +62,19 @@ line mentions that run's working-copy path is force-killed and logged to
 `killed-processes.txt` in the run's artifact directory - see "Stray fixture processes"
 below.
 
+## Running it from Antigravity (run_suite.py)
+
+`evals/run_suite.py start --suite outcome (--case <case>|--all-cases) --in-place` and its
+`grade --all-runs <ts> --record` are a second way to run this tier, alongside
+`run-outcome.ps1` above - see `evals/README.md`'s "Running any suite from Antigravity"
+section and `skills/bg-eval/SKILL.md` (`/bg-eval outcome`). It only ever drives the
+**plugin arm**: the baseline arm needs the plugin disabled in the runtime, which is a
+manual step this path does not perform - disable it by hand first if a baseline run is
+wanted. Its records carry `total_cost_usd` and the token fields as `null` (there is no
+`claude -p` invocation to read usage from), and carry `runtime` and `model` naming what
+actually performed the task, so a reader can tell a `run_suite.py` row from a
+`run-outcome.ps1` row in the same `results.jsonl`.
+
 ## Timeout
 
 Default `-TimeoutSeconds` is 5400 (90 min). A smoke run of the plugin arm was still
