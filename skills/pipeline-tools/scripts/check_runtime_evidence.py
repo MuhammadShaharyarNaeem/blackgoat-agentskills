@@ -316,6 +316,30 @@ def resolve_path(candidate, report_path, repo):
     return p if p.is_file() else None
 
 
+def load_log_fallback_text(fields, report_path, repo):
+    """The FULL on-disk log named by the capture's `- Log:` field, or None.
+
+    run_quiet.py 2.5+ embeds an EXCERPT (error lines + tail) in the capture
+    body by default, not the full child output -- a status line or a JSON
+    key the excerpt happened to cut can still be on disk in the full log.
+    This is a content fallback only, resolved the same way a cited capture
+    is (report dir, then --repo, then as given): it never substitutes for
+    the capture's own hash-protected body in a provenance check, only in a
+    CONTENT read (--expect-status, --require-key, the OpenAPI schema diff)
+    that came up empty against the excerpt.
+    """
+    log_field = (fields.get("log") or "").strip()
+    if not log_field:
+        return None
+    p = resolve_path(log_field, report_path, repo)
+    if p is None:
+        return None
+    try:
+        return p.read_text(encoding=READ_ENCODING, errors="replace")
+    except OSError:
+        return None
+
+
 def milestone_tokens(milestone):
     """Full title plus its leading identifier (text before the first ':' / '—')."""
     tokens = [milestone.strip().lower()]
@@ -1024,7 +1048,23 @@ def evaluate_capture(candidate, args, patterns, newest_mtime, schema_ctx=None):
     if not captured.strip():
         res["problems"].append("captured output is empty")
 
+    # Content fallback: read lazily, at most once per capture, and only if
+    # the excerpt body itself doesn't already answer the check. See
+    # load_log_fallback_text() -- this is a content read, never a substitute
+    # for the capture's own hash-protected body in a provenance check.
+    log_fallback = {"loaded": False, "text": None}
+
+    def log_fallback_text():
+        if not log_fallback["loaded"]:
+            log_fallback["loaded"] = True
+            log_fallback["text"] = load_log_fallback_text(fields, args.report, args.repo)
+        return log_fallback["text"]
+
     status_m = STATUS_LINE_RE.search(captured)
+    if status_m is None:
+        fallback = log_fallback_text()
+        if fallback:
+            status_m = STATUS_LINE_RE.search(fallback)
     observed_status = int(status_m.group(1)) if status_m else None
 
     if args.expect_status is not None:
@@ -1040,6 +1080,12 @@ def evaluate_capture(candidate, args, patterns, newest_mtime, schema_ctx=None):
     body_doc, body_error = None, None
     if args.require_key or schema_ctx["active"]:
         body_doc, body_error = extract_body_json(captured)
+        if body_error is not None:
+            fallback = log_fallback_text()
+            if fallback:
+                alt_doc, alt_error = extract_body_json(fallback)
+                if alt_error is None:
+                    body_doc, body_error = alt_doc, None
         if body_error is None:
             res["body_parsed"] = True
             scopes = key_scopes(body_doc)
@@ -1600,6 +1646,54 @@ def run_self_test():
         def test_key_inside_body_scope_passes(self):
             self._report(self._write(body='{"body":{"isSuccess":true,"notifications":[]}}'))
             r = build_report(self._args(require_key=["isSuccess", "notifications"]))
+            self.assertEqual(r["result"], "PASS", r)
+
+        # ---- content fallback: run_quiet.py 2.5+'s excerpt body can miss the
+        # very line a content check asks about; the gate then reads the FULL
+        # log named by the capture's own '- Log:' field. Never a substitute
+        # for the hash-protected body in a provenance check -- only content. ----
+
+        def test_expect_status_and_require_key_fall_back_to_the_full_log(self):
+            log_path = self.dir / "probe.md.log"
+            log_path.write_text(
+                "noise\n" * 5 +
+                f"HTTP/1.1 200 OK\ncontent-type: application/json\n\n{ENVELOPE}\n",
+                encoding="utf-8")
+            # The capture's own body is a truncated excerpt: no status line,
+            # no JSON, but non-empty -- exactly what a real run_quiet.py
+            # excerpt looks like when the response landed outside the
+            # error-excerpt/tail window.
+            cited = self._write(
+                status="TRUNCATED",
+                body="no errors detected\n\nTAIL (last 3 lines):\n"
+                     "1: unrelated noise\n2: more noise\n3: still no json",
+                extra=(f"- Log: {log_path}",))
+            self._report(cited)
+            r = build_report(self._args(
+                require_key=["isSuccess", "notifications"], expect_status=200))
+            self.assertEqual(r["result"], "PASS", r)
+
+        def test_content_fallback_does_nothing_without_a_log_field(self):
+            """No '- Log:' field (a legacy or hand-authored capture) -- the
+            excerpt is all there is, and a truncated one still fails closed."""
+            cited = self._write(
+                status="TRUNCATED",
+                body="no errors detected\n\nTAIL (last 3 lines):\n"
+                     "1: unrelated noise\n2: more noise\n3: still no json")
+            self._report(cited)
+            r = build_report(self._args(
+                require_key=["isSuccess"], expect_status=200))
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["rejected"], ["evidence/runtime/m3-orders.md"])
+
+        def test_content_fallback_ignored_when_excerpt_already_answers_it(self):
+            """The excerpt is read FIRST; the log is only a fallback."""
+            log_path = self.dir / "probe.md.log"
+            log_path.write_text("this file must never be read\n", encoding="utf-8")
+            cited = self._write(extra=(f"- Log: {log_path}",))
+            self._report(cited)
+            r = build_report(self._args(
+                require_key=["isSuccess", "notifications"], expect_status=200))
             self.assertEqual(r["result"], "PASS", r)
 
         # ---- transport honesty ----

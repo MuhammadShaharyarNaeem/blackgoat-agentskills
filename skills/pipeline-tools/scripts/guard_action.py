@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Pre-execution guard: converts four restraint rules from "should not" to "cannot".
+"""Pre-execution guard: converts six restraint rules from "should not" to "cannot".
 
 Every other script in this family verifies AFTER the fact, and the decision to
 run it is the model's. This one runs BEFORE the tool call, decided by the
 runtime rather than by the model, and returns a deny that the model cannot
 route around. It is the mechanical form of CLAUDE.md convention #9 applied to
-the four restraints that bite at the exact moment the model most wants to
-proceed: committing, editing the RED, delegating before intake, and hand-
-writing the artifacts the gates read.
+the six restraints that bite at the exact moment the model most wants to
+proceed: committing, editing the RED, delegating before intake, delegating
+into a lane a human has to clear, hand-writing the artifacts the gates read,
+and running a build or test raw instead of through the log wrapper.
 
 This file is the DECISION LOGIC and it is runtime-neutral (convention #5).
 The per-runtime packaging -- which hook event fires it, and which JSON shape
@@ -15,8 +16,8 @@ the host reads -- lives in `hooks/hooks.json` (Claude Code),
 `hooks/hooks-cursor.json` (Cursor) and the `--format` flag below. No rule text
 is duplicated into either.
 
-THE FOUR RULES
---------------
+THE SIX RULES
+-------------
 1. `commit_through_the_gate` -- tool `Bash`, a history-writing `git`
    invocation (`commit|merge|cherry-pick|revert|rebase|am|notes|tag|stash`) or
    `gh pr merge`, while a lane is ACTIVE and NOT yet closed -> DENY, naming
@@ -39,6 +40,86 @@ THE FOUR RULES
    DENY, always, lane or no lane. "A write" again covers write TOOLS and
    `Bash` (see BASH WRITES). These are the evidence the other gates read; a
    hand edit to any of them makes every verdict downstream unfalsifiable.
+5. `build_and_test_through_the_wrapper` -- tool `Bash`, the command's leading
+   tokens (per `;`/`&`/`|`/newline segment) are a raw build/test runner
+   (`dotnet build`, `dotnet test`, `npm test`, `npm run build`, `npm run
+   test`, `pnpm test`, `yarn test`, `pytest`, `npx playwright test`, `npx
+   vitest`, `npx jest`), while ANY lane is active, and the command does not
+   also mention `run_quiet.py` -> DENY, naming the wrapper form. A real build
+   or test child writes its own noise straight to a transcript before
+   anything else gets a chance to trim it -- 190-570 KB dotnet logs, almost
+   all `Copying file`/`Deleting file` chatter and 196 repeated nullable
+   warnings, were observed on disk, and one epic ran with none on disk at all
+   because the run never went through the wrapper. Checked on LEADING tokens
+   only (see RUNNER MATCHING), not a substring search, so a runner name
+   quoted inside an unrelated argument -- a commit message, an `echo` --
+   never matches. Unlike rule 1, no lane has to ARM this: it fires for any
+   detected lane, closed or not, verify included, because quieting output has
+   nothing to do with who commits.
+6. `delegation_halted_for_the_user` -- tool `Task`/`Agent`, while any active
+   lane's own `orchestrator-state.json` carries a non-empty `state["halt"]`
+   -> DENY, naming the halted unit, its code, its reason, and the exact
+   `update_state.py --clear-halt` command that lifts it. `halt` is written
+   by `check_redelegation.py` via `update_state.py --set-halt` when a
+   delegation round hits `halt_environment`, `halt_dependency`,
+   `halt_repeated_blocker` or `halt_round_bound` (see that file's docstring)
+   -- a wall only a human clears now: there is no auto-clear-on-PASS path
+   (removed this round), only a human running `update_state.py --clear-halt
+   "<unit>" --reason "<what changed>" --ledger <path>` themselves, which
+   removes `state["halt"]`. This rule is what makes that halt actually stop
+   re-delegation rather than rely on the Orchestrator noticing the state
+   file changed. Checked against the SAME `lanes` rule 1 already detected
+   for this call -- no separate detection pass -- read from each lane's own
+   `orchestrator-state.json` (only a FEATURE lane carries one; bugfix and
+   quick lanes have none, so the read is absent and skipped, same as any
+   other missing file in this guard). A halt in a STALE lane does not deny:
+   the lane freshness window (12h default) already governs whether the lane
+   -- and therefore its halt -- is active at all.
+
+RUNNER MATCHING (rule 5)
+-------------------------
+`raw_runner_invocation()` splits the command on the same separators as
+`bash_write_targets()`, tokenizes each segment, and compares only the
+SEGMENT'S OWN LEADING tokens (the first token normalized like every other
+verb table in this file -- basename, lower-case, `.exe`/`.cmd` stripped)
+against the eleven known runner-invocation prefixes. A segment that merely
+CONTAINS a runner name past its first tokens is not a hit: `git commit -m
+"npm test passes"` and `echo "run npx playwright test first"` both allow,
+because the leading token of their one segment is `git`/`echo`, never `npm`
+or `npx`. `run_quiet.py` anywhere on the whole command line -- not per
+segment -- disarms the rule for the entire call, matching how a real
+invocation reads (`python run_quiet.py --log x.log -- npm test`).
+
+Two constructs sit BEFORE the leading tokens and are stripped before that
+comparison, not matched against it:
+
+  * SHELL VARIABLE ASSIGNMENTS -- one or more leading `NAME=value` tokens
+    (`DOTNET_CLI_TELEMETRY_OPTOUT=1 dotnet test`), and an `env` prefix with
+    its own `NAME=value` operands (`env VAR=1 dotnet test`). Before 2.6.2 the
+    leading `NAME=value` token was taken AS the executable -- `command_basename`
+    lower-cased it to itself, it matched no runner tuple, and the call
+    allowed. `_skip_env_prefix()` removes both forms (and stacks of them) so
+    the comparison lands on the real executable.
+  * AN INTERPRETER WRAPPER carrying its own inline command string -- `cmd /c`,
+    `powershell -Command`/`-c`, `pwsh -Command`/`-c`, `bash -c`, `sh -c`.
+    `_interpreter_inline_command()` recognizes the pair (case-insensitively)
+    and re-joins everything after it into one command string, which
+    `raw_runner_invocation()` then calls itself on -- so `bash -c "dotnet
+    test"` denies (the inner string's own leading tokens are `dotnet test`)
+    while `bash -c "echo dotnet test"` allows (the inner string's leading
+    token is `echo`). This is recursion into a NAMED argument position, one
+    level of shell-quote unwrapping deeper than the outer split already does
+    -- never a substring search across the whole command line, which is what
+    rule 1's documented `echo "git commit"` over-block would look like if
+    applied here and is deliberately not how this rule works.
+
+OUT OF SCOPE: an unknown npm SCRIPT NAME. `npm run build:prod` and `npm run
+test:unit` do not match the `("npm","run","build")` / `("npm","run","test")`
+tuples (tuple membership is exact, not a prefix on the script name) and stay
+allowed, same as any other `npm run <anything-else>`. Widening the match to
+a prefix on the script name would turn every unrelated `npm run buildinfo` or
+`npm run testutils` into a false positive; the fix belongs in `package.json`
+script naming, not in this guard.
 
 BASH WRITES (rules 2 and 4)
 ---------------------------
@@ -297,6 +378,38 @@ PY_OPEN_WRITE_RE = re.compile(
 # `git checkout -- <paths>` / `git restore <paths>` overwrite the working tree.
 GIT_RESTORE_RE = re.compile(
     r"\bgit\b(?:\s+(?:-[cC]\s+\S+|--\S+|-\w))*\s+(checkout|restore)\b(?P<rest>[^;&|\n]*)")
+
+# --- Rule 5: raw build/test runners (see RUNNER MATCHING in the docstring).
+# Each tuple is the LEADING tokens of a runner invocation, lower-cased. Only
+# a segment that STARTS WITH one of these is a hit -- see raw_runner_invocation().
+RUNNER_COMMANDS = (
+    ("dotnet", "build"),
+    ("dotnet", "test"),
+    ("npm", "run", "build"),
+    ("npm", "run", "test"),
+    ("npm", "test"),
+    ("pnpm", "test"),
+    ("yarn", "test"),
+    ("pytest",),
+    ("npx", "playwright", "test"),
+    ("npx", "vitest"),
+    ("npx", "jest"),
+)
+RUN_QUIET_MARKER = "run_quiet.py"
+# A leading `NAME=value` shell assignment; matched against a raw (unlowered)
+# token, since env var names are conventionally upper-case but the pattern
+# itself is case-insensitive by construction.
+ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
+# Interpreter -> the inline-command flag(s) that take the rest of the line as
+# one command string, lower-cased for comparison. `cmd /k` behaves like `/c`
+# for this purpose (persists a shell afterward; still runs the command first).
+INTERPRETER_INLINE_FLAGS = {
+    "cmd": ("/c", "/k"),
+    "powershell": ("-c", "-command"),
+    "pwsh": ("-c", "-command"),
+    "bash": ("-c",),
+    "sh": ("-c",),
+}
 
 
 class GuardError(Exception):
@@ -579,6 +692,32 @@ def unfixed_bugfix_lanes(lanes):
             and not ledger_has_pass(lane.ledger, "check_commit_gate.py")]
 
 
+def lane_halt(lane):
+    """The standing `state["halt"]` object in this lane's own
+    `orchestrator-state.json`, or None (rule 6's predicate).
+
+    Only a FEATURE lane's root carries an `orchestrator-state.json`; bugfix
+    and quick lanes simply have no such file, so this reads absent and
+    returns None the same way a corrupt or missing file does -- fail open,
+    like every other filesystem read in this module.
+    """
+    state = _read_json(Path(lane.root) / "orchestrator-state.json")
+    if not isinstance(state, dict):
+        return None
+    halt = state.get("halt")
+    required = ("unit", "agent", "code", "reason")
+    if isinstance(halt, dict) and all(
+            isinstance(halt.get(k), str) and halt.get(k).strip()
+            for k in required):
+        return halt
+    return None
+
+
+def halted_lanes(lanes):
+    """Active lanes currently carrying a standing halt (rule 6's arming set)."""
+    return [lane for lane in lanes if lane_halt(lane) is not None]
+
+
 # ---------------------------------------------------------------------------
 # Payload normalization -- one shape in, whatever the host sent
 # ---------------------------------------------------------------------------
@@ -790,6 +929,78 @@ def git_write_invocation(command):
     return None
 
 
+def _skip_env_prefix(tokens):
+    """`tokens` with any leading `NAME=value` assignments and `env` stripped.
+
+    Handles `VAR=1 dotnet test`, `env VAR=1 dotnet test`, and stacks of
+    either (`VAR=1 env VAR2=2 dotnet test`) by alternating the two skips
+    until neither applies. See RUNNER MATCHING in the module docstring.
+    """
+    idx = 0
+    changed = True
+    while changed and idx < len(tokens):
+        changed = False
+        while idx < len(tokens) and ENV_ASSIGNMENT_RE.match(tokens[idx]):
+            idx += 1
+            changed = True
+        if idx < len(tokens) and command_basename(tokens[idx]) == "env":
+            idx += 1
+            changed = True
+    return tokens[idx:]
+
+
+def _interpreter_inline_command(tokens):
+    """The inline command string `tokens` hands to a wrapping interpreter.
+
+    `tokens` must already have `_skip_env_prefix` applied. Returns None when
+    `tokens` does not open with a known interpreter (`cmd`, `powershell`,
+    `pwsh`, `bash`, `sh`) immediately followed by that interpreter's
+    inline-command flag (`/c`, `-c`, `-Command`, case-insensitive) -- else
+    everything after the flag, re-joined into one string for
+    `raw_runner_invocation()` to tokenize and match itself.
+    """
+    if len(tokens) < 3:
+        return None
+    flags = INTERPRETER_INLINE_FLAGS.get(command_basename(tokens[0]))
+    if not flags or tokens[1].lower() not in flags:
+        return None
+    return " ".join(tokens[2:])
+
+
+def raw_runner_invocation(command):
+    """The raw build/test runner invocation `command` STARTS WITH, or None.
+
+    Checked per shell segment (COMMAND_SEPARATORS), against that segment's
+    own LEADING tokens only, after stripping an env-assignment/`env` prefix
+    and -- if what remains opens an interpreter wrapper (`bash -c "..."` and
+    the like) -- recursing into its inline command string. A runner name
+    that merely appears as an argument to something else (a commit message,
+    an `echo`) never matches; see RUNNER MATCHING in the module docstring.
+    The first token is normalized with `command_basename` (path/`.exe`/
+    `.cmd` stripped, same as every other verb table here); the rest are
+    compared lower-cased.
+    """
+    command = command or ""
+    for segment in COMMAND_SEPARATORS.split(command):
+        tokens = bash_tokens(segment)
+        if not tokens:
+            continue
+        tokens = _skip_env_prefix(tokens)
+        if not tokens:
+            continue
+        inline = _interpreter_inline_command(tokens)
+        if inline is not None:
+            nested = raw_runner_invocation(inline)
+            if nested:
+                return nested
+            continue
+        lowered = [command_basename(tokens[0])] + [t.lower() for t in tokens[1:]]
+        for runner in RUNNER_COMMANDS:
+            if tuple(lowered[:len(runner)]) == runner:
+                return " ".join(tokens[:len(runner)])
+    return None
+
+
 # ---------------------------------------------------------------------------
 # The decision
 # ---------------------------------------------------------------------------
@@ -901,6 +1112,36 @@ def decide(tool_name, tool_input, cwd, now=None, window_hours=WINDOW_HOURS_DEFAU
                 .format(lane.root, _gate_command(lane.gate), lane.ledger)
             )
 
+    # Rule 5 -- builds and tests run through the wrapper, not raw.
+    if tool_name in BASH_TOOLS and lanes:
+        command = command_of(tool_input)
+        if RUN_QUIET_MARKER not in command:
+            runner = raw_runner_invocation(command)
+            if runner:
+                return "deny", "build_and_test_through_the_wrapper", (
+                    "Blocked: `{0}` runs a raw build/test runner while a "
+                    "lane is active -- output belongs on disk, not in your "
+                    "context; wrap it: {1} --log <path> -- {0}"
+                    .format(command.strip(), _gate_command("run_quiet.py"))
+                )
+
+    # Rule 6 -- delegation halted for the user.
+    if tool_name in DELEGATION_TOOLS:
+        halted = halted_lanes(lanes)
+        if halted:
+            lane = halted[0]
+            halt = lane_halt(lane)
+            state_path = Path(lane.root) / "orchestrator-state.json"
+            return "deny", "delegation_halted_for_the_user", (
+                "Blocked: the {0} lane at `{1}` is halted for the user -- "
+                "unit {2!r}, code {3}, reason: {4}. Do not re-delegate; only "
+                "a human clears this, with: {5} --state {6} --clear-halt "
+                "\"{7}\" --reason \"<what changed in the world>\" --ledger {8}"
+                .format(lane.kind, lane.root, halt["unit"], halt["code"],
+                        halt["reason"], _gate_command("update_state.py"),
+                        state_path, halt["unit"], lane.ledger)
+            )
+
     return "allow", None, ""
 
 
@@ -987,6 +1228,7 @@ def run_explain(args):
     lanes = detect_lanes(cwd, now=now, window_hours=args.window_hours)
     pending = pending_bugfix_intakes(cwd, now=now, window_hours=args.window_hours)
     unfixed = unfixed_bugfix_lanes(lanes)
+    halted = halted_lanes(lanes)
 
     out = ["guard_action.py -- pre-execution guard", ""]
     out.append("Rules (each reads an artifact; a deny is always a positive")
@@ -1002,6 +1244,13 @@ def run_explain(args):
     out.append("  4 gate_artifacts_are_written_by_tools  write (tool OR Bash "
                "mutation) to gates.jsonl / orchestrator-state.json / "
                "run-log.jsonl / *.meta.json, always")
+    out.append("  5 build_and_test_through_the_wrapper Bash running a raw "
+               "dotnet build/test, npm test/run build/run test, pnpm test, "
+               "yarn test, pytest, npx playwright test/vitest/jest, any "
+               "active lane, unless run_quiet.py is on the line")
+    out.append("  6 delegation_halted_for_the_user    Task/Agent while any "
+               "active lane's orchestrator-state.json carries a standing "
+               "halt (check_redelegation.py / update_state.py --set-halt)")
     out.append("")
     out.append("cwd            : {0}".format(cwd))
     out.append("window (hours) : {0:g}".format(args.window_hours))
@@ -1038,6 +1287,10 @@ def run_explain(args):
         ", ".join(l.root for l in pending) if pending else "nothing"))
     out.append("Rule 4 is always armed, for write tools AND for Bash "
                "redirection/tee/Set-Content/sed -i/mv/rm/git checkout.")
+    out.append("Rule 5 armed for: {0}".format(
+        ", ".join(l.root for l in lanes) if lanes else "nothing"))
+    out.append("Rule 6 armed for: {0}".format(
+        ", ".join(l.root for l in halted) if halted else "nothing"))
     print("\n".join(out))
     return 0
 
@@ -1124,11 +1377,12 @@ def run_self_test():
             return str(d)
 
         def make_feature(self, name="demo", pipeline="bgpdd-build", age_hours=0.0,
-                         cursor=None, commit_milestone=None):
+                         cursor=None, commit_milestone=None, halt=None):
             d = Path(self.root) / ".docs" / name
-            touch(d / "orchestrator-state.json",
-                  json.dumps({"pipeline": pipeline,
-                              "milestone_cursor": cursor}), age_hours)
+            state = {"pipeline": pipeline, "milestone_cursor": cursor}
+            if halt is not None:
+                state["halt"] = halt
+            touch(d / "orchestrator-state.json", json.dumps(state), age_hours)
             lines = ""
             if commit_milestone is not None:
                 lines = ledger_line("check_commit_gate.py", argv=["--commit"],
@@ -1647,11 +1901,14 @@ def run_self_test():
                 "Bash", {"command": "rm " + path})[0], "allow")
 
         def test_65_running_the_test_suite_is_not_a_write(self):
+            # Wrapped through run_quiet.py so rule 5 (audit E2) does not also
+            # fire here -- this test is about rule 2, not rule 5.
             self.make_bugfix()
             touch(Path(self.root) / "tests" / "orders.test.js", "old")
             for command in ("npm test", "pytest tests/", "dotnet test",
                             "npx playwright test tests/orders.test.js"):
-                self.assertEqual(self.decide("Bash", {"command": command})[0],
+                wrapped = "python run_quiet.py --log run.log -- " + command
+                self.assertEqual(self.decide("Bash", {"command": wrapped})[0],
                                  "allow", command)
 
         # -- the feature bugfix route (audit3 Metric 20) ----------------
@@ -1838,6 +2095,111 @@ def run_self_test():
             self.assertIn("no commit gate", text)
             self.assertIn("closed", text)
             self.assertIn("milestone:", text)
+
+        # == audit E2 ================================================
+        # -- rule 5: builds and tests run through the wrapper -----------
+
+        def test_89_raw_runner_denied_for_each_command(self):
+            self.make_feature()
+            for command in ("dotnet build", "dotnet test", "npm test",
+                            "npm run build", "npm run test", "pnpm test",
+                            "yarn test", "pytest",
+                            "npx playwright test", "npx vitest",
+                            "npx jest"):
+                d, rule, reason = self.decide("Bash", {"command": command})
+                self.assertEqual(
+                    (d, rule),
+                    ("deny", "build_and_test_through_the_wrapper"), command)
+                self.assertIn("run_quiet.py", reason, command)
+
+        def test_90_raw_runner_allowed_when_wrapped(self):
+            self.make_feature()
+            for command in ("dotnet test", "npm test", "pytest",
+                            "npx playwright test"):
+                wrapped = ("python {PLUGIN_ROOT}/pipeline-tools/scripts/"
+                          "run_quiet.py --log build.log -- " + command)
+                self.assertEqual(
+                    self.decide("Bash", {"command": wrapped})[0],
+                    "allow", command)
+
+        def test_91_raw_runner_allowed_outside_a_lane(self):
+            self.assertEqual(detect_lanes(self.root), [])
+            for command in ("dotnet build", "npm test", "pytest"):
+                self.assertEqual(
+                    self.decide("Bash", {"command": command})[0],
+                    "allow", command)
+
+        def test_92_runner_name_only_inside_a_string_argument_is_allowed(self):
+            # Not a false-positive test of rule 1 -- these commands avoid
+            # every rule, including rule 1 (no git verb, no gate-artifact
+            # write), so a plain "allow" isolates rule 5's own leading-token
+            # check from the rest of decide().
+            self.make_feature()
+            for command in (
+                    'echo "please run npm test before you push"',
+                    'echo "run npx playwright test first"',
+                    'echo "remember: dotnet build then dotnet test"'):
+                self.assertEqual(
+                    self.decide("Bash", {"command": command})[0],
+                    "allow", command)
+
+        # -- rule 5 fix round: env prefixes and interpreter wrappers ----
+
+        def test_93_env_var_prefix_does_not_bypass_the_match(self):
+            self.make_feature()
+            d, rule, _ = self.decide(
+                "Bash",
+                {"command": "DOTNET_CLI_TELEMETRY_OPTOUT=1 dotnet test"})
+            self.assertEqual((d, rule),
+                             ("deny", "build_and_test_through_the_wrapper"))
+
+        def test_94_env_command_prefix_does_not_bypass_the_match(self):
+            self.make_feature()
+            d, rule, _ = self.decide(
+                "Bash", {"command": "env VAR=1 dotnet test"})
+            self.assertEqual((d, rule),
+                             ("deny", "build_and_test_through_the_wrapper"))
+
+        def test_95_bash_dash_c_inline_runner_denies(self):
+            self.make_feature()
+            d, rule, _ = self.decide(
+                "Bash", {"command": 'bash -c "dotnet test"'})
+            self.assertEqual((d, rule),
+                             ("deny", "build_and_test_through_the_wrapper"))
+
+        def test_96_bash_dash_c_inline_non_runner_is_allowed(self):
+            self.make_feature()
+            self.assertEqual(self.decide(
+                "Bash", {"command": 'bash -c "echo dotnet test"'})[0],
+                "allow")
+
+        # -- rule 6: delegation halted for the user (blocker-halt gate) -
+
+        def _halt(self, code="halt_environment"):
+            return {"unit": "M1: Auth", "agent": "quinn", "code": code,
+                    "reason": "no admin shell", "ts": "2026-09-14T00:00:00Z"}
+
+        def test_97_halted_lane_denies_delegation(self):
+            self.make_feature(halt=self._halt())
+            d, rule, reason = self.decide("Task", {"prompt": "go"})
+            self.assertEqual((d, rule),
+                             ("deny", "delegation_halted_for_the_user"))
+            self.assertIn("M1: Auth", reason)
+            self.assertIn("halt_environment", reason)
+            self.assertIn("no admin shell", reason)
+
+        def test_98_cleared_halt_allows_delegation(self):
+            self.make_feature()  # no halt key at all -- cleared/never set
+            self.assertEqual(self.decide("Task", {"prompt": "go"})[0], "allow")
+
+        def test_99_no_active_lane_allows_delegation(self):
+            self.assertEqual(detect_lanes(self.root), [])
+            self.assertEqual(self.decide("Agent", {"prompt": "go"})[0], "allow")
+
+        def test_100_halt_in_a_stale_lane_allows_delegation(self):
+            self.make_feature(age_hours=13.0, halt=self._halt())
+            self.assertEqual(detect_lanes(self.root), [])
+            self.assertEqual(self.decide("Task", {"prompt": "go"})[0], "allow")
 
     suite = unittest.TestLoader().loadTestsFromTestCase(GuardTest)
     result = unittest.TextTestRunner(verbosity=2).run(suite)

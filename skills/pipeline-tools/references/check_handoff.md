@@ -223,3 +223,13 @@ The docs-root-parent/cwd fallback above was added to close that gap.
 diffed against the repo it resolved to rather than the first one listed, the
 `.docs`-ancestor default, and the relative-path parent/cwd fallback for
 `<artifact>`/`<changed_skills>` only.
+
+## `blocked_on:` grammar (Unreleased)
+
+Measured on epic slide-s5: Quinn was delegated four times on the same milestone and returned `PARTIAL` every time with the same environment wall — no admin shell, no installed service, no dev token — only the human could clear, and about 1.2M tokens were spent re-discovering that one fact across the four rounds because nothing in the handoff was machine-readable enough to stop the Orchestrator from trying again. `<blockers>` free text said the same thing four different ways.
+
+On a `PARTIAL`/`BLOCKED` `<status>`, `<blockers>` must now carry at least one line matching `blocked_on: <category> — <one-line reason>`, where `<category>` is one of `environment`, `credentials`, `dependency`, `spec`, or `defect`. A line naming a category outside the five, or a `PARTIAL`/`BLOCKED` handoff with no `blocked_on:` line at all, is `blockers_uncategorised`. `COMPLETE` is exempt — the grammar exists to classify a blocker, and a complete handoff has none. An entirely absent `<blockers>` element stays `element_missing`, never additionally `blockers_uncategorised` — one finding per actual gap, not two for the same missing thing.
+
+This is the grammar `check_redelegation.py` reads to decide whether re-delegating the same agent on the same unit would just re-discover the same wall: `environment`/`credentials` halt outright, `dependency` halts unless explicitly waived, and `spec`/`defect` never halt on their own since those are squarely the agent's to keep working on.
+
+Self-test count: 57 → 67 — ten `blocked_on:` grammar cases: every known category, an unknown one, a missing line, the `COMPLETE` exemption, a bulleted/backtick-wrapped line, and the absent-`<blockers>`-is-only-`element_missing` non-duplication case.

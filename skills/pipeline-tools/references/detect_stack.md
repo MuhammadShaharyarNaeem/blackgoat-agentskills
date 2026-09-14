@@ -53,3 +53,15 @@ decides whether that was the right half of the repo.
 ## Self-test inventory
 
 `python scripts/detect_stack.py --self-test` runs **26** cases: dotnet, vue3, the vue2 suppression, godot, powershell, aws via terraform, azure via bicep, an empty repo, `node_modules` skipped, db via EF, react, node, playwright, github-actions, a missing repo (exit 2), the skills mapping, the never-guess invariant (no stack without an evidence path), and markdown rendering; then eight for the defaults — node's command and globs, the dotnet/python/powershell/vue3 first commands, defaults only for detected stacks, the deduped rollup ordering, a stack with no row carrying empty lists, an empty repo's empty rollup, the markdown block (ASCII-only), and the invariant that every table key is a name the detector can actually emit and carries both lists non-empty.
+
+## Quiet-at-source suggested commands and `quiet_wrapper` (Unreleased)
+
+`guard_action.py` rule 5 (`build_and_test_through_the_wrapper`) now denies a raw `dotnet test`/`npm test`/`pytest`/`npx playwright test` (and siblings) run directly by Bash while a lane is active, unless `run_quiet.py` is on the line. That made the OLD stack defaults table — `dotnet test`, `npm test`, `pytest`, `npx playwright test`, each printing full unabridged output — actively wrong advice: every one of them is now something the quick lane's own default would trip the guard on if run raw.
+
+Two independent fixes. First, every suggested command in the table is now QUIET AT THE SOURCE, not merely piped through a wrapper: `dotnet test --nologo -v q --logger "console;verbosity=minimal"` (plus a second alternative, `dotnet build --nologo -v q -clp:ErrorsOnly;Summary`, for a build-only check), `npm test -- --reporter=dot` (and its react/angular/vue3 equivalents), `npx vitest run --reporter=dot`, `pytest -q`, `npx playwright test --reporter=line`. `Invoke-Pester` and the GUT headless runner are unchanged — neither has an obvious quiet flag worth guessing at.
+
+Second, a new `quiet_wrapper` field on each stack entry gives the exact `run_quiet.py --log <log> -- <command>` form for that stack's FIRST suggested command, so a caller who needs the wrapped form (writing out the Phase 2 capture command by hand, say) doesn't have to compose it — and so the string on offer satisfies rule 5 on its own even before quieting-at-source is considered. A stack with no knowable runner carries an empty `quiet_wrapper`, matching its empty `suggested_check_commands`.
+
+Both are proposals, same as before: nothing here is ever executed by this script, and the quick lane still offers rather than adopts.
+
+Self-test count: 26 → 34, covering the new quiet flags per stack, the `quiet_wrapper` field's presence/emptiness, and its exact wrapped-command shape for the first suggested command.
