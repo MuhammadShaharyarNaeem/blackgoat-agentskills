@@ -266,6 +266,8 @@ def stamp_key(prefix):
     text = re.sub(r"^[\s>*+\-#]+", "", text)
     text = DATE_RE.sub(" ", text)
     text = STAMP_NOISE_RE.sub(" ", text)
+    text = re.sub(r"\[.*?\]\(.*?\)", " ", text)
+    text = re.sub(r"\([^)]*\)", " ", text)
     text = re.sub(r"[`*_]", "", text)
     text = re.sub(r"[\s:=,\-]+$", "", text)
     return re.sub(r"\s+", " ", text).strip().casefold()
