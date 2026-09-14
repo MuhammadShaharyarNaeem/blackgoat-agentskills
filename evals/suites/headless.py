@@ -542,7 +542,10 @@ _SCOPE_GUARD_PATH_ARG_KEYS = ("AbsolutePath", "DirectoryPath", "SearchDirectory"
 _SCOPE_GUARD_NETWORK_TOOLS = ("read_url_content", "search_web", "call_mcp_tool")
 
 _WINDOWS_ABS_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
-_WINDOWS_ABS_PATH_TOKEN_RE = re.compile(r"[A-Za-z]:[\\/][^\s\"']*")
+# A drive-letter token must not be preceded by a letter or digit: `http://` ends in
+# `p:/` and matched the unanchored form, flagging every `curl http://localhost:...`
+# reproduction command as an escape (bgpdd-bugfix-lane run 1, 2026-09-14 22:56Z).
+_WINDOWS_ABS_PATH_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s\"']*")
 
 
 def _is_absolute_windows_path(path):

@@ -151,6 +151,16 @@ class SelfTest(unittest.TestCase):
         self.assertEqual(prompt, "it's a test")
         self.assertEqual("'it''s a test'"[0:end], "'it''s a test'")
 
+    def test_abs_path_token_ignores_urls(self):
+        # Regression: `http://localhost:5182/orders` must not read as drive `p:/`.
+        from suites import headless as h
+        rx = h._WINDOWS_ABS_PATH_TOKEN_RE
+        self.assertEqual(rx.findall('curl --fail -sS -X POST http://localhost:5182/orders -H "Content-Type: application/json" -d "{}"'), [])
+        self.assertEqual(rx.findall("curl.exe -sS -i https://example.test/x"), [])
+        self.assertEqual(rx.findall("git -C C:/Gorelo/Gorelo_Web grep -n x"), ["C:/Gorelo/Gorelo_Web"])
+        self.assertEqual(rx.findall("Get-ChildItem -Path C:/ -Directory"), ["C:/"])
+        self.assertEqual(rx.findall('view "D:/other/clone/x.md"'), ["D:/other/clone/x.md"])
+
     def test_double_quoted_prompt_with_backtick_quote_escape(self):
         remainder = '"she said `"hi`" to me" --flag'
         prompt, end = contract.parse_quoted_prompt(remainder)
