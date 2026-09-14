@@ -155,6 +155,54 @@ LLM cases' pass rates above.
 with nothing to grade; a `run_suite.py` run is paced by whichever agent is performing the
 prompt in real time, so a fast, genuine completion is not a signal of anything broken.
 
+### Headless: run
+
+```
+python evals/run_suite.py run --runtime {agy,claude} --suite {antigravity,contract,trigger} (--case <case> | --all-cases) [--runs N] [--model <name>] [--timeout <seconds>] [--root <dir>] [--record] [--no-skip-permissions] [--preflight-probe] [--keep-workspaces]
+```
+
+A fourth way to run a suite: `run` starts a workspace itself, invokes the runtime CLI in
+it (`agy -p "<prompt>"` or `claude -p "<prompt>"` — the print-mode equivalent of the
+Orchestrator-performed path above), grades it with the same graders `start`/`grade` use,
+and — with `--record` — appends to the suite's results file. `--runs N` repeats this
+sequentially, never in parallel; no human pastes anything and the Orchestrator performs no
+prompt. Scope is `antigravity`/`contract`/`trigger` only — the outcome tier and the
+baseline (plugin-disabled) arm stay interactive, `evals/outcome/run-outcome.ps1` (the
+user's decision, 2026-09-15).
+
+| Suite | `--runtime claude` | `--runtime agy` |
+|---|---|---|
+| `contract` | gradable — runs each case's `## Command` verbatim, the same measurement `run-evals.ps1` makes; rows pool with those | gradable — artifact-graded, no transcript needed |
+| `trigger` | gradable — `judge: "tool_use"`, the `Skill` tool in the stream, exactly like `run-evals.ps1` | gradable — `judge: "skill_read"`, first `SKILL.md` read, off the `~/.gemini/antigravity-cli/brain/` transcript |
+| `antigravity` | INFRA on the three transcript-based cases (no Antigravity transcript exists under claude); `run-log-discipline` still gradable (artifact-only) | gradable on all four cases — transcripts land under `~/.gemini/antigravity-cli/brain/` |
+
+**`run --runtime agy` rows never pool with `claude` rows for the same case** — different
+runtime is a different instrument, mirroring the `skill_read`/`tool_use` warning above.
+Attribution reads agy's own `~/.gemini/antigravity-cli/` conversation store, whose
+`cache/last_conversations.json` maps a workspace cwd to the conversation that ran there.
+
+**INFRA**: empty output, a `jetski:` permission denial, an API refusal signature, or a
+timeout — retried once, then quarantined to `results-invalid-infra-<date>.jsonl` with
+`pass: null`, never counted toward `--runs`. Evidence for every run, INFRA included,
+archives under `evals/results/transcripts/headless/<suite>-<case>-<ts>/` (stdout, stderr,
+the exact command); the workspace is deleted on PASS and kept on FAIL/INFRA.
+
+**Which plugin the runtime loaded.** The runtime auto-loads its INSTALLED plugin (agy:
+`~/.gemini/config/plugins/blackgoat-agentskills`; claude: `~/.claude/skills/blackgoat-agentskills`)
+while the harness copies `agents/`/`skills/`/`references/` from the checkout `run_suite.py`
+lives in, so a trigger or antigravity run under agy measures the installed clone's skills.
+Every `run` record therefore carries `installed_plugin_path`/`installed_plugin_sha`/
+`installed_plugin_dirty` next to the harness's own `plugin_sha`/`plugin_dirty`, and preflight
+prints the installed path and sha. No warning is raised when they differ: the installed tree may
+differ on purpose (the Antigravity clone keeps its own `record_run.py` shape and explicit agent
+tools), so the fields record the fact and a reader compares them when it matters.
+INFRA quarantine rows are written only with `--record`, like every other write here (a
+deliberate divergence from `run-evals.ps1`, which quarantines unconditionally).
+
+**Permissions.** Headless `agy` auto-denies every tool permission unless
+`--dangerously-skip-permissions` is passed; `run` passes it by default (the headless
+equivalent of `claude -p --allowedTools`), and `--no-skip-permissions` disables that.
+
 ## Layout
 
 ```

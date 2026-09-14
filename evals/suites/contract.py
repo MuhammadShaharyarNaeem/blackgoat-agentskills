@@ -178,7 +178,16 @@ def build_working_copy(case, workspace):
     return text
 
 
-def start_one(case, root, ts):
+def start_one(case, root, ts, run_prefix=True):
+    """`run_prefix=False` skips executing the Command block's prefix (the
+    `git init ...;` preamble) here -- used by `run_suite.py run --runtime
+    claude --suite contract`, which runs the ENTIRE Command block (prefix +
+    `claude -p ...`) verbatim through one `powershell.exe -Command` for
+    parity with `run-evals.ps1`'s `Invoke-ContractRun`. Running the prefix
+    both here and there would double it (e.g. two `git commit -m base`
+    calls, the second failing on "nothing to commit"). Every other runtime
+    (agy) keeps the default `run_prefix=True`: the prefix runs at `start`
+    time and only the extracted `prompt` is handed to the agent."""
     workspace = Path(root) / "eval-runs" / f"contract-{case}-{ts}"
     common.ensure_empty_workspace(workspace)
     case_dir = CONTRACT_ROOT / case
@@ -190,7 +199,7 @@ def start_one(case, root, ts):
     min_duration = extract_min_duration(text)
     prefix, prompt, handoff_to = split_command(command_text)
 
-    if prefix:
+    if prefix and run_prefix:
         proc = common.run_powershell_command(
             common.harden_git_prefix_for_long_paths(prefix), cwd=workspace)
         if proc.returncode != 0:
@@ -218,7 +227,8 @@ def start_one(case, root, ts):
     marker = common.marker_path("contract", case, ts)
     common.save_marker(marker, record)
     return {"case": case, "workspace": workspace, "marker": marker,
-            "prompt": prompt, "handoff_to": handoff_to}
+            "prompt": prompt, "handoff_to": handoff_to,
+            "command_text": command_text, "prefix": prefix}
 
 
 def cmd_start(args):
@@ -253,10 +263,16 @@ def cmd_start(args):
 # --------------------------------------------------------------------------
 
 def grade_one(marker_path, end_override=None, model="gemini-3.8-flash", brain_root=None,
-              record=False, case_dir=None):
+              record=False, case_dir=None, transcripts_override=None):
     """`case_dir` overrides `CONTRACT_ROOT / case` -- used only by the
     self-test, to grade against a synthetic stub `grade.ps1` without writing
-    anything under the real `evals/contract/`."""
+    anything under the real `evals/contract/`.
+
+    `transcripts_override` skips the internal `common.get_transcripts` call
+    entirely and uses this `{"parent", "subagents", "all"}` dict instead --
+    used by `run_suite.py run --runtime agy`, which resolves the run's
+    conversation deterministically via `last_conversations.json` rather than
+    the window/workspace-mention heuristic `common.get_transcripts` applies."""
     rec = common.load_marker(marker_path)
     case = rec["case"]
     workspace = Path(rec["workspace"])
@@ -265,7 +281,8 @@ def grade_one(marker_path, end_override=None, model="gemini-3.8-flash", brain_ro
     current_manifest = common.compute_manifest_sha256(workspace)
     manifest_changed = current_manifest != rec.get("manifest_sha256")
     window_end = common.compute_window_end(workspace, end_override)
-    transcripts = common.get_transcripts(started_at, window_end, brain_root, workspace)
+    transcripts = (transcripts_override if transcripts_override is not None
+                   else common.get_transcripts(started_at, window_end, brain_root, workspace))
     attributed = common.transcript_attributed(transcripts)
 
     infra = common.is_infra(manifest_changed, transcript_judged=False, attributed=attributed)

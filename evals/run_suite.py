@@ -31,10 +31,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "antigravity"))
 
-from suites import common, contract, trigger, outcome  # noqa: E402
+from suites import common, contract, trigger, outcome, headless  # noqa: E402
 import run as antigravity_run  # noqa: E402  (evals/antigravity/run.py)
 
 SUITE_NAMES = ("contract", "trigger", "outcome", "antigravity")
+RUN_SUITE_NAMES = headless.RUN_SUITES
+RUN_RUNTIME_NAMES = headless.RUNTIMES
 
 
 # --------------------------------------------------------------------------
@@ -213,6 +215,34 @@ def main(argv=None):
 
     p_list = sub.add_parser("list", help="list known cases (all four suites) and run markers")
     p_list.set_defaults(func=lambda a: cmd_list(a))
+
+    p_run = sub.add_parser("run", help="headless: start, invoke a real runtime CLI, classify INFRA, "
+                                        "grade and (optionally) record every run, unattended")
+    p_run.add_argument("--runtime", choices=RUN_RUNTIME_NAMES, required=True)
+    p_run.add_argument("--suite", choices=RUN_SUITE_NAMES, required=True)
+    p_run.add_argument("--case", default=None)
+    p_run.add_argument("--all-cases", action="store_true")
+    p_run.add_argument("--runs", type=int, default=1)
+    p_run.add_argument("--model", default=None, help="passed through verbatim to the runtime CLI; "
+                                                       "default: omit the flag, record '<runtime>-default'")
+    p_run.add_argument("--timeout", type=int, default=None,
+                        help=f"seconds before a hard kill (default: {headless.DEFAULT_TIMEOUT_S})")
+    p_run.add_argument("--root", default=None, help="root dir for eval-runs/ (default: cwd)")
+    p_run.add_argument("--record", action="store_true", help="append results.jsonl / antigravity records")
+    p_run.add_argument("--no-skip-permissions", action="store_true",
+                        help="agy only: omit --dangerously-skip-permissions")
+    p_run.add_argument("--preflight-probe", action="store_true",
+                        help="add a live 'reply with the word READY' probe to preflight (spends tokens)")
+    p_run.add_argument("--keep-workspaces", action="store_true",
+                        help="never delete a run's workspace, even on PASS")
+    p_run.add_argument("--brain-root", default=None,
+                        help="agy only: override the antigravity-cli brain root "
+                             "(default: ~/.gemini/antigravity-cli/brain)")
+    p_run.add_argument("--installed-plugin-path", default=None,
+                        help="override the installed-plugin path used for provenance "
+                             "(default: agy -> ~/.gemini/config/plugins/blackgoat-agentskills, "
+                             "claude -> ~/.claude/skills/blackgoat-agentskills)")
+    p_run.set_defaults(func=headless.cmd_run)
 
     args = parser.parse_args(argv)
 

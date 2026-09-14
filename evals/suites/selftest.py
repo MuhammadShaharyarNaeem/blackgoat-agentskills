@@ -9,6 +9,8 @@ writes exclusively under a `tempfile.mkdtemp()` directory that is removed in
 `evals/trigger/`, or `evals/outcome/` trees, and no `claude`/Antigravity
 process is invoked.
 """
+import contextlib
+import io
 import json
 import shutil
 import sys
@@ -17,7 +19,7 @@ import unittest
 from datetime import timedelta
 from pathlib import Path
 
-from . import common, contract, trigger, outcome
+from . import common, contract, trigger, outcome, headless
 
 sys.path.insert(0, str(common.EVALS_ROOT / "outcome"))
 import scoreboard  # noqa: E402
@@ -42,6 +44,24 @@ def _view(skill_suffix):
 
 def _run_cmd(cmdline):
     return {"name": "run_command", "args": {"CommandLine": _q(cmdline)}}
+
+
+class _FakeInvoker:
+    """`headless.RUNTIME_INVOKER` replacement: records every call and returns
+    canned responses (a `headless.ProcResult`, or a callable producing one)
+    in order. Raises if a test asks for more calls than it canned -- a
+    silent extra retry would otherwise read as a passing test."""
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def __call__(self, argv, cwd, timeout_s):
+        self.calls.append({"argv": list(argv), "cwd": str(cwd), "timeout_s": timeout_s})
+        if not self.responses:
+            raise AssertionError("_FakeInvoker ran out of canned responses")
+        resp = self.responses.pop(0)
+        return resp(argv, cwd, timeout_s) if callable(resp) else resp
 
 
 class SelfTest(unittest.TestCase):
@@ -613,6 +633,373 @@ class SelfTest(unittest.TestCase):
         (case_dir / "grade.ps1").write_text(
             f'param([string]$TargetDir)\nWrite-Host "{line}"\nexit {exit_code}\n', encoding="utf-8")
         return case_dir
+
+    # ======================================================================
+    # headless.py -- `run_suite.py run` (offline: RUNTIME_INVOKER is always
+    # replaced by a fake below; no `agy`/`claude` process is ever started)
+    # ======================================================================
+
+    def _patch_invoker(self, fake):
+        original = headless.RUNTIME_INVOKER
+        headless.RUNTIME_INVOKER = fake
+        self.addCleanup(lambda: setattr(headless, "RUNTIME_INVOKER", original))
+
+    def _patch_agy_cache_path(self, path):
+        original = headless.AGY_LAST_CONVERSATIONS_PATH
+        headless.AGY_LAST_CONVERSATIONS_PATH = path
+        self.addCleanup(lambda: setattr(headless, "AGY_LAST_CONVERSATIONS_PATH", original))
+
+    def _patch_headless_dirs(self):
+        """Redirects the two directories `headless.py` writes archives/quarantine
+        records to, so no self-test call ever touches the real `evals/results/`."""
+        orig_results, orig_transcripts = headless.RESULTS_DIR, headless.TRANSCRIPTS_DIR
+        headless.RESULTS_DIR = self.tmp / "headless-results"
+        headless.TRANSCRIPTS_DIR = self.tmp / "headless-transcripts"
+        self.addCleanup(lambda: setattr(headless, "RESULTS_DIR", orig_results))
+        self.addCleanup(lambda: setattr(headless, "TRANSCRIPTS_DIR", orig_transcripts))
+
+    # -- Go-duration formatting -----------------------------------------------
+
+    def test_headless_go_duration_formatting(self):
+        self.assertEqual(headless.to_go_duration(2700), "45m")
+        self.assertEqual(headless.to_go_duration(90), "1m30s")
+        self.assertEqual(headless.to_go_duration(45), "45s")
+        self.assertEqual(headless.to_go_duration(3661), "1h1m1s")
+        self.assertEqual(headless.to_go_duration(0), "0s")
+
+    # -- INFRA classification --------------------------------------------------
+
+    def test_headless_classify_infra_agy_permission_denied(self):
+        reason = headless.classify_infra(
+            "agy", 'jetski: no output produced -- a tool required the "command" permission '
+                   'that headless mode cannot prompt for, so it was auto-denied.', timed_out=False)
+        self.assertIn("permission_denied", reason)
+
+    def test_headless_classify_infra_empty_stdout(self):
+        self.assertIn("no output", headless.classify_infra("agy", "", timed_out=False))
+        self.assertIn("no output", headless.classify_infra("claude", "   ", timed_out=False))
+
+    def test_headless_classify_infra_timeout(self):
+        reason = headless.classify_infra("agy", "some real text", timed_out=True, timeout_s=60)
+        self.assertIn("60s timeout", reason)
+
+    def test_headless_classify_infra_claude_patterns(self):
+        self.assertIsNotNone(headless.classify_infra("claude", "API Error: Connection closed", timed_out=False))
+        self.assertIsNotNone(headless.classify_infra("claude", "This requires approval to run.", timed_out=False))
+        self.assertIsNone(headless.classify_infra("claude", "Here is the plan I made.", timed_out=False))
+
+    # -- handoff.txt / workspace lifecycle --------------------------------------
+
+    def test_headless_write_handoff_if_needed(self):
+        ws = self.tmp / "handoff-ws"
+        ws.mkdir()
+        self.assertFalse(headless.write_handoff_if_needed("claude", "handoff.txt", ws, "reply"))
+        self.assertFalse((ws / "handoff.txt").exists())
+        self.assertTrue(headless.write_handoff_if_needed("agy", "handoff.txt", ws, "reply text"))
+        self.assertEqual((ws / "handoff.txt").read_text(encoding="utf-8"), "reply text")
+        self.assertFalse(headless.write_handoff_if_needed("agy", None, ws, "reply text"))
+
+    def test_headless_maybe_delete_workspace(self):
+        ws_pass = self.tmp / "ws-pass"
+        ws_pass.mkdir()
+        headless._maybe_delete_workspace(ws_pass, "GRADED", True, keep_workspaces=False)
+        self.assertFalse(ws_pass.exists())
+
+        ws_fail = self.tmp / "ws-fail"
+        ws_fail.mkdir()
+        headless._maybe_delete_workspace(ws_fail, "GRADED", False, keep_workspaces=False)
+        self.assertTrue(ws_fail.exists())
+
+        ws_infra = self.tmp / "ws-infra"
+        ws_infra.mkdir()
+        headless._maybe_delete_workspace(ws_infra, "INFRA", None, keep_workspaces=False)
+        self.assertTrue(ws_infra.exists())
+
+        ws_keep = self.tmp / "ws-keep"
+        ws_keep.mkdir()
+        headless._maybe_delete_workspace(ws_keep, "GRADED", True, keep_workspaces=True)
+        self.assertTrue(ws_keep.exists())
+
+    # -- SUMMARY table -----------------------------------------------------------
+
+    def test_headless_print_summary_table(self):
+        rows = [
+            {"suite": "trigger", "case": "trigger-1", "run": 1, "runtime": "agy",
+             "outcome": "ROUTED_OK", "pass": True, "duration_s": 12.3, "failed_criterion": None},
+            {"suite": "contract", "case": "stub", "run": 1, "runtime": "claude",
+             "outcome": "GRADED", "pass": False, "duration_s": 45.0, "failed_criterion": "nope"},
+        ]
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            headless.print_summary(rows)
+        out = buf.getvalue()
+        self.assertIn("SUMMARY:", out)
+        self.assertIn("trigger-1", out)
+        self.assertIn("nope", out)
+
+    # -- claude stream-json trigger judging (port of Invoke-TriggerJudge's read path) --
+
+    @staticmethod
+    def _claude_skill_line(skill_name):
+        return json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Skill", "input": {"skill": skill_name}}]}})
+
+    def test_headless_claude_stream_trigger_judge_variants(self):
+        result_line = json.dumps({"type": "result", "result": "I would route this to bgpdd-bugfix."})
+
+        stream = "\n".join([self._claude_skill_line("bgpdd-bugfix"), result_line])
+        skills = headless.claude_skill_invocations(stream)
+        self.assertEqual(skills, ["bgpdd-bugfix"])
+        self.assertEqual(trigger.judge_outcome(skills, [], "bgpdd-bugfix", []), "ROUTED_OK")
+
+        stream = "\n".join([self._claude_skill_line("bgpdd-quick"), result_line])
+        skills = headless.claude_skill_invocations(stream)
+        self.assertEqual(trigger.judge_outcome(skills, [], "bgpdd-bugfix", []), "ROUTED_WRONG")
+        self.assertTrue(headless.claude_mentioned_only(stream, "bgpdd-bugfix", []))
+
+        stream = result_line
+        skills = headless.claude_skill_invocations(stream)
+        self.assertEqual(skills, [])
+        self.assertEqual(trigger.judge_outcome(skills, [], "bgpdd-bugfix", []), "NO_ROUTE")
+
+        stream = "\n".join([self._claude_skill_line("bg"), self._claude_skill_line("bgpdd-bugfix"), result_line])
+        skills = headless.claude_skill_invocations(stream)
+        self.assertEqual(trigger.judge_outcome(skills, ["bg", "bgpdd-bugfix"], "bg", []), "ROUTED_OK")
+
+        stream = "\n".join([self._claude_skill_line("bg"), self._claude_skill_line("bgpdd-quick"), result_line])
+        skills = headless.claude_skill_invocations(stream)
+        self.assertEqual(trigger.judge_outcome(skills, ["bg", "bgpdd-bugfix"], "bg", []), "ROUTED_WRONG")
+
+        stream = "\n".join([self._claude_skill_line("blackgoat-agentskills:bgpdd-plan"), result_line])
+        skills = headless.claude_skill_invocations(stream)
+        self.assertEqual(skills, ["bgpdd-plan"])
+
+    # -- installed-plugin provenance ------------------------------------------
+
+    def test_headless_installed_plugin_provenance_warns_on_mismatch(self):
+        fake_installed = self.tmp / "installed-plugin"
+        fake_installed.mkdir()
+        self._make_git_repo(fake_installed)
+        (fake_installed / "f.txt").write_text("x", encoding="utf-8")
+        import subprocess
+        subprocess.run(["git", "add", "-A"], cwd=str(fake_installed), capture_output=True, text=True)
+        subprocess.run(["git", "commit", "-q", "-m", "other"], cwd=str(fake_installed),
+                        capture_output=True, text=True)
+
+        info = headless.installed_plugin_info("agy", override_path=fake_installed)
+        self.assertIsNotNone(info["sha"])
+        harness_sha = common.eval_record.plugin_sha()
+        self.assertNotEqual(info["sha"], harness_sha)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            headless.print_installed_plugin_provenance(info)
+        out = buf.getvalue()
+        self.assertIn("installed plugin:", out)
+        self.assertIn(info["sha"], out)
+        # Deliberately NO warning on a sha mismatch: the installed tree may
+        # differ from the harness checkout on purpose.
+        self.assertNotIn("WARNING", out)
+
+    def test_headless_records_carry_installed_plugin_fields(self):
+        results_path = self.tmp / "results-installed-plugin-test.jsonl"
+        common.eval_record.append_runtime_trigger_record(
+            case="trigger-1", run_index=1, outcome="ROUTED_OK", first_skill="bgpdd-plan",
+            skills_invoked=["bgpdd-plan"], expected_chain=[], mentioned_only=False,
+            runtime="claude", model="claude-default", results_path=results_path,
+            installed_plugin_path="/x", installed_plugin_sha="deadbeef", installed_plugin_dirty=True,
+            judge="tool_use",
+        )
+        rec = json.loads(results_path.read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(rec["installed_plugin_sha"], "deadbeef")
+        self.assertTrue(rec["installed_plugin_dirty"])
+        self.assertEqual(rec["judge"], "tool_use")
+
+    # -- agy conversation attribution via last_conversations.json ----------------
+
+    def test_headless_resolve_agy_transcripts_prefers_mapping(self):
+        brain = self.tmp / "agy-brain"
+        workspace = self.tmp / "eval-runs" / "trigger-case-x-20260101T000000Z"
+        workspace.mkdir(parents=True)
+        t0 = common.parse_iso("2026-01-01T00:00:00Z")
+        window_start = common.format_iso(t0)
+        window_end = common.format_iso(t0 + timedelta(minutes=10))
+
+        # This conversation starts AFTER window_start, so find_run_transcripts'
+        # own "overlaps window_start" parent-inference rule would never pick
+        # it, and it never mentions the workspace either.
+        conv_id = "agy-conv-mapped"
+        steps = [
+            {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE",
+             "created_at": common.format_iso(t0 + timedelta(minutes=1)), "content": "do the thing"},
+            {"step_index": 1, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+             "created_at": common.format_iso(t0 + timedelta(minutes=2)), "content": "done"},
+        ]
+        _write_transcript(brain / conv_id, steps)
+
+        cache_path = self.tmp / "last_conversations.json"
+        cache_path.write_text(json.dumps({str(workspace): conv_id}), encoding="utf-8")
+
+        baseline = common.transcript_tools.find_run_transcripts(window_start, window_end, brain,
+                                                                  workspace=str(workspace))
+        self.assertIsNone(baseline["parent"])
+
+        resolved = headless.resolve_agy_transcripts(workspace, window_start, window_end, brain_root=brain,
+                                                      cache_path=cache_path)
+        self.assertIsNotNone(resolved["parent"])
+        self.assertEqual(resolved["parent"]["conversation_id"], conv_id)
+
+    def test_headless_run_one_agy_trigger_routed_ok_via_mapping(self):
+        self._patch_headless_dirs()
+        root = self.tmp / "agy-trigger-root"
+        root.mkdir()
+        brain = self.tmp / "agy-trigger-brain"
+        cache_path = self.tmp / "agy-trigger-cache" / "last_conversations.json"
+        conv_id = "agy-trigger-conv"
+        self._patch_agy_cache_path(cache_path)
+
+        def fake_invoke(argv, cwd, timeout_s):
+            now = common.utc_now_iso()
+            steps = [
+                {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE",
+                 "created_at": now, "content": "prompt"},
+                {"step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                 "created_at": now, "tool_calls": [_view("skills/bgpdd-plan/SKILL.md")]},
+            ]
+            _write_transcript(brain / conv_id, steps)
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(json.dumps({str(cwd): conv_id}), encoding="utf-8")
+            return headless.ProcResult(stdout="I'll use bgpdd-plan.", stderr="", returncode=0,
+                                        duration_s=3.0, timed_out=False)
+
+        self._patch_invoker(fake_invoke)
+        installed = {"path": None, "sha": None, "dirty": False}
+        row, was_infra = headless.run_one("agy", "trigger", "trigger-1", 1, root, 60, None, False,
+                                           True, False, brain, installed)
+        self.assertFalse(was_infra)
+        self.assertEqual(row["outcome"], "ROUTED_OK")
+        self.assertTrue(row["pass"])
+        self.assertFalse(Path(row["workspace"]).exists())  # PASS, not kept -> deleted
+
+    def test_headless_run_one_agy_permission_denied_retried_and_quarantined(self):
+        self._patch_headless_dirs()
+        root = self.tmp / "agy-infra-root"
+        root.mkdir()
+        jetski_text = ('jetski: no output produced -- a tool required the "command" permission '
+                       'that headless mode cannot prompt for, so it was auto-denied.')
+        invoker = _FakeInvoker([
+            lambda argv, cwd, t: headless.ProcResult(jetski_text, "", 0, 2.0, False),
+            lambda argv, cwd, t: headless.ProcResult(jetski_text, "", 0, 2.0, False),
+        ])
+        self._patch_invoker(invoker)
+        installed = {"path": None, "sha": None, "dirty": False}
+
+        row, was_infra = headless.run_one("agy", "trigger", "trigger-1", 1, root, 60, None, True,
+                                           True, True, self.tmp / "unused-brain", installed)
+        self.assertTrue(was_infra)
+        self.assertEqual(row["outcome"], "INFRA")
+        self.assertIsNone(row["pass"])
+        self.assertEqual(len(invoker.calls), 2)  # retried exactly once, never a third try
+        self.assertTrue(Path(row["workspace"]).exists())  # INFRA -> kept
+
+        invalid_path = headless.invalid_infra_path()
+        self.assertTrue(invalid_path.is_file())
+        lines = invalid_path.read_text(encoding="utf-8").strip().splitlines()
+        self.assertEqual(len(lines), 1)
+        rec = json.loads(lines[0])
+        self.assertEqual(rec["outcome"], "INFRA")
+        self.assertIsNone(rec["pass"])
+        self.assertEqual(rec["triage"], "INFRA")
+        self.assertTrue(rec["failed_criterion"].startswith("INFRA: permission_denied"))
+        self.assertFalse((headless.RESULTS_DIR / "results.jsonl").exists())
+
+    def test_headless_run_one_agy_empty_stdout_is_infra(self):
+        self._patch_headless_dirs()
+        root = self.tmp / "agy-empty-root"
+        root.mkdir()
+        invoker = _FakeInvoker([
+            lambda argv, cwd, t: headless.ProcResult("", "", 0, 1.0, False),
+            lambda argv, cwd, t: headless.ProcResult("", "", 0, 1.0, False),
+        ])
+        self._patch_invoker(invoker)
+        installed = {"path": None, "sha": None, "dirty": False}
+        row, was_infra = headless.run_one("agy", "trigger", "trigger-1", 1, root, 60, None, False,
+                                           True, True, self.tmp / "unused-brain-2", installed)
+        self.assertTrue(was_infra)
+        self.assertEqual(row["outcome"], "INFRA")
+        self.assertIn("no output", row["failed_criterion"])
+
+    def test_headless_run_one_agy_timeout_is_infra(self):
+        self._patch_headless_dirs()
+        root = self.tmp / "agy-timeout-root"
+        root.mkdir()
+        invoker = _FakeInvoker([
+            lambda argv, cwd, t: headless.ProcResult("", "", -1, float(t) + 60, True),
+            lambda argv, cwd, t: headless.ProcResult("", "", -1, float(t) + 60, True),
+        ])
+        self._patch_invoker(invoker)
+        installed = {"path": None, "sha": None, "dirty": False}
+        row, was_infra = headless.run_one("agy", "trigger", "trigger-1", 1, root, 30, None, False,
+                                           True, True, self.tmp / "unused-brain-3", installed)
+        self.assertTrue(was_infra)
+        self.assertEqual(row["outcome"], "INFRA")
+        self.assertIn("timeout", row["failed_criterion"])
+
+    # -- claude+contract parity: the prefix runs exactly once, never twice -------
+
+    def test_headless_claude_contract_parity_no_double_prefix(self):
+        self._patch_headless_dirs()
+        case = "bgpdd-bugfix-lane"  # has a git-init prefix and an Out-File handoff
+        root = self.tmp / "claude-contract-root"
+        root.mkdir()
+        calls = []
+
+        def fake_invoke(argv, cwd, timeout_s):
+            calls.append({"argv": list(argv), "cwd": Path(cwd)})
+            self.assertEqual(argv[0], "powershell.exe")
+            command_text = argv[-1]
+            self.assertIn("claude -p", command_text)
+            self.assertIn("bgpdd-bugfix", command_text)  # the case's own prompt text, verbatim
+            prefix, _prompt, handoff_to = contract.split_command(command_text)
+            # Runs ONLY the prefix for real (git setup -- no tokens spent);
+            # a double-run bug would make the second `git commit` here fail
+            # with "nothing to commit" (non-zero exit), which the assertion
+            # below catches.
+            proc = common.run_powershell_command(prefix, cwd=cwd)
+            self.assertEqual(proc.returncode, 0, f"stdout={proc.stdout}\nstderr={proc.stderr}")
+            if handoff_to:
+                (Path(cwd) / handoff_to).write_text("Fixed the bug.", encoding="utf-8")
+            # Above this case's 60s default minimum duration (contract.DEFAULT_MIN_DURATION)
+            # -- a faster "run" would classify INFRA and retry, running the prefix twice.
+            return headless.ProcResult("", "", 0, 65.0, False)
+
+        self._patch_invoker(fake_invoke)
+        installed = {"path": None, "sha": None, "dirty": False}
+        row, _was_infra = headless.run_one("claude", "contract", case, 1, root, 120, None, False,
+                                            True, True, None, installed)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue((Path(row["workspace"]) / ".git").is_dir())
+
+    # -- antigravity: the three transcript-judged cases are INFRA under claude ---
+
+    def test_headless_run_one_claude_antigravity_transcript_cases_are_infra(self):
+        self._patch_headless_dirs()
+        root = self.tmp / "claude-antigravity-root"
+        root.mkdir()
+        installed = {"path": None, "sha": None, "dirty": False}
+
+        def fake_invoke(argv, cwd, timeout_s):
+            return headless.ProcResult("I did the work as instructed.", "", 0, 5.0, False)
+
+        self._patch_invoker(fake_invoke)
+        for case in sorted(headless.CLAUDE_ANTIGRAVITY_TRANSCRIPT_CASES):
+            row, was_infra = headless.run_one("claude", "antigravity", case, 1, root, 60, None, False,
+                                               True, True, None, installed)
+            self.assertTrue(was_infra, case)
+            self.assertEqual(row["outcome"], "INFRA", case)
+            self.assertEqual(row["failed_criterion"],
+                              "INFRA: no Antigravity transcript under runtime claude", case)
+            self.assertTrue(Path(row["workspace"]).exists(), case)  # INFRA -> kept
 
 
 def run_self_test():
