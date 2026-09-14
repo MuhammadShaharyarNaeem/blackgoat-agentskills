@@ -528,7 +528,8 @@ def detect_report(root):
     try:
         proc = subprocess.run(
             [sys.executable, str(detector), "--repo", key, "--json"],
-            capture_output=True, text=True, timeout=120)
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=120)
         if proc.returncode == 0:
             parsed = json.loads(proc.stdout)
             if isinstance(parsed, dict):

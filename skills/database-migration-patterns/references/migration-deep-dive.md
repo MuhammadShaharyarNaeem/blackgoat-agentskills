@@ -33,8 +33,7 @@ Four deploys for one rename is the price of a rollout that never has a broken in
 
 ```bash
 # Generate the reviewable script (idempotent guards around each migration)
-dotnet ef migrations script --idempotent --from <PreviousMigration> --to <TargetMigration> \
-  --output .docs/<project>/implementation/evidence/migration/<name>.sql
+dotnet ef migrations script --idempotent --from <PreviousMigration> --to <TargetMigration> --output .docs/<project>/implementation/evidence/migration/<name>.sql
 
 # Inspect what the model diff actually produced before trusting it
 dotnet ef migrations list

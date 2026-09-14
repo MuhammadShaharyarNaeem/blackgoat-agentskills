@@ -232,16 +232,16 @@ WINDOW_HOURS_DEFAULT = 12
 
 # Tool names, by role. Matched exactly against `tool_name`; the host-side
 # matcher in hooks.json is a coarse pre-filter, this is the real check.
-BASH_TOOLS = ("Bash",)
-WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
-DELEGATION_TOOLS = ("Task", "Agent")
+BASH_TOOLS = ("Bash", "run_command")
+WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit", "write_to_file", "replace_file_content", "multi_replace_file_content")
+DELEGATION_TOOLS = ("Task", "Agent", "invoke_subagent", "send_message")
 
 # `tool_input` keys that can carry a target path. The published tool schemas
 # disagree between doc pages on whether MultiEdit puts `file_path` at the top
 # level or inside each `edits[]` entry, so this collects BOTH rather than
 # betting on one shape -- guessing wrong would be a silent hole in rules 2
 # and 4, which is the one failure this guard cannot afford.
-PATH_KEYS = ("file_path", "notebook_path", "path", "filePath", "file")
+PATH_KEYS = ("file_path", "notebook_path", "path", "filePath", "file", "TargetFile", "AbsolutePath", "target_file", "absolute_path")
 
 TEST_DIR_SEGMENTS = ("tests", "test", "__tests__", "spec")
 TEST_FILE_PATTERNS = (
@@ -609,7 +609,7 @@ def normalize_payload(payload):
 
 
 def command_of(tool_input):
-    value = tool_input.get("command")
+    value = tool_input.get("command") or tool_input.get("CommandLine") or tool_input.get("cmd")
     return value if isinstance(value, str) else ""
 
 
@@ -942,6 +942,23 @@ def read_stdin():
     fails OPEN -- a deny silently becoming an allow. Caught by
     `test_42_bom_prefixed_stdin_still_denies`.
     """
+    if hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
+        return ""
+    if sys.platform == "win32":
+        try:
+            import msvcrt
+            import ctypes
+            from ctypes import wintypes
+            handle = msvcrt.get_osfhandle(sys.stdin.fileno())
+            avail = wintypes.DWORD()
+            res = ctypes.windll.kernel32.PeekNamedPipe(handle, None, 0, None, ctypes.byref(avail), None)
+            if res and avail.value == 0:
+                time.sleep(0.05)
+                ctypes.windll.kernel32.PeekNamedPipe(handle, None, 0, None, ctypes.byref(avail), None)
+                if avail.value == 0:
+                    return ""
+        except Exception:
+            pass
     try:
         data = sys.stdin.buffer.read()
     except AttributeError:  # a text-only stdin (tests, some embedders)

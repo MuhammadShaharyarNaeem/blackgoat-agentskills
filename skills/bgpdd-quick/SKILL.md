@@ -92,12 +92,7 @@ python {PLUGIN_ROOT}/pipeline-tools/scripts/check_test_authenticity.py --repo . 
 Principle: `test-driven-development/SKILL.md` § Rules — not restated here. Exit 0 = proceed; cite the ledger entry in the `## Result` bullet (§1). Exit 1 = the one round §1 allows — fix and re-run. Exit 2 = artifact defect. **`pipeline_driver.py` does not emit this step yet** — nothing enforces remembering it.
 
 ```bash
-python {PLUGIN_ROOT}/pipeline-tools/scripts/check_quick_close.py \
-    --note {quick-root}/note.md --capture {quick-root}/evidence/check.md \
-    --changed-files <paths> --repo . --max-changed-files 3 \
-    --frozen '<glob>' [--frozen '<glob>']... \
-    --milestone "{slug}" --ledger {quick-root}/gates.jsonl \
-    --commit --message "<msg>"
+python {PLUGIN_ROOT}/pipeline-tools/scripts/check_quick_close.py --note {quick-root}/note.md --capture {quick-root}/evidence/check.md --changed-files <paths> --repo . --max-changed-files 3 --frozen '<glob>' [--frozen '<glob>']... --milestone "{slug}" --ledger {quick-root}/gates.jsonl --commit --message "<msg>"
 ```
 
 **Pass Phase 0's `test_path_globs`, one `--frozen` per glob** (`tests/**`, `**/*.spec.ts`; a value with no `*`/`?`/`[` is a directory prefix). **The gate holds no default and must not**: a guessed freeze that misses is indistinguishable from a change with no test to protect. Adding a test passes.

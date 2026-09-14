@@ -407,7 +407,7 @@ def sidecar_body_disagreement(text, meta):
 def run_git(args, repo):
     try:
         proc = subprocess.run(["git"] + args, cwd=repo, capture_output=True,
-                              text=True, timeout=240)
+                              text=True, encoding="utf-8", errors="replace", timeout=240)
     except (OSError, subprocess.SubprocessError) as exc:
         raise GateError("git could not be run in {0}: {1}".format(repo, exc))
     if proc.returncode != 0:
@@ -1059,7 +1059,8 @@ def run_self_test():
 
         def _git(self, *args):
             proc = subprocess.run(["git"] + list(args), cwd=str(self.repo),
-                                  capture_output=True, text=True, timeout=240)
+                                  capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", timeout=240)
             if proc.returncode != 0:
                 raise AssertionError("git {0}: {1}".format(
                     args, proc.stderr or proc.stdout))

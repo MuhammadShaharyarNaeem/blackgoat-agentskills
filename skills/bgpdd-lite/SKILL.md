@@ -70,15 +70,7 @@ This pipeline's only refinement on the skeleton's Error Recovery section: the ar
   4. The user confirms the file before you proceed to Phase 2.
   5. **Initialize state the moment the user confirms — deliberately earlier than the Phase 3 write this replaces (convention #8).** Record the artifacts that do not yet exist as `null`. Why here and not Phase 3: `references/lite-rationale.md` § Initializing state at Phase 1.
      ```bash
-     python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py \
-       --state .docs/{project-name}/orchestrator-state.json \
-       --init --project-name "{project-name}" \
-       --set-pipeline bgpdd-lite \
-       --set-feature <feature|null> \
-       --set-artifact requirements=.docs/{project-name}/requirements.md \
-       --set-artifact plan=null \
-       --set-artifact design=null \
-       --set-artifact acceptance_matrix=null
+     python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --init --project-name "{project-name}" --set-pipeline bgpdd-lite --set-feature <feature|null> --set-artifact requirements=.docs/{project-name}/requirements.md --set-artifact plan=null --set-artifact design=null --set-artifact acceptance_matrix=null
      ```
      Phase 3 then **updates** this file (cursor and the artifacts Alex produced); it does not re-init it.
 

@@ -44,7 +44,7 @@ Compress into an evidence brief of at most 15 bullets: what happened, which skil
 
 **Record confirmations, not only failures.** A decision or rule that a later phase confirmed worked cleanly is evidence too — it identifies which rules are earning their keep and must be protected from future pruning or "simplification". Include at least the confirmations you have evidence for: designs that built and tested first time, gates that caught a real defect, rules whose presence visibly prevented a class of error. An evidence brief composed only of failures teaches the next optimization pass to delete the rules that were quietly working, and gives Forge no way to distinguish a load-bearing rule from dead weight.
 
-**Transcript access:** if the runtime persists session transcripts as files (Claude Code: `~/.claude/projects/<project-slug>/<session-id>.jsonl`), resolve the current session's transcript path and pass it to Forge alongside the brief. The brief remains the always-available fallback.
+**Transcript access:** if the runtime persists session transcripts as files (Claude Code: `~/.claude/projects/<project-slug>/<session-id>.jsonl`, Antigravity: `<appDataDir>/brain/<conversation-id>/.system_generated/logs/transcript.jsonl`), resolve the current session's transcript path and pass it to Forge alongside the brief. The brief remains the always-available fallback.
 
 ### Step 2: DELEGATE (Forge — Learning Triage mode)
 

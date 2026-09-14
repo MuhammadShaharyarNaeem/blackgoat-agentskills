@@ -87,10 +87,7 @@ An empty consumer list is a finding, not a green light: either the API has no ca
 **Run the diff gate. Do not read the two documents side by side and conclude.**
 
 ```bash
-python {PLUGIN_ROOT}/pipeline-tools/scripts/check_openapi_diff.py \
-    --base <the contract document as published> \
-    --head <the contract document as proposed> \
-    [--allow-breaking "<reason>"] [--milestone "<title>"] [--ledger <path>]
+python {PLUGIN_ROOT}/pipeline-tools/scripts/check_openapi_diff.py --base <the contract document as published> --head <the contract document as proposed> [--allow-breaking "<reason>"] [--milestone "<title>"] [--ledger <path>]
 ```
 
 - Exit **0** every difference is additive; **1** the `breaking` array names each class, location and detail; **2** a document is missing, unreadable, or YAML outside the gate's supported subset.

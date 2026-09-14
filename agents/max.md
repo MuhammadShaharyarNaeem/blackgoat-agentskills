@@ -17,9 +17,6 @@ tools:
     - list_dir
     - read_url_content
     - search_web
-    - schedule
-    - generate_image
-    - multi_replace_file_content
     - replace_file_content
     - write_to_file
     - run_command

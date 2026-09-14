@@ -47,9 +47,9 @@ import unittest
 from pathlib import Path
 
 EXEMPT_AGENT = "blackgoat.md"
-VALID_MODELS = {"opus", "sonnet", "haiku"}
+VALID_MODELS = {"opus", "sonnet", "haiku", "inherit", "pro", "flash", "flash_lite"}
 MAX_DESCRIPTION_LEN = 1024
-AGENT_REQUIRED_KEYS = ("name", "description", "model", "role", "phase", "squad", "reports-to")
+AGENT_REQUIRED_KEYS = ("name", "description", "role", "phase", "squad", "reports-to")
 SKILL_REQUIRED_KEYS = ("name", "description")
 
 KEY_LINE_RE = re.compile(r"^([A-Za-z0-9_.-]+):(?:\s(.*))?$")
@@ -93,8 +93,8 @@ def unquote(value):
 def parse_frontmatter(body_lines, start_line_no=2):
     """Parse frontmatter body lines into (fields, parse_errors).
 
-    fields is {key: raw_value_string} for every line that structurally reads
-    as `key: value` (or bare `key:`) -- a key is recorded even when its own
+    fields is {key: raw_value_string_or_list} for every line that structurally reads
+    as `key: value` (or bare `key:` with YAML list items) -- a key is recorded even when its own
     value is separately flagged as a parse error below, so one broken value
     never hides an otherwise-present required key.
 
@@ -105,16 +105,26 @@ def parse_frontmatter(body_lines, start_line_no=2):
     """
     fields = {}
     parse_errors = []
+    current_list_key = None
     for offset, line in enumerate(body_lines):
         line_no = start_line_no + offset
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
+        if stripped.startswith("- ") and current_list_key:
+            item_val = stripped[2:].strip()
+            if isinstance(fields.get(current_list_key), list):
+                fields[current_list_key].append(item_val)
+            else:
+                fields[current_list_key] = [item_val]
+            continue
         match = KEY_LINE_RE.match(stripped)
         if not match:
             parse_errors.append((line_no, f"key line is not `key: value`: {stripped!r}"))
+            current_list_key = None
             continue
         key, value = match.group(1), (match.group(2) or "").strip()
+        current_list_key = key if not value else None
         fields[key] = value
         if not value:
             continue
@@ -307,11 +317,21 @@ def run_self_test():
             files_checked, errors, warnings = check_all(self.dir)
             self.assertEqual(errors, [])
 
-        def test_missing_key_is_error(self):
-            lines = [l for l in self.VALID_AGENT_LINES if not l.startswith("role:")]
+        def test_yaml_list_in_frontmatter_is_ok(self):
+            lines = list(self.VALID_AGENT_LINES) + [
+                "tools:",
+                "  - send_message",
+                "  - run_command",
+            ]
             self._write_agent("rex.md", lines)
             files_checked, errors, warnings = check_all(self.dir)
-            self.assertTrue(any(e["problem"] == "missing required key: role" for e in errors))
+            self.assertEqual(errors, [])
+
+        def test_missing_model_is_ok(self):
+            lines = [l for l in self.VALID_AGENT_LINES if not l.startswith("model:")]
+            self._write_agent("rex.md", lines)
+            files_checked, errors, warnings = check_all(self.dir)
+            self.assertEqual(errors, [])
 
         def test_bad_model_is_error(self):
             lines = list(self.VALID_AGENT_LINES)

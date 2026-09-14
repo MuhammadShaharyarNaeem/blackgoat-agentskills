@@ -463,7 +463,8 @@ def previous_for(previous, root, artifact, warnings):
 
 
 def build_report(summary_root, repos, feature=None, today=None,
-                 verify_current=False, allow_drift=None, previous=None):
+                 verify_current=False, allow_drift=None, previous=None,
+                 context_only=False):
     root = Path(summary_root)
     if not root.is_dir():
         raise GateError(f"--summary-root is not a directory: {summary_root}")
@@ -482,17 +483,20 @@ def build_report(summary_root, repos, feature=None, today=None,
                    today, verify_current,
                    previous_for(previous_path, root, context, warnings))
 
-    if feature:
-        features = [feature]
+    if not context_only:
+        if feature:
+            features = [feature]
+        else:
+            features = sorted(p.name for p in root.iterdir()
+                              if p.is_dir() and not p.name.startswith("."))
+        for name in features:
+            overview = root / name / FEATURE_ARTIFACT
+            checked.append(str(overview))
+            check_artifact(overview, repos, findings, warnings, drift,
+                           f"Tier-1 feature '{name}'", today, verify_current,
+                           previous_for(previous_path, root, overview, warnings))
     else:
-        features = sorted(p.name for p in root.iterdir()
-                          if p.is_dir() and not p.name.startswith("."))
-    for name in features:
-        overview = root / name / FEATURE_ARTIFACT
-        checked.append(str(overview))
-        check_artifact(overview, repos, findings, warnings, drift,
-                       f"Tier-1 feature '{name}'", today, verify_current,
-                       previous_for(previous_path, root, overview, warnings))
+        features = []
 
     waived = []
     if verify_current and allow_drift:
@@ -528,6 +532,8 @@ def main(argv):
     parser.add_argument("--summary-root", default=".docs/summary",
                         help="Tier-1 knowledge base root (default .docs/summary)")
     parser.add_argument("--feature", help="check only this feature's overview.md")
+    parser.add_argument("--context-only", action="store_true",
+                        help="check only context.md (Phase 1 gate in brownfield workspaces)")
     parser.add_argument("--repo", action="append", default=[],
                         help="in-scope repository as [<name>=]<path>; repeat "
                              "once per repo on a multi-repo Target Scope")
@@ -585,7 +591,8 @@ def main(argv):
         report = build_report(args.summary_root, repos, args.feature,
                               verify_current=args.verify_current,
                               allow_drift=args.allow_drift,
-                              previous=args.previous)
+                              previous=args.previous,
+                              context_only=args.context_only)
     except GateError as exc:
         print(json.dumps({"result": "ERROR", "error": str(exc)}))
         return finish(2, "ERROR")

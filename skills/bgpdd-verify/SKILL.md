@@ -104,15 +104,7 @@ The sections below carry ONLY this pipeline's refinements on top of that contrac
   3. **Game tape**: append a `## bgpdd-verify — [date]` section to `.docs/{project-name}/implementation/game-tape.md` (create if absent) — at most 10 bullets: scope chosen, gate results as verbatim command + captured output tail, findings raised, BLOCKED verifications, retry rounds and why.
   4. **State persistence** via `update_state.py` — never hand-edit JSON:
      ```bash
-     python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py \
-       --state .docs/{project-name}/orchestrator-state.json \
-       --init --project-name "{project-name}" \
-       --set-pipeline bgpdd-verify \
-       --set-feature {feature} \
-       --set-artifact acceptance_matrix=.docs/{project-name}/acceptance-matrix.md \
-       --set-artifact requirements=null \
-       --set-artifact design=null \
-       --set-artifact plan=null
+     python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --init --project-name "{project-name}" --set-pipeline bgpdd-verify --set-feature {feature} --set-artifact acceptance_matrix=.docs/{project-name}/acceptance-matrix.md --set-artifact requirements=null --set-artifact design=null --set-artifact plan=null
      ```
      Append `--add-blocker` entries for environment blocks and BLOCKED verifications (not for product-defect findings — those are output, routed in step 2, and live in the results artifact). **A blocker write carries `--ledger .docs/{project-name}/implementation/gates.jsonl`** — parity with `bgpdd-shipping` and `bgpdd-plan`, which 2.5.0 gave the flag and this lane was skipped; the `--init` call above does not, being a state writer and not a gate.
   4b. **Commit Quinn's specs — by hand, here, and nowhere else.** Her permanent spec files are this lane's only durable product-repo output and **no gate here can commit them**: `check_commit_gate.py` requires a `## Review:` verdict and there is no Luna to write one (§1). So, **a deliberate divergence (convention #8) from `always-on.md` rule 3's "inside a lane the lane's gate commits"**: after step 4, commit her `<changed_files>` yourself on the current branch, citing the Phase 3 acceptance gate's PASS in the message (its `gates.jsonl` milestone and verdict). The guard hook carries a verify-lane exemption for exactly this commit; only her spec files go in it, and a deny is relayed and obeyed, never worked around.

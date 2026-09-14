@@ -673,7 +673,7 @@ def check_blockers(state_path, milestone, ignore_unscoped):
 
 def run_git(args, repo):
     proc = subprocess.run(["git"] + args, cwd=repo, capture_output=True,
-                          text=True, timeout=240)
+                          text=True, encoding="utf-8", errors="replace", timeout=240)
     if proc.returncode != 0:
         raise GateError(f"git {' '.join(args[:1])} failed: "
                         f"{(proc.stderr or proc.stdout).strip()}")
@@ -1185,7 +1185,8 @@ def run_runtime_gate(args, resolved_changed_files):
         cmd += ["--allow-missing-sidecar"]
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=240)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise GateError(f"cannot run the runtime-evidence gate: {exc}")
     try:

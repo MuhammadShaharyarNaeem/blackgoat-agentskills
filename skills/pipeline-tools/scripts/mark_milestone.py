@@ -322,7 +322,8 @@ def check_commit_exists(repo, milestone):
         proc = subprocess.run(
             ["git", "log", "--fixed-strings", f"--grep={milestone}",
              "--format=%H"],
-            cwd=repo, capture_output=True, text=True, timeout=240)
+            cwd=repo, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=240)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise GateError(f"cannot run git in {repo}: {exc}")
     if proc.returncode != 0:
@@ -857,7 +858,7 @@ def run_self_test():
 
     def git(args, repo):
         proc = subprocess.run(["git"] + args, cwd=repo, capture_output=True,
-                              text=True, timeout=240)
+                              text=True, encoding="utf-8", errors="replace", timeout=240)
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout)
         return proc.stdout
@@ -1272,7 +1273,8 @@ def run_self_test():
             if nm.is_file():
                 proc = subprocess.run(
                     [sys.executable, str(nm), "--plan", str(self.plan)],
-                    capture_output=True, text=True, timeout=240)
+                    capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=240)
                 data = json.loads(proc.stdout)
                 self.assertEqual(data["result"], "NEXT")
                 self.assertTrue(

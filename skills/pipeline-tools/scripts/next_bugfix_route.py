@@ -347,7 +347,8 @@ def run_intake_gate(report_path):
         raise GateError(f"intake gate not found at {INTAKE_GATE}")
     cmd = [sys.executable, str(INTAKE_GATE), "--report", str(report_path)]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=240)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise GateError(f"cannot run the intake gate: {exc}")
     try:

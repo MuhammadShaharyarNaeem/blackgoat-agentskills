@@ -450,7 +450,8 @@ def git_changed_since(repo, ref):
                  ["ls-files", "--others", "--exclude-standard"]):
         try:
             proc = subprocess.run(["git", "-C", str(repo)] + args,
-                                  capture_output=True, text=True, timeout=120)
+                                  capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", timeout=120)
         except FileNotFoundError:
             raise GateError("git executable not found; --since cannot be checked")
         except subprocess.TimeoutExpired:
@@ -955,7 +956,8 @@ def run_self_test():
 
         def run_git(self, *args):
             return subprocess.run(["git", "-C", str(self.dir)] + list(args),
-                                  capture_output=True, text=True, timeout=120)
+                                  capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", timeout=120)
 
         def make_repo(self):
             try:
@@ -1350,7 +1352,8 @@ def run_self_test():
         def _init_repo(self, repo):
             def run(*args):
                 return subprocess.run(["git", "-C", str(repo)] + list(args),
-                                      capture_output=True, text=True, timeout=120)
+                                      capture_output=True, text=True,
+                                      encoding="utf-8", errors="replace", timeout=120)
             try:
                 if run("init", "-q").returncode != 0:
                     self.skipTest("git init failed")

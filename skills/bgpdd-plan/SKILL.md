@@ -156,15 +156,7 @@ The illustrative file-by-file trees for both tiers, and the phase-transition han
   2. This evidence feeds the SINGLE end-of-epic Forge run in `bgpdd-shipping` Step 7 — do NOT delegate Forge here. If this run went badly enough that lessons should not wait for the epic to ship, offer the user an on-demand `/bgpdd-learn` run now instead.
   3. **State Persistence**: Before concluding, write orchestrator state via `update_state.py` — never hand-edit JSON. Schema authority is `update_state.py` (schema version string `"1"`). Its `--init` may already be a no-op here (Phase 3.6 writes the state file first when it records a manifest or a capability blocker) — the warning is expected, and the entries Phase 3.6 wrote are preserved. If Python is unavailable: HALT and surface the missing interpreter.
      ```bash
-     python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py \
-       --state .docs/{project-name}/orchestrator-state.json \
-       --init --project-name "{project-name}" \
-       --set-pipeline bgpdd-plan \
-       --set-feature <feature|null> \
-       --set-artifact requirements=.docs/{project-name}/requirements.md \
-       --set-artifact design=.docs/{project-name}/design/detailed-design.md \
-       --set-artifact plan=.docs/{project-name}/implementation/plan.md \
-       --set-artifact acceptance_matrix=.docs/{project-name}/acceptance-matrix.md
+     python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --init --project-name "{project-name}" --set-pipeline bgpdd-plan --set-feature <feature|null> --set-artifact requirements=.docs/{project-name}/requirements.md --set-artifact design=.docs/{project-name}/design/detailed-design.md --set-artifact plan=.docs/{project-name}/implementation/plan.md --set-artifact acceptance_matrix=.docs/{project-name}/acceptance-matrix.md
      ```
      Field notes: `feature` is the Tier-1 durable feature id from `.docs/summary/{feature}/` (`null` for greenfield). `pipeline` is the last pipeline that wrote the state. `milestone_cursor` and `branch` stay `null` until `bgpdd-build` owns them. The resulting state shape is documented in `references/plan-rationale.md` § The `orchestrator-state.json` shape — documentation only; never hand-write that JSON.
   4. Prompt the user to open a new chat session and trigger `/bgpdd-build` to execute the code.

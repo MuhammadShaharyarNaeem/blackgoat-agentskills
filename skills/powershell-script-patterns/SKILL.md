@@ -36,7 +36,7 @@ When the script lives inside a host-language string (e.g. a C# string literal, a
 
 ### Execution Testing — Never Validate by Reading Alone
 
-- Run the script: `powershell -NonInteractive -File <scratch>.ps1 [params]` (use `pwsh` if the script targets PowerShell 7+).
+- Run the script: `powershell -NonInteractive -ExecutionPolicy Bypass -File <scratch>.ps1 [params]` (use `pwsh -NonInteractive -ExecutionPolicy Bypass -File <scratch>.ps1 [params]` if the script targets PowerShell 7+).
 - Capture stdout, stderr, AND the exit code. Clean-looking output with a nonzero exit code is a failure.
 - Iterate on real errors until the script runs clean, or fails only for an expected environmental reason you can name (requires elevation, a target machine, a domain join). If you could not execute it at all, state that explicitly in your handoff — never report a read-only review as "tested".
 - If the script has destructive side effects (deletes, service/registry changes), test through a dry-run or `-WhatIf` path, or stub the destructive step; state in your handoff which paths executed for real.

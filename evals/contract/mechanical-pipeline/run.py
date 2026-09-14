@@ -1206,27 +1206,19 @@ def run_lifecycle(repo):
                   "--tokens-total", "100"]
     producer = run_py(RECORD_RUN, log_common + ["--agent", "mason",
                                                 "--model", "claude-opus-4-1"])
-    typo = run_py(RECORD_RUN, log_common + ["--agent", "luna",
-                                            "--model", "gpt-4o"])
+    non_claude = run_py(RECORD_RUN, log_common + ["--agent", "mason", "--rounds", "2",
+                                                  "--model", "gpt-4o"])
     inversion = run_py(RECORD_RUN, log_common + ["--agent", "luna",
                                                  "--model", "haiku"])
-    typo_data = None
-    try:
-        typo_data = json.loads(typo.stdout)
-    except ValueError:
-        pass
     lines = [json.loads(l) for l in
              run_log.read_text(encoding="utf-8").splitlines() if l.strip()]
-    ok = (producer.returncode == 0 and typo.returncode == 2
-          and typo_data is not None
-          and typo_data.get("problem") == "model_unknown"
+    ok = (producer.returncode == 0 and non_claude.returncode == 0
           and inversion.returncode == 1
-          # The producer record is the only one written: the typo wrote
-          # nothing, and the inversion was refused before the write.
-          and [r.get("agent") for r in lines] == ["mason"])
-    record("20. record_run: an unresolvable --model is exit 2 (model_unknown), "
+          # The producer and round-2 non-claude records are written; inversion was refused
+          and [r.get("agent") for r in lines] == ["mason", "mason"])
+    record("20. record_run: a non-Claude --model records with tier null, "
            "and the inversion check still fires after it", ok,
-           "" if ok else f"producer={producer.returncode} typo={typo.returncode} "
+           "" if ok else f"producer={producer.returncode} non_claude={non_claude.returncode} "
                          f"inversion={inversion.returncode} log={lines!r}")
 
     # 20b: dep is a producer, so a verifier below Dep is the same inversion.
@@ -1240,63 +1232,50 @@ def run_lifecycle(repo):
     record("20b. record_run: a verifier below `dep` is an inversion -> exit 1",
            ok, "" if ok else f"dep={dep.returncode} vera={below.returncode}")
 
-    # 20c-20g: --tier for a non-Claude --model, --model inherit, and the
-    # mandatory-tokens family (including --tokens-unavailable and its
-    # contradiction refusal against a real token figure).
+    # 20c-20g: optional tokens on delegation, --model inherit, and tokens contradiction refusal.
     gate_log = impl_dir / "run-log-token-gate.jsonl"
     gate_common = ["--log", gate_log, "--pipeline", "bgpdd-build",
                    "--phase", "Phase 2", "--event", "delegation",
                    "--unit", MILESTONE2_TITLE, "--agent", "mason"]
 
     no_tokens = run_py(RECORD_RUN, gate_common + ["--model", "opus"])
-    no_tokens_data = None
-    try:
-        no_tokens_data = json.loads(no_tokens.stdout)
-    except ValueError:
-        pass
-    ok = (no_tokens.returncode == 2 and no_tokens_data is not None
-          and no_tokens_data.get("problem") == "tokens_missing"
-          and not gate_log.exists())
-    record("20c. record_run: a delegation with no token form is exit 2 "
-           "(tokens_missing), and nothing is written", ok,
-           "" if ok else f"exit={no_tokens.returncode} data={no_tokens_data!r} "
-                         f"log_exists={gate_log.exists()}")
+    gate_lines_no_tokens = [json.loads(l) for l in
+                            gate_log.read_text(encoding="utf-8").splitlines() if l.strip()]
+    ok = (no_tokens.returncode == 0 and gate_log.exists()
+          and len(gate_lines_no_tokens) == 1
+          and gate_lines_no_tokens[0].get("tokens_total") is None)
+    record("20c. record_run: a delegation with no token form records with tokens null", ok,
+           "" if ok else f"exit={no_tokens.returncode} log={gate_lines_no_tokens!r}")
 
     inherit = run_py(RECORD_RUN, gate_common + [
-        "--model", "inherit", "--tokens-total", "100"])
-    inherit_data = None
-    try:
-        inherit_data = json.loads(inherit.stdout)
-    except ValueError:
-        pass
-    ok = (inherit.returncode == 2 and inherit_data is not None
-          and inherit_data.get("problem") == "model_inherit")
-    record("20d. record_run: --model inherit is exit 2 (model_inherit)", ok,
-           "" if ok else f"exit={inherit.returncode} data={inherit_data!r}")
+        "--model", "inherit", "--rounds", "2", "--tokens-total", "100"])
+    gate_lines_inherit = [json.loads(l) for l in
+                          gate_log.read_text(encoding="utf-8").splitlines() if l.strip()]
+    ok = (inherit.returncode == 0 and len(gate_lines_inherit) == 2
+          and gate_lines_inherit[1].get("model") == "inherit"
+          and gate_lines_inherit[1].get("tier") is None)
+    record("20d. record_run: --model inherit records cleanly with tier null", ok,
+           "" if ok else f"exit={inherit.returncode} log={gate_lines_inherit!r}")
 
     gemini_no_tier = run_py(RECORD_RUN, gate_common + [
-        "--model", "gemini-3.8-flash", "--tokens-total", "100"])
-    gemini_no_tier_data = None
-    try:
-        gemini_no_tier_data = json.loads(gemini_no_tier.stdout)
-    except ValueError:
-        pass
-    ok = (gemini_no_tier.returncode == 2 and gemini_no_tier_data is not None
-          and gemini_no_tier_data.get("problem") == "model_unknown")
-    record("20e. record_run: a non-Claude --model with no --tier is exit 2 "
-           "(model_unknown)", ok,
-           "" if ok else f"exit={gemini_no_tier.returncode} "
-                         f"data={gemini_no_tier_data!r}")
+        "--model", "gemini-3.8-flash", "--rounds", "3", "--tokens-total", "100"])
+    gate_lines_gemini = [json.loads(l) for l in
+                         gate_log.read_text(encoding="utf-8").splitlines() if l.strip()]
+    ok = (gemini_no_tier.returncode == 0 and len(gate_lines_gemini) == 3
+          and gate_lines_gemini[2].get("model") == "gemini-3.8-flash"
+          and gate_lines_gemini[2].get("tier") is None)
+    record("20e. record_run: a non-Claude --model with no --tier records with tier null", ok,
+           "" if ok else f"exit={gemini_no_tier.returncode} log={gate_lines_gemini!r}")
 
     gemini_with_tier = run_py(RECORD_RUN, gate_common + [
-        "--model", "gemini-3.8-flash", "--tier", "opus",
+        "--model", "gemini-3.8-flash", "--tier", "opus", "--rounds", "4",
         "--tokens-unavailable", "antigravity: no usage payload"])
     gate_lines = [json.loads(l) for l in
                   gate_log.read_text(encoding="utf-8").splitlines() if l.strip()]
-    ok = (gemini_with_tier.returncode == 0 and len(gate_lines) == 1
-          and gate_lines[0].get("tier") == "opus"
-          and gate_lines[0].get("model") == "gemini-3.8-flash"
-          and gate_lines[0].get("tokens_unavailable") ==
+    ok = (gemini_with_tier.returncode == 0 and len(gate_lines) == 4
+          and gate_lines[3].get("tier") == "opus"
+          and gate_lines[3].get("model") == "gemini-3.8-flash"
+          and gate_lines[3].get("tokens_unavailable") ==
               "antigravity: no usage payload")
     record("20f. record_run: a non-Claude --model with --tier and "
            "--tokens-unavailable records verbatim", ok,
@@ -1304,7 +1283,7 @@ def run_lifecycle(repo):
                          f"log={gate_lines!r}")
 
     contradiction = run_py(RECORD_RUN, gate_common + [
-        "--model", "opus", "--tokens-total", "9",
+        "--model", "opus", "--rounds", "5", "--tokens-total", "9",
         "--tokens-unavailable", "x: y"])
     contradiction_data = None
     try:
@@ -1316,8 +1295,8 @@ def run_lifecycle(repo):
                         if l.strip()]
     ok = (contradiction.returncode == 2 and contradiction_data is not None
           and contradiction_data.get("problem") == "tokens_contradiction"
-          # still just the one record from 20f -- nothing new written
-          and len(gate_lines_after) == 1)
+          # still just the four records -- nothing new written
+          and len(gate_lines_after) == 4)
     record("20g. record_run: --tokens-total with --tokens-unavailable is "
            "exit 2 (tokens_contradiction)", ok,
            "" if ok else f"exit={contradiction.returncode} "
