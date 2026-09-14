@@ -1,0 +1,6 @@
+# The eval harness pipes the agent's reply into handoff.txt inside this working
+# copy, and a --verify-tree gate rightly refuses to commit around an undeclared
+# file. Ignored files do not appear in `git status --porcelain`, so this keeps
+# the harness's own artifact out of the lane's tree check (run 1, 2026-09-03).
+handoff.txt
+node_modules/

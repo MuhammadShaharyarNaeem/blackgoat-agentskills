@@ -150,3 +150,72 @@ def append_script_record(case, passed, failed_criterion=None, duration_s=None,
         return None
     print(f"RECORDED: {target.name} <- {json.dumps(record)}")
     return record
+
+
+def append_antigravity_record(case, run_index, passed, runtime="antigravity",
+                              model="gemini-3.8-flash", failed_criterion=None,
+                              metrics=None, outcome=None, triage=None,
+                              duration_s=None, results_path=None, case_path=None):
+    """Append one flat `evals/antigravity/` run record, sibling to `append_script_record`.
+
+    Additive only: every field `append_script_record` writes is written here
+    too (`case_sha256` hashes `evals/antigravity/cases/<case>/case.md` by
+    convention instead of a `run.py`, since an antigravity case has no
+    zero-LLM `run.py` -- pass `case_path` to override), plus two fields no
+    existing reader looks for: `runtime` and `model`. `judge` is always
+    `"harness"` (distinct from the existing `"tool_use"`/`"script"` values --
+    an antigravity grade is neither a `claude -p` tool-use judge nor a
+    zero-LLM script case; it is a Python grader reading transcripts + a
+    workspace). `run-evals.ps1` never reads this file's `runtime`/`judge`
+    values, so its own pass-rate pooling for contract/trigger cases is
+    unaffected -- see evals/antigravity/README.md for how a reader is
+    expected to pool these records (never mixed with `judge: "tool_use"` or
+    `judge: "script"` rows for a same-named case; no name collision exists
+    today because every antigravity case name is new).
+
+    `outcome` should be `"GRADED"` or `"INFRA"` (INFRA when the window had no
+    transcript or the workspace had no artifact at all -- same rule as the
+    rest of the suite; `pass` must be `None` on an INFRA record). `metrics` is
+    an arbitrary JSON-safe dict the case's grader produced; stored verbatim.
+    """
+    record = {
+        "timestamp": utc_timestamp(),
+        "case": case,
+        "run_index": run_index,
+        "pass": (bool(passed) if outcome != "INFRA" else None),
+        "outcome": outcome or ("GRADED" if passed is not None else "INFRA"),
+        "failed_criterion": failed_criterion,
+        "duration_s": duration_s,
+        "metrics": metrics or {},
+        "runtime": runtime,
+        "model": model,
+        "plugin_sha": plugin_sha(),
+        "plugin_dirty": plugin_dirty(),
+        "case_sha256": _antigravity_case_sha256(case, case_path),
+        "judge": "harness",
+        "harness_version": harness_version(),
+    }
+    if triage:
+        record["triage"] = triage
+    target = Path(results_path) if results_path else RESULTS_PATH
+    try:
+        os.makedirs(str(target.parent), exist_ok=True)
+        with io.open(str(target), "a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(record) + "\n")
+    except OSError as exc:
+        print(f"warning: could not append the run record to {target}: {exc}",
+              file=sys.stderr)
+        return None
+    print(f"RECORDED: {target.name} <- {json.dumps(record)}")
+    return record
+
+
+def _antigravity_case_sha256(case, case_path=None):
+    """Hex sha256 of an antigravity case's `case.md`, or None if unreadable."""
+    path = Path(case_path) if case_path else EVALS_ROOT / "antigravity" / "cases" / case / "case.md"
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        print(f"warning: could not hash the case definition {path}; "
+              "recording case_sha256=null", file=sys.stderr)
+        return None
