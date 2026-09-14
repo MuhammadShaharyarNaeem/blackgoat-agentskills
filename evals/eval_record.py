@@ -155,7 +155,9 @@ def append_script_record(case, passed, failed_criterion=None, duration_s=None,
 def append_antigravity_record(case, run_index, passed, runtime="antigravity",
                               model="gemini-3.8-flash", failed_criterion=None,
                               metrics=None, outcome=None, triage=None,
-                              duration_s=None, results_path=None, case_path=None):
+                              duration_s=None, results_path=None, case_path=None,
+                              installed_plugin_path=None, installed_plugin_sha=None,
+                              installed_plugin_dirty=None):
     """Append one flat `evals/antigravity/` run record, sibling to `append_script_record`.
 
     Additive only: every field `append_script_record` writes is written here
@@ -194,6 +196,9 @@ def append_antigravity_record(case, run_index, passed, runtime="antigravity",
         "case_sha256": _antigravity_case_sha256(case, case_path),
         "judge": "harness",
         "harness_version": harness_version(),
+        "installed_plugin_path": installed_plugin_path,
+        "installed_plugin_sha": installed_plugin_sha,
+        "installed_plugin_dirty": installed_plugin_dirty,
     }
     if triage:
         record["triage"] = triage
@@ -212,7 +217,9 @@ def append_antigravity_record(case, run_index, passed, runtime="antigravity",
 
 def append_runtime_contract_record(case, run_index, passed, outcome, failed_criterion=None,
                                     duration_s=None, runtime="antigravity", model="gemini-3.8-flash",
-                                    workspace=None, results_path=None, case_path=None):
+                                    workspace=None, results_path=None, case_path=None, triage=None,
+                                    installed_plugin_path=None, installed_plugin_sha=None,
+                                    installed_plugin_dirty=None):
     """Append one flat `evals/run_suite.py --suite contract` record, sibling to
     `append_antigravity_record`. Written by `evals/suites/contract.py` for a
     runtime-neutral contract grade (a `claude -p` invocation replaced by a
@@ -248,7 +255,12 @@ def append_runtime_contract_record(case, run_index, passed, outcome, failed_crit
         "runtime": runtime,
         "model": model,
         "workspace": str(workspace) if workspace else None,
+        "installed_plugin_path": installed_plugin_path,
+        "installed_plugin_sha": installed_plugin_sha,
+        "installed_plugin_dirty": installed_plugin_dirty,
     }
+    if triage:
+        record["triage"] = triage
     target = Path(results_path) if results_path else RESULTS_PATH
     try:
         os.makedirs(str(target.parent), exist_ok=True)
@@ -265,22 +277,29 @@ def append_runtime_contract_record(case, run_index, passed, outcome, failed_crit
 def append_runtime_trigger_record(case, run_index, outcome, first_skill, skills_invoked,
                                    expected_chain, mentioned_only, failed_criterion=None,
                                    duration_s=None, runtime="antigravity", model="gemini-3.8-flash",
-                                   workspace=None, raw_line=None, results_path=None):
+                                   workspace=None, raw_line=None, results_path=None, triage=None,
+                                   installed_plugin_path=None, installed_plugin_sha=None,
+                                   installed_plugin_dirty=None, judge="skill_read"):
     """Append one flat `evals/run_suite.py --suite trigger` record, sibling to
     `append_runtime_contract_record`. `pass` is derived from `outcome` exactly
     as evals/README.md's "Trigger judging" table defines it (`True` only for
     `"ROUTED_OK"`). `case_sha256` hashes the case's raw `cases.jsonl` line
     (there is no `case.md` for a trigger case), matching `run-evals.ps1`'s own
-    trigger records. `judge` is always `"skill_read"` -- distinct from
-    `run-evals.ps1`'s `"tool_use"`, since this judge reads `skills/<name>/
-    SKILL.md` file-view events off a transcript rather than a `Skill`
-    tool_use block (no runtime this suite targets necessarily has one).
+    trigger records. `judge` defaults to `"skill_read"` (a transcript-reading
+    judge over `skills/<name>/SKILL.md` file-view events -- the default for a
+    runtime with no `Skill` tool of its own) but `run_suite.py run --runtime
+    claude` passes `judge="tool_use"` -- the same `Skill` tool_use signal
+    `run-evals.ps1` reads off `claude`'s own stream-json.
     """
     record = {
         "timestamp": utc_timestamp(),
         "case": case,
         "run_index": run_index,
-        "pass": (outcome == "ROUTED_OK"),
+        # Matches `append_runtime_contract_record`'s existing `outcome != "INFRA"`
+        # guard: an INFRA row must carry `pass: null`, never `false` -- a bug
+        # found while wiring `run_suite.py run`'s INFRA quarantine writer,
+        # which calls this same function for suite=trigger.
+        "pass": (outcome == "ROUTED_OK") if outcome != "INFRA" else None,
         "failed_criterion": failed_criterion,
         "duration_s": duration_s,
         "outcome": outcome,
@@ -289,7 +308,7 @@ def append_runtime_trigger_record(case, run_index, outcome, first_skill, skills_
         "expected_chain": list(expected_chain or []),
         "mentioned_only": mentioned_only,
         "transcript": None,
-        "judge": "skill_read",
+        "judge": judge,
         "plugin_sha": plugin_sha(),
         "plugin_dirty": plugin_dirty(),
         "claude_version": None,
@@ -299,7 +318,12 @@ def append_runtime_trigger_record(case, run_index, outcome, first_skill, skills_
         "runtime": runtime,
         "model": model,
         "workspace": str(workspace) if workspace else None,
+        "installed_plugin_path": installed_plugin_path,
+        "installed_plugin_sha": installed_plugin_sha,
+        "installed_plugin_dirty": installed_plugin_dirty,
     }
+    if triage:
+        record["triage"] = triage
     target = Path(results_path) if results_path else RESULTS_PATH
     try:
         os.makedirs(str(target.parent), exist_ok=True)

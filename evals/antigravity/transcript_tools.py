@@ -325,6 +325,61 @@ def find_run_transcripts(window_start, window_end, brain_root=None, workspace=No
     return {"parent": parent, "subagents": subagents, "all": all_active}
 
 
+def transcripts_for_conversation(conversation_id, window_start, window_end, brain_root=None):
+    """Like `find_run_transcripts`, but the PARENT conversation is pinned to
+    `conversation_id` instead of inferred from which conversation's own span
+    overlaps `window_start`.
+
+    Used by `evals/suites/headless.py` for the Antigravity CLI (`agy`), whose
+    headless-run conversation is attributed deterministically via
+    `~/.gemini/antigravity-cli/cache/last_conversations.json` (cwd -> conversation
+    id) rather than by which conversation happens to overlap the window's start --
+    a fresh headless run's OWN conversation may start well after `window_start`
+    (workspace setup, preflight, etc. all happen before the CLI is even invoked).
+
+    Subagents are every OTHER conversation active in the window whose first
+    USER_INPUT is a briefing (`is_briefing_input`) -- the same rule
+    `find_run_transcripts` uses. Returns the same `{"parent", "subagents",
+    "all"}` shape. `parent` is `None` if `conversation_id`'s transcript is
+    missing or empty (the caller should fall back to `find_run_transcripts`
+    in that case).
+    """
+    root = Path(brain_root) if brain_root else DEFAULT_BRAIN_ROOT
+    conv_dir = root / conversation_id
+    tpath = _transcript_path(conv_dir)
+    parent = None
+    all_active = []
+    if tpath.is_file():
+        steps = _read_jsonl(tpath)
+        if steps:
+            fu = first_user_input(steps)
+            parent = {
+                "conversation_id": conversation_id,
+                "dir": str(conv_dir),
+                "first_ts": steps[0].get("created_at"),
+                "last_ts": steps[-1].get("created_at"),
+                "n_steps": len(steps),
+                "first_user_input": fu,
+            }
+            all_active.append(parent)
+
+    subagents = []
+    for conv in find_active_in_window(window_start, window_end, root):
+        if conv["conversation_id"] == conversation_id:
+            continue
+        tpath2 = _transcript_path(conv["dir"])
+        steps2 = _read_jsonl(tpath2) if tpath2.is_file() else []
+        fu2 = first_user_input(steps2)
+        record = dict(conv)
+        record["first_user_input"] = fu2
+        all_active.append(record)
+        if is_briefing_input(fu2):
+            record["persona"] = briefing_persona(fu2)
+            subagents.append(record)
+
+    return {"parent": parent, "subagents": subagents, "all": all_active}
+
+
 # --------------------------------------------------------------------------
 # Transcript parsing
 # --------------------------------------------------------------------------
