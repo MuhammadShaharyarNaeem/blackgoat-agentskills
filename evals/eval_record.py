@@ -210,6 +210,109 @@ def append_antigravity_record(case, run_index, passed, runtime="antigravity",
     return record
 
 
+def append_runtime_contract_record(case, run_index, passed, outcome, failed_criterion=None,
+                                    duration_s=None, runtime="antigravity", model="gemini-3.8-flash",
+                                    workspace=None, results_path=None, case_path=None):
+    """Append one flat `evals/run_suite.py --suite contract` record, sibling to
+    `append_antigravity_record`. Written by `evals/suites/contract.py` for a
+    runtime-neutral contract grade (a `claude -p` invocation replaced by a
+    human/Orchestrator-performed prompt on any runtime -- Antigravity by
+    default). Carries the harness-4 contract fields from evals/README.md's
+    "Result record shape" (this file's own docstring section) verbatim --
+    `transcript` and `claude_version` are always `None` here because this
+    writer has no archived per-run transcript file and no `claude --version`
+    to read (the agent-under-test is not necessarily `claude` at all) -- plus
+    the three additive fields `run_suite.py` needs that no existing writer
+    carries: `runtime`, `model`, `workspace`.
+
+    `judge` is always `"grade.ps1"` -- distinct from `run-evals.ps1`'s own
+    `judge` values ("tool_use"/"script") and from `append_antigravity_record`'s
+    `"harness"`, so a reader pooling `results.jsonl` can always tell which
+    tool produced the verdict.
+    """
+    record = {
+        "timestamp": utc_timestamp(),
+        "case": case,
+        "run_index": run_index,
+        "pass": (bool(passed) if outcome != "INFRA" else None),
+        "failed_criterion": failed_criterion,
+        "duration_s": duration_s,
+        "outcome": outcome,
+        "transcript": None,
+        "judge": "grade.ps1",
+        "plugin_sha": plugin_sha(),
+        "plugin_dirty": plugin_dirty(),
+        "claude_version": None,
+        "case_sha256": case_sha256(case, case_path),
+        "harness_version": harness_version(),
+        "runtime": runtime,
+        "model": model,
+        "workspace": str(workspace) if workspace else None,
+    }
+    target = Path(results_path) if results_path else RESULTS_PATH
+    try:
+        os.makedirs(str(target.parent), exist_ok=True)
+        with io.open(str(target), "a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(record) + "\n")
+    except OSError as exc:
+        print(f"warning: could not append the run record to {target}: {exc}",
+              file=sys.stderr)
+        return None
+    print(f"RECORDED: {target.name} <- {json.dumps(record)}")
+    return record
+
+
+def append_runtime_trigger_record(case, run_index, outcome, first_skill, skills_invoked,
+                                   expected_chain, mentioned_only, failed_criterion=None,
+                                   duration_s=None, runtime="antigravity", model="gemini-3.8-flash",
+                                   workspace=None, raw_line=None, results_path=None):
+    """Append one flat `evals/run_suite.py --suite trigger` record, sibling to
+    `append_runtime_contract_record`. `pass` is derived from `outcome` exactly
+    as evals/README.md's "Trigger judging" table defines it (`True` only for
+    `"ROUTED_OK"`). `case_sha256` hashes the case's raw `cases.jsonl` line
+    (there is no `case.md` for a trigger case), matching `run-evals.ps1`'s own
+    trigger records. `judge` is always `"skill_read"` -- distinct from
+    `run-evals.ps1`'s `"tool_use"`, since this judge reads `skills/<name>/
+    SKILL.md` file-view events off a transcript rather than a `Skill`
+    tool_use block (no runtime this suite targets necessarily has one).
+    """
+    record = {
+        "timestamp": utc_timestamp(),
+        "case": case,
+        "run_index": run_index,
+        "pass": (outcome == "ROUTED_OK"),
+        "failed_criterion": failed_criterion,
+        "duration_s": duration_s,
+        "outcome": outcome,
+        "first_skill": first_skill,
+        "skills_invoked": list(skills_invoked or []),
+        "expected_chain": list(expected_chain or []),
+        "mentioned_only": mentioned_only,
+        "transcript": None,
+        "judge": "skill_read",
+        "plugin_sha": plugin_sha(),
+        "plugin_dirty": plugin_dirty(),
+        "claude_version": None,
+        "case_sha256": (hashlib.sha256(raw_line.encode("utf-8")).hexdigest()
+                        if raw_line else None),
+        "harness_version": harness_version(),
+        "runtime": runtime,
+        "model": model,
+        "workspace": str(workspace) if workspace else None,
+    }
+    target = Path(results_path) if results_path else RESULTS_PATH
+    try:
+        os.makedirs(str(target.parent), exist_ok=True)
+        with io.open(str(target), "a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(record) + "\n")
+    except OSError as exc:
+        print(f"warning: could not append the run record to {target}: {exc}",
+              file=sys.stderr)
+        return None
+    print(f"RECORDED: {target.name} <- {json.dumps(record)}")
+    return record
+
+
 def _antigravity_case_sha256(case, case_path=None):
     """Hex sha256 of an antigravity case's `case.md`, or None if unreadable."""
     path = Path(case_path) if case_path else EVALS_ROOT / "antigravity" / "cases" / case / "case.md"

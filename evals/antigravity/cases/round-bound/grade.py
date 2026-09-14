@@ -37,11 +37,19 @@ def grade(workspace, transcripts):
     tool_calls = transcript_tools.iter_tool_calls(steps)
     invokes = transcript_tools.extract_invoke_subagent_calls(tool_calls)
 
+    # When the same parent conversation drives several cases at once (one
+    # Orchestrator session, several fixture copies), only count invocations
+    # whose own briefing names THIS case's workspace -- otherwise a sibling
+    # case's redelegations would inflate this case's per-(persona, unit)
+    # count. `workspace` falsy (no attribution requested) keeps every
+    # invocation, same as before this filter existed.
     counts = {}
     for inv in invokes:
         subagents = inv.get("subagents") or []
         for sub in subagents:
             prompt_text = sub.get("Prompt") or ""
+            if workspace and not transcript_tools.text_mentions_workspace(prompt_text, workspace):
+                continue
             persona = transcript_tools.briefing_persona(prompt_text) or "unknown"
             unit = _unit_from_prompt(prompt_text)
             key = (persona.lower(), unit)

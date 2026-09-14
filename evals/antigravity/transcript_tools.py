@@ -205,7 +205,63 @@ def briefing_persona(text):
     return m.group(1) if m else None
 
 
-def find_run_transcripts(window_start, window_end, brain_root=None):
+def workspace_match_key(workspace):
+    """Normalize `workspace` (any path-like value) to the substring used to
+    match it against transcript text.
+
+    Prefers the `eval-runs/<case>-<ts>` tail when present -- the piece that
+    survives a machine-prefix difference between where `run.py` ran and
+    where Antigravity recorded the path in a `view_file`/`run_command` arg or
+    a briefing's `Prompt` text. Falls back to the full normalized path
+    (`normalize_path`, so already lowercase/forward-slash) for a classic
+    external `--workspace <dir>` that has no `eval-runs/` segment. Empty
+    input yields `""`, which callers treat as "no filter".
+    """
+    if not workspace:
+        return ""
+    norm = normalize_path(str(workspace))
+    parts = [p for p in norm.split("/") if p]
+    for i, part in enumerate(parts):
+        if part == "eval-runs":
+            return "/".join(parts[i:])
+    return norm
+
+
+def text_mentions_workspace(text, workspace):
+    """True if `text` (content, a tool-call arg, a raw `Subagents` JSON blob --
+    anything stringy) contains `workspace`'s `workspace_match_key` once both
+    sides are normalized (lowercase, forward-slash)."""
+    key = workspace_match_key(workspace)
+    if not key or not text:
+        return False
+    return key in normalize_path(text)
+
+
+def _step_mentions_key(step, key):
+    content = step.get("content")
+    if isinstance(content, str) and key in normalize_path(content):
+        return True
+    for call in step.get("tool_calls") or []:
+        for value in (call.get("args") or {}).values():
+            if isinstance(value, str) and key in normalize_path(value):
+                return True
+    return False
+
+
+def conversation_mentions_workspace(conversation_dir, workspace):
+    """True if any step's USER_INPUT content, tool-call arg, or `content`
+    field anywhere in the conversation at `conversation_dir` mentions
+    `workspace` (see `workspace_match_key`). `workspace` falsy -> always
+    False (an empty key matches nothing, deliberately -- callers that want
+    "no filter" check `workspace` truthiness themselves)."""
+    key = workspace_match_key(workspace)
+    if not key:
+        return False
+    steps = parse_transcript(conversation_dir)
+    return any(_step_mentions_key(s, key) for s in steps)
+
+
+def find_run_transcripts(window_start, window_end, brain_root=None, workspace=None):
     """Locate the parent conversation and any subagent conversations for one run.
 
     A "run" is one invocation of a bgpdd-* lane, bounded by [window_start,
@@ -213,6 +269,19 @@ def find_run_transcripts(window_start, window_end, brain_root=None):
     `ts`). Returns:
 
         {"parent": {...} | None, "subagents": [{...}, ...], "all": [{...}, ...]}
+
+    When `workspace` is given, a conversation active in the window is kept
+    only if it mentions that workspace (`conversation_mentions_workspace`)
+    somewhere in a `USER_INPUT`, a `tool_calls` arg, or a `content` field --
+    this is what lets several cases run from one Antigravity conversation (the
+    eval orchestrator driving multiple parallel fixture copies) without one
+    case's worker transcripts leaking into another's grading: the parent's
+    `invoke_subagent`/`define_subagent` calls (or their briefing text) name
+    the workspace a subagent was launched against, so the same parent
+    conversation is kept -- and re-attributed -- for each case's own
+    `workspace` filter in turn, while a worker whose OWN briefing names a
+    different case's workspace is dropped. `workspace=None` (the default)
+    keeps the old unfiltered behavior.
 
     `parent` is the conversation whose OWN span [first_ts, last_ts] contains
     the whole window (the human-driven conversation the Orchestrator ran in).
@@ -231,6 +300,8 @@ def find_run_transcripts(window_start, window_end, brain_root=None):
     subagents = []
     all_active = []
     for conv in candidates:
+        if workspace and not conversation_mentions_workspace(conv["dir"], workspace):
+            continue
         tpath = _transcript_path(conv["dir"])
         steps = _read_jsonl(tpath) if tpath.is_file() else []
         fu = first_user_input(steps)
@@ -240,10 +311,15 @@ def find_run_transcripts(window_start, window_end, brain_root=None):
         if is_briefing_input(fu):
             record["persona"] = briefing_persona(fu)
             subagents.append(record)
-        elif (conv["first_ts"] or "") <= window_start and (conv["last_ts"] or "") >= window_end:
-            # Spans the whole window and isn't itself a briefing -> the
-            # human-driven parent. If several qualify, keep the tightest
-            # (latest first_ts) as parent and leave the rest in "all" only.
+        elif (conv["first_ts"] or "") <= window_start and (conv["last_ts"] or "") >= window_start:
+            # Overlaps the window's START and isn't itself a briefing -> the
+            # human-driven parent. Deliberately NOT "spans the whole window"
+            # (first_ts <= window_start AND last_ts >= window_end): grade's
+            # window_end is "last artifact write + 2 min", so a conversation
+            # that ended within that buffer of its own last gate write would
+            # otherwise lose its parent to a false INFRA. If several qualify,
+            # keep the tightest (latest first_ts) as parent and leave the
+            # rest in "all" only.
             if parent is None or conv["first_ts"] > parent["first_ts"]:
                 parent = record
     return {"parent": parent, "subagents": subagents, "all": all_active}
@@ -392,7 +468,7 @@ def _cmd_list(args):
 
 
 def _cmd_window(args):
-    result = find_run_transcripts(args.start, args.end, args.brain_root)
+    result = find_run_transcripts(args.start, args.end, args.brain_root, workspace=args.workspace)
     parent = result["parent"]
     print("parent:", parent["conversation_id"] if parent else None)
     print(f"subagents ({len(result['subagents'])}):")
@@ -412,6 +488,7 @@ def main(argv=None):
     p_window = sub.add_parser("window", help="find parent + subagent transcripts for a time window")
     p_window.add_argument("--start", required=True)
     p_window.add_argument("--end", required=True)
+    p_window.add_argument("--workspace", default=None, help="attribute conversations to this workspace path only")
     p_window.set_defaults(func=_cmd_window)
 
     parsed = parser.parse_args(argv)

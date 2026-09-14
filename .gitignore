@@ -20,3 +20,10 @@ Thumbs.db
 
 # Per-run eval transcripts and artifacts (large; results.jsonl is the record of truth)
 evals/results/transcripts/
+
+# Antigravity eval harness run state: per-run start markers and in-place fixture
+# copies made by `evals/antigravity/run.py start --in-place` (results.jsonl is the
+# record of truth; both are disposable per-machine data)
+evals/antigravity/runs/
+evals/runs/
+eval-runs/
