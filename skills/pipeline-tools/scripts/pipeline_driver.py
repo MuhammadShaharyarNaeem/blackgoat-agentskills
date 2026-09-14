@@ -725,7 +725,10 @@ def build_bugfix_report(root, ledger, milestone_override):
                     "uncommitted, and neither the RED capture nor its command "
                     "may be edited. On return run: %s --log %s --pipeline "
                     'bgpdd-bugfix --phase "Phase 3: Fix" --event delegation '
-                    '--agent %s --model <tier> --unit "%s"'
+                    '--agent %s --model <tier> --unit "%s" --tokens-total <n> '
+                    '(or --tokens-unavailable "<runtime>: <reason>") '
+                    "[--tier <haiku|sonnet|opus|fable> for a non-Claude "
+                    "model id]"
                     % (personas, _script("record_run.py"), rp(run_log), agent,
                        slug_label))
 
@@ -1333,6 +1336,10 @@ def run_self_test():
             self.assertEqual((rep["phase"], code), (3, EXIT_NEXT))
             self.assertIn("Mason", rep["next_action"])
             self.assertIn("record_run.py", rep["next_action"])
+            # record_run.py now refuses a delegation record with no token
+            # measurement (tokens_missing) -- the suggested command must be
+            # one the gate accepts.
+            self.assertIn("--tokens", rep["next_action"])
 
         def test_phase3_names_both_builders_for_surface_both(self):
             self.stage_intake(surface="both")

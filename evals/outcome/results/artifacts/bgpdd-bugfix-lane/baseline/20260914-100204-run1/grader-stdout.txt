@@ -1,0 +1,1 @@
+﻿{"criteria":[{"id":"visible_suite_green","pass":true,"detail":"pass=3 fail=0 skipped=0 todo=0"},{"id":"hidden_tests","pass":true,"detail":"1 hidden test(s), 0 failing"},{"id":"no_regression","pass":true,"detail":"2 neighbour test(s), 0 failing"}]}

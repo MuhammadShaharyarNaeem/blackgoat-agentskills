@@ -1199,7 +1199,11 @@ def run_lifecycle(repo):
     run_log = impl_dir / "run-log-2611.jsonl"
     log_common = ["--log", run_log, "--pipeline", "bgpdd-build",
                   "--phase", "Phase 2", "--event", "delegation",
-                  "--unit", MILESTONE2_TITLE]
+                  "--unit", MILESTONE2_TITLE,
+                  # Tokens are mandatory on a delegation record; a fixture
+                  # value stands in since token cost is not what this step
+                  # tests.
+                  "--tokens-total", "100"]
     producer = run_py(RECORD_RUN, log_common + ["--agent", "mason",
                                                 "--model", "claude-opus-4-1"])
     typo = run_py(RECORD_RUN, log_common + ["--agent", "luna",
@@ -1229,12 +1233,95 @@ def run_lifecycle(repo):
     dep_log = impl_dir / "run-log-dep.jsonl"
     dep_common = ["--log", dep_log, "--pipeline", "bgpdd-shipping",
                   "--phase", "Step 2", "--event", "delegation",
-                  "--unit", "Launch"]
+                  "--unit", "Launch", "--tokens-total", "100"]
     dep = run_py(RECORD_RUN, dep_common + ["--agent", "dep", "--model", "opus"])
     below = run_py(RECORD_RUN, dep_common + ["--agent", "vera", "--model", "haiku"])
     ok = dep.returncode == 0 and below.returncode == 1
     record("20b. record_run: a verifier below `dep` is an inversion -> exit 1",
            ok, "" if ok else f"dep={dep.returncode} vera={below.returncode}")
+
+    # 20c-20g: --tier for a non-Claude --model, --model inherit, and the
+    # mandatory-tokens family (including --tokens-unavailable and its
+    # contradiction refusal against a real token figure).
+    gate_log = impl_dir / "run-log-token-gate.jsonl"
+    gate_common = ["--log", gate_log, "--pipeline", "bgpdd-build",
+                   "--phase", "Phase 2", "--event", "delegation",
+                   "--unit", MILESTONE2_TITLE, "--agent", "mason"]
+
+    no_tokens = run_py(RECORD_RUN, gate_common + ["--model", "opus"])
+    no_tokens_data = None
+    try:
+        no_tokens_data = json.loads(no_tokens.stdout)
+    except ValueError:
+        pass
+    ok = (no_tokens.returncode == 2 and no_tokens_data is not None
+          and no_tokens_data.get("problem") == "tokens_missing"
+          and not gate_log.exists())
+    record("20c. record_run: a delegation with no token form is exit 2 "
+           "(tokens_missing), and nothing is written", ok,
+           "" if ok else f"exit={no_tokens.returncode} data={no_tokens_data!r} "
+                         f"log_exists={gate_log.exists()}")
+
+    inherit = run_py(RECORD_RUN, gate_common + [
+        "--model", "inherit", "--tokens-total", "100"])
+    inherit_data = None
+    try:
+        inherit_data = json.loads(inherit.stdout)
+    except ValueError:
+        pass
+    ok = (inherit.returncode == 2 and inherit_data is not None
+          and inherit_data.get("problem") == "model_inherit")
+    record("20d. record_run: --model inherit is exit 2 (model_inherit)", ok,
+           "" if ok else f"exit={inherit.returncode} data={inherit_data!r}")
+
+    gemini_no_tier = run_py(RECORD_RUN, gate_common + [
+        "--model", "gemini-3.8-flash", "--tokens-total", "100"])
+    gemini_no_tier_data = None
+    try:
+        gemini_no_tier_data = json.loads(gemini_no_tier.stdout)
+    except ValueError:
+        pass
+    ok = (gemini_no_tier.returncode == 2 and gemini_no_tier_data is not None
+          and gemini_no_tier_data.get("problem") == "model_unknown")
+    record("20e. record_run: a non-Claude --model with no --tier is exit 2 "
+           "(model_unknown)", ok,
+           "" if ok else f"exit={gemini_no_tier.returncode} "
+                         f"data={gemini_no_tier_data!r}")
+
+    gemini_with_tier = run_py(RECORD_RUN, gate_common + [
+        "--model", "gemini-3.8-flash", "--tier", "opus",
+        "--tokens-unavailable", "antigravity: no usage payload"])
+    gate_lines = [json.loads(l) for l in
+                  gate_log.read_text(encoding="utf-8").splitlines() if l.strip()]
+    ok = (gemini_with_tier.returncode == 0 and len(gate_lines) == 1
+          and gate_lines[0].get("tier") == "opus"
+          and gate_lines[0].get("model") == "gemini-3.8-flash"
+          and gate_lines[0].get("tokens_unavailable") ==
+              "antigravity: no usage payload")
+    record("20f. record_run: a non-Claude --model with --tier and "
+           "--tokens-unavailable records verbatim", ok,
+           "" if ok else f"exit={gemini_with_tier.returncode} "
+                         f"log={gate_lines!r}")
+
+    contradiction = run_py(RECORD_RUN, gate_common + [
+        "--model", "opus", "--tokens-total", "9",
+        "--tokens-unavailable", "x: y"])
+    contradiction_data = None
+    try:
+        contradiction_data = json.loads(contradiction.stdout)
+    except ValueError:
+        pass
+    gate_lines_after = [json.loads(l) for l in
+                        gate_log.read_text(encoding="utf-8").splitlines()
+                        if l.strip()]
+    ok = (contradiction.returncode == 2 and contradiction_data is not None
+          and contradiction_data.get("problem") == "tokens_contradiction"
+          # still just the one record from 20f -- nothing new written
+          and len(gate_lines_after) == 1)
+    record("20g. record_run: --tokens-total with --tokens-unavailable is "
+           "exit 2 (tokens_contradiction)", ok,
+           "" if ok else f"exit={contradiction.returncode} "
+                         f"data={contradiction_data!r} log={gate_lines_after!r}")
 
     # --- Step 21 (2.6.1): the guard hook sees Bash ---------------------------
     # Rules 2 and 4 tested `tool_name in WRITE_TOOLS`, so one `>>` rewrote any
@@ -1386,7 +1473,7 @@ def run_lifecycle(repo):
     rewake_log = impl_dir / "run-log-2612.jsonl"
     rw_common = ["--log", rewake_log, "--pipeline", "bgpdd-build",
                  "--phase", "Phase 3", "--event", "delegation",
-                 "--unit", MILESTONE3_TITLE]
+                 "--unit", MILESTONE3_TITLE, "--tokens-total", "100"]
     fable_producer = run_py(RECORD_RUN, rw_common + [
         "--agent", "mason", "--model", "claude-fable-5-1",
         "--duration-s", "88"])

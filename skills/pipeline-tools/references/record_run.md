@@ -145,3 +145,44 @@ duration preserved, the error naming the problem and `--rounds`, a genuine
 round 2 accepted, a different unit or pipeline not colliding, a re-labelled
 phase not minting a record, an agentless delegation ungated, non-delegation
 events ungated, and duplicate-before-inversion ordering).
+
+## `--tier`, `model_inherit` and mandatory tokens (Unreleased)
+
+Two field audits exposed gaps `model_unknown` alone could not close. First:
+two real Google Antigravity/Gemini runs recorded `model: "sonnet"`, because
+the only way to satisfy `model_unknown` was to name a Claude tier the
+delegation never ran at — the check that stops a typo from disabling the
+inversion gate was also, for a non-Claude runtime, forcing a lie. Second: a
+25-run audit found only 20 of 138 delegation records carried any token figure
+at all — an absence that had always been a silent `null`, indistinguishable
+from a deliberate "not measured."
+
+**`--tier <haiku|sonnet|opus|fable>`** answers the first gap. When `--model`
+already resolves to a Claude tier, `--tier` is optional and must agree
+(`tier_mismatch`, exit 2, if it does not). When `--model` does not resolve
+— a non-Claude id, a typo, a name mentioning two tiers — `--tier` is now
+REQUIRED, and the record stores `model` verbatim alongside the `tier` the
+flag supplied. The tier-inversion check reads `tier` off the record, falling
+back to deriving it from `model` for older log lines written before this
+field existed.
+
+**`--model inherit` is refused outright (`model_inherit`, exit 2),
+case-insensitively.** `inherit` names a runtime setting the Orchestrator
+configured, not a measurement of the tier the delegation actually ran at, and
+recording it would make every such delegation look identical regardless of
+what it actually ran on.
+
+**A token measurement is now mandatory on `--event delegation`
+(`tokens_missing`, exit 2).** One of four forms satisfies it: `--tokens-total`,
+both `--tokens-in` and `--tokens-out`, a `--from-json` payload carrying any of
+those, or `--tokens-unavailable "<runtime>: <reason>"` naming why none could
+be measured. `--tokens-unavailable` together with any token figure is refused
+(`tokens_contradiction`, exit 2) — a record does not get to both claim a
+number and disclaim having one.
+
+**`--runtime <name>`** is new and never required: recorded verbatim on any
+event (e.g. `claude-code`, `antigravity`, `cursor`), it is what lets a later
+read of the log tell which runtime a `tier`-only, non-Claude `model` record
+actually ran under.
+
+The self-test grew to **70**.

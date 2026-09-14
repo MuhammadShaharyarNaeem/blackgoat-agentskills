@@ -87,3 +87,41 @@ are `--require-ledger-gates` (which re-hashes what the recorded gate read) and
 Unchanged in 2.6.1: `--require-ledger-gates` still checks the chain first,
 then the latest per-gate verdict scoped to the milestone (or unscoped), then
 re-hashes every recorded input. That behaviour was verified, not modified.
+
+## `--repo`-relative `--changed-files`, `--docs-root`, and the cwd fallback (Unreleased)
+
+Observed failure: a real invocation from a workspace root ABOVE `--repo`
+(one shared `.docs/` over several sibling repos) typed `--changed-files`
+entries as cwd-relative paths, and the gate — which had always resolved a
+relative entry against the process's cwd, not against `--repo` — either
+matched the wrong file under a look-alike sibling repo or reported
+`changed_file_missing` on a path that genuinely existed. Two changes close
+this:
+
+**`resolve_changed_files` now resolves every entry to a canonical,
+repo-relative path, and every downstream use (staleness mtimes, the
+runtime-evidence delegation, git pathspecs, the undeclared-tree comparison)
+reads that normalized form.** A relative entry resolves against `--repo`
+first. Only when that does not exist is it retried against the process's own
+cwd — a fix-round addition, since the workspace-root case above still needed
+a way in for an honest cwd-relative path — and accepted only if it both
+exists there AND resolves under `--repo` (`Path.resolve()` containment, never
+a string prefix, so a look-alike path belonging to a sibling repo cannot slip
+through as this repo's). An absolute entry must lie under `--repo` outright —
+there is no cwd ambiguity for it to fall back on. Either miss is
+`changed_file_outside_repo`, exit 2: the fix is to run the gate once per
+repo, not to combine paths from several in one invocation.
+`changed_file_missing` now names the repo it searched (and that it also
+checked the cwd), not just the bare path.
+
+**`--docs-root` is new**, because `.docs/` living above `--repo` (the same
+Gorelo shape) has no default that finds it: `resolve_docs_root` tries an
+explicit `--docs-root` first, then walks up from `--review-report` (then
+`--state`) looking for an ancestor named `.docs`, and only falls back to the
+old assumption, `--repo/.docs`, when neither artifact path has such an
+ancestor. The resolved value is recorded as `docs_root` in the report, and
+`docs_root_repo_prefix` uses it to keep the undeclared-tree comparison from
+expecting `git status` (which runs inside `--repo`) to ever report a path
+outside it.
+
+Self-test 94 → 105.

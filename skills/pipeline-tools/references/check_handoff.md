@@ -37,7 +37,7 @@ Where several unfenced blocks survive, the **last** is validated and a warning s
 
 ## `--since` and the diff subset
 
-Without `--since` the gate never asks git anything: it cannot know what window the handoff covers, and a clean tree after a legitimate commit would otherwise read as "the agent changed nothing". With `--since <ref>` it takes `git diff --name-only <ref>` (ref..working-tree, so committed-since *and* uncommitted edits both appear) plus `git ls-files --others --exclude-standard` (a brand-new source file is the commonest thing a builder names and diff never sees it), and requires `<changed_files>` to be a subset. A ref git cannot resolve is exit 2, never a pass — an unperformable check is not a satisfied one.
+Without `--since` the gate never asks git anything: it cannot know what window the handoff covers, and a clean tree after a legitimate commit would otherwise read as "the agent changed nothing". With `--since <ref>` it takes `git diff --name-only <ref>` (ref..working-tree, so committed-since *and* uncommitted edits both appear) plus `git ls-files --others --exclude-standard` (a brand-new source file is the commonest thing a builder names and diff never sees it), and requires `<changed_files>` to be a subset. **With more than one `--repo`, each path is diffed in the specific repo it resolved to, not the first one listed** — a milestone that touches two repos needs `<ref>` to be resolvable in both (e.g. a same-named tag placed in each at milestone start). A ref git cannot resolve in the repo a path resolved to is exit 2, never a pass — an unperformable check is not a satisfied one.
 
 ## The honesty rules, and why they are narrow
 
@@ -52,7 +52,7 @@ Two mechanical rules, both chosen to have almost no false-positive surface:
 
 `handoff_missing`, `element_missing`, `path_missing`, `changed_files_not_in_diff`, `status_invalid`, `consumers_grammar`, `honesty_contradiction`.
 
-`path_missing` covers both a path that does not exist under `--repo` and one that escapes it (`../x`, another drive). Both are the same defect from the consumer's side: the Orchestrator cannot open what the handoff named.
+`path_missing` covers both a path that does not exist under any searched root and one that escapes all of them (`../x`, another drive). The roots searched are every `--repo` for `<changed_files>`, plus every `--docs-root` — and, for a *relative* path, each `--docs-root`'s own parent directory and the cwd — for `<artifact>`/`<changed_skills>` only. A report path under the shared docs tree is not a code change, so `<changed_files>` never gets the docs-root or its fallbacks. Both failure shapes are the same defect from the consumer's side: the Orchestrator cannot open what the handoff named.
 
 ## Self-test
 
@@ -191,3 +191,35 @@ inside a fence still hitting; `PARTIAL` and `BLOCKED` keeping their markers; a
 with a warning; multi-hit line numbering; and the `--allow-scaffolding` round
 trip — refused, blank-reason exit 2, waived with the reason and the waived
 entries inside the ledger chain, and a clean run recording neither key.
+
+## Multi-`--repo` and `--docs-root` (Unreleased)
+
+A milestone that spans more than one repo (a shared `.docs/` tree above
+several checkouts, or two repos touched by one delegation) used to have no
+honest way to pass this gate: `--repo` took exactly one directory, so a
+`<changed_files>` path resolving under the second repo failed `path_missing`
+no matter how real the file was. `--repo` is now repeatable, and a path is
+accepted the moment it resolves under **any** listed repo; when `--since` is
+also given, each path is diffed against the repo it actually resolved to
+(`git diff --name-only <ref>` run there), not against the first `--repo`
+listed — a two-repo milestone needs `<ref>` resolvable in both.
+
+`--docs-root` is new and repeatable, and is for `<artifact>`/`<changed_skills>`
+only — never `<changed_files>`, which is a code change and stays scoped to
+`--repo`. It defaults to the nearest ancestor of `--handoff` named `.docs`, so
+the common shape (a handoff and its report both under the same `.docs/` tree)
+needs no flag at all. A relative `<artifact>`/`<changed_skills>` path also
+falls back to each `--docs-root`'s own parent directory and the cwd.
+
+**2026-09-14 fix round:** a red-team run against the real Gorelo shape found
+that `.docs/bugfix/x/review-report.md` — the form every real handoff actually
+writes, relative to the workspace root *above* `.docs`, not to `.docs` itself
+— still failed `path_missing` even with the `.docs`-ancestor default in place.
+The docs-root-parent/cwd fallback above was added to close that gap.
+`<changed_files>` is untouched by it.
+
+`--self-test` now runs **57** cases: the fifty above, plus multi-`--repo`/
+`--docs-root` cases — a path resolving under the second `--repo`, `--since`
+diffed against the repo it resolved to rather than the first one listed, the
+`.docs`-ancestor default, and the relative-path parent/cwd fallback for
+`<artifact>`/`<changed_skills>` only.
