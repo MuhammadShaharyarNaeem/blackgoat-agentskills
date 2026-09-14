@@ -1,8 +1,9 @@
 name: Plugin Checks
 
+# Manual only (the user's decision, 2026-09-15): run it from the Actions tab when
+# you want the preflight, not on every push or pull request.
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
 
 # Two jobs by design: the ubuntu and windows legs of one matrix. The pipeline
 # scripts do real path work, so both platforms run the whole Python surface;
