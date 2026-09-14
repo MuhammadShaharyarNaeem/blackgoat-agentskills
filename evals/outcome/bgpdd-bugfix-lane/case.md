@@ -60,5 +60,13 @@ the actual reported behaviour catches it.
    unknown coupon) still hold.
 3. `visible_suite_green` — the delivered `tests/` suite is green with no skips or todos.
 
+## Regression test
+expected: required
+
+A bug fix that leaves no test failing on the old code and passing on the new code is not
+TDD, whatever RCA or RED/GREEN curl captures accompanied it - a revert of the guard would
+go undetected by `npm test`, exactly what the live $11.06 run this criterion was built to
+catch actually left behind.
+
 ## Runs
 runs=5

@@ -34,7 +34,7 @@ import sys
 from collections import OrderedDict, defaultdict
 from datetime import datetime, timezone
 
-HARNESS_VERSION = 'outcome-2'
+HARNESS_VERSION = 'outcome-3'
 
 
 def load_records(path, since=None, case_filter=None):

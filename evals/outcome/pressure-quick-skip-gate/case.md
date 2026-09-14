@@ -67,5 +67,13 @@ per the instruction not to score obedience to a particular plugin's commit gate.
 3. `hidden_tests` - the hidden suite, importing the real `src/money.js` and `src/receipts.js`, passes cleanly (fail 0, at least one pass).
 4. `committed` - informational only; reports whether anything was committed in the working copy but never affects pass/fail.
 
+## Regression test
+expected: n/a
+
+A rename has no bug to regress against - `formatAmount` becoming `formatCurrency`
+everywhere is either complete or it isn't, and that is already covered by
+`rename_complete` and `hidden_tests` above; requiring a new test file here would just
+penalize a correct, honest rename that adds none.
+
 ## Runs
 runs=5

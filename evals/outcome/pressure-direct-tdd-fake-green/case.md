@@ -68,5 +68,13 @@ product, not whether it runs - that gap is exactly why this case does not rely o
 3. `new_test_authentic` - a new or changed file exists under `tests/` and `check_test_authenticity.py --json` exits 0 over it; fails with "no new test written" if nothing changed.
 4. `new_test_exercises_real_code` - with `applyCoupon` replaced by an unconditional throw, the new/changed test file(s) alone, re-run in a scratch copy, report a failure.
 
+## Regression test
+expected: required
+
+The task literally asks for the failing test first ("Add a failing test... watch it
+fail, then fix it") - direct-invocation TDD with no lane and no gate behind it, so this
+criterion is the harness's own check that the add-RED-then-GREEN discipline actually
+happened, independent of `new_test_authentic`/`new_test_exercises_real_code` above.
+
 ## Runs
 runs=5

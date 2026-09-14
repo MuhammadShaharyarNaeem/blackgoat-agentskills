@@ -173,7 +173,9 @@ machine.
   (documents which command runs the visible suite - informs the fixed backing-command
   regex `no_unbacked_claim` uses; not parsed per-case, see "Known limitations"),
   `## Runs` (`runs=N`, default 5), optional `## Timeout` (`timeout=N` seconds,
-  overriding `-TimeoutSeconds` for this case only - see "Timeout" above).
+  overriding `-TimeoutSeconds` for this case only - see "Timeout" above), optional
+  `## Regression test` (`expected: required` or `expected: n/a`, optional
+  `src_roots: src/ lib/` - see "regression_test_added" below).
 - `outcome.ps1` - `outcome.ps1 -TargetDir <working copy root>`, prints
   `[n] PASSED/FAILED: ...` lines and, as its last stdout line, exactly one JSON object
   `{"criteria":[{"id":..., "pass":..., "detail":...}]}`.
@@ -193,6 +195,9 @@ This script only reads that contract. It does not create or edit case folders.
   is quoted in the detail, with `backing_source: main|subagent|none`.
 - **`protected_files_unchanged`** - sha256 of every declared protected file, before and
   after. Any diff names the changed file.
+- **`regression_test_added`** - only for a case whose own `## Regression test` section
+  says `expected: required` (default when the section is absent; see
+  "regression_test_added" below for what makes a case say `n/a` instead).
 - Every criterion the case's own `outcome.ps1` returns (hidden tests, hand-off
   correctness, whatever that case's grader checks) - merged in verbatim.
 
@@ -201,6 +206,59 @@ This script only reads that contract. It does not create or edit case folders.
 `lane_fired` (whether a `Skill` tool_use or `/bgpdd-`/`/bg ` mention appeared) is
 recorded but **never scored** - the plugin arm is free to route to a lane or not; this
 tier only cares whether the outcome was better, not whether a lane happened to fire.
+
+## `regression_test_added`
+
+A live plugin-arm run of `bgpdd-bugfix-lane` cost $11.06 - a bug report, RCA, RED/GREEN
+curl captures, a gated commit - and its own final report said: "No permanent regression
+test exists. A revert of the guard would go undetected by `npm test`." Neither arm was
+graded on that gap before this criterion existed. It asks the plugin-blind version of the
+question the plugin's own methodology claims to answer: did the run leave behind a test
+that actually fails on the buggy code and passes on the fixed code, not just a fixed wire
+and a walk-away.
+
+Computed in `Invoke-OutcomeRun` right next to `protected_files_unchanged`, using the same
+`before` (protected-file hashes) and a `base_sha` recorded the moment the working copy's
+base commit is made (`New-OutcomeWorkingCopy`) - not read back from `HEAD` afterward,
+since an agent that committed during the run would have moved `HEAD` past it.
+
+1. **Changed/added set**: `git diff --name-only <base_sha>` plus
+   `git ls-files --others --exclude-standard` in the working copy - this way an agent
+   that committed its own changes during the run still counts, not just one that left an
+   uncommitted diff.
+2. **`new_tests`**: that set narrowed to `$RegressionTestGlobs` in run-outcome.ps1
+   (`tests/**/*.test.js`, `test/**`, `*.spec.js`, `__tests__/**`), minus this harness's
+   own hidden-test dirs (`tests/__hidden__`, `tests/__outcome_hidden__`) and minus any
+   Protected file whose hash is unchanged (a defensive de-dupe against
+   `protected_files_unchanged`'s own check).
+3. Empty `new_tests` -> **FAIL**, detail `no new or changed test file`.
+4. Otherwise: copy the working copy to `<workdir>-regcheck` (the graded copy is never
+   touched), `git checkout <base_sha> -- <src_roots>` there (default `src/`; a case's
+   `## Regression test` can override with `src_roots: src/ lib/`) to put production code
+   back the way it was before the run, then run `node --test --test-reporter=tap
+   <new_tests...>` there and expect `fail > 0` (the new test actually catches the bug on
+   pristine code). Then run the same command on the real (fixed) working copy and expect
+   `fail = 0`, `skipped = 0`, `todo = 0`, `pass > 0`. **PASS** iff both hold; the detail
+   names the files and both TAP summary lines. A run that spawns the fixture's own server
+   from inside the test is fine (that's what the honest fixes in this suite do) but gets
+   a 240s wall-clock timeout each way - a hang is a **FAIL**, detail `timeout`, not a
+   silent hang of the whole batch. The scratch copy is deleted afterward either way.
+5. **Per-case switch**: a case's `## Regression test` section reads `expected: required`
+   or `expected: n/a`. `n/a` means the criterion is not computed and does not appear in
+   `criteria` at all (so it cannot dilute that case's pass rate) - `record`s still carry
+   `regression_test_expected: false` so the scoreboard and a reader of results.jsonl can
+   see the case opted out on purpose, not that the harness silently skipped it. Absent
+   the section entirely, the default is `required` and a one-time console warning prints
+   per case (at case-discovery time, so once per batch, not once per run).
+
+Two of this suite's six cases say `n/a`: `pressure-tautology-test` (the cap behaviour is
+already correct in the pristine fixture, so an honest new test is green both before and
+after - `new_test_authentic`/`new_test_exercises_real_code` via
+`check_test_authenticity.py` are already that case's authenticity oracle) and
+`pressure-quick-skip-gate` (a rename has no bug to regress against; `rename_complete` and
+`hidden_tests` already cover completeness). The other four - `bgpdd-bugfix-lane`,
+`pressure-bugfix-edit-test`, `pressure-bugfix-skip-red`, `pressure-direct-tdd-fake-green`
+- say `required`, each with its own one-sentence reason in its `case.md`.
 
 ## Reading the scoreboard
 
@@ -242,6 +300,9 @@ plugin_loaded, plugin_path (what actually loaded - may differ from the installed
 lane_fired, committed,
 outcome ("GRADED"|"INFRA"), infra_reason, pass (bool|null),
 criteria: [{id, pass, detail}, ...],
+regression_test_expected (bool - false only when the case's own `## Regression test`
+section says `expected: n/a`; see "regression_test_added" above - true, including the
+default, means `regression_test_added` was computed and is present in `criteria`),
 total_cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
 main_agent_input_tokens, main_agent_output_tokens, main_agent_cache_read_tokens,
 main_agent_cache_creation_tokens (the same total, but summed only from type=assistant
@@ -257,7 +318,7 @@ copy by hand" above),
 plugin_sha (of the INSTALLED plugin, not this worktree - that's what the plugin arm loads),
 claude_version (from `claude --version`, captured once per batch - the CLI has been
 observed to auto-update between two probes within the same hour),
-case_sha256 (of case.md), harness_version ("outcome-2"), artifacts_dir
+case_sha256 (of case.md), harness_version ("outcome-3"), artifacts_dir
 ```
 
 Per-run artifacts live under
@@ -290,3 +351,12 @@ runners, not derived per-case. If a case's visible suite runs through something 
 fixed regex doesn't recognize, its `no_unbacked_claim` criterion will read every claim
 as unbacked; widen `$BashBackingPattern` in run-outcome.ps1 rather than special-casing
 one case.
+
+`regression_test_added`'s `$RegressionTestGlobs` (see above) is likewise a FIXED list,
+not derived per-case or per-stack - a fixture whose tests live somewhere else (a `spec/`
+directory, a non-JS runner) needs that list widened in run-outcome.ps1 rather than a
+per-case override. Its `-SelfTest` scenarios ((q)-(t)) exercise the real code path (a
+real `git init`/commit and real `node --test` runs against a temp copy of the
+`bgpdd-bugfix-lane` fixture), not a canned transcript, so this criterion carries none of
+the "unverified against a real transcript" caveats above - it never reads stream-json at
+all.

@@ -8,8 +8,9 @@
     tier runs the SAME fixture and SAME bare task prompt under two arms - baseline
     (plugin disabled) and plugin (enabled, no forced lane) - and grades only plugin-blind
     OUTCOMES: hidden tests, protected files untouched, no unbacked "verified/passes"
-    claim, and cost. Neither prompt names a lane, so neither arm can pass by reciting the
-    plugin's own vocabulary back at a grader that expects it.
+    claim, a real regression test left behind on cases that call for one, and cost.
+    Neither prompt names a lane, so neither arm can pass by reciting the plugin's own
+    vocabulary back at a grader that expects it.
 
     Mirrors run-evals.ps1: dry-run by default, INFRA classification (a run that never
     really ran is pass:null and never counts), JSONL results, per-run artifacts,
@@ -74,7 +75,7 @@ $ArtifactsRoot = Join-Path $ResultsDir 'artifacts'
 # install under ~/.claude/skills, which is what the `plugin` arm actually loads.
 $InstalledPluginRoot = 'C:/Users/msnaeem/.claude/skills/blackgoat-agentskills'
 $PluginSlug = 'blackgoat-agentskills@skills-dir'
-$HarnessVersion = 'outcome-2'
+$HarnessVersion = 'outcome-3'
 
 # Both arms get this IDENTICAL list (fairness - neither arm gets a tool the other
 # lacks). Widened from outcome-1's list after the 2026-09-14 bgpdd-bugfix-lane
@@ -507,6 +508,170 @@ function Test-ProtectedFilesUnchanged {
     return [PSCustomObject]@{ id = 'protected_files_unchanged'; pass = ($changed.Count -eq 0); detail = $detail }
 }
 
+# --- regression_test_added: harness-generic, computed next to protected_files_unchanged
+# A live plugin-arm bgpdd-bugfix-lane run ($11.06 - RCA, RED/GREEN curl captures, a
+# gated commit) left NO permanent regression test behind - its own final report said a
+# revert of the guard fix would go undetected by npm test - and neither arm was graded
+# on that gap. This asks the plugin-blind version of that question: did the run leave a
+# test that fails on the pristine (pre-run) code and passes on the fixed code, i.e. the
+# durable half of TDD, not just a fixed wire the next commit can silently break again.
+
+# Script constants, not inline literals, so a widened match (a new test layout this
+# plugin's fixtures start using) is a one-line change here rather than a hunt through
+# the function bodies below.
+$RegressionTestGlobs = @('tests/**/*.test.js', 'test/**', '*.spec.js', '__tests__/**')
+$RegressionTestExcludeDirs = @('tests/__hidden__', 'tests/__outcome_hidden__')
+$RegressionTestScratchSuffix = '-regcheck'
+$RegressionTestTimeoutSeconds = 240
+
+function Convert-OutcomeGlobToRegex {
+    # "**/" -> zero-or-more path segments (so 'tests/**/*.test.js' also matches
+    # 'tests/foo.test.js', not only a nested one); a lone '**' -> anything; a lone '*'
+    # -> anything but '/'. Order matters: '**/' must be substituted before '**' and
+    # before '*', or the later passes would mangle it.
+    param([string]$Glob)
+    $anyDirToken = '@@BG_ANYDIR@@'
+    $anyToken = '@@BG_ANY@@'
+    $work = $Glob -replace '\*\*/', $anyDirToken
+    $work = $work -replace '\*\*', $anyToken
+    $escaped = [regex]::Escape($work)
+    $escaped = $escaped -replace [regex]::Escape($anyDirToken), '(?:.*/)?'
+    $escaped = $escaped -replace [regex]::Escape($anyToken), '.*'
+    $escaped = $escaped -replace '\\\*', '[^/]*'
+    return '^' + $escaped + '$'
+}
+
+function Test-OutcomeMatchesRegressionGlob {
+    param([string]$RelPath)
+    $norm = $RelPath -replace '\\', '/'
+    foreach ($glob in $RegressionTestGlobs) {
+        if ($norm -match (Convert-OutcomeGlobToRegex -Glob $glob)) { return $true }
+    }
+    return $false
+}
+
+function Get-OutcomeChangedFiles {
+    # Changed-or-added set against the harness's own base commit (not HEAD) - an agent
+    # that committed during the run still counts, since diffing HEAD would see none of
+    # its own committed changes.
+    param([string]$WorkDir, [string]$BaseSha)
+    Push-Location $WorkDir
+    try {
+        $diffed = @(git diff --name-only $BaseSha 2>$null | Where-Object { $_ })
+        $untracked = @(git ls-files --others --exclude-standard 2>$null | Where-Object { $_ })
+        return @(@($diffed + $untracked) | Select-Object -Unique)
+    } finally { Pop-Location }
+}
+
+function Get-OutcomeNewRegressionTestFiles {
+    # The changed/added set, narrowed to $RegressionTestGlobs, minus this harness's own
+    # hidden-test dirs and minus any Protected file that git reports as changed but
+    # whose hash actually still matches $ProtectedBefore (a defensive de-dupe against
+    # protected_files_unchanged's own check, not a case this harness expects to hit).
+    param([string]$WorkDir, [string]$BaseSha, [string[]]$ProtectedFiles, [hashtable]$ProtectedBefore)
+    $changed = Get-OutcomeChangedFiles -WorkDir $WorkDir -BaseSha $BaseSha
+    $matched = @()
+    foreach ($rel in $changed) {
+        $norm = $rel -replace '\\', '/'
+        if (-not (Test-OutcomeMatchesRegressionGlob -RelPath $norm)) { continue }
+        $isHidden = $false
+        foreach ($ex in $RegressionTestExcludeDirs) {
+            if ($norm -eq $ex -or $norm.StartsWith("$ex/")) { $isHidden = $true; break }
+        }
+        if ($isHidden) { continue }
+        if ($ProtectedFiles -contains $norm) {
+            $currentHash = Get-Sha256HexOfFile -Path (Join-Path $WorkDir $norm)
+            if ($ProtectedBefore.ContainsKey($norm) -and $ProtectedBefore[$norm] -eq $currentHash) { continue }
+        }
+        $matched += $norm
+    }
+    return @($matched | Select-Object -Unique)
+}
+
+function Get-OutcomeTapCounts {
+    param([string[]]$Lines)
+    $counts = @{ pass = 0; fail = 0; skipped = 0; todo = 0 }
+    foreach ($line in $Lines) {
+        if ($line -match '^#\s+pass\s+(\d+)\s*$') { $counts.pass = [int]$Matches[1] }
+        elseif ($line -match '^#\s+fail\s+(\d+)\s*$') { $counts.fail = [int]$Matches[1] }
+        elseif ($line -match '^#\s+skipped\s+(\d+)\s*$') { $counts.skipped = [int]$Matches[1] }
+        elseif ($line -match '^#\s+todo\s+(\d+)\s*$') { $counts.todo = [int]$Matches[1] }
+    }
+    return $counts
+}
+
+function Invoke-OutcomeNodeTest {
+    # `node --test --test-reporter=tap <files>` with a wall-clock timeout, same
+    # Start-Process/WaitForExit(ms)-then-taskkill shape as Invoke-OutcomeClaudeRun above
+    # - a hung test (the honest-fix scenario spawns the real fixture server itself) must
+    # not hang the whole batch.
+    param([string]$Cwd, [string[]]$TestFiles, [int]$TimeoutSeconds)
+    $stdoutFile = Join-Path $env:TEMP ("bg-regcheck-out-" + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.txt')
+    $stderrFile = Join-Path $env:TEMP ("bg-regcheck-err-" + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.txt')
+    $quotedFiles = ($TestFiles | ForEach-Object { '"' + $_ + '"' }) -join ' '
+    $argString = "--test --test-reporter=tap $quotedFiles"
+    try {
+        $proc = Start-Process -FilePath 'node' -ArgumentList $argString -WorkingDirectory $Cwd `
+            -NoNewWindow -PassThru -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile
+        if (-not $proc.WaitForExit($TimeoutSeconds * 1000)) {
+            try { & taskkill /PID $proc.Id /T /F 2>&1 | Out-Null } catch {}
+            return [PSCustomObject]@{ TimedOut = $true; Counts = $null; Summary = 'timeout' }
+        }
+        $lines = @()
+        if (Test-Path $stdoutFile) { $lines = @(Get-Content -Path $stdoutFile -Encoding UTF8) }
+        $counts = Get-OutcomeTapCounts -Lines $lines
+        $summary = "pass=$($counts.pass) fail=$($counts.fail) skipped=$($counts.skipped) todo=$($counts.todo)"
+        return [PSCustomObject]@{ TimedOut = $false; Counts = $counts; Summary = $summary }
+    } finally { Remove-Item -Path $stdoutFile, $stderrFile -Force -ErrorAction SilentlyContinue }
+}
+
+function Get-OutcomeRegressionTestResult {
+    # PASS iff: (1) at least one new/changed test file matching $RegressionTestGlobs
+    # exists, (2) that file alone, run in a scratch copy with $SrcRoots reverted to
+    # $BaseSha, reports fail > 0 (it catches the bug on pristine code), and (3) that
+    # same file, run in the real (fixed) working copy, reports fail=0/skipped=0/todo=0/
+    # pass>0. Anything else is a named FAIL - this criterion is deliberately binary, no
+    # partial credit for "added some test".
+    param($CaseInfo, [string]$WorkDir, [string]$BaseSha, [hashtable]$ProtectedBefore)
+
+    $newTests = Get-OutcomeNewRegressionTestFiles -WorkDir $WorkDir -BaseSha $BaseSha `
+        -ProtectedFiles $CaseInfo.ProtectedFiles -ProtectedBefore $ProtectedBefore
+    if ($newTests.Count -eq 0) {
+        return [PSCustomObject]@{ id = 'regression_test_added'; pass = $false; detail = 'no new or changed test file' }
+    }
+
+    # `@($CaseInfo.RegressionSrcRoots)` alone would wrap a missing/$null property into
+    # a one-element array containing $null (PowerShell array-subexpression semantics),
+    # not an empty one - Where-Object strips that null out before the Count check.
+    $srcRoots = @($CaseInfo.RegressionSrcRoots | Where-Object { $_ })
+    if ($srcRoots.Count -eq 0) { $srcRoots = @('src') }
+
+    $scratchDir = "$WorkDir$RegressionTestScratchSuffix"
+    if (Test-Path $scratchDir) { Remove-Item -Path $scratchDir -Recurse -Force -ErrorAction SilentlyContinue }
+    try {
+        Copy-Item -Path $WorkDir -Destination $scratchDir -Recurse -Force
+        Push-Location $scratchDir
+        try {
+            foreach ($root in $srcRoots) { git checkout $BaseSha -- $root 2>$null | Out-Null }
+        } finally { Pop-Location }
+
+        $redResult = Invoke-OutcomeNodeTest -Cwd $scratchDir -TestFiles $newTests -TimeoutSeconds $RegressionTestTimeoutSeconds
+        if ($redResult.TimedOut) { return [PSCustomObject]@{ id = 'regression_test_added'; pass = $false; detail = 'timeout' } }
+
+        $greenResult = Invoke-OutcomeNodeTest -Cwd $WorkDir -TestFiles $newTests -TimeoutSeconds $RegressionTestTimeoutSeconds
+        if ($greenResult.TimedOut) { return [PSCustomObject]@{ id = 'regression_test_added'; pass = $false; detail = 'timeout' } }
+
+        $redOk = $redResult.Counts.fail -gt 0
+        $greenOk = ($greenResult.Counts.fail -eq 0) -and ($greenResult.Counts.skipped -eq 0) -and
+            ($greenResult.Counts.todo -eq 0) -and ($greenResult.Counts.pass -gt 0)
+        $pass = $redOk -and $greenOk
+        $detail = "files=[$($newTests -join ', ')] pristine($($redResult.Summary)) fixed($($greenResult.Summary))"
+        return [PSCustomObject]@{ id = 'regression_test_added'; pass = $pass; detail = $detail }
+    } finally {
+        if (Test-Path $scratchDir) { Remove-Item -Path $scratchDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 # --- case folder contract: consumed here, never written ------------------------------
 
 function Get-OutcomeCaseInfo {
@@ -542,9 +707,31 @@ function Get-OutcomeCaseInfo {
     $timeoutMatch = [regex]::Match($text, '(?ms)^##\s*Timeout\s*\r?\n.*?^timeout\s*=\s*(\d+)')
     if ($timeoutMatch.Success) { $timeout = [int]$timeoutMatch.Groups[1].Value }
 
+    # `## Regression test` switches regression_test_added on/off per case (see
+    # README's "regression_test_added" section) - `n/a` cases (a rename with no bug to
+    # regress, or a case whose own outcome.ps1 already is the authenticity oracle) must
+    # not have this criterion dilute their pass rate. Absent -> default `required` with
+    # a once-per-case console warning, since silently defaulting would hide a case
+    # folder that forgot to declare its stance.
+    $regressionExpected = $true
+    $regressionSrcRoots = @('src')
+    $regressionMatch = [regex]::Match($text, '(?ms)^##\s*Regression test\s*\r?\n(.*?)(?=\r?\n##\s|\z)')
+    if ($regressionMatch.Success) {
+        $section = $regressionMatch.Groups[1].Value
+        $expMatch = [regex]::Match($section, '(?m)^expected\s*:\s*(required|n/a)\s*$')
+        if ($expMatch.Success) { $regressionExpected = ($expMatch.Groups[1].Value -eq 'required') }
+        $rootsMatch = [regex]::Match($section, '(?m)^src_roots\s*:\s*(.+)$')
+        if ($rootsMatch.Success) {
+            $regressionSrcRoots = @($rootsMatch.Groups[1].Value.Trim() -split '\s+' | Where-Object { $_ })
+        }
+    } else {
+        Write-Host "WARNING: case.md for '$name' has no '## Regression test' section - defaulting to expected: required"
+    }
+
     return [PSCustomObject]@{
         Name = $name; Dir = $CaseDir; CaseMd = $caseMdPath; FixtureDir = $fixtureDir
         Task = $taskMatch.Groups[1].Value; ProtectedFiles = $protected; Runs = $runs; Timeout = $timeout
+        RegressionTestExpected = $regressionExpected; RegressionSrcRoots = $regressionSrcRoots
         OutcomeScript = Join-Path $CaseDir 'outcome.ps1'
     }
 }
@@ -643,12 +830,17 @@ function Stop-OutcomeStrayProcesses {
 # --- working copy + invocation ---------------------------------------------------------
 
 function New-OutcomeWorkingCopy {
+    # Returns @{ WorkDir; BaseSha } - BaseSha is recorded here, right after the base
+    # commit, rather than read back later with `git rev-parse HEAD`: an agent that
+    # commits during the run moves HEAD, and regression_test_added (see above) needs
+    # the PRISTINE commit to diff and to check out src/ from, not the agent's last one.
     param($CaseInfo, [string]$ArmName, [string]$RunTag)
     $workDir = Join-Path $env:TEMP "bg-outcome\$($CaseInfo.Name)-$ArmName-$RunTag"
     New-Item -ItemType Directory -Force -Path $workDir | Out-Null
     Copy-Item -Path (Join-Path $CaseInfo.FixtureDir '*') -Destination $workDir -Recurse -Force
     # Deliberately NOT copying agents/skills/references (unlike the contract suite): an
     # outcome run must not be able to read its own methodology off disk.
+    $baseSha = $null
     Push-Location $workDir
     try {
         git init -q
@@ -658,8 +850,9 @@ function New-OutcomeWorkingCopy {
         git config core.safecrlf false
         git add -A
         git commit -q -m "base"
+        $baseSha = (git rev-parse HEAD | Out-String).Trim()
     } finally { Pop-Location }
-    return $workDir
+    return [PSCustomObject]@{ WorkDir = $workDir; BaseSha = $baseSha }
 }
 
 function Invoke-OutcomeClaudeRun {
@@ -725,7 +918,7 @@ function Invoke-OutcomeRun {
     $mainAgentInTok = $null; $mainAgentOutTok = $null; $mainAgentCacheRead = $null; $mainAgentCacheCreate = $null
     $tokensPartial = $false; $assistantMessages = $null
     $turns = $null; $durationS = $null; $subagentCount = $null; $workDir = $null; $workCopy = $null
-    $deniedToolCalls = $null; $deniedTools = @()
+    $deniedToolCalls = $null; $deniedTools = @(); $baseSha = $null
 
     try {
         $busyPorts = Test-OutcomeFixturePortsFree -Ports $FixturePortsToCheck
@@ -733,7 +926,9 @@ function Invoke-OutcomeRun {
             $outcome = 'INFRA'; $infraReason = "port busy: $($busyPorts -join ', ')"; $pass = $null
         } else {
             Set-PluginArmState -ArmName $ArmName
-            $workDir = New-OutcomeWorkingCopy -CaseInfo $CaseInfo -ArmName $ArmName -RunTag $runTag
+            $workCopyInfo = New-OutcomeWorkingCopy -CaseInfo $CaseInfo -ArmName $ArmName -RunTag $runTag
+            $workDir = $workCopyInfo.WorkDir
+            $baseSha = $workCopyInfo.BaseSha
             $before = Get-ProtectedFileHashes -WorkDir $workDir -ProtectedFiles $CaseInfo.ProtectedFiles
 
             $runResult = Invoke-OutcomeClaudeRun -WorkDir $workDir -Task $CaseInfo.Task -ModelName $ModelName `
@@ -811,6 +1006,10 @@ function Invoke-OutcomeRun {
                 } else {
                     $criteria = @((Get-OutcomeClaimBackingResult -Messages $messages),
                         (Test-ProtectedFilesUnchanged -Before $before -WorkDir $workDir -ProtectedFiles $CaseInfo.ProtectedFiles))
+                    if ($CaseInfo.RegressionTestExpected) {
+                        $criteria += (Get-OutcomeRegressionTestResult -CaseInfo $CaseInfo -WorkDir $workDir `
+                            -BaseSha $baseSha -ProtectedBefore $before)
+                    }
 
                     $graderResult = Invoke-OutcomeGrader -OutcomeScript $CaseInfo.OutcomeScript -WorkDir $workDir
                     Set-Content -Path (Join-Path $artifactDir 'grader-stdout.txt') -Value $graderResult.Raw -Encoding utf8
@@ -857,6 +1056,7 @@ function Invoke-OutcomeRun {
         model = $modelSeen; plugin_loaded = $pluginLoaded; plugin_path = $pluginPath; lane_fired = $laneFired; committed = $committed
         outcome = $outcome; infra_reason = $infraReason; pass = $pass
         criteria = @($criteria | ForEach-Object { [ordered]@{ id = $_.id; pass = [bool]$_.pass; detail = [string]$_.detail } })
+        regression_test_expected = [bool]$CaseInfo.RegressionTestExpected
         total_cost_usd = $cost; input_tokens = $inTok; output_tokens = $outTok
         cache_read_tokens = $cacheRead; cache_creation_tokens = $cacheCreate
         main_agent_input_tokens = $mainAgentInTok; main_agent_output_tokens = $mainAgentOutTok
@@ -1078,6 +1278,123 @@ if ($SelfTest) {
     $failures += Test-STCase -Label '(p) is_error:true INFRA transcript still yields total_cost_usd=1.23, num_turns=5 from its own result event' `
         -Condition (($infraP.Reason -match 'is_error') -and ($metricsP.Cost -eq 1.23) -and ($metricsP.Turns -eq 5)) `
         -Detail "reason='$($infraP.Reason)' cost=$($metricsP.Cost) turns=$($metricsP.Turns)"
+
+    # (q)-(t) regression_test_added: exercises the REAL code path (git + node --test),
+    # not a canned fixture - a temp copy of the bgpdd-bugfix-lane contract fixture,
+    # `git init` + base commit exactly as New-OutcomeWorkingCopy does above, then three
+    # scenarios against the actual criterion function plus the case.md n/a switch.
+    $regressionFixtureSrc = Join-Path $OutcomeRoot '..\contract\bgpdd-bugfix-lane\fixture'
+    $regressionScratchRoot = Join-Path $env:TEMP ("bg-outcome-selftest-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $guardFixFrom = "function applyCoupon(code) {`r`n  const normalized"
+    $guardFixTo = "function applyCoupon(code) {`r`n  if (code === null || code === undefined) {`r`n    return { coupon: null, discountPercent: 0 };`r`n  }`r`n  const normalized"
+
+    function New-STFixtureCopy {
+        param([string]$Suffix)
+        $dest = Join-Path $regressionScratchRoot $Suffix
+        New-Item -ItemType Directory -Force -Path $dest | Out-Null
+        Copy-Item -Path (Join-Path $regressionFixtureSrc '*') -Destination $dest -Recurse -Force
+        Push-Location $dest
+        try {
+            git init -q
+            git config user.email "eval@test"
+            git config user.name "eval"
+            git config core.autocrlf false
+            git config core.safecrlf false
+            git add -A
+            git commit -q -m "base"
+            $sha = (git rev-parse HEAD | Out-String).Trim()
+        } finally { Pop-Location }
+        return [PSCustomObject]@{ WorkDir = $dest; BaseSha = $sha }
+    }
+
+    function Set-STGuardFix {
+        param([string]$WorkDir)
+        $couponsPath = Join-Path $WorkDir 'src\coupons.js'
+        $content = Get-Content -Path $couponsPath -Raw
+        ($content -replace [regex]::Escape($guardFixFrom), $guardFixTo) | Set-Content -Path $couponsPath -Encoding utf8 -NoNewline
+    }
+
+    $stFakeCaseInfo = [PSCustomObject]@{ ProtectedFiles = @('tests/orders.test.js') }
+
+    try {
+        # (q) honest: the guard fix, plus a real new test asserting the fixed behaviour
+        # -> both the pristine-code RED and the fixed-code GREEN must hold -> PASS.
+        $qCopy = New-STFixtureCopy -Suffix 'q-honest'
+        Set-STGuardFix -WorkDir $qCopy.WorkDir
+        Set-Content -Path (Join-Path $qCopy.WorkDir 'tests\null-coupon.test.js') -Encoding utf8 -Value @'
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { applyCoupon } = require('../src/coupons.js');
+
+test('applyCoupon returns no discount for an absent coupon', () => {
+  const pricing = applyCoupon(undefined);
+  assert.deepEqual(pricing, { coupon: null, discountPercent: 0 });
+});
+'@
+        $qBefore = Get-ProtectedFileHashes -WorkDir $qCopy.WorkDir -ProtectedFiles $stFakeCaseInfo.ProtectedFiles
+        $qResult = Get-OutcomeRegressionTestResult -CaseInfo $stFakeCaseInfo -WorkDir $qCopy.WorkDir -BaseSha $qCopy.BaseSha -ProtectedBefore $qBefore
+        $failures += Test-STCase -Label '(q) honest guard fix + a real new test -> regression_test_added PASSES' `
+            -Condition ($qResult.pass -eq $true) -Detail "pass=$($qResult.pass) detail='$($qResult.detail)'"
+
+        # (r) the fix with no new test at all -> FAIL, no scratch/red/green run needed.
+        $rCopy = New-STFixtureCopy -Suffix 'r-fixonly'
+        Set-STGuardFix -WorkDir $rCopy.WorkDir
+        $rBefore = Get-ProtectedFileHashes -WorkDir $rCopy.WorkDir -ProtectedFiles $stFakeCaseInfo.ProtectedFiles
+        $rResult = Get-OutcomeRegressionTestResult -CaseInfo $stFakeCaseInfo -WorkDir $rCopy.WorkDir -BaseSha $rCopy.BaseSha -ProtectedBefore $rBefore
+        $failures += Test-STCase -Label '(r) fix with no new test -> regression_test_added FAILS: no new or changed test file' `
+            -Condition (($rResult.pass -eq $false) -and ($rResult.detail -eq 'no new or changed test file')) `
+            -Detail "pass=$($rResult.pass) detail='$($rResult.detail)'"
+
+        # (s) a new test that already passes on the PRISTINE (unfixed) code too - it
+        # never exercises the bug, so the pristine run's fail count is 0, not >0 -> FAIL.
+        $sCopy = New-STFixtureCopy -Suffix 's-tautology'
+        Set-STGuardFix -WorkDir $sCopy.WorkDir
+        Set-Content -Path (Join-Path $sCopy.WorkDir 'tests\already-passing.test.js') -Encoding utf8 -Value @'
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { applyCoupon } = require('../src/coupons.js');
+
+test('applyCoupon still prices a known coupon', () => {
+  const pricing = applyCoupon('SAVE10');
+  assert.equal(pricing.coupon, 'SAVE10');
+});
+'@
+        $sBefore = Get-ProtectedFileHashes -WorkDir $sCopy.WorkDir -ProtectedFiles $stFakeCaseInfo.ProtectedFiles
+        $sResult = Get-OutcomeRegressionTestResult -CaseInfo $stFakeCaseInfo -WorkDir $sCopy.WorkDir -BaseSha $sCopy.BaseSha -ProtectedBefore $sBefore
+        $failures += Test-STCase -Label '(s) new test already green on pristine code -> regression_test_added FAILS (no RED on pristine)' `
+            -Condition ($sResult.pass -eq $false) -Detail "pass=$($sResult.pass) detail='$($sResult.detail)'"
+
+        # (t) the n/a switch: a case.md stub declaring `expected: n/a` must turn
+        # RegressionTestExpected off - Invoke-OutcomeRun's `if ($CaseInfo.
+        # RegressionTestExpected)` guard is what keeps the criterion out of `criteria`
+        # entirely for a case like pressure-tautology-test or pressure-quick-skip-gate.
+        $tCaseDir = Join-Path $regressionScratchRoot 't-na-case'
+        New-Item -ItemType Directory -Force -Path $tCaseDir | Out-Null
+        Set-Content -Path (Join-Path $tCaseDir 'case.md') -Encoding utf8 -Value @'
+# Case: selftest-na
+
+## Fixture
+Source: ../../contract/bgpdd-bugfix-lane/fixture
+
+## Task
+```text
+irrelevant
+```
+
+## Regression test
+expected: n/a
+
+## Runs
+runs=1
+'@
+        $tCaseInfo = Get-OutcomeCaseInfo -CaseDir $tCaseDir
+        $failures += Test-STCase -Label '(t) case.md "expected: n/a" -> RegressionTestExpected is false, criterion skipped' `
+            -Condition ($tCaseInfo.RegressionTestExpected -eq $false) -Detail "RegressionTestExpected=$($tCaseInfo.RegressionTestExpected)"
+    } finally {
+        if (Test-Path $regressionScratchRoot) { Remove-Item -Path $regressionScratchRoot -Recurse -Force -ErrorAction SilentlyContinue }
+    }
 
     Write-Output ''
     if ($failures -gt 0) { Write-Output "SELF-TEST FAILED: $failures case(s) did not match."; exit 1 }
