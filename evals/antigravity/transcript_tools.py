@@ -340,7 +340,9 @@ def transcripts_for_conversation(conversation_id, window_start, window_end, brai
     Subagents are every OTHER conversation active in the window whose first
     USER_INPUT is a briefing (`is_briefing_input`) -- the same rule
     `find_run_transcripts` uses. Returns the same `{"parent", "subagents",
-    "all"}` shape. `parent` is `None` if `conversation_id`'s transcript is
+    "all"}` shape, where "all" is exactly the parent plus those subagents --
+    a non-briefing neighbour conversation in the window is NOT included
+    (it is another run's parent). `parent` is `None` if `conversation_id`'s transcript is
     missing or empty (the caller should fall back to `find_run_transcripts`
     in that case).
     """
@@ -372,10 +374,14 @@ def transcripts_for_conversation(conversation_id, window_start, window_end, brai
         fu2 = first_user_input(steps2)
         record = dict(conv)
         record["first_user_input"] = fu2
-        all_active.append(record)
+        # Only briefing conversations (this run's own subagents) join the
+        # set. A non-briefing neighbour active in the same window is another
+        # headless run's parent, and letting it into "all" would leak its
+        # tool calls into this run's trigger judge and escape tripwire.
         if is_briefing_input(fu2):
             record["persona"] = briefing_persona(fu2)
             subagents.append(record)
+            all_active.append(record)
 
     return {"parent": parent, "subagents": subagents, "all": all_active}
 

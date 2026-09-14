@@ -157,7 +157,8 @@ def append_antigravity_record(case, run_index, passed, runtime="antigravity",
                               metrics=None, outcome=None, triage=None,
                               duration_s=None, results_path=None, case_path=None,
                               installed_plugin_path=None, installed_plugin_sha=None,
-                              installed_plugin_dirty=None):
+                              installed_plugin_dirty=None, left_workspace=None,
+                              left_workspace_first=None):
     """Append one flat `evals/antigravity/` run record, sibling to `append_script_record`.
 
     Additive only: every field `append_script_record` writes is written here
@@ -202,6 +203,9 @@ def append_antigravity_record(case, run_index, passed, runtime="antigravity",
     }
     if triage:
         record["triage"] = triage
+    if left_workspace is not None:
+        record["left_workspace"] = left_workspace
+        record["left_workspace_first"] = left_workspace_first
     target = Path(results_path) if results_path else RESULTS_PATH
     try:
         os.makedirs(str(target.parent), exist_ok=True)
@@ -219,7 +223,8 @@ def append_runtime_contract_record(case, run_index, passed, outcome, failed_crit
                                     duration_s=None, runtime="antigravity", model="gemini-3.8-flash",
                                     workspace=None, results_path=None, case_path=None, triage=None,
                                     installed_plugin_path=None, installed_plugin_sha=None,
-                                    installed_plugin_dirty=None):
+                                    installed_plugin_dirty=None, left_workspace=None,
+                                    left_workspace_first=None):
     """Append one flat `evals/run_suite.py --suite contract` record, sibling to
     `append_antigravity_record`. Written by `evals/suites/contract.py` for a
     runtime-neutral contract grade (a `claude -p` invocation replaced by a
@@ -261,6 +266,9 @@ def append_runtime_contract_record(case, run_index, passed, outcome, failed_crit
     }
     if triage:
         record["triage"] = triage
+    if left_workspace is not None:
+        record["left_workspace"] = left_workspace
+        record["left_workspace_first"] = left_workspace_first
     target = Path(results_path) if results_path else RESULTS_PATH
     try:
         os.makedirs(str(target.parent), exist_ok=True)
@@ -279,7 +287,8 @@ def append_runtime_trigger_record(case, run_index, outcome, first_skill, skills_
                                    duration_s=None, runtime="antigravity", model="gemini-3.8-flash",
                                    workspace=None, raw_line=None, results_path=None, triage=None,
                                    installed_plugin_path=None, installed_plugin_sha=None,
-                                   installed_plugin_dirty=None, judge="skill_read"):
+                                   installed_plugin_dirty=None, judge="skill_read",
+                                   left_workspace=None, left_workspace_first=None):
     """Append one flat `evals/run_suite.py --suite trigger` record, sibling to
     `append_runtime_contract_record`. `pass` is derived from `outcome` exactly
     as evals/README.md's "Trigger judging" table defines it (`True` only for
@@ -324,6 +333,9 @@ def append_runtime_trigger_record(case, run_index, outcome, first_skill, skills_
     }
     if triage:
         record["triage"] = triage
+    if left_workspace is not None:
+        record["left_workspace"] = left_workspace
+        record["left_workspace_first"] = left_workspace_first
     target = Path(results_path) if results_path else RESULTS_PATH
     try:
         os.makedirs(str(target.parent), exist_ok=True)
