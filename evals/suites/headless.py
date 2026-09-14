@@ -52,6 +52,15 @@ RESULTS_DIR = common.EVALS_ROOT / "results"
 OUTCOME_RESULTS_DIR = common.OUTCOME_RESULTS_PATH.parent
 
 DEFAULT_TIMEOUT_S = 2700  # 45 minutes
+# Headless workspaces live OUTSIDE the plugin checkout by default. In-place
+# `start` puts them under cwd/eval-runs/ for the interactive skill, but a
+# headless worker that searches one directory upward from such a workspace
+# lands in the checkout itself -- graders included -- and the scope guard
+# rightly flags it (bgpdd-bugfix-lane run 1 of the resumed 2026-09-14 batch:
+# `find_by_name` on the checkout root). The system temp dir is already an
+# allowed root, so a sibling-or-parent peek under it is harmless, exactly as
+# run-evals.ps1's temp working copies are.
+DEFAULT_RUN_ROOT = Path(tempfile.gettempdir()) / "bg-eval-runs"
 HARD_KILL_GRACE_S = 60
 
 AGY_CLI_BRAIN_ROOT = Path.home() / ".gemini" / "antigravity-cli" / "brain"
@@ -1222,7 +1231,7 @@ def cmd_run(args):
     if bool(args.case) == bool(args.all_cases):
         common.fail("--case or --all-cases is required (exactly one)")
 
-    root = Path(args.root).resolve() if args.root else Path.cwd()
+    root = Path(args.root).resolve() if args.root else DEFAULT_RUN_ROOT
     runs = args.runs or 1
     timeout_s = args.timeout or DEFAULT_TIMEOUT_S
     skip_permissions = not args.no_skip_permissions

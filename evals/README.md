@@ -215,6 +215,11 @@ tools), so the fields record the fact and a reader compares them when it matters
 INFRA quarantine rows are written only with `--record`, like every other write here (a
 deliberate divergence from `run-evals.ps1`, which quarantines unconditionally).
 
+**Where headless workspaces live.** `run` puts them under `<system temp>/bg-eval-runs/eval-runs/`
+by default (`--root` overrides), not under the checkout: a worker that searches one directory
+upward from an in-place workspace lands in the plugin tree itself and is flagged as an escape.
+The temp dir is an allowed root, so the same peek there is harmless.
+
 **Permissions.** Headless `agy` auto-denies every tool permission unless
 `--dangerously-skip-permissions` is passed; `run` passes it by default (the headless
 equivalent of `claude -p --allowedTools`), and `--no-skip-permissions` disables that.
