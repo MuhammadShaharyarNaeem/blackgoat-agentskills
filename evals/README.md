@@ -219,6 +219,22 @@ deliberate divergence from `run-evals.ps1`, which quarantines unconditionally).
 `--dangerously-skip-permissions` is passed; `run` passes it by default (the headless
 equivalent of `claude -p --allowedTools`), and `--no-skip-permissions` disables that.
 
+**Scope guard (2026-09-15 incident).** A live `--case trigger-3` run under agy with
+permissions skipped once found no `.git` in its fixture, searched the whole machine for a
+"real" repository, and spent six minutes grepping an unrelated project over `git -C` and
+querying the `linear` MCP server — nothing was modified, but the graded transcript measured
+a runaway, not the plugin. Three guards close that: every composed prompt is prefixed with
+`scope_preamble()`, naming the workspace as the entire project and forbidding any excursion
+outside it; a trigger run under agy passes `--mode plan` (read-only, parity with the claude
+trigger run's `--permission-mode plan`); and after each agy run, `detect_workspace_escape()`
+walks its attributed transcript for a `view_file`/`run_command`/etc. outside every allowed
+root (the workspace, the installed plugin, `~/.gemini/antigravity-cli/`,
+`~/.gemini/antigravity/`, the system temp dir, the interpreter's own install dir) or any
+`call_mcp_tool`/`read_url_content`/`search_web`/browser call at all. An escape is classified
+INFRA with reason `left_workspace`, retried once like any other INFRA, and quarantined —
+never graded. A `claude` run has no Antigravity-shaped transcript to check, so its rows
+always carry `left_workspace: null`.
+
 ## Layout
 
 ```

@@ -46,6 +46,23 @@ def _run_cmd(cmdline):
     return {"name": "run_command", "args": {"CommandLine": _q(cmdline)}}
 
 
+def _escape_transcripts(conv_dir, tool_calls_by_step, conversation_id="conv"):
+    """Build a `{"parent": None, "subagents": [], "all": [...]}` transcripts
+    dict (the shape `headless.detect_workspace_escape` walks) out of one
+    conversation whose steps each carry one list of raw tool calls, in
+    order -- one synthetic step per list, `created_at` auto-incrementing by
+    a second so ordering is deterministic."""
+    t0 = common.parse_iso("2026-01-01T00:00:00Z")
+    steps = []
+    for i, calls in enumerate(tool_calls_by_step):
+        steps.append({"step_index": i, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+                      "created_at": common.format_iso(t0 + timedelta(seconds=i)), "tool_calls": calls})
+    _write_transcript(conv_dir, steps)
+    return {"parent": None, "subagents": [],
+            "all": [{"conversation_id": conversation_id, "dir": str(conv_dir),
+                     "first_ts": steps[0]["created_at"], "last_ts": steps[-1]["created_at"]}]}
+
+
 class _FakeInvoker:
     """`headless.RUNTIME_INVOKER` replacement: records every call and returns
     canned responses (a `headless.ProcResult`, or a callable producing one)
@@ -713,6 +730,59 @@ class SelfTest(unittest.TestCase):
         self.assertEqual(headless.to_go_duration(3661), "1h1m1s")
         self.assertEqual(headless.to_go_duration(0), "0s")
 
+    # -- guard 1: workspace-scope preamble --------------------------------------
+
+    def test_headless_scope_preamble_exact_text_and_composed_prompt(self):
+        ws = Path("C:/Users/msnaeem/bg-worktrees/bg-wt-scope/eval-runs/trigger-trigger-3-x")
+        preamble = headless.scope_preamble(ws)
+        self.assertEqual(preamble, (
+            f"Your working copy is {ws}. Treat it as the entire project: every "
+            "relative path resolves there. Do not read, search, or modify anything "
+            "outside it; do not look for other repositories or projects on this "
+            "machine; do not call external services, issue trackers, MCP tools, or "
+            "the network. If something the task needs is not inside the working "
+            "copy, stop and say so."))
+
+        # A contract-shaped single-quoted prompt with an embedded double quote
+        # (the exact shape `parse_quoted_prompt` produces) must survive
+        # composition verbatim.
+        case_prompt = 'she said "hi" to me'
+        composed = headless.apply_scope_preamble(case_prompt, ws)
+        self.assertEqual(composed, preamble + "\n\n" + case_prompt)
+        self.assertTrue(composed.endswith(case_prompt))
+
+        prompt_sha256 = common.sha256_text(case_prompt)
+        prompt_sent_sha256 = common.sha256_text(composed)
+        self.assertNotEqual(prompt_sha256, prompt_sent_sha256)
+
+    def test_headless_claude_contract_command_text_not_scoped(self):
+        # guard 1 explicitly excludes this path -- it must run a case's own
+        # `## Command` block verbatim (parity with run-evals.ps1), never
+        # prefixed with the scope preamble.
+        command_text = "claude -p 'do the thing' --permission-mode acceptEdits"
+        result = headless.build_claude_contract_command_text(command_text)
+        self.assertNotIn("Your working copy is", result)
+        self.assertEqual(result, common.harden_git_prefix_for_long_paths(command_text))
+
+    # -- guard 2: read-only mode for trigger runs --------------------------------
+
+    def test_headless_build_argv_agy_mode_default_and_plan(self):
+        default_argv = headless.build_argv_agy("prompt")
+        self.assertIn("--mode", default_argv)
+        self.assertEqual(default_argv[default_argv.index("--mode") + 1], "accept-edits")
+
+        plan_argv = headless.build_argv_agy("prompt", mode="plan")
+        self.assertIn("--mode", plan_argv)
+        self.assertEqual(plan_argv[plan_argv.index("--mode") + 1], "plan")
+
+    def test_headless_archive_run_command_txt_names_the_mode(self):
+        self._patch_headless_dirs()
+        argv = headless.build_argv_agy("prompt", mode="plan")
+        proc = headless.ProcResult(stdout="ok", stderr="", returncode=0, duration_s=1.0, timed_out=False)
+        d = headless.archive_run("trigger", "trigger-1", "20260101T000000Z", argv, proc)
+        command_txt = (d / "command.txt").read_text(encoding="utf-8")
+        self.assertIn("--mode plan", command_txt)
+
     # -- INFRA classification --------------------------------------------------
 
     def test_headless_classify_infra_agy_permission_denied(self):
@@ -895,6 +965,138 @@ class SelfTest(unittest.TestCase):
         self.assertIsNotNone(resolved["parent"])
         self.assertEqual(resolved["parent"]["conversation_id"], conv_id)
 
+    # -- guard 3: workspace-scope tripwire (detect_workspace_escape) -------------
+    # Six scenarios modelled on the 2026-09-15 incident transcript (see this
+    # module's docstring / evals/suites/headless.py's detect_workspace_escape).
+
+    def test_headless_detect_workspace_escape_run_command_external_git(self):
+        ws = self.tmp / "ws-a"
+        ws.mkdir()
+        transcripts = _escape_transcripts(self.tmp / "conv-a", [
+            [{"name": "run_command", "args": {
+                "CommandLine": _q(r"git -C C:\Gorelo\Gorelo_Web grep -n x"), "Cwd": _q(str(ws))}}],
+        ])
+        result = headless.detect_workspace_escape(transcripts, ws, None, None)
+        self.assertTrue(result["escaped"])
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["first"]["tool"], "run_command")
+        self.assertIn("Gorelo", result["first"]["argument"])
+
+    def test_headless_detect_workspace_escape_view_file_external(self):
+        ws = self.tmp / "ws-b"
+        ws.mkdir()
+        transcripts = _escape_transcripts(self.tmp / "conv-b", [
+            [{"name": "view_file", "args": {"AbsolutePath": _q(r"C:\Gorelo\gorelo_backend\Program.cs")}}],
+        ])
+        result = headless.detect_workspace_escape(transcripts, ws, None, None)
+        self.assertTrue(result["escaped"])
+        self.assertEqual(result["first"]["tool"], "view_file")
+        self.assertIn("Gorelo", result["first"]["argument"])
+
+    def test_headless_detect_workspace_escape_call_mcp_tool(self):
+        ws = self.tmp / "ws-c"
+        ws.mkdir()
+        transcripts = _escape_transcripts(self.tmp / "conv-c", [
+            [{"name": "call_mcp_tool", "args": {"ServerName": _q("linear"), "ToolName": _q("list_issues")}}],
+        ])
+        result = headless.detect_workspace_escape(transcripts, ws, None, None)
+        self.assertTrue(result["escaped"])
+        self.assertEqual(result["first"]["tool"], "call_mcp_tool")
+        self.assertIn("linear", result["first"]["argument"])
+        self.assertIn("list_issues", result["first"]["argument"])
+
+    def test_headless_detect_workspace_escape_run_command_machine_search(self):
+        ws = self.tmp / "ws-d"
+        ws.mkdir()
+        transcripts = _escape_transcripts(self.tmp / "conv-d", [
+            [{"name": "run_command", "args": {"CommandLine": _q("Get-ChildItem -Path C:\\ -Directory")}}],
+        ])
+        result = headless.detect_workspace_escape(transcripts, ws, None, None)
+        self.assertTrue(result["escaped"])
+        self.assertEqual(result["first"]["tool"], "run_command")
+
+    def test_headless_detect_workspace_escape_allowed_roots_not_flagged(self):
+        ws = self.tmp / "ws-e"
+        ws.mkdir()
+        installed_plugin = self.tmp / "installed-plugin"
+        installed_plugin.mkdir()
+        antigravity_cli_path = str(Path.home() / ".gemini" / "antigravity-cli" / "brain" /
+                                    "some-conv" / "notes.md")
+        temp_path = str(Path(tempfile.gettempdir()) / "scratch.tmp")
+        transcripts = _escape_transcripts(self.tmp / "conv-e", [
+            [{"name": "run_command", "args": {"CommandLine": _q("npm test"), "Cwd": _q(str(ws))}}],
+            [{"name": "view_file", "args": {"AbsolutePath": _q(str(installed_plugin / "agents" / "mason.md"))}}],
+            [{"name": "view_file", "args": {"AbsolutePath": _q(antigravity_cli_path)}}],
+            [{"name": "view_file", "args": {"AbsolutePath": _q("skills/bgpdd-plan/SKILL.md")}}],  # relative
+            [{"name": "run_command", "args": {"CommandLine": _q(f"type {temp_path}")}}],
+        ])
+        result = headless.detect_workspace_escape(transcripts, ws, installed_plugin, None)
+        self.assertFalse(result["escaped"], result["first"])
+        self.assertEqual(result["count"], 0)
+
+    def test_headless_detect_workspace_escape_case_and_slash_variants_not_flagged(self):
+        ws = self.tmp / "Ws-F"
+        ws.mkdir()
+        mixed_case_backslash = str(ws).upper() + r"\skills\bgpdd-plan\SKILL.md"
+        forward_slash_cwd = str(ws).replace("\\", "/")
+        transcripts = _escape_transcripts(self.tmp / "conv-f", [
+            [{"name": "view_file", "args": {"AbsolutePath": _q(mixed_case_backslash)}}],
+            [{"name": "run_command", "args": {"CommandLine": _q("npm test"), "Cwd": _q(forward_slash_cwd)}}],
+        ])
+        result = headless.detect_workspace_escape(transcripts, ws, None, None)
+        self.assertFalse(result["escaped"], result["first"])
+
+    def test_headless_run_one_agy_trigger_left_workspace_retried_and_quarantined(self):
+        # End-to-end through the fake invoker: a trigger run whose fake
+        # transcript escapes (a call_mcp_tool to `linear`, same shape as the
+        # incident) must grade as INFRA `left_workspace`, retried exactly
+        # once, quarantined to the invalid-infra file -- never results.jsonl,
+        # never graded by trigger.grade_one at all.
+        self._patch_headless_dirs()
+        root = self.tmp / "agy-escape-root"
+        root.mkdir()
+        brain = self.tmp / "agy-escape-brain"
+        cache_path = self.tmp / "agy-escape-cache" / "last_conversations.json"
+        conv_id = "agy-escape-conv"
+        self._patch_agy_cache_path(cache_path)
+
+        def fake_invoke(argv, cwd, timeout_s):
+            now = common.utc_now_iso()
+            steps = [
+                {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE",
+                 "created_at": now, "content": "prompt"},
+                {"step_index": 1, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+                 "created_at": now, "tool_calls": [
+                     {"name": "call_mcp_tool", "args": {"ServerName": _q("linear"), "ToolName": _q("list_issues")}}]},
+            ]
+            _write_transcript(brain / conv_id, steps)
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(json.dumps({str(cwd): conv_id}), encoding="utf-8")
+            return headless.ProcResult(stdout="checking linear for context...", stderr="", returncode=0,
+                                        duration_s=4.0, timed_out=False)
+
+        invoker = _FakeInvoker([fake_invoke, fake_invoke])
+        self._patch_invoker(invoker)
+        installed = {"path": None, "sha": None, "dirty": False}
+        row, was_infra = headless.run_one("agy", "trigger", "trigger-1", 1, root, 60, None, True,
+                                           True, True, brain, installed)
+        self.assertTrue(was_infra)
+        self.assertEqual(row["outcome"], "INFRA")
+        self.assertIsNone(row["pass"])
+        self.assertEqual(row["failed_criterion"], "INFRA: left_workspace")
+        self.assertTrue(row["left_workspace"])
+        self.assertEqual(row["left_workspace_first"]["tool"], "call_mcp_tool")
+        self.assertEqual(len(invoker.calls), 2)  # retried exactly once, never a third try
+
+        invalid_path = headless.invalid_infra_path()
+        self.assertTrue(invalid_path.is_file())
+        lines = invalid_path.read_text(encoding="utf-8").strip().splitlines()
+        self.assertEqual(len(lines), 1)  # one quarantined record, not two
+        rec = json.loads(lines[0])
+        self.assertEqual(rec["outcome"], "INFRA")
+        self.assertTrue(rec["left_workspace"])
+        self.assertFalse((headless.RESULTS_DIR / "results.jsonl").exists())  # never graded
+
     def test_headless_run_one_agy_trigger_routed_ok_via_mapping(self):
         self._patch_headless_dirs()
         root = self.tmp / "agy-trigger-root"
@@ -906,11 +1108,18 @@ class SelfTest(unittest.TestCase):
 
         def fake_invoke(argv, cwd, timeout_s):
             now = common.utc_now_iso()
+            # In-workspace path (a real compliant agy run reads the SKILL.md
+            # `copy_plugin_agents_skills_references` already copied INTO the
+            # workspace, not some other machine path) -- so this transcript
+            # passes the workspace-scope tripwire (guard 3) same as it did
+            # before that guard existed.
+            skill_path = str(Path(cwd) / "skills" / "bgpdd-plan" / "SKILL.md")
             steps = [
                 {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE",
                  "created_at": now, "content": "prompt"},
                 {"step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
-                 "created_at": now, "tool_calls": [_view("skills/bgpdd-plan/SKILL.md")]},
+                 "created_at": now, "tool_calls": [
+                     {"name": "view_file", "args": {"AbsolutePath": _q(skill_path)}}]},
             ]
             _write_transcript(brain / conv_id, steps)
             cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -925,6 +1134,7 @@ class SelfTest(unittest.TestCase):
         self.assertFalse(was_infra)
         self.assertEqual(row["outcome"], "ROUTED_OK")
         self.assertTrue(row["pass"])
+        self.assertFalse(row["left_workspace"])  # in-workspace view_file -> no tripwire
         self.assertFalse(Path(row["workspace"]).exists())  # PASS, not kept -> deleted
 
     def test_headless_run_one_agy_permission_denied_retried_and_quarantined(self):
