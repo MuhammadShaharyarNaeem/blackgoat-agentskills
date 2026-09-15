@@ -8,7 +8,7 @@ Depth for the `update_state.py` section of `../SKILL.md`: persistence guarantees
 - stdout is always the resulting **full state JSON** (indent 2) on success. Warnings (no-op `--init`, a `--resolve-blocker` that matched nothing) go to **stderr** as `Warning: ...` lines, never stdout — stdout stays parseable.
 ### The ledger rule this mechanizes
 
-Orchestrator Contract §4's blocker-ledger doctrine — **an entry is removed only once its fix is verified** — is enforced here, not just documented: the CLI physically refuses `--resolve-blocker` without a stated `--evidence` string. And every successful removal appends one line per removed entry to a **`blockers-resolved.log`** file beside the state file (`<ISO timestamp>\t<id>\t<the full entry>\t<evidence text>`), so a removal always leaves an audit trace even though the state file itself only ever shows the current, post-removal `blockers` array.
+Orchestrator Contract §4's blocker-ledger doctrine — **an entry is removed only once its fix is verified** — is enforced here, not just documented: `--resolve-blocker`'s `--evidence` must be a path that resolves to an existing, non-empty file — tried relative to the state file's own directory first, then the CWD. A missing, empty, or directory path fails the call closed at exit 1 with an `evidence_not_found` / `evidence_empty` / `evidence_is_directory` problem, and nothing is written. And every successful removal appends one line per removed entry to a **`blockers-resolved.log`** file beside the state file (`<ISO timestamp>\t<id>\t<the full entry>\t<evidence text>`), so a removal always leaves an audit trace even though the state file itself only ever shows the current, post-removal `blockers` array.
 
 ## The schema migration: why scoping needed a field
 
@@ -23,7 +23,7 @@ Two consequences worth stating:
 
 ## `--ledger` on a state writer
 
-`update_state.py` is not a gate, so its ledger record is not a verdict anyone gates on — it is the durable half of a blocker resolution. `--resolve-blocker` additionally records `"action": "resolve-blocker"` and `"evidence": "<text>"` in the ledger line. The CLI still cannot judge whether "trust me" is real evidence; the ledger makes the claim durable and attributable instead of gone the moment the array shrinks. Pipelines therefore pass `--ledger` on `--resolve-blocker` calls and nowhere else — nothing else here makes a claim that outlives the file it writes.
+`update_state.py` is not a gate, so its ledger record is not a verdict anyone gates on — it is the durable half of a blocker resolution. `--resolve-blocker` additionally records `"action": "resolve-blocker"` and `"evidence": "<the --evidence value as given>"` in the ledger line, plus `evidence_resolved` (the resolved path, relative to the state file's directory when possible) and `evidence_sha256` (the resolved file's hash) — so a later reader can verify the exact file that was checked, not just the string typed on the command line. Pipelines therefore pass `--ledger` on `--resolve-blocker` calls and nowhere else — nothing else here makes a claim that outlives the file it writes.
 
 ## The game-tape gate on a state writer
 
@@ -63,3 +63,11 @@ lane name satisfy a lane gate.
 `--clear-halt <unit>` is deliberately narrow: it only removes `state["halt"]` when the CURRENT halt's `unit` matches the one named, and it requires a non-empty `--reason` naming what changed in the world. Both restrictions trace to the same design decision made in `check_redelegation.py`'s own contract — that script never clears its own halt, on any result, from any agent, because a blocker in the `environment`/`credentials`/`dependency` category is a fact about the unit's surroundings, not about whether the latest handoff happened to read clean. Clearing is therefore a human act with a recorded justification, and `--reason` is where that justification lives; omitting it (or passing blank) is exit 2, the same shape as `--resolve-blocker`'s mandatory `--evidence`. A `--clear-halt` naming a unit that isn't the one currently halted — or naming one when nothing is halted at all — is a no-op warning, not an error: there is no malformed state to refuse, just nothing to do.
 
 Self-test count: 47 → 60, adding the `--set-halt`/`--clear-halt` round trips (merge, malformed JSON, missing keys, blank-reason clear, matching-unit clear, mismatched-unit clear, no-op-when-absent, and the ledger record's `action`/`unit`/`code`/`reason` fields) through both `apply_updates` directly and `main`.
+
+## `--set-status` (Unreleased)
+
+Merges `state["status"] = STATUS` plus a `status_updated` timestamp, the same shape `--set-halt` stamps `ts` in. `STATUS` is one of `active`, `escalated`, `closed`, validated by argparse `choices` — an unknown value exits 2 before anything is read or written. `--reason` is optional here (unlike `--clear-halt`, which requires it) and, when given, is recorded on the ledger line alongside the new status and the status this call overwrote (`previous_status`, omitted when there was none to overwrite).
+
+Written by `bgpdd-bugfix` Phase 2 step 5 and Phase 5 step 4 (standalone route) when a lane HALTs and escalates to another pipeline, so `guard_action.py`'s `lane_is_closed()`/`unfixed_bugfix_lanes()` can treat the lane as closed without waiting on the 12h freshness window to age it out — see `guard_action.md`.
+
+Self-test count: 60 → 69.

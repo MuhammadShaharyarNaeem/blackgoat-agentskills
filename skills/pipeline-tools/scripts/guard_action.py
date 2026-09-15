@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pre-execution guard: converts six restraint rules from "should not" to "cannot".
+"""Pre-execution guard: converts seven restraint rules from "should not" to "cannot".
 
 Every other script in this family verifies AFTER the fact, and the decision to
 run it is the model's. This one runs BEFORE the tool call, decided by the
