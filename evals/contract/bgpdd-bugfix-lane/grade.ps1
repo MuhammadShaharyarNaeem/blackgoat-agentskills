@@ -653,7 +653,7 @@ if ($null -eq $gateRecord) {
     if ($declaredFiles.Count -eq 0) {
         $commitProblems.Add('the gating check_commit_gate.py PASS declared no --changed-files, so no commit can be matched to it')
     }
-    foreach ($flag in @('--verify-tree', '--max-changed-files')) {
+    foreach ($flag in @('--verify-tree', '--max-changed-files', '--require-files-reviewed')) {
         if (-not (Test-ArgvHasFlag -Argv $gateRecord.argv -Flag $flag)) {
             $commitProblems.Add("the commit gate was run without $flag")
         }

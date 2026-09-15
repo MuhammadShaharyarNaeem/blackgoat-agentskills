@@ -183,7 +183,7 @@ that, not as a missing file.
    — the first thing checked, because a PASS read out of a tampered ledger is not a weaker
    PASS but no PASS — and the ledger holds a latest `PASS` for `check_bugfix_intake.py` and
    `check_red_green.py`, plus a `check_commit_gate.py` `PASS` whose own recorded argv carries
-   `--commit`, `--verify-tree`, `--max-changed-files`, and a `--require-ledger-gates` value
+   `--commit`, `--verify-tree`, `--max-changed-files`, `--require-files-reviewed`, and a `--require-ledger-gates` value
    naming **both** `check_bugfix_intake.py` and `check_red_green.py`.
 4. **Each bug's RED/GREEN pair is a real before/after.** The grader opens the `--red` and
    every `--green` capture that bug's own `check_red_green.py` argv names and confirms:

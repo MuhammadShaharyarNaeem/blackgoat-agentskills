@@ -521,7 +521,7 @@ if ($null -eq $gateRecord) {
     Write-Output '[7] PASSED (vacuous, and says so): no check_commit_gate.py PASS carrying --commit exists, so there is no gated commit to bound'
 } else {
     $shapeProblems = New-Object System.Collections.Generic.List[string]
-    foreach ($flag in @('--verify-tree', '--max-changed-files')) {
+    foreach ($flag in @('--verify-tree', '--max-changed-files', '--require-files-reviewed')) {
         if (-not (Test-ArgvHasFlag -Argv $gateRecord.argv -Flag $flag)) {
             $shapeProblems.Add("the commit gate was run without $flag")
         }
@@ -544,7 +544,7 @@ if ($null -eq $gateRecord) {
     if ($shapeProblems.Count -gt 0) {
         Add-Failure '7' "the gated commit is not a bounded, ledger-backed close: $($shapeProblems -join '; ')"
     } else {
-        Write-Output "[7] PASSED: the gated commit is $(@($gatedCommit.Files).Count) file(s), gated with --commit, --verify-tree, --max-changed-files and --require-ledger-gates naming the intake and red/green gates"
+        Write-Output "[7] PASSED: the gated commit is $(@($gatedCommit.Files).Count) file(s), gated with --commit, --verify-tree, --max-changed-files, --require-files-reviewed and --require-ledger-gates naming the intake and red/green gates"
     }
 }
 

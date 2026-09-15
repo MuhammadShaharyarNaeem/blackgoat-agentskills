@@ -4,8 +4,8 @@
 
 An adversarial composition eval for the four gates `/bgpdd-bugfix` runs:
 `check_bugfix_intake.py`, `next_bugfix_route.py`, `check_red_green.py` and
-`check_commit_gate.py`'s size terms. Each already has its own `--self-test` (33, 49,
-24 and 76 cases) which proves its predicate in-process against synthetic fixtures.
+`check_commit_gate.py`'s size terms. Each already has its own `--self-test` (33, 52,
+38 and 125 cases) which proves its predicate in-process against synthetic fixtures.
 Nothing previously proved that they **refuse a fabricated run when composed in the
 order the lane invokes them**, against real `run_quiet.py` captures, a real ledger
 that one gate writes and the next reads, and a real on-disk git repo.

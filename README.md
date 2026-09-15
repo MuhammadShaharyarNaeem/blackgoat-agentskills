@@ -4,7 +4,7 @@
 
 A Claude Code plugin that packages an **agent squad** and a **Prompt-Driven Development (PDD)** workflow into reusable skills and personas. An Orchestrator delegates self-contained tasks to specialized subagents, each of which runs in isolation and returns a structured `<handoff>`. Instead of one agent trying to hold an entire project in context, work is split across a squad of narrow specialists coordinated through slash-command SOPs — with requirement traceability enforced from the first honing question to the final pre-launch gate.
 
-- **Plugin:** `blackgoat-agentskills` v2.7.0 — see [CHANGELOG.md](CHANGELOG.md)
+- **Plugin:** `blackgoat-agentskills` v2.7.1 — see [CHANGELOG.md](CHANGELOG.md)
 - **Author:** shaharyar.naeem (shaharyar.naeem@gorelo.io)
 
 > Note: this repo's `AGENTS.md` is the Google Antigravity runtime contract, not the generic cross-tool "AGENTS.md" coding-agent convention — see [docs/cursor-setup.md](docs/cursor-setup.md).
@@ -415,7 +415,7 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **bgpdd-learn** — `/bgpdd-learn`, the on-demand session-learning triage (Orchestrator + Forge)
 
 ### Standalone tools
-- **pipeline-tools** — the deterministic gate CLI family (coverage, commit gate, agent report, runtime evidence, acceptance suite, ship decision — including the `--require-rehearsal` and `--require-baseline` flags that make a rollback rehearsal and a rollout baseline evidenced rather than asserted — milestone-scoped blockers, milestone read/write, state writes, quiet runs, and the two static lints) executed by the Orchestrator at every bgpdd gate; there is no manual open-and-read substitute. Alongside the gates: **`detect_stack.py`** gives "if the project uses X" a mechanical floor by reporting evidence-backed stacks and the skills they imply, and **`record_run.py` / `summarize_run.py`** are the run-telemetry pair — one JSON line per delegation, rolled up into the fired-versus-rubber-stamped block the game tape pastes instead of narrating
+- **pipeline-tools** — the deterministic gate CLI family (coverage, commit gate, agent report, runtime evidence, acceptance suite, ship decision, re-delegation halts, Tier-1 staleness, the review package — including the `--require-rehearsal` and `--require-baseline` flags that make a rollback rehearsal and a rollout baseline evidenced rather than asserted — milestone-scoped blockers, milestone read/write, state writes, quiet runs, and the two static lints) executed by the Orchestrator at every bgpdd gate; there is no manual open-and-read substitute. Alongside the gates: **`detect_stack.py`** gives "if the project uses X" a mechanical floor by reporting evidence-backed stacks and the skills they imply, and **`record_run.py` / `summarize_run.py`** are the run-telemetry pair — one JSON line per delegation, rolled up into the fired-versus-rubber-stamped block the game tape pastes instead of narrating
 - **doubt-driven-development** — adversarial fresh-context verification of decisions (run by the main-session Orchestrator, never by subagents)
 - **github-pr-review** — Linear-driven multi-repo PR review via GitHub MCP
 - **prompt-engineering** — prompting patterns and optimization guidance
@@ -436,7 +436,7 @@ The plugin's failure doctrine is *halt and surface* — never guess, never silen
 
 ## Enforcement Hooks: "should not" → "cannot"
 
-Every gate in this plugin verifies *after* the fact, and the decision to run one is the model's. `hooks/hooks.json` closes that hole for four restraints by registering a **`PreToolUse` hook** — `skills/pipeline-tools/scripts/guard_action.py` — which the runtime invokes before a tool call and which can refuse it outright. The refusal reason is fed back to Claude, so a block reads as "run this gate instead", not as a crash.
+Every gate in this plugin verifies *after* the fact, and the decision to run one is the model's. `hooks/hooks.json` closes that hole for six restraints by registering a **`PreToolUse` hook** — `skills/pipeline-tools/scripts/guard_action.py` — which the runtime invokes before a tool call and which can refuse it outright. The refusal reason is fed back to Claude, so a block reads as "run this gate instead", not as a crash.
 
 | It blocks | When | Instead |
 |---|---|---|
@@ -444,8 +444,10 @@ Every gate in this plugin verifies *after* the fact, and the decision to run one
 | editing an **existing** test file | a bugfix lane has not reached its commit gate | fix the code; Quinn owns tests in that lane. Adding a *new* test file is allowed |
 | spawning a subagent | a fresh `bug-report.md` has no `check_bugfix_intake.py` PASS | run the intake gate |
 | hand-editing `gates.jsonl`, `orchestrator-state.json`, `run-log.jsonl`, `*.meta.json` | **always** | use the pipeline-tools script that owns that artifact |
+| a raw `dotnet build`/`dotnet test`/`npm test`/`pytest`/`npx playwright test`/… via the Bash tool | any lane is active | wrap it: `run_quiet.py --log <log> -- <command>` — the log and capture are the evidence the gates read |
+| spawning a subagent | the active lane's `orchestrator-state.json` carries a standing `halt` | run the printed `update_state.py --clear-halt` command — a human decision, never the model's |
 
-The active lane is detected from artifacts in the working tree (a state file's `pipeline`, a bug report, a quick note, each with a 12-hour freshness window — `--window-hours`, default 12; a lane abandoned longer than that stops being active) — never from prose or a model assertion. `python skills/pipeline-tools/scripts/guard_action.py --explain` prints the rules and what it currently detects; `--self-test` runs 42 cases. **It fails open by design**: any internal error, a missing python, or an unparseable payload allows the call, because a guard that bricks a session gets deleted and a deleted guard enforces nothing. Every block is therefore a positive identification, never an inability to decide — and the guard raises the cost of the wrong action rather than making the repo tamper-proof. Under Cursor only the commit rule is mechanically enforceable (`hooks/hooks-cursor.json`, a template); see `rules/cursor-runtime.mdc`.
+The active lane is detected from artifacts in the working tree (a state file's `pipeline`, a bug report, a quick note, each with a 12-hour freshness window — `--window-hours`, default 12; a lane abandoned longer than that stops being active) — never from prose or a model assertion. `python skills/pipeline-tools/scripts/guard_action.py --explain` prints the rules and what it currently detects; `--self-test` runs 100 cases. **It fails open by design**: any internal error, a missing python, or an unparseable payload allows the call, because a guard that bricks a session gets deleted and a deleted guard enforces nothing. Every block is therefore a positive identification, never an inability to decide — and the guard raises the cost of the wrong action rather than making the repo tamper-proof. Under Cursor only the commit rule is mechanically enforceable (`hooks/hooks-cursor.json`, a template); see `rules/cursor-runtime.mdc`.
 
 ---
 
