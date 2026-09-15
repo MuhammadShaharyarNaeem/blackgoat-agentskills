@@ -61,6 +61,28 @@ BLOCKER_SEVERITY_RANK = {"Critical": 3, "Important": 2, "Info": 1}
 # milestone lands and letting a caller loosen it defeats the point.
 BLOCKER_FLOOR_RANK = BLOCKER_SEVERITY_RANK["Important"]
 
+# --- Verdict/severity consistency (CLAUDE.md convention #9: the "no Approve
+# over a standing Critical/Important finding" prose rule, converted) ---------
+# A finding line's list marker (if any) is optional -- allow '- ', '* ',
+# '1. ' or none at all, matching however the reviewer actually wrote it.
+FINDING_LINE_RE = re.compile(
+    r"^(?P<indent>\s*)(?:[-*]\s+|\d+\.\s+)?\*\*(?P<severity>Critical|Important):\*\*")
+# Any list-item line, used only to find where a finding's BLOCK ends (a
+# sibling item at the same or lesser indentation).
+LIST_ITEM_RE = re.compile(r"^(\s*)(?:[-*]|\d+\.)\s+")
+# Whole uppercase word only -- 'the fix resolved this' (prose, lowercase)
+# must not satisfy a marker meant to be a deliberate, machine-read annotation.
+RESOLVED_RE = re.compile(r"\bRESOLVED\b")
+
+# --- Files-reviewed coverage (--require-files-reviewed) ---------------------
+# Exactly two '#' -- the level-2 heading that ends the WIDER range a
+# 'Files reviewed' subsection is searched in (parse_review_sections's own
+# body already closes at level 3, before that subsection even starts).
+LEVEL2_HEADING_RE = re.compile(r"^#{2}(?:\s|$)")
+FILES_REVIEWED_HEADING_RE = re.compile(r"^#{3,4}\s+files reviewed\s*$",
+                                       re.IGNORECASE)
+BACKTICK_SPAN_RE = re.compile(r"`([^`]+)`")
+
 
 class GateError(Exception):
     """Structural/usage failure — maps to exit 2."""
@@ -343,7 +365,13 @@ def _matches_milestone(patterns, haystack):
 
 
 def parse_review_sections(text):
-    """Return every '## Review: ...' section as (title, [body lines]).
+    """Return every '## Review: ...' section as (title, [body lines], body_start).
+
+    `body_start` is the 0-based index into `text.splitlines()` of `body[0]`
+    (or of the line right after the heading, when the body is empty) --
+    carried so a caller that needs to cite a real line number for something
+    found inside `body` (the finding-consistency gate) can do so without
+    re-scanning the text.
 
     ANY heading of level 2-6 closes an open section. Closing only on '## '
     meant a '### Addendum' (or any deeper subsection) stayed INSIDE the review
@@ -352,10 +380,10 @@ def parse_review_sections(text):
     """
     sections = []
     current = None
-    for line in text.splitlines():
+    for idx, line in enumerate(text.splitlines()):
         m = REVIEW_HEADING_RE.match(line)
         if m:
-            current = (m.group(1).strip(), [])
+            current = (m.group(1).strip(), [], idx + 1)
             sections.append(current)
         elif ANY_HEADING_RE.match(line):
             current = None
@@ -377,7 +405,7 @@ def section_milestone_ids(title):
 
 
 def find_matching_section(text, milestone):
-    """Return (title, body_lines) for the LAST section matching the milestone."""
+    """Return (title, body_lines, body_start) for the LAST matching section."""
     patterns = milestone_token_patterns(milestone)
     matching = [s for s in parse_review_sections(text)
                 if _matches_milestone(patterns, s[0])]
@@ -390,7 +418,7 @@ def find_latest_review(text, milestone):
     section = find_matching_section(text, milestone)
     if section is None:
         return False, None, warnings
-    title, body = section
+    title, body, _body_start = section
     verdict_lines = [m.group(1) for m in
                      (VERDICT_LINE_RE.match(l) for l in body) if m]
     if not verdict_lines:
@@ -405,6 +433,202 @@ def find_latest_review(text, milestone):
             "required: 'Approve' or 'Request Changes' exactly")
         return True, None, warnings
     return True, token.group(1), warnings
+
+
+def matched_section_range(text, milestone):
+    """Return (heading_idx, end_idx) for the LAST '## Review:' section
+    matching milestone, or None. Both are 0-based indices into
+    `text.splitlines()`: `heading_idx` is the '## Review:' line itself,
+    `end_idx` is the index of the NEXT level-2 '##' heading (or `len(lines)`
+    if none) -- a narrower level 3-6 subsection heading does not end this
+    range.
+
+    Shared by the finding-consistency and Files-reviewed gates so the two
+    cannot drift on where a review section actually ends. Both need to see
+    subsections (`### Correctness`, `### Security`, `### Files reviewed`)
+    that `parse_review_sections`'s own body deliberately does NOT include --
+    it closes at the FIRST subsequent heading of any level, which is right
+    for the verdict (a `**Verdict:**` line must come before any `###`, see
+    "Section boundaries" above) but wrong for content that legitimately
+    lives under those subsections. `find_matching_section`'s own body is
+    used only for the verdict and for rendered-evidence citations, both of
+    which the template places before the first `###` on purpose.
+    """
+    lines = text.splitlines()
+    section = find_matching_section(text, milestone)
+    if section is None:
+        return None
+    _title, _body, body_start = section
+    heading_idx = body_start - 1
+    end_idx = len(lines)
+    for idx in range(body_start, len(lines)):
+        if LEVEL2_HEADING_RE.match(lines[idx]):
+            end_idx = idx
+            break
+    return heading_idx, end_idx
+
+
+def finding_blocks(lines):
+    """Every Critical/Important finding line in a range of review-report lines.
+
+    Each result is `{"severity", "start": 0-based index into `lines`, "block":
+    [lines]}`. A finding's block is its own line plus every following line up
+    to (not including): a blank line, a heading (`ANY_HEADING_RE` -- `lines`
+    is the WIDER `matched_section_range`, which contains `### Correctness` /
+    `### Security` etc., unlike the narrower verdict body), another list-item
+    line at the same or lesser indentation as the finding's own marker, or
+    another finding line (a fourth stop this rule's prose does not name,
+    added defensively: two finding lines written back-to-back with no list
+    marker at all are not 'list items' by `LIST_ITEM_RE` and would otherwise
+    merge into one block).
+
+    A table row (`| **Critical:** | Blocks merge |` in the severity legend)
+    is excluded explicitly: `FINDING_LINE_RE` already requires the bold token
+    to be the first thing on the line after an optional list marker, which a
+    `|`-prefixed row never is, but the exclusion is named here rather than
+    left to be inferred from that regex not matching.
+    """
+    findings = []
+    i, n = 0, len(lines)
+    while i < n:
+        line = lines[i]
+        if line.lstrip().startswith("|"):
+            i += 1
+            continue
+        m = FINDING_LINE_RE.match(line)
+        if not m:
+            i += 1
+            continue
+        indent = len(m.group("indent"))
+        block = [line]
+        j = i + 1
+        while j < n:
+            nxt = lines[j]
+            if not nxt.strip():
+                break
+            if ANY_HEADING_RE.match(nxt):
+                break
+            if FINDING_LINE_RE.match(nxt):
+                break
+            lm = LIST_ITEM_RE.match(nxt)
+            if lm and len(lm.group(1)) <= indent:
+                break
+            block.append(nxt)
+            j += 1
+        findings.append({"severity": m.group("severity"), "start": i, "block": block})
+        i = j
+    return findings
+
+
+def check_finding_consistency(text, milestone, verdict):
+    """(findings_consistent, standing_findings) for the matched review section.
+
+    Converts the code-review-and-quality prose rule -- 'Approve is
+    unavailable while any Critical or Important finding stands in the same
+    report' -- into a mechanical check (CLAUDE.md convention #9). Only an
+    `Approve` verdict is at risk here: `Request Changes` already fails the
+    gate on the verdict itself, so this reports it as consistent (there is
+    nothing this rule additionally forbids about a Request Changes verdict
+    carrying findings -- that is the normal case).
+
+    Scans the SAME wider range `find_files_reviewed_paths` uses
+    (`matched_section_range`), NOT `find_latest_review`'s narrower verdict
+    body: the template files real findings under `### Correctness` /
+    `### Security` / etc, which sit outside that narrower body by design (see
+    `matched_section_range`'s own docstring). Scanning only the pre-subsection
+    body returned `(True, [])` for an Approve whose Critical finding lived
+    under `### Security` -- silently passing the exact case this rule exists
+    to catch.
+
+    A finding is 'standing' unless its block (see `finding_blocks`) contains
+    the literal uppercase word `RESOLVED` -- `\\bRESOLVED\\b`, case-sensitive.
+    Lowercase ('the fix resolved this') is prose, not the deliberate marker
+    the rule asks for, and does not count.
+    """
+    if verdict != "Approve":
+        return True, []
+    rng = matched_section_range(text, milestone)
+    if rng is None:
+        return True, []
+    heading_idx, end_idx = rng
+    lines = text.splitlines()
+    section_lines = lines[heading_idx + 1:end_idx]
+    standing = []
+    for f in finding_blocks(section_lines):
+        block_text = "\n".join(f["block"])
+        if RESOLVED_RE.search(block_text):
+            continue
+        standing.append({
+            "severity": f["severity"],
+            # 1-based line number in the report as read: heading_idx + 1 is
+            # the 0-based index of section_lines[0], + f["start"] locates the
+            # finding within it, + 1 converts to 1-based.
+            "line": heading_idx + 2 + f["start"],
+            "text": f["block"][0].strip()[:200],
+        })
+    return (not standing), standing
+
+
+def find_files_reviewed_paths(text, milestone):
+    """Return (subsection_found, [listed paths as written]) for the LAST
+    '## Review:' section matching milestone.
+
+    Uses the same wider `matched_section_range` the finding-consistency gate
+    does (see its docstring for why) -- a '### Files reviewed' subsection is
+    a heading, so `parse_review_sections`'s own body never contains it. Looks
+    for a level 3-4 'Files reviewed' heading inside the range and collects
+    the first backticked path on each of ITS list-item lines. Only the
+    LATEST matching '## Review:' section is read, same as the verdict -- a
+    'Files reviewed' subsection under a later section for a different
+    milestone is never reached because it lies past this section's own
+    level-2 boundary.
+    """
+    rng = matched_section_range(text, milestone)
+    if rng is None:
+        return False, []
+    heading_idx, end_idx = rng
+    lines = text.splitlines()
+    files_reviewed_idx = None
+    for idx in range(heading_idx + 1, end_idx):
+        if FILES_REVIEWED_HEADING_RE.match(lines[idx]):
+            files_reviewed_idx = idx
+            break
+    if files_reviewed_idx is None:
+        return False, []
+    paths = []
+    for idx in range(files_reviewed_idx + 1, end_idx):
+        line = lines[idx]
+        if ANY_HEADING_RE.match(line):
+            break
+        if not LIST_ITEM_RE.match(line):
+            continue
+        m = BACKTICK_SPAN_RE.search(line)
+        if m:
+            paths.append(m.group(1))
+    return True, paths
+
+
+def declared_file_reviewed(declared, listed_paths):
+    """True if some Files-reviewed line names this declared changed file.
+
+    Comparison is forward-slash, case-sensitive -- unlike `normalize_repo_path`
+    (used elsewhere in this file for the undeclared-tree check), which
+    case-folds on Windows because it compares actual filesystem paths where
+    Windows itself is case-insensitive. A Files-reviewed line is prose a
+    reviewer typed, not a filesystem lookup, and a reviewer who wrote
+    `Src/Foo.cs` for `src/Foo.cs` has not actually named the file. `declared`
+    is already resolved, repo-relative and forward-slash
+    (`resolve_changed_files`); a listed path may legitimately be shorter --
+    given relative to a root under the one `declared` was resolved to (see
+    `resolve_changed_files`'s own docstring for the sibling-repo case this
+    mirrors) -- so `declared` ending in `/` + the listed path also counts.
+    """
+    d = declared.replace("\\", "/")
+    for listed in listed_paths:
+        l = listed.replace("\\", "/").strip()
+        if d == l or d.endswith("/" + l):
+            return True
+    return False
 
 
 def is_path_shaped(token):
@@ -1218,6 +1442,8 @@ def build_report(args):
         "review_found": False,
         "verdict": None,
         "ambiguous_review_section": False,
+        "standing_findings": [],
+        "findings_consistent": True,
         "stale": False,
         "blocking": [],
         "unscoped_blockers": [],
@@ -1237,6 +1463,10 @@ def build_report(args):
         "run_log_ok": True,
         "undeclared_changes": [],
         "tree_verified": True,
+        "require_files_reviewed": args.require_files_reviewed,
+        "files_reviewed": [],
+        "files_unreviewed": [],
+        "files_reviewed_ok": not args.require_files_reviewed,
         "max_changed_files": args.max_changed_files,
         "changed_file_count": len(args.changed_files or []),
         "size_waiver": None,
@@ -1286,6 +1516,19 @@ def build_report(args):
                 f"{len(named)} milestones ({', '.join('M' + n for n in named)}) "
                 "— one verdict cannot review several milestones. Split it into "
                 "one '## Review:' section per milestone")
+
+    findings_consistent, standing_findings = check_finding_consistency(
+        text, args.milestone, verdict)
+    report["findings_consistent"] = findings_consistent
+    report["standing_findings"] = standing_findings
+    if not findings_consistent:
+        report["warnings"].append(
+            "findings_consistent: false — verdict is Approve but "
+            f"{len(standing_findings)} standing Critical/Important finding(s) "
+            "carry no whole-word 'RESOLVED' marker in their block "
+            "(code-review-and-quality/SKILL.md § The Review Report: "
+            "'Approve is unavailable while any Critical or Important finding "
+            "stands in the same report')")
 
     candidates = collect_rendered_evidence(section[1] if section else [])
     report["rendered_evidence"] = candidates
@@ -1359,6 +1602,28 @@ def build_report(args):
                 f"change outside --changed-files and the docs root "
                 f"({docs_root}): {path}")
 
+    if args.require_files_reviewed:
+        subsection_found, listed_paths = find_files_reviewed_paths(
+            text, args.milestone)
+        report["files_reviewed"] = listed_paths
+        if not subsection_found:
+            report["files_unreviewed"] = list(resolved_changed_files)
+            report["files_reviewed_ok"] = False
+            report["warnings"].append(
+                "--require-files-reviewed set but the matched review section "
+                "has no '### Files reviewed' subsection; every declared "
+                "changed file counts as unreviewed")
+        else:
+            unreviewed = [d for d in resolved_changed_files
+                         if not declared_file_reviewed(d, listed_paths)]
+            report["files_unreviewed"] = unreviewed
+            report["files_reviewed_ok"] = not unreviewed
+            if unreviewed:
+                report["warnings"].append(
+                    "--require-files-reviewed set but "
+                    f"{len(unreviewed)} declared changed file(s) have no "
+                    "'Files reviewed' line: " + ", ".join(unreviewed))
+
     if args.commit and args.changed_files:
         pending = declared_files_uncommitted(resolved_changed_files, args.repo)
         if not pending:
@@ -1372,12 +1637,14 @@ def build_report(args):
     gate_ok = (found and verdict == "Approve" and not stale and not scoped
                and not report["ambiguous_review_section"]
                and (args.ignore_unscoped or not unscoped)
+               and report["findings_consistent"]
                and report["rendered_evidence_ok"]
                and report["runtime_evidence_ok"]
                and report["ledger_gates_ok"]
                and report["run_log_ok"]
                and report["size_ok"]
                and report["tree_verified"]
+               and report["files_reviewed_ok"]
                and not report["already_committed"])
     report["result"] = "PASS" if gate_ok else "FAIL"
 
@@ -1410,6 +1677,10 @@ def build_parser():
              "shared .docs/ above several sibling repos")
     parser.add_argument("--ignore-unscoped", action="store_true")
     parser.add_argument("--require-rendered-evidence", action="store_true")
+    parser.add_argument(
+        "--require-files-reviewed", action="store_true",
+        help="every --changed-files path must have a line in the matched "
+             "review section's '### Files reviewed' subsection")
     parser.add_argument("--verify-tree", action="store_true")
     # Fix-size bound (bgpdd-bugfix Phase 5; lane default 5). Counts the
     # DECLARED --changed-files paths -- see check_size_bound().
@@ -1618,6 +1889,132 @@ def run_self_test():
     REVIEW_EVIDENCE_BUILD_ONLY = ("## Review: M3 — Auth endpoints\n\nfindings...\n\n"
                                   "Rendered evidence: evidence/build/m3-table.png\n\n"
                                   "**Verdict:** Approve\n")
+
+    # --- Gate 1 fixtures: verdict/severity consistency -----------------------
+    REVIEW_APPROVE_UNRESOLVED_CRITICAL = (
+        "## Review: M3 — Auth endpoints\n\n"
+        "- **Critical:** SQL injection in query builder\n\n"
+        "**Verdict:** Approve\n")
+    REVIEW_APPROVE_UNRESOLVED_IMPORTANT = (
+        "## Review: M3 — Auth endpoints\n\n"
+        "- **Important:** N+1 query on the list endpoint\n\n"
+        "**Verdict:** Approve\n")
+    REVIEW_APPROVE_CRITICAL_RESOLVED_CONTINUATION = (
+        "## Review: M3 — Auth endpoints\n\n"
+        "- **Critical:** SQL injection in query builder\n"
+        "  RESOLVED: parameterized the query; verified in "
+        "evidence/review/m3-fix.png\n\n"
+        "**Verdict:** Approve\n")
+    REVIEW_APPROVE_LOWERCASE_RESOLVED = (
+        "## Review: M3 — Auth endpoints\n\n"
+        "- **Critical:** SQL injection in query builder\n"
+        "  resolved: parameterized the query\n\n"
+        "**Verdict:** Approve\n")
+    REVIEW_APPROVE_SUGGESTION_ONLY = (
+        "## Review: M3 — Auth endpoints\n\n"
+        "- **Suggestion:** consider renaming this variable\n\n"
+        "**Verdict:** Approve\n")
+    REVIEW_RC_WITH_CRITICAL = (
+        "## Review: M3 — Auth endpoints\n\n"
+        "- **Critical:** SQL injection in query builder\n\n"
+        "**Verdict:** Request Changes\n")
+    REVIEW_APPROVE_FENCED_CRITICAL = (
+        "## Review: M3 — Auth endpoints\n\n"
+        "Example of a finding to avoid:\n\n"
+        "```markdown\n"
+        "- **Critical:** example finding\n"
+        "```\n\n"
+        "**Verdict:** Approve\n")
+    REVIEW_APPROVE_SEVERITY_LEGEND_TABLE = (
+        "## Review: M3 — Auth endpoints\n\n"
+        "| Severity | Meaning |\n"
+        "| --- | --- |\n"
+        "| **Critical:** | Blocks merge |\n\n"
+        "**Verdict:** Approve\n")
+    REVIEW_APPROVE_EARLIER_CRITICAL_LATER_CLEAN = (
+        "## Review: M3 — Auth endpoints\n\n"
+        "- **Critical:** old finding from round 1\n\n"
+        "**Verdict:** Request Changes\n\n"
+        "## Review: M3 — Auth endpoints\n\n"
+        "**Verdict:** Approve\n")
+    # The scoping bug found in review: a real report (per the template)
+    # files findings under '### Correctness' / '### Security', which sits
+    # OUTSIDE the narrower body find_latest_review's verdict comes from.
+    # Scanning only that narrower body returned (True, []) for this exact
+    # shape -- an Approve with a standing Critical under '### Security'.
+    REVIEW_APPROVE_CRITICAL_UNDER_SECURITY_SUBSECTION = (
+        "## Review: M3 — Login hardening\n\n"
+        "**Verdict:** Approve\n\n"
+        "### Context\n"
+        "- [x] understood\n\n"
+        "### Files reviewed\n"
+        "- `src_file.py` — identity: session; failure paths: raised; "
+        "findings: F1\n\n"
+        "### Security\n"
+        "- **Critical:** F1 the tenant id comes from the request body, "
+        "not the session.\n")
+    REVIEW_APPROVE_CRITICAL_UNDER_SECURITY_RESOLVED = (
+        "## Review: M3 — Login hardening\n\n"
+        "**Verdict:** Approve\n\n"
+        "### Context\n"
+        "- [x] understood\n\n"
+        "### Files reviewed\n"
+        "- `src_file.py` — identity: session; failure paths: raised; "
+        "findings: F1\n\n"
+        "### Security\n"
+        "- **Critical:** F1 the tenant id comes from the request body, "
+        "not the session.\n"
+        "  RESOLVED — fixed in a1b2c3, GREEN re-run captured at "
+        "evidence/review/m3-fix.md\n")
+    REVIEW_APPROVE_LATER_SECTION_CRITICAL_NOT_COUNTED = (
+        "## Review: M3 — Login hardening\n\n"
+        "**Verdict:** Approve\n\n"
+        "### Security\n"
+        "- **Suggestion:** nothing serious here\n\n"
+        "## Review: M4 — Something else\n\n"
+        "### Security\n"
+        "- **Critical:** unrelated finding scoped to M4\n")
+    REVIEW_APPROVE_IMPORTANT_UNDER_FILES_REVIEWED = (
+        "## Review: M3 — Login hardening\n\n"
+        "**Verdict:** Approve\n\n"
+        "### Files reviewed\n"
+        "- `src_file.py` — identity: n/a; failure paths: n/a; findings: none\n"
+        "- **Important:** forgot to check this file's failure path\n\n"
+        "### Security\n"
+        "- [x] fine\n")
+
+    # --- Gate 2 fixtures: Files-reviewed coverage -----------------------------
+    REVIEW_FILES_REVIEWED_OK = (
+        "## Review: M3 — Auth endpoints\n\n"
+        "**Verdict:** Approve\n\n"
+        "### Files reviewed\n"
+        "- `src_file.py` — identity: n/a; failure paths: n/a; findings: none\n")
+    REVIEW_FILES_REVIEWED_MISSING_ONE = (
+        "## Review: M3 — Auth endpoints\n\n"
+        "**Verdict:** Approve\n\n"
+        "### Files reviewed\n"
+        "- `src_file.py` — identity: n/a; failure paths: n/a; findings: none\n")
+    REVIEW_FILES_REVIEWED_NO_SUBSECTION = (
+        "## Review: M3 — Auth endpoints\n\n"
+        "**Verdict:** Approve\n")
+    REVIEW_FILES_REVIEWED_FENCED = (
+        "## Review: M3 — Auth endpoints\n\n"
+        "**Verdict:** Approve\n\n"
+        "### Files reviewed\n"
+        "```markdown\n"
+        "- `src_file.py` — identity: n/a\n"
+        "```\n")
+    REVIEW_FILES_REVIEWED_LATER_SECTION_ONLY = (
+        "## Review: M3 — Auth endpoints\n\n"
+        "**Verdict:** Approve\n\n"
+        "## Review: M4 — Something else\n\n"
+        "### Files reviewed\n"
+        "- `other_file.py` — identity: n/a\n")
+    REVIEW_FILES_REVIEWED_NESTED_PATH = (
+        "## Review: M3 — Auth endpoints\n\n"
+        "**Verdict:** Approve\n\n"
+        "### Files reviewed\n"
+        "- `sub/file.py` — identity: n/a; failure paths: n/a; findings: none\n")
 
     class GateTests(unittest.TestCase):
         def setUp(self):
@@ -3070,6 +3467,200 @@ def run_self_test():
                 self.assertIn("stray/", r["undeclared_changes"])
             finally:
                 shutil.rmtree(repo_dir, ignore_errors=True)
+
+        # --- Gate 1: verdict/severity consistency -----------------------
+
+        def test_approve_unresolved_critical_fails(self):
+            self.review.write_text(REVIEW_APPROVE_UNRESOLVED_CRITICAL)
+            self._order(self.changed, self.review)
+            r = self._run()
+            self.assertEqual(r["result"], "FAIL")
+            self.assertFalse(r["findings_consistent"])
+            self.assertEqual(len(r["standing_findings"]), 1)
+            self.assertEqual(r["standing_findings"][0]["severity"], "Critical")
+
+        def test_approve_unresolved_important_fails(self):
+            self.review.write_text(REVIEW_APPROVE_UNRESOLVED_IMPORTANT)
+            self._order(self.changed, self.review)
+            r = self._run()
+            self.assertEqual(r["result"], "FAIL")
+            self.assertFalse(r["findings_consistent"])
+            self.assertEqual(r["standing_findings"][0]["severity"], "Important")
+
+        def test_approve_critical_resolved_continuation_passes(self):
+            self.review.write_text(REVIEW_APPROVE_CRITICAL_RESOLVED_CONTINUATION)
+            self._order(self.changed, self.review)
+            r = self._run()
+            self.assertEqual(r["result"], "PASS")
+            self.assertTrue(r["findings_consistent"])
+            self.assertEqual(r["standing_findings"], [])
+
+        def test_approve_lowercase_resolved_still_fails(self):
+            # Whole UPPERCASE word only -- "resolved" written as prose does
+            # not satisfy the deliberate machine-read marker.
+            self.review.write_text(REVIEW_APPROVE_LOWERCASE_RESOLVED)
+            self._order(self.changed, self.review)
+            r = self._run()
+            self.assertEqual(r["result"], "FAIL")
+            self.assertFalse(r["findings_consistent"])
+
+        def test_approve_suggestion_only_passes(self):
+            self.review.write_text(REVIEW_APPROVE_SUGGESTION_ONLY)
+            self._order(self.changed, self.review)
+            r = self._run()
+            self.assertEqual(r["result"], "PASS")
+            self.assertTrue(r["findings_consistent"])
+
+        def test_request_changes_with_critical_findings_consistent_true(self):
+            # Fails on the verdict itself (as before) -- this rule only
+            # forbids the combination with Approve.
+            self.review.write_text(REVIEW_RC_WITH_CRITICAL)
+            self._order(self.changed, self.review)
+            r = self._run()
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["verdict"], "Request Changes")
+            self.assertTrue(r["findings_consistent"])
+
+        def test_approve_fenced_critical_ignored_passes(self):
+            # Fences are stripped before this parser ever sees the text.
+            self.review.write_text(REVIEW_APPROVE_FENCED_CRITICAL)
+            self._order(self.changed, self.review)
+            r = self._run()
+            self.assertEqual(r["result"], "PASS")
+            self.assertTrue(r["findings_consistent"])
+
+        def test_approve_severity_legend_table_ignored_passes(self):
+            self.review.write_text(REVIEW_APPROVE_SEVERITY_LEGEND_TABLE)
+            self._order(self.changed, self.review)
+            r = self._run()
+            self.assertEqual(r["result"], "PASS")
+            self.assertTrue(r["findings_consistent"])
+
+        def test_approve_earlier_critical_later_clean_passes(self):
+            # Only the LATEST '## Review:' section for the milestone is read.
+            self.review.write_text(REVIEW_APPROVE_EARLIER_CRITICAL_LATER_CLEAN)
+            self._order(self.changed, self.review)
+            r = self._run()
+            self.assertEqual(r["result"], "PASS")
+            self.assertTrue(r["findings_consistent"])
+            self.assertEqual(r["standing_findings"], [])
+
+        def test_approve_critical_under_security_subsection_fails(self):
+            # The scoping bug: a real report (per the template) files
+            # findings under '### Correctness' / '### Security', which sits
+            # OUTSIDE the narrower body find_latest_review's verdict comes
+            # from. check_finding_consistency must scan the WIDER
+            # matched_section_range instead, same as find_files_reviewed_paths.
+            self.review.write_text(REVIEW_APPROVE_CRITICAL_UNDER_SECURITY_SUBSECTION)
+            self._order(self.changed, self.review)
+            r = self._run()
+            self.assertEqual(r["result"], "FAIL")
+            self.assertFalse(r["findings_consistent"])
+            self.assertEqual(len(r["standing_findings"]), 1)
+            self.assertEqual(r["standing_findings"][0]["severity"], "Critical")
+            # 1-based line number in the report as read.
+            self.assertEqual(r["standing_findings"][0]["line"], 12)
+
+        def test_approve_critical_under_security_resolved_passes(self):
+            self.review.write_text(REVIEW_APPROVE_CRITICAL_UNDER_SECURITY_RESOLVED)
+            self._order(self.changed, self.review)
+            r = self._run()
+            self.assertEqual(r["result"], "PASS")
+            self.assertTrue(r["findings_consistent"])
+            self.assertEqual(r["standing_findings"], [])
+
+        def test_approve_later_section_critical_not_counted_passes(self):
+            # A Critical under a LATER '## Review:' section for a DIFFERENT
+            # milestone must not be read as M3's own standing finding.
+            self.review.write_text(REVIEW_APPROVE_LATER_SECTION_CRITICAL_NOT_COUNTED)
+            self._order(self.changed, self.review)
+            r = self._run()
+            self.assertEqual(r["result"], "PASS")
+            self.assertTrue(r["findings_consistent"])
+            self.assertEqual(r["standing_findings"], [])
+
+        def test_approve_important_under_files_reviewed_still_counted_fails(self):
+            # A finding line physically inside '### Files reviewed' is still
+            # inside the wider matched_section_range and must still count.
+            self.review.write_text(REVIEW_APPROVE_IMPORTANT_UNDER_FILES_REVIEWED)
+            self._order(self.changed, self.review)
+            r = self._run()
+            self.assertEqual(r["result"], "FAIL")
+            self.assertFalse(r["findings_consistent"])
+            self.assertEqual(len(r["standing_findings"]), 1)
+            self.assertEqual(r["standing_findings"][0]["severity"], "Important")
+
+        # --- Gate 2: Files-reviewed coverage (--require-files-reviewed) -
+
+        def test_files_reviewed_flag_off_is_backcompat(self):
+            self.review.write_text(REVIEW_FILES_REVIEWED_NO_SUBSECTION)
+            self._order(self.changed, self.review)
+            r = self._run()
+            self.assertEqual(r["result"], "PASS")
+            self.assertTrue(r["files_reviewed_ok"])
+            self.assertFalse(r["require_files_reviewed"])
+
+        def test_files_reviewed_flag_on_all_listed_passes(self):
+            self.review.write_text(REVIEW_FILES_REVIEWED_OK)
+            self._order(self.changed, self.review)
+            r = self._run(["--require-files-reviewed"])
+            self.assertEqual(r["result"], "PASS")
+            self.assertTrue(r["files_reviewed_ok"])
+            self.assertEqual(r["files_reviewed"], ["src_file.py"])
+            self.assertEqual(r["files_unreviewed"], [])
+
+        def test_files_reviewed_flag_on_missing_one_fails(self):
+            other = self.dir / "other_file.py"
+            other.write_text("code\n")
+            self.review.write_text(REVIEW_FILES_REVIEWED_MISSING_ONE)
+            self._order(self.changed, self.review)
+            self._order(other, self.review)
+            ns = self._ns(changed=[str(self.changed), str(other)],
+                          extra=["--require-files-reviewed"])
+            r = build_report(ns)
+            self.assertEqual(r["result"], "FAIL")
+            self.assertFalse(r["files_reviewed_ok"])
+            self.assertEqual(r["files_unreviewed"], ["other_file.py"])
+
+        def test_files_reviewed_no_subsection_fails(self):
+            self.review.write_text(REVIEW_FILES_REVIEWED_NO_SUBSECTION)
+            self._order(self.changed, self.review)
+            r = self._run(["--require-files-reviewed"])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertFalse(r["files_reviewed_ok"])
+            self.assertEqual(r["files_unreviewed"], ["src_file.py"])
+
+        def test_files_reviewed_fenced_path_not_counted_fails(self):
+            self.review.write_text(REVIEW_FILES_REVIEWED_FENCED)
+            self._order(self.changed, self.review)
+            r = self._run(["--require-files-reviewed"])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertFalse(r["files_reviewed_ok"])
+            self.assertEqual(r["files_unreviewed"], ["src_file.py"])
+
+        def test_files_reviewed_later_section_not_read_fails(self):
+            # 'Files reviewed' under a LATER '## Review:' section for a
+            # different milestone must not be read as M3's own coverage.
+            self.review.write_text(REVIEW_FILES_REVIEWED_LATER_SECTION_ONLY)
+            self._order(self.changed, self.review)
+            r = self._run(["--require-files-reviewed"])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertFalse(r["files_reviewed_ok"])
+            self.assertEqual(r["files_unreviewed"], ["src_file.py"])
+
+        def test_files_reviewed_backslash_declared_path_matches_passes(self):
+            sub = self.dir / "sub"
+            sub.mkdir()
+            nested = sub / "file.py"
+            nested.write_text("code\n")
+            self.review.write_text(REVIEW_FILES_REVIEWED_NESTED_PATH)
+            self._order(nested, self.review)
+            ns = self._ns(changed=[str(self.dir) + os.sep + "sub" + os.sep + "file.py"],
+                          extra=["--require-files-reviewed"])
+            r = build_report(ns)
+            self.assertEqual(r["result"], "PASS")
+            self.assertTrue(r["files_reviewed_ok"])
+            self.assertEqual(r["files_unreviewed"], [])
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(GateTests)
     result = unittest.TextTestRunner(verbosity=1).run(suite)
