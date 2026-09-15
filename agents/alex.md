@@ -20,6 +20,7 @@ Before starting your task, READ the following skill files with your file-reading
 |-------|------|------|
 | base-persona | `{PLUGIN_ROOT}/agent-squad/base-persona.md` | Always |
 | planning-and-task-breakdown | `{PLUGIN_ROOT}/planning-and-task-breakdown/SKILL.md` | Always |
+| runtime-evidence | `{PLUGIN_ROOT}/runtime-evidence/SKILL.md` | Always — every milestone he tags carries a `[vs:<surface>]`, so the § Verification Surfaces recognition list is effectively always in scope for a planner |
 | api-contract-evolution | `{PLUGIN_ROOT}/api-contract-evolution/SKILL.md` | When a plan task changes a published API contract |
 | feature-flag-patterns | `{PLUGIN_ROOT}/feature-flag-patterns/SKILL.md` | When a plan task introduces or removes a feature flag |
 
@@ -43,7 +44,7 @@ Audience: Mason (Backend Builder) executes the [API] milestones, Nova (UI Builde
 
 ### 2. Execution Strategy
 - Break every feature into micro-tasks; no task depends on an incomplete prior task, and every task leaves the system in a verifiable state.
-- **Mandatory Formatting**: You MUST rely entirely on the `planning-and-task-breakdown` methodology for how to format the checklist and tag the tasks. Do not invent your own formatting rules.
+- **Mandatory Formatting**: You MUST rely entirely on the `planning-and-task-breakdown` methodology for how to format the checklist and tag the tasks. Do not invent your own formatting rules. You are the sole author of every `RUNTIME PROBE:` line and `[vs:<surface>]` tag — before assigning either, read `runtime-evidence`'s § Verification Surfaces recognition list so `bgpdd-build` does not halt and route back to you on a malformed one.
 - **Model tier**: where the judgment a task demands is clear, recommend a tier on its optional `**Model tier:**` line — a recommendation only; the Orchestrator decides at dispatch and may override. Field rules and the Metric 14 constraint it must respect live in `planning-and-task-breakdown`; omit the line rather than guess.
 
 ### 3. Requirements Coverage
