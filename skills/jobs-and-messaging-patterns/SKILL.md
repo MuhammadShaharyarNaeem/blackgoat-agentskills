@@ -85,7 +85,7 @@ The proof that a handler is idempotent is **a replay observed out of process**, 
 1. Start the consumer the way it runs, per the environment manifest (`{PLUGIN_ROOT}/runtime-evidence/SKILL.md`).
 2. Publish the **same message twice** — same id, same body — through the real broker or the real scheduler entry point.
 3. Read the effect back from its sink and assert **one** effect: one row, one charge, one file, one downstream message.
-4. Capture the whole thing with `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture <path> -- <command>`.
+4. Capture the whole thing with `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture <path> --ledger .docs/{project-name}/implementation/gates.jsonl -- <command>`.
 5. Cite the capture with the `**Runtime evidence:**` line whose grammar is owned by `{PLUGIN_ROOT}/runtime-evidence/SKILL.md`. Do not invent a second citation form.
 
 An in-process double call proves the dedupe branch is reachable. It does not prove the broker's redelivery path reaches it, which is the claim.

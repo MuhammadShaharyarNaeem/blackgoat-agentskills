@@ -55,7 +55,7 @@ Before the first edit, and in this order:
 2. **The audit command**, captured:
 
 ```
-python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/upgrade/audit-before-<package>.md -- <audit command>
+python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/upgrade/audit-before-<package>.md --ledger .docs/{project-name}/implementation/gates.jsonl -- <audit command>
 ```
 
 `<audit command>` is the stack's: `npm audit`, `dotnet list package --vulnerable`, `pip-audit`, or the wrapper the project declares — the same tool list `{PLUGIN_ROOT}/security-and-hardening/SKILL.md` (*Always Do*) owns for release-time auditing; this contract only adds the before/after pair. A non-zero exit is a legitimate capture: you are recording what the tree looked like, not asserting it was clean.

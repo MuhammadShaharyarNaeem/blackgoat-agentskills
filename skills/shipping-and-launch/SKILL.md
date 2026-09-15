@@ -106,6 +106,7 @@ Ship behind feature flags to decouple deployment from release. **The flag contra
 ```bash
 python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py \
     --capture .docs/{project-name}/implementation/evidence/shipping/flag-expiry.md \
+    --ledger .docs/{project-name}/implementation/gates.jsonl \
     -- grep -rnE "expiry:|review:" <the committed flag config path>
 ```
 
@@ -117,7 +118,14 @@ python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py \
 
 ### Baseline Capture
 
-**Dep-owned. Before the first rollout step, not during it.** Read the current production values of three metrics from the project's monitoring source and save each reading as its own artifact under `.docs/{project-name}/implementation/evidence/baseline/`:
+**Dep-owned. Before the first rollout step, not during it.** Read the current production values of three metrics from the project's monitoring source and capture each reading through the wrapper, so it carries the provenance sidecar `check_ship_decision.py --require-baseline` now demands — a `touch`ed or hand-typed file at the cited path no longer satisfies it:
+
+```bash
+python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py \
+    --capture .docs/{project-name}/implementation/evidence/baseline/<metric>.md \
+    --ledger .docs/{project-name}/implementation/gates.jsonl \
+    -- <the read command for this metric>
+```
 
 1. **Error rate** — total, over a stated window
 2. **P95 latency** — on the endpoint or flow this release touches
@@ -199,7 +207,7 @@ A metric you cannot read is `BLOCKED`, named — never a remembered value and ne
 **Owner and artifact — this checklist is Dep's, it runs against the *deployed* environment, and it produces a report.** Until it named an owner and a destination it was a list nobody executed: the pipeline's last gate was the ship decision, which is taken *before* the deploy, so nothing downstream ever asked whether the deployed thing worked.
 
 - **Who**: Dep, freshly delegated after the deploy or merge lands — not the Dep who wrote the ship decision, whose context already recorded these items as expected-green.
-- **Where**: the deployed environment (production, or whichever environment the user named at deploy time). Every runtime probe is captured out-of-process via `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/runtime/<name>.md -- <the probe>`, per `{PLUGIN_ROOT}/runtime-evidence/SKILL.md`, and cited by path in the line it backs.
+- **Where**: the deployed environment (production, or whichever environment the user named at deploy time). Every runtime probe is captured out-of-process via `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/runtime/<name>.md --ledger .docs/{project-name}/implementation/gates.jsonl -- <the probe>`, per `{PLUGIN_ROOT}/runtime-evidence/SKILL.md`, and cited by path in the line it backs.
 - **What**: `.docs/{project-name}/implementation/post-deploy-report.md`, one line per numbered item above, in the check-line grammar the pipelines parse:
 
   `- <check>: PASS|FAIL|BLOCKED|NOT RUN — exit <N> — <detail> — capture: evidence/runtime/<file>.md`
@@ -244,7 +252,7 @@ Every deployment needs a rollback plan before it happens:
 
 1. **Run it end to end on a non-production environment** — the same command sequence the Rollback Steps above name, with the health check as the last command in the sequence so a revert that leaves the service down cannot record as a success.
 2. **Capture the run**, so the timing and the outcome are recorded by the tool rather than remembered by you:
-   `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/rollback/<date>-rehearsal.md -- <the revert command sequence, health check included>`
+   `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/rollback/<date>-rehearsal.md --ledger .docs/{project-name}/implementation/gates.jsonl -- <the revert command sequence, health check included>`
 3. **Record the result in `ship-decision.md`** on one line, in exactly this grammar:
 
    `Time to Rollback: <N><unit> — rehearsed <YYYY-MM-DD> on <env> — evidence: <path under evidence/rollback/>`

@@ -89,7 +89,7 @@ The proof that a path is observable is **a log line carrying its correlation id,
 1. Start the service the way it runs, per the environment manifest (`{PLUGIN_ROOT}/runtime-evidence/SKILL.md`).
 2. Drive the path with a known correlation id — send it on the inbound `X-Correlation-Id` header rather than hunting a generated one afterwards.
 3. Read the line back **from where the manifest says logs are read** — the log sink, not the process's own stdout buffer inside the test host.
-4. Capture it with `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture <path> -- <command>`.
+4. Capture it with `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture <path> --ledger .docs/{project-name}/implementation/gates.jsonl -- <command>`.
 5. Cite it with the `**Runtime evidence:**` line whose grammar is owned by `{PLUGIN_ROOT}/runtime-evidence/SKILL.md`.
 
 An assertion that the logging call exists is not evidence the line reaches the sink — the gap between a logger and a log.
