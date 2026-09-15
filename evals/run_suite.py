@@ -227,7 +227,8 @@ def main(argv=None):
                                                        "default: omit the flag, record '<runtime>-default'")
     p_run.add_argument("--timeout", type=int, default=None,
                         help=f"seconds before a hard kill (default: {headless.DEFAULT_TIMEOUT_S})")
-    p_run.add_argument("--root", default=None, help="root dir for eval-runs/ (default: cwd)")
+    p_run.add_argument("--root", default=None,
+                        help=f"root dir for eval-runs/ (default: {headless.DEFAULT_RUN_ROOT} -- outside the checkout, so an upward search never lands in the plugin tree)")
     p_run.add_argument("--record", action="store_true", help="append results.jsonl / antigravity records")
     p_run.add_argument("--no-skip-permissions", action="store_true",
                         help="agy only: omit --dangerously-skip-permissions")

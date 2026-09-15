@@ -151,6 +151,52 @@ class SelfTest(unittest.TestCase):
         self.assertEqual(prompt, "it's a test")
         self.assertEqual("'it''s a test'"[0:end], "'it''s a test'")
 
+    def test_default_run_root_is_outside_checkout_and_allowed(self):
+        from suites import headless as h
+        import tempfile
+        root = h.DEFAULT_RUN_ROOT
+        self.assertTrue(str(root).lower().startswith(str(Path(tempfile.gettempdir())).lower()))
+        self.assertNotIn("blackgoat-agentskills", str(root).lower())
+        ws = root / "eval-runs" / "contract-x-20260101T000000Z"
+        roots = h.scope_guard_allowed_roots(ws, None)
+        parent = h.common.transcript_tools.normalize_path(str(ws.parent))
+        self.assertTrue(any(parent.startswith(r) for r in roots), roots)
+
+    def test_evals_dir_is_off_limits_even_under_installed_plugin(self):
+        from suites import headless as h
+        ws = "C:/Users/u/AppData/Local/Temp/bg-eval-runs/eval-runs/contract-x-20260101T000000Z"
+        inst = "C:/Users/u/.gemini/config/plugins/blackgoat-agentskills"
+        self.assertTrue(h._is_evals_self_inspection(inst + "/evals/contract/x/grade.ps1", ws))
+        self.assertTrue(h._is_evals_self_inspection(inst + "/evals/outcome/results/artifacts/x/transcript.jsonl", ws))
+        self.assertFalse(h._is_evals_self_inspection(inst + "/skills/bg/SKILL.md", ws))
+        self.assertFalse(h._is_evals_self_inspection(ws + "/src/x.js", ws))
+        conv_dir = self.tmp / "evals-offlimits-conv"
+        steps = [
+            {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE",
+             "created_at": "2026-01-01T00:00:00Z", "content": "You are Quinn, the QA Tester. Workspace: " + ws},
+            {"step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+             "created_at": "2026-01-01T00:01:00Z", "tool_calls": [
+                 {"name": "view_file", "args": {"AbsolutePath": inst + "/skills/bg/SKILL.md"}},
+                 {"name": "grep_search", "args": {"Query": "slug", "SearchPath": inst + "/evals/outcome/results/artifacts"}},
+                 {"name": "view_file", "args": {"AbsolutePath": inst + "/evals/contract/x/case.md"}},
+             ]},
+        ]
+        h.antigravity_run._write_transcript(conv_dir, steps)
+        tr = {"parent": None, "subagents": [], "all": [{"conversation_id": "c", "dir": str(conv_dir), "first_ts": "2026-01-01T00:00:00Z"}]}
+        r = h.detect_workspace_escape(tr, ws, inst, None)
+        self.assertTrue(r["escaped"]); self.assertEqual(r["count"], 2)
+        self.assertEqual(r["first"]["tool"], "grep_search")
+
+    def test_abs_path_token_ignores_urls(self):
+        # Regression: `http://localhost:5182/orders` must not read as drive `p:/`.
+        from suites import headless as h
+        rx = h._WINDOWS_ABS_PATH_TOKEN_RE
+        self.assertEqual(rx.findall('curl --fail -sS -X POST http://localhost:5182/orders -H "Content-Type: application/json" -d "{}"'), [])
+        self.assertEqual(rx.findall("curl.exe -sS -i https://example.test/x"), [])
+        self.assertEqual(rx.findall("git -C C:/Gorelo/Gorelo_Web grep -n x"), ["C:/Gorelo/Gorelo_Web"])
+        self.assertEqual(rx.findall("Get-ChildItem -Path C:/ -Directory"), ["C:/"])
+        self.assertEqual(rx.findall('view "D:/other/clone/x.md"'), ["D:/other/clone/x.md"])
+
     def test_double_quoted_prompt_with_backtick_quote_escape(self):
         remainder = '"she said `"hi`" to me" --flag'
         prompt, end = contract.parse_quoted_prompt(remainder)
@@ -740,8 +786,10 @@ class SelfTest(unittest.TestCase):
             "relative path resolves there. Do not read, search, or modify anything "
             "outside it; do not look for other repositories or projects on this "
             "machine; do not call external services, issue trackers, MCP tools, or "
-            "the network. If something the task needs is not inside the working "
-            "copy, stop and say so."))
+            "the network. Never open the plugin evals/ directory or any earlier runs artifacts, results, or transcripts; they are not part of the project. If something the task needs is not inside the working "
+            "copy, stop and say so. Repeat these restrictions, verbatim, at the top of every "
+            "briefing you write for a delegated worker; they bind the workers exactly as they "
+            "bind you."))
 
         # A contract-shaped single-quoted prompt with an embedded double quote
         # (the exact shape `parse_quoted_prompt` produces) must survive

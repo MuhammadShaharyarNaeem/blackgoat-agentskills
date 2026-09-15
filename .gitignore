@@ -27,3 +27,8 @@ evals/results/transcripts/
 evals/antigravity/runs/
 evals/runs/
 eval-runs/
+
+# Outcome-tier run artifacts (transcripts, diffs, handoffs of past runs). Never commit
+# these: a committed transcript of a case is an answer key that the installed plugin
+# clone then ships to every eval run (a worker read one on 2026-09-15).
+evals/outcome/results/artifacts/

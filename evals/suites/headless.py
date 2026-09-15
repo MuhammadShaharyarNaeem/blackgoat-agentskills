@@ -52,6 +52,15 @@ RESULTS_DIR = common.EVALS_ROOT / "results"
 OUTCOME_RESULTS_DIR = common.OUTCOME_RESULTS_PATH.parent
 
 DEFAULT_TIMEOUT_S = 2700  # 45 minutes
+# Headless workspaces live OUTSIDE the plugin checkout by default. In-place
+# `start` puts them under cwd/eval-runs/ for the interactive skill, but a
+# headless worker that searches one directory upward from such a workspace
+# lands in the checkout itself -- graders included -- and the scope guard
+# rightly flags it (bgpdd-bugfix-lane run 1 of the resumed 2026-09-14 batch:
+# `find_by_name` on the checkout root). The system temp dir is already an
+# allowed root, so a sibling-or-parent peek under it is harmless, exactly as
+# run-evals.ps1's temp working copies are.
+DEFAULT_RUN_ROOT = Path(tempfile.gettempdir()) / "bg-eval-runs"
 HARD_KILL_GRACE_S = 60
 
 AGY_CLI_BRAIN_ROOT = Path.home() / ".gemini" / "antigravity-cli" / "brain"
@@ -298,8 +307,12 @@ def scope_preamble(workspace):
             "relative path resolves there. Do not read, search, or modify anything "
             "outside it; do not look for other repositories or projects on this "
             "machine; do not call external services, issue trackers, MCP tools, or "
-            "the network. If something the task needs is not inside the working "
-            "copy, stop and say so.")
+            "the network. Never open the plugin evals/ directory or any earlier "
+            "runs artifacts, results, or transcripts; they are not part of the project. If "
+            "something the task needs is not inside the working "
+            "copy, stop and say so. Repeat these restrictions, verbatim, at the top of every "
+            "briefing you write for a delegated worker; they bind the workers exactly as they "
+            "bind you.")
 
 
 def apply_scope_preamble(prompt, workspace):
@@ -533,7 +546,7 @@ def resolve_agy_transcripts(workspace, window_start, window_end, brain_root=None
 # whichever key is present wins (a call carries exactly one of these).
 _SCOPE_GUARD_PATH_TOOLS = ("view_file", "list_dir", "find_by_name", "grep_search",
                            "write_to_file", "replace_file_content", "multi_replace_file_content")
-_SCOPE_GUARD_PATH_ARG_KEYS = ("AbsolutePath", "DirectoryPath", "SearchDirectory", "TargetFile", "Path")
+_SCOPE_GUARD_PATH_ARG_KEYS = ("AbsolutePath", "DirectoryPath", "SearchDirectory", "SearchPath", "TargetFile", "Path")
 
 # Any call to one of these is a flag regardless of its arguments -- the
 # incident's four `call_mcp_tool` calls to `linear` had no in-workspace
@@ -542,13 +555,30 @@ _SCOPE_GUARD_PATH_ARG_KEYS = ("AbsolutePath", "DirectoryPath", "SearchDirectory"
 _SCOPE_GUARD_NETWORK_TOOLS = ("read_url_content", "search_web", "call_mcp_tool")
 
 _WINDOWS_ABS_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
-_WINDOWS_ABS_PATH_TOKEN_RE = re.compile(r"[A-Za-z]:[\\/][^\s\"']*")
+# A drive-letter token must not be preceded by a letter or digit: `http://` ends in
+# `p:/` and matched the unanchored form, flagging every `curl http://localhost:...`
+# reproduction command as an escape (bgpdd-bugfix-lane run 1, 2026-09-14 22:56Z).
+_WINDOWS_ABS_PATH_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s\"']*")
 
 
 def _is_absolute_windows_path(path):
     if not path:
         return False
     return bool(_WINDOWS_ABS_PATH_RE.match(path.strip().strip('"').strip("'")))
+
+
+def _is_evals_self_inspection(path, workspace):
+    """True when `path` points anywhere under an `evals/` directory that is
+    not the run's own workspace -- the harness's cases, graders, results and
+    archived transcripts, wherever they live (the checkout, the installed
+    plugin clone). Reading them is self-inspection, so it is an escape even
+    inside an otherwise allowed root: on 2026-09-15 00:03Z a Quinn worker
+    grep-searched the installed clone for its bug slug, found a committed
+    outcome-run transcript of the same case under
+    `evals/outcome/results/artifacts/`, and read it."""
+    norm = common.transcript_tools.normalize_path(path)
+    ws = common.transcript_tools.normalize_path(str(workspace)).rstrip("/") + "/"
+    return "/evals/" in norm and not norm.startswith(ws)
 
 
 def _path_within_roots(path, normalized_roots):
@@ -655,17 +685,19 @@ def detect_workspace_escape(transcripts, workspace, installed_plugin_path, brain
             argument = None
             if name in _SCOPE_GUARD_PATH_TOOLS:
                 path = _scope_guard_path_arg(call)
-                if path and _is_absolute_windows_path(path) and not _path_within_roots(path, roots):
+                if path and _is_absolute_windows_path(path) and (
+                        _is_evals_self_inspection(path, workspace) or not _path_within_roots(path, roots)):
                     argument = path
             elif name == "run_command":
                 args = call.get("args") or {}
                 cwd = common.transcript_tools.unwrap_arg(args.get("Cwd"))
                 cmdline = common.transcript_tools.unwrap_arg(args.get("CommandLine")) or ""
-                if cwd and _is_absolute_windows_path(cwd) and not _path_within_roots(cwd, roots):
+                if cwd and _is_absolute_windows_path(cwd) and (
+                        _is_evals_self_inspection(cwd, workspace) or not _path_within_roots(cwd, roots)):
                     argument = cmdline or cwd
                 else:
                     for token in _WINDOWS_ABS_PATH_TOKEN_RE.findall(cmdline):
-                        if not _path_within_roots(token, roots):
+                        if _is_evals_self_inspection(token, workspace) or not _path_within_roots(token, roots):
                             argument = cmdline
                             break
             elif name == "call_mcp_tool":
@@ -1219,7 +1251,7 @@ def cmd_run(args):
     if bool(args.case) == bool(args.all_cases):
         common.fail("--case or --all-cases is required (exactly one)")
 
-    root = Path(args.root).resolve() if args.root else Path.cwd()
+    root = Path(args.root).resolve() if args.root else DEFAULT_RUN_ROOT
     runs = args.runs or 1
     timeout_s = args.timeout or DEFAULT_TIMEOUT_S
     skip_permissions = not args.no_skip_permissions
