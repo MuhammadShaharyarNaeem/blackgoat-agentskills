@@ -439,7 +439,7 @@ foreach ($bug in $bugs) {
     } else {
         $bug.GateRecord = $gating[$gating.Count - 1]
         $bug.DeclaredFiles = @(Get-ArgvVariadicValues -Argv $bug.GateRecord.argv -Flag '--changed-files')
-        foreach ($flag in @('--verify-tree', '--max-changed-files')) {
+        foreach ($flag in @('--verify-tree', '--max-changed-files', '--require-files-reviewed')) {
             if (-not (Test-ArgvHasFlag -Argv $bug.GateRecord.argv -Flag $flag)) {
                 $c3.Add("$($bug.Slug): the commit gate was run without $flag")
             }

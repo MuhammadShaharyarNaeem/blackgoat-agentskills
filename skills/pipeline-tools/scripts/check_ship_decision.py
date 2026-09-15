@@ -32,15 +32,33 @@ Two opt-in flags convert the two assertions a heading match never proved
         `shipping-and-launch/SKILL.md` is expressed entirely in deltas
         ("within 10% of baseline", ">2x baseline"), so without a captured
         baseline every one of its rows is unevaluable. The decision must
-        carry a `## Baseline` section of at least three evidenced metrics.
+        carry a `## Baseline` section of at least three evidenced metrics,
+        each citing a file that carries the SAME run_quiet.py provenance
+        sidecar a rehearsal capture does: existence alone was the whole test,
+        and `touch evidence/baseline/p95.md` satisfied it, so every threshold
+        row graded against a number nobody had read.
 
 Both default OFF: `bgpdd-build` Phase 5 and `bgpdd-shipping` Step 0.4 gate a
 PREP decision, which legitimately predates any rehearsal or rollout baseline.
+
+A CONSISTENT PAIR IS NOT AN OBSERVED RUN (`unledgered_capture`)
+---------------------------------------------------------------
+The sidecar checks above compare an artifact with its own sidecar. Both files
+are plain text and both hashes are unkeyed, so a short script writes a
+mutually-consistent pair for a rehearsal that never happened, and it passed
+here cleanly. With `--ledger`, each cited rehearsal capture and baseline
+reading is additionally looked up by its current sha256 among that ledger's
+`gate: "run_quiet.py"` records, which `run_quiet.py --capture --ledger`
+appends as it takes each capture. An artifact no record pins is reported
+`unledgered_capture`: a WARNING by default, a failure under
+`--require-ledgered-captures` (convention #8, deliberately LOOSER than every
+other code here) because artifacts recorded before this release carry none.
 
 Usage:
     python check_ship_decision.py --report <path> [--require-go]
         [--require-rehearsal] [--require-baseline] [--repo <dir>]
         [--max-rehearsal-age-days <N>] [--ledger <path>]
+        [--require-ledgered-captures]
     python check_ship_decision.py --self-test
 """
 import argparse
@@ -490,6 +508,54 @@ def check_ledger_gates(ledger_path, gate_names, milestone):
     return problems
 
 
+def ledger_capture_hashes(ledger_path):
+    """Every `capture_sha256` a `run_quiet.py` record in this ledger carries.
+
+    `run_quiet.py --capture --ledger` appends one record per capture it takes,
+    pinning the artifact's sha256 as it landed on disk. A capture whose
+    current hash is absent from that set was never recorded by the tool,
+    however consistent its sidecar is with its body -- both files are plain
+    text and both hashes are unkeyed, so a consistent pair proves internal
+    agreement, not that a command ran (SKILL.md § The unkeyed-sidecar limit).
+
+    CHAIN INTEGRITY IS NOT CHECKED HERE, deliberately: `check_ledger.py` owns
+    it, and `--require-ledger-gates` re-walks it at commit time. A record
+    inside a broken chain still counts here; an absent or unreadable ledger
+    yields an empty set rather than an error.
+    """
+    hashes = set()
+    try:
+        raw = Path(ledger_path).read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return hashes
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(record, dict) or record.get("gate") != "run_quiet.py":
+            continue
+        digest = record.get("capture_sha256")
+        if isinstance(digest, str) and digest.strip():
+            hashes.add(digest.strip().lower())
+    return hashes
+
+
+def unledgered_warning(path, require_ledgered):
+    """The shared `unledgered_capture` line, warning or failure wording."""
+    return ("unledgered_capture: {0} — no `run_quiet.py` ledger record pins "
+            "this artifact's sha256, so nothing distinguishes it from a "
+            "hand-authored capture+sidecar pair{1}".format(
+                path,
+                " (FAILING under --require-ledgered-captures)"
+                if require_ledgered else
+                " (WARNING ONLY this release — artifacts recorded before it "
+                "carry no record; pass --require-ledgered-captures to make "
+                "this a failure)"))
+
+
 def parse_gate_names(values):
     """Flatten repeated and/or comma-separated --require-ledger-gates values."""
     names = []
@@ -578,23 +644,27 @@ def parse_rehearsal(text):
             "path": m.group("path").strip().strip("`<>\"'")}
 
 
-def check_rehearsal(text, report_path, repo, max_age_days, today):
-    """(rehearsal dict, [(code, detail), ...]) for the --require-rehearsal half."""
+def check_rehearsal(text, report_path, repo, max_age_days, today,
+                    ledger_hashes=None, require_ledgered=False):
+    """(rehearsal dict, [(code, detail), ...], [warning, ...]) for
+    the --require-rehearsal half."""
     res = {"present": False, "time_s": None, "rehearsed_on": None, "env": None,
            "evidence": None, "sidecar_ok": None, "body_agrees": None,
-           "age_days": None}
+           "ledgered": None, "age_days": None}
+    warnings = []
     parsed = parse_rehearsal(text)
     if parsed is None:
         return res, [("rehearsal_missing",
                       "no `Time to Rollback: <N><unit> — rehearsed <YYYY-MM-DD> "
                       "on <env> — evidence: <path>` line — a Rollback heading "
-                      "asserts a plan, not that the revert was ever performed")]
+                      "asserts a plan, not that the revert was ever performed")], []
     try:
         rehearsed = datetime.strptime(parsed["date"], "%Y-%m-%d").date()
     except ValueError:
         return res, [("rehearsal_missing",
                       f"`rehearsed {parsed['date']}` is not a real calendar "
-                      "date, so the rehearsal line does not satisfy the grammar")]
+                      "date, so the rehearsal line does not satisfy the "
+                      "grammar")], []
 
     res["present"] = True
     res["time_s"] = parsed["time"] * UNIT_SECONDS[parsed["unit"]]
@@ -617,21 +687,21 @@ def check_rehearsal(text, report_path, repo, max_age_days, today):
             "rehearsal_unevidenced",
             f"cited evidence `{cited}` does not resolve under `evidence/rollback/` "
             "(a `..` segment is refused outright)"))
-        return res, problems
+        return res, problems, warnings
 
     resolved = resolve_path(cited, report_path, repo)
     if resolved is None:
         problems.append(("rehearsal_unevidenced",
                          f"cited evidence `{cited}` does not exist relative to "
                          f"the report's directory, --repo, or the working directory"))
-        return res, problems
+        return res, problems, warnings
 
     try:
         capture = resolved.read_text(encoding="utf-8-sig", errors="replace")
     except OSError as exc:
         problems.append(("rehearsal_unevidenced",
                          f"cited evidence `{cited}` is unreadable: {exc}"))
-        return res, problems
+        return res, problems, warnings
 
     if not capture.strip():
         problems.append(("rehearsal_unevidenced",
@@ -651,7 +721,7 @@ def check_rehearsal(text, report_path, repo, max_age_days, today):
             "rehearsal_unevidenced",
             f"{side_error} at {side_path.name} — a capture with no run_quiet.py "
             "provenance sidecar is indistinguishable from a hand-typed one"))
-        return res, problems
+        return res, problems, warnings
 
     declared = meta.get("capture_sha256")
     actual = sha256_file(resolved)
@@ -662,7 +732,7 @@ def check_rehearsal(text, report_path, repo, max_age_days, today):
             f"the capture's sha256 ({actual}) does not match the sidecar's "
             f"capture_sha256 ({declared}) — the artifact was edited after it was "
             "recorded, so its contents are authored, not observed"))
-        return res, problems
+        return res, problems, warnings
 
     # The hash above protects the capture file, not the sidecar. Compare the
     # two BEFORE trusting the exit code below.
@@ -671,7 +741,7 @@ def check_rehearsal(text, report_path, repo, max_age_days, today):
     if code:
         res["sidecar_ok"] = False
         problems.append((code, detail))
-        return res, problems
+        return res, problems, warnings
 
     exit_code = meta.get("exit_code")
     if not isinstance(exit_code, int):
@@ -688,7 +758,23 @@ def check_rehearsal(text, report_path, repo, max_age_days, today):
             "no matter what its recorded time says"))
     else:
         res["sidecar_ok"] = True
-    return res, problems
+
+    # Everything above compares the capture with its own sidecar; both are
+    # typeable, so a forger writes a pair that agrees and a rehearsal that
+    # never happened reads as one that did. The ledger record run_quiet.py
+    # appends as it takes a capture is the term that says the pair came from
+    # a run. DELIBERATELY LOOSER than every other code in this function
+    # (convention #8): a missing record is a WARNING for one release, because
+    # rehearsals recorded before it carry none.
+    if ledger_hashes is not None:
+        res["ledgered"] = (sha256_file(resolved) or "").lower() in ledger_hashes
+        if not res["ledgered"]:
+            if require_ledgered:
+                problems.append(("unledgered_capture",
+                                 unledgered_warning(cited, True)))
+            else:
+                warnings.append(unledgered_warning(cited, False))
+    return res, problems, warnings
 
 
 # ---------------------------------------------------------------------------
@@ -707,8 +793,10 @@ def baseline_section(text):
     return text[m.end():]
 
 
-def check_baseline(text, report_path, repo):
-    """(baseline dict, [(code, detail), ...]) for the --require-baseline half."""
+def check_baseline(text, report_path, repo, ledger_hashes=None,
+                   require_ledgered=False):
+    """(baseline dict, [(code, detail), ...], [warning, ...]) for
+    the --require-baseline half."""
     res = {"present": False, "metrics": [], "evidenced_count": 0}
     section = baseline_section(text)
     if section is None:
@@ -716,16 +804,18 @@ def check_baseline(text, report_path, repo):
                       "no `## Baseline` (or `### Baseline`) section — every row "
                       "of the rollout threshold table is expressed as a delta "
                       "against a baseline, so without one none of them can be "
-                      "evaluated at canary time")]
+                      "evaluated at canary time")], []
     res["present"] = True
 
     problems = []
+    warnings = []
     for m in METRIC_LINE_RE.finditer(section):
         value = m.group("value")
         cited = next((t for t in PATH_TOKEN_RE.findall(value)
                       if has_segments(t, ("evidence", "baseline"))), None)
         entry = {"name": m.group("name").strip(), "value": value,
-                 "evidence": cited, "resolved": None}
+                 "evidence": cited, "resolved": None, "sidecar_ok": None,
+                 "ledgered": None}
         if cited is None:
             problems.append((
                 "baseline_unevidenced",
@@ -742,7 +832,46 @@ def check_baseline(text, report_path, repo):
                     "does not exist relative to the report's directory, --repo, "
                     "or the working directory"))
             else:
-                res["evidenced_count"] += 1
+                # EXISTENCE WAS THE WHOLE TEST, and `touch` satisfies it: an
+                # empty file at the cited path passed, so every threshold row
+                # graded against a number nobody read. A baseline reading is a
+                # capture like any other, so it carries the same provenance
+                # sidecar the rehearsal capture does (convention #8 — this
+                # tightens `--require-baseline`'s own "cites an existing path"
+                # rule to the sidecar contract the rest of this file uses).
+                side_path = Path(str(resolved) + SIDECAR_SUFFIX)
+                meta, side_error = load_sidecar(side_path)
+                if meta is None:
+                    entry["sidecar_ok"] = False
+                    problems.append((
+                        "baseline_unevidenced",
+                        f"baseline metric `{entry['name']}` cites `{cited}`, "
+                        f"but {side_error} at {side_path.name} — a baseline "
+                        "file with no run_quiet.py provenance sidecar is a "
+                        "file somebody created, not a reading somebody took"))
+                else:
+                    declared = meta.get("capture_sha256")
+                    actual = sha256_file(resolved)
+                    entry["sidecar_ok"] = bool(
+                        declared and actual and declared == actual)
+                    if not entry["sidecar_ok"]:
+                        problems.append((
+                            "baseline_unevidenced",
+                            f"baseline metric `{entry['name']}`: the cited "
+                            f"file's sha256 ({actual}) does not match its "
+                            f"sidecar's capture_sha256 ({declared}) — the "
+                            "reading was edited after it was recorded"))
+                    elif ledger_hashes is not None:
+                        entry["ledgered"] = (actual or "").lower() in ledger_hashes
+                        if not entry["ledgered"]:
+                            if require_ledgered:
+                                problems.append((
+                                    "unledgered_capture",
+                                    unledgered_warning(cited, True)))
+                            else:
+                                warnings.append(unledgered_warning(cited, False))
+                    if entry["sidecar_ok"]:
+                        res["evidenced_count"] += 1
         res["metrics"].append(entry)
 
     if len(res["metrics"]) < 3:
@@ -751,14 +880,14 @@ def check_baseline(text, report_path, repo):
             f"the Baseline section holds {len(res['metrics'])} `- <metric>: "
             "<value>` line(s); at least 3 are required (error rate, p95 latency "
             "and one business metric — the three the threshold table grades)"))
-    return res, problems
+    return res, problems, warnings
 
 
 def build_report(path, require_go, require_rehearsal=False,
                  require_baseline=False, repo=".",
                  max_rehearsal_age_days=DEFAULT_MAX_REHEARSAL_AGE_DAYS,
                  today=None, ledger=None, require_ledger_gates=None,
-                 milestone=None):
+                 milestone=None, require_ledgered_captures=False):
     # Fences are stripped ONCE, here: the verdict scan, the Rollback heading,
     # the checklist, the rehearsal line and the Baseline section all read a
     # document with no example blocks in it. A `Time to Rollback:` line inside
@@ -796,24 +925,34 @@ def build_report(path, require_go, require_rehearsal=False,
     # `failures` keeps the human string for every finding, old and new, so an
     # existing consumer of this JSON sees the new checks without being changed.
     problems = {}
+    warnings = []
 
     def record(code, detail):
         problems.setdefault(code, []).append(detail)
         failures.append(f"{code}: {detail}")
 
+    # No --ledger, no lookup: there is nothing to look a capture up in, and the
+    # check is skipped rather than failed (--require-ledgered-captures without
+    # --ledger is refused as a usage error in main()).
+    ledger_hashes = ledger_capture_hashes(ledger) if ledger else None
+
     rehearsal = None
     if require_rehearsal:
-        rehearsal, found = check_rehearsal(
+        rehearsal, found, warned = check_rehearsal(
             text, path, repo, max_rehearsal_age_days,
-            today or datetime.now(timezone.utc).date())
+            today or datetime.now(timezone.utc).date(),
+            ledger_hashes, require_ledgered_captures)
         for code, detail in found:
             record(code, detail)
+        warnings.extend(warned)
 
     baseline = None
     if require_baseline:
-        baseline, found = check_baseline(text, path, repo)
+        baseline, found, warned = check_baseline(
+            text, path, repo, ledger_hashes, require_ledgered_captures)
         for code, detail in found:
             record(code, detail)
+        warnings.extend(warned)
 
     # The sibling-gate binding. `check_coverage.py` and
     # `check_acceptance_suite.py` are epic-scoped and record `milestone: null`,
@@ -844,8 +983,10 @@ def build_report(path, require_go, require_rehearsal=False,
         "require_baseline": require_baseline,
         "baseline": baseline,
         "max_rehearsal_age_days": max_rehearsal_age_days,
+        "require_ledgered_captures": bool(require_ledgered_captures),
         "problems": problems,
         "failures": failures,
+        "warnings": warnings,
         "error": None,
     }
 
@@ -886,6 +1027,14 @@ def main(argv):
              "(any milestone); narrowed to '--milestone or unscoped' when "
              "--milestone is given")
     parser.add_argument(
+        "--require-ledgered-captures", action="store_true",
+        help="fail (problem code `unledgered_capture`) when a cited rehearsal "
+             "capture or baseline reading is pinned by no `run_quiet.py "
+             "--capture --ledger` record in --ledger. WITHOUT this flag such "
+             "an artifact is a WARNING and the exit code is unchanged — "
+             "captures taken before this release carry no record, so the "
+             "default is one release of grace. Requires --ledger.")
+    parser.add_argument(
         "--milestone",
         help="narrow --require-ledger-gates to this milestone (or unscoped) "
              "and record it in this run's ledger line; the ship decision is "
@@ -910,6 +1059,13 @@ def main(argv):
                                    "(there is no ledger to read otherwise)"}))
         return finish(2, "ERROR")
 
+    if args.require_ledgered_captures and not args.ledger:
+        print(json.dumps({"pass": False,
+                          "error": "--require-ledgered-captures requires "
+                                   "--ledger (there is no ledger to look a "
+                                   "capture up in otherwise)"}))
+        return finish(2, "ERROR")
+
     if not args.report:
         print(json.dumps({"pass": False, "error": "missing required argument: --report"}))
         return finish(2, "ERROR")
@@ -922,7 +1078,9 @@ def main(argv):
                               max_rehearsal_age_days=args.max_rehearsal_age_days,
                               ledger=args.ledger,
                               require_ledger_gates=args.require_ledger_gates,
-                              milestone=args.milestone)
+                              milestone=args.milestone,
+                              require_ledgered_captures=(
+                                  args.require_ledgered_captures))
     except GateError as exc:
         print(json.dumps({"pass": False, "error": str(exc)}))
         return finish(2, "ERROR")
@@ -933,6 +1091,7 @@ def main(argv):
 
 def run_self_test():
     import shutil
+    import subprocess
     from datetime import date, timedelta
 
     HAPPY = """# Ship Decision
@@ -1067,12 +1226,29 @@ Verdict: NO-GO
                     json.dumps(meta, indent=2) + "\n", encoding="utf-8")
             return p
 
-        def _baseline_evidence(self):
+        def _baseline_evidence(self, sidecar=True, sidecar_hash=None):
+            """The three baseline readings, each with its provenance sidecar.
+
+            The sidecar is now REQUIRED (it was not; `touch` satisfied the old
+            existence-only rule), so a fixture that omits it is testing the
+            refusal, not the happy path.
+            """
+            paths = []
             for name in ("error-rate.md", "latency.md", "conversion.md"):
                 p = self.dir / "evidence" / "baseline" / name
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text(f"# {name}\n\nread from the monitoring source\n",
                              encoding="utf-8")
+                if sidecar:
+                    meta = {"argv": ["curl", "-sS", "http://monitoring/metrics"],
+                            "started": "2026-09-02T09:00:00Z",
+                            "finished": "2026-09-02T09:00:00Z",
+                            "exit_code": 0, "tool": "run_quiet.py",
+                            "capture_sha256": sidecar_hash or sha256_file(p)}
+                    Path(str(p) + SIDECAR_SUFFIX).write_text(
+                        json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+                paths.append(p)
+            return paths
 
         def _write(self, *extra):
             self.path.write_text(HAPPY + "\n" + "\n".join(extra), encoding="utf-8")
@@ -1460,6 +1636,102 @@ Verdict: NO-GO
             self.assertEqual(main(["--report", str(self.path), "--require-go",
                                    "--require-rehearsal", "--require-baseline",
                                    "--repo", str(self.dir)]), 1)
+
+        # ---- a touched baseline file is not a reading (finding B) ----
+
+        def test_touched_baseline_file_without_a_sidecar_fails(self):
+            """`touch evidence/baseline/p95.md` satisfied the old rule."""
+            self._baseline_evidence(sidecar=False)
+            self._write(BASELINE)
+            report = self._run(require_baseline=True)
+            self.assertFalse(report["pass"])
+            self.assertIn("baseline_unevidenced", report["problems"])
+            self.assertEqual(report["baseline"]["evidenced_count"], 0)
+            self.assertFalse(report["baseline"]["metrics"][0]["sidecar_ok"])
+
+        def test_baseline_file_edited_after_recording_fails(self):
+            self._baseline_evidence(sidecar_hash="ab" * 32)
+            self._write(BASELINE)
+            report = self._run(require_baseline=True)
+            self.assertFalse(report["pass"])
+            self.assertIn("baseline_unevidenced", report["problems"])
+
+        # ---- unledgered_capture: consistent pair vs observed run ----
+
+        def _run_quiet_capture(self, rel, script="print('reverted; health 200')"):
+            """An ACTUAL `run_quiet.py --capture --ledger` run.
+
+            Every other fixture here is typed; this is the only artifact whose
+            sha256 a real ledger record pins, and it is what ties this gate's
+            lookup to the writer.
+            """
+            cap = self.dir / rel
+            ledger = self.dir / "gates.jsonl"
+            proc = subprocess.run(
+                [sys.executable,
+                 str(Path(__file__).resolve().parent / "run_quiet.py"),
+                 "--capture", str(cap), "--ledger", str(ledger),
+                 "--", sys.executable, "-c", script],
+                capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            return cap, str(ledger)
+
+        def test_unledgered_rehearsal_capture_only_warns_by_default(self):
+            self._capture()
+            self._write(rehearsal_line())
+            ledger = self.dir / "gates.jsonl"
+            ledger.write_text("", encoding="utf-8")
+            report = self._run(require_rehearsal=True, ledger=str(ledger))
+            self.assertTrue(report["pass"], report["failures"])
+            self.assertIs(report["rehearsal"]["ledgered"], False)
+            self.assertTrue(any("unledgered_capture" in w
+                                for w in report["warnings"]))
+
+        def test_unledgered_rehearsal_capture_fails_under_the_flag(self):
+            self._capture()
+            self._write(rehearsal_line())
+            ledger = self.dir / "gates.jsonl"
+            ledger.write_text("", encoding="utf-8")
+            report = self._run(require_rehearsal=True, ledger=str(ledger),
+                               require_ledgered_captures=True)
+            self.assertFalse(report["pass"])
+            self.assertIn("unledgered_capture", report["problems"])
+
+        def test_unledgered_baseline_reading_fails_under_the_flag(self):
+            self._baseline_evidence()
+            self._write(BASELINE)
+            ledger = self.dir / "gates.jsonl"
+            ledger.write_text("", encoding="utf-8")
+            self.assertTrue(self._run(require_baseline=True,
+                                      ledger=str(ledger))["pass"])
+            report = self._run(require_baseline=True, ledger=str(ledger),
+                               require_ledgered_captures=True)
+            self.assertFalse(report["pass"])
+            self.assertIn("unledgered_capture", report["problems"])
+
+        def test_a_real_run_quiet_rehearsal_passes_under_the_flag(self):
+            """The honest input: recorded by the tool, pinned by its record."""
+            rel = "evidence/rollback/2026-09-02-rehearsal.md"
+            cap, ledger = self._run_quiet_capture(rel)
+            self._write(rehearsal_line(path=rel))
+            report = self._run(require_rehearsal=True, ledger=ledger,
+                               require_ledgered_captures=True)
+            self.assertTrue(report["pass"], report["failures"])
+            self.assertIs(report["rehearsal"]["ledgered"], True)
+
+        def test_require_ledgered_captures_without_ledger_is_exit_2(self):
+            self._write()
+            self.assertEqual(main(["--report", str(self.path),
+                                   "--require-ledgered-captures"]), 2)
+
+        def test_lookup_skipped_entirely_without_a_ledger(self):
+            """Default behavior is unchanged for every existing caller."""
+            self._capture()
+            self._write(rehearsal_line())
+            report = self._run(require_rehearsal=True)
+            self.assertTrue(report["pass"], report["failures"])
+            self.assertIsNone(report["rehearsal"]["ledgered"])
+            self.assertEqual(report["warnings"], [])
 
         # ---- the shared gate ledger ----
 

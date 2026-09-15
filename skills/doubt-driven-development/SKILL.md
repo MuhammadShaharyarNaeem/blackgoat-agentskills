@@ -21,7 +21,7 @@ Derived from the contract below for a ≤ 3-file change; no new rules (conventio
 2. Run it when the change branches, crosses a boundary, or outruns the compiler (§ When to Use).
 3. Write the CLAIM in two or three lines before it stands (§ Step 1).
 4. Hand the reviewer ARTIFACT + CONTRACT only — never the CLAIM (§ Step 2).
-5. Classify each finding against the artifact text; stop at trivial findings or 3 cycles (§ Step 4).
+5. Classify each finding against the artifact text — contract misread, actionable, trade-off, or noise (§ Step 4).
 
 - Brief → the quick note (What / Where / How verified)
 - Artifact → the capture at `{quick-root}/evidence/check.md`

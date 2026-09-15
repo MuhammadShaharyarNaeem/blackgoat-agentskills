@@ -223,8 +223,9 @@ class TestPassEvidence(unittest.TestCase):
 
     The gate was deterministic about the STATUS token and completely trusting
     about the EVIDENCE beside it, so `- FR-1: PASS — I did not run anything`
-    counted as coverage. Accepted forms mirror agents/quinn.md §6: an exit
-    code, a `file::test-name` reference, or an evidence/runtime/ capture.
+    counted as coverage. Accepted forms mirror agents/quinn.md §6: an
+    evidence/runtime/ capture, a `file::test-name` reference RESOLVED against
+    --repo, or (unless --strict-evidence) a bare exit code.
     """
 
     def test_prose_only_pass_is_unevidenced_and_uncovered(self):
@@ -239,10 +240,60 @@ class TestPassEvidence(unittest.TestCase):
         self.assertEqual(status_by_id["FR-1"], "PASS")
         self.assertEqual(warnings, [])
 
-    def test_file_test_name_reference_is_accepted(self):
-        status_by_id, _ = cc.parse_test_report(
-            "- FR-1: PASS — tests/reset.test.js::token expires after TTL\n")
-        self.assertEqual(status_by_id["FR-1"], "PASS")
+    def test_file_test_name_reference_resolves_against_repo(self):
+        """The file half must exist and the name half must appear in it."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            test_file = Path(tmp) / "tests" / "reset.test.js"
+            test_file.parent.mkdir(parents=True)
+            test_file.write_text(
+                "test('token expires after TTL', () => {});\n", encoding="utf-8")
+            status_by_id, warnings = cc.parse_test_report(
+                "- FR-1: PASS — tests/reset.test.js::token expires after TTL\n",
+                repo_root=tmp)
+            self.assertEqual(status_by_id["FR-1"], "PASS")
+            self.assertEqual(warnings, [])
+
+    def test_file_test_name_citation_to_a_nonexistent_file_is_unevidenced(self):
+        """The audited fabrication (Metric 19.2): a citation to a file that
+        does not exist in the repo must not certify coverage."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            status_by_id, warnings = cc.parse_test_report(
+                "- FR-1: PASS — tests/LoginTests.cs::CanLogIn\n", repo_root=tmp)
+            self.assertEqual(status_by_id["FR-1"], "UNEVIDENCED")
+            self.assertTrue(any("cited_test_file_missing" in w for w in warnings))
+
+    def test_file_test_name_citation_with_absent_test_name_is_unevidenced(self):
+        """The file exists but never mentions the cited test — still fabricated."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            test_file = Path(tmp) / "tests" / "reset.test.js"
+            test_file.parent.mkdir(parents=True)
+            test_file.write_text("test('unrelated case', () => {});\n", encoding="utf-8")
+            status_by_id, warnings = cc.parse_test_report(
+                "- FR-1: PASS — tests/reset.test.js::token expires after TTL\n",
+                repo_root=tmp)
+            self.assertEqual(status_by_id["FR-1"], "UNEVIDENCED")
+            self.assertTrue(any("cited_test_not_found_in_file" in w for w in warnings))
+
+    def test_co_cited_exit_code_still_covers_an_unresolvable_test_ref(self):
+        """Backward compatibility: every pre-existing fixture pairs `exit 0`
+        with a `file::test-name` citing a path from the TARGET project the
+        gate checks, not this plugin repo, so it never resolves here either.
+        The bare exit code stays sufficient on its own unless
+        --strict-evidence is set (see next class)."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            status_by_id, warnings = cc.parse_test_report(
+                "- FR-1: PASS — `pytest` — exit 0 — tests/no_such.py::test_x\n",
+                repo_root=tmp)
+            self.assertEqual(status_by_id["FR-1"], "PASS")
+            self.assertEqual(warnings, [])
 
     def test_runtime_capture_citation_is_accepted(self):
         for line in ("- FR-1: PASS — evidence/runtime/m3-auth.md\n",
@@ -254,6 +305,28 @@ class TestPassEvidence(unittest.TestCase):
         """`exit 0` must be the PASS's evidence, not an earlier line fragment."""
         self.assertFalse(cc.pass_is_evidenced(
             "- FR-1: exit 0 was yesterday's run; today it is PASS"))
+
+    def test_strict_evidence_rejects_a_bare_exit_code(self):
+        status_by_id, warnings = cc.parse_test_report(
+            "- FR-1: PASS — `npm test` — exit 0 — 42 passed\n",
+            strict_evidence=True)
+        self.assertEqual(status_by_id["FR-1"], "UNEVIDENCED")
+        self.assertTrue(any("strict-evidence" in w for w in warnings))
+
+    def test_strict_evidence_still_accepts_a_resolved_file_test_name(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            test_file = Path(tmp) / "a.test.js"
+            test_file.write_text("test('x', () => {});\n", encoding="utf-8")
+            status_by_id, _ = cc.parse_test_report(
+                "- FR-1: PASS — a.test.js::x\n", repo_root=tmp, strict_evidence=True)
+            self.assertEqual(status_by_id["FR-1"], "PASS")
+
+    def test_strict_evidence_still_accepts_runtime_capture(self):
+        status_by_id, _ = cc.parse_test_report(
+            "- FR-1: PASS — evidence/runtime/m3-auth.md\n", strict_evidence=True)
+        self.assertEqual(status_by_id["FR-1"], "PASS")
 
     def test_unevidenced_must_have_lands_in_uncovered_and_unevidenced(self):
         report = cc.build_report(

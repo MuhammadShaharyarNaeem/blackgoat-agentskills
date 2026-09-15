@@ -46,28 +46,16 @@ Every milestone carries a `[vs:<surface>]` tag assigned at planning. The tag sel
 
 A probe command is not an environment. On a microservice estate the feature under test needs several services running **and pointed at each other locally**, and a probe that quietly succeeds against shared dev — because that is what the checked-in config still points at — produces a capture that is fresh, well-formed, and about the wrong system.
 
-The facts that make a probe runnable are **caller-supplied**, and they live in a manifest of six blocks — **Bring-up sequence**, **Services**, **Repointing map**, **Forbidden hosts**, **Test identities & fixtures**, **Capabilities**. Read the one your brief names; absent that, the authoritative file is `.docs/summary/{feature}/QA/runtime-environment.md` (the Tier-1 brownfield recipe) whenever it exists, else `.docs/{project-name}/implementation/environment-manifest.md`.
+Read the manifest your brief names; absent that, the authoritative file is `.docs/summary/{feature}/QA/runtime-environment.md` (the Tier-1 brownfield recipe) whenever it exists, else `.docs/{project-name}/implementation/environment-manifest.md`. **No agent authors this file, and no agent fills a gap in it** — a start command, port, base URL, credential, or capability you were not given is context the caller owes you, not a blank to fill from convention; escalate it via `<handoff>` and stop (see *Escalate When* below).
 
-**The authoring half of this section is [`references/environment-manifest.md`](references/environment-manifest.md)** — what each block records, the three entry points and their precedence, minimal-subset selection, and a capability blocker's ledger mechanics. It is the format authority the three authoring steps cite; **you do not need it to run a probe**, and the next rule is why.
-
-**No agent authors this file, and no agent fills a gap in it.** A start command you cannot find, a port nobody wrote down, a base URL you would have to infer from a compose file, a credential you were not given, a browser you do not have: each is context the caller owes you, not a blank to fill from convention. Escalate it via `<handoff>` and stop — this is the environment-scoped case of *you do not author the probe you are graded on*.
-
-**Run only the subset the milestone needs, and name that subset in the capture's `Environment` field** — the reviewer needs to know a claim was made against three services and not eight. A step you skipped is a scoping decision; a step you skipped silently is an unstated assumption about what the claim covers.
-
-**A missing capability is requested immediately and blocks at the evidence boundary — not at detection.** Docker is not installed, the browser tooling is absent, the test device is unprovisioned, a credential has no source. Halting the run on the spot wastes the one resource the situation actually gives you: the human can install Docker while you write the code. So:
-
-1. **Ask now**, naming exactly what and why — *"Docker Desktop, to run the local Postgres this API's integration tier needs"*. Specific enough to act on without a follow-up question, and **before the work starts**, never at capture time: at that point the only remaining move is a lower tier, which the Tier Ladder forbids. The Orchestrator files it as a blocker in the same breath (mechanics: the reference above).
-2. **Keep working on everything that does not need it.** Write the code. Run the tiers you can reach. A missing Tier-3 capability does not make Tier 1 and 2 unavailable.
-3. **Stop at the first step that needs it** — your own self-verification, the verifier's capture, the gate that reads it. Not one step past. That boundary is exactly where a deferral would otherwise turn into a shipped claim with nothing behind it.
-
-The manifest is what makes the capture's `Environment` and `Config repointed` fields fillable, and what a reviewer diffs a suspiciously-green capture against.
+Full depth — load on demand, not part of this Always wake-up: the six-block format, the three entry points and their precedence, minimal-subset selection, and the missing-capability ask-now/keep-working/stop protocol and its ledger mechanics — [`references/environment-manifest.md`](references/environment-manifest.md). **You do not need it to run a probe** whose manifest already exists; it is the format authority for whoever authors or extends one.
 
 ### The Runtime Probe
 
 1. **START** the application the way a user starts it, using the start command declared in the milestone's `RUNTIME PROBE:` line. Never invent the command — see *Escalate When*.
 2. **REPOINT** whatever configuration is needed so the surfaces under test talk to the local instances, and record exactly what you changed.
 3. **PROBE** using the declared probe command through the transport below.
-4. **CAPTURE** the output to a file under `evidence/runtime/` via `{PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture`, which writes the command, timestamp, exit code, and the output itself — an excerpt (error lines + tail) by default, with the full output always on disk at the `- Log:` path and available via `--full-body` when the whole response IS the evidence. When no Python 3 runtime is available, hand-write the capture with the complete field list from *The Capture Artifact* below; `--capture` is preferred because those fields are tool-authored and therefore cannot be faked.
+4. **CAPTURE** the output to a file under `evidence/runtime/` via `{PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture <path> --ledger {epic-root}/gates.jsonl`, which writes the command, timestamp, exit code, and the output itself — an excerpt (error lines + tail) by default, with the full output always on disk at the `- Log:` path and available via `--full-body` when the whole response IS the evidence. When no Python 3 runtime is available, hand-write the capture with the complete field list from *The Capture Artifact* below; `--capture` is preferred because those fields are tool-authored and therefore cannot be faked.
 5. **CITE** the capture path in your report.
 
 **You do not author the probe you are graded on.** The probe and its expected observable come from the plan. A probe invented at verification time is invented by the party motivated to soften it.
@@ -112,7 +100,7 @@ The third consumer cites differently: in `acceptance-results.md` the capture pat
 
 If the application will not start, the environment cannot be repointed, the device is unreachable, or the transport is unavailable:
 
-- Record the claim as **`BLOCKED — <what was missing>`**. Never `PASS`. Never omit it.
+- Record the claim as **`BLOCKED — <what was missing>`** — never `PASS`, never omitted, per `{PLUGIN_ROOT}/agent-squad/base-persona.md` § Evidence Integrity.
 - Say explicitly what you observed *instead*, if anything: `BLOCKED — app will not start; Tier 2 suite green only`. An unnamed proxy is a fabrication in effect (`{PLUGIN_ROOT}/agent-squad/base-persona.md`, Evidence Integrity).
 - Report it in your `<handoff>` as well as your artifact, so it reaches the blockers ledger.
 

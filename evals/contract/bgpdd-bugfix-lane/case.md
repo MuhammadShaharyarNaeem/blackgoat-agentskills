@@ -173,7 +173,7 @@ route problem rather than as a missing file.
    - **at least one** commit exists after `base`;
    - **exactly one** of them is the **gated** commit — identified not by its message but by
      its file set matching the `--changed-files` of a `check_commit_gate.py` `PASS` record
-     whose own `argv` carries `--commit`, `--verify-tree`, `--max-changed-files`, and a
+     whose own `argv` carries `--commit`, `--verify-tree`, `--max-changed-files`, `--require-files-reviewed`, and a
      `--require-ledger-gates` value naming **both** `check_bugfix_intake.py` and
      `check_red_green.py`. A hand-made `git commit` fails here even when the diff is
      perfect, and so does a gate that passed but was never asked to commit;

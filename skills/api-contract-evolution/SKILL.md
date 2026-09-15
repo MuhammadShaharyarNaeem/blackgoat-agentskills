@@ -9,7 +9,7 @@ A published API is the one artifact you cannot change by redeploying. Every cons
 
 ## Direct invocation
 
-A user can ask for this directly on named files outside a pipeline — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, and the diff gate is run, not reasoned about (`base-persona.md`, Evidence Integrity). **Scope: three files or fewer, additive only.** Anything larger, and every breaking change, routes through `/bg`.
+A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no unobserved claims (`base-persona.md`, Evidence Integrity). **Scope: three files or fewer, additive only.** Anything larger, and every breaking change, routes through `/bg`.
 
 ## Quick card
 

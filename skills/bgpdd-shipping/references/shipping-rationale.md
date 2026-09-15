@@ -63,6 +63,8 @@ Hence the exit ticket is deliberately tighter (convention #8): `--require-rehear
 
 The **resume branch** of Step 0.4 drops `--require-go` for a different reason. On a resume, Stage 2 Dep has already rewritten the file, so its content is an *exit* verdict, not an entry one. A standing `NO-GO` is the work the resume exists to finish. Applying `--require-go` there would block re-entry to the only stage that can resolve the NO-GO, and the pipeline could never converge on its own output.
 
+This resume branch fires only when Step 0's hydration reads `pipeline: bgpdd-shipping` — an interrupted shipping session picking back up inside this same pipeline, never having left it. A build round trip (Step 3 routing a finding back to `/bgpdd-build`) is a different case: build's re-entry handler resets `pipeline` to `bgpdd-build` before it builds, so re-entering shipping afterward reads `bgpdd-build` and takes the **fresh-run** branch instead, correctly re-requiring `--require-go`.
+
 ---
 
 ## Why the acceptance suite is re-executed rather than re-read

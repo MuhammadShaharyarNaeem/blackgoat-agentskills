@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Pre-execution guard: converts six restraint rules from "should not" to "cannot".
+"""Pre-execution guard: converts seven restraint rules from "should not" to "cannot".
 
 Every other script in this family verifies AFTER the fact, and the decision to
 run it is the model's. This one runs BEFORE the tool call, decided by the
 runtime rather than by the model, and returns a deny that the model cannot
 route around. It is the mechanical form of CLAUDE.md convention #9 applied to
-the six restraints that bite at the exact moment the model most wants to
+the seven restraints that bite at the exact moment the model most wants to
 proceed: committing, editing the RED, delegating before intake, delegating
 into a lane a human has to clear, hand-writing the artifacts the gates read,
-and running a build or test raw instead of through the log wrapper.
+running a build or test raw instead of through the log wrapper, and hand-
+editing the one persona file in this tree no agent may touch.
 
 This file is the DECISION LOGIC and it is runtime-neutral (convention #5).
 The per-runtime packaging -- which hook event fires it, and which JSON shape
@@ -16,8 +17,8 @@ the host reads -- lives in `hooks/hooks.json` (Claude Code),
 `hooks/hooks-cursor.json` (Cursor) and the `--format` flag below. No rule text
 is duplicated into either.
 
-THE SIX RULES
--------------
+THE SEVEN RULES
+----------------
 1. `commit_through_the_gate` -- tool `Bash`, a history-writing `git`
    invocation (`commit|merge|cherry-pick|revert|rebase|am|notes|tag|stash`) or
    `gh pr merge`, while a lane is ACTIVE and NOT yet closed -> DENY, naming
@@ -31,7 +32,10 @@ THE SIX RULES
    `check_commit_gate.py` PASS -> DENY. "A write" is a write TOOL (`Edit`,
    `Write`, `MultiEdit`, `NotebookEdit`) or a `Bash` command that mutates the
    path (see BASH WRITES). A path that does not exist yet is allowed: adding
-   a new test is not editing the RED.
+   a new test is not editing the RED. A lane whose own `orchestrator-state.json`
+   carries a terminal `status` of `escalated` or `closed` (standalone route
+   only; `update_state.py --set-status`) is treated as fixed too -- see
+   CLOSED LANES.
 3. `no_delegation_before_intake` -- a delegation tool while a fresh
    `bug-report.md` exists whose ledger lacks a `check_bugfix_intake.py` PASS
    -> DENY.
@@ -75,6 +79,26 @@ THE SIX RULES
    other missing file in this guard). A halt in a STALE lane does not deny:
    the lane freshness window (12h default) already governs whether the lane
    -- and therefore its halt -- is active at all.
+7. `blackgoat_persona_is_hand_edited_only` -- tool `Write`/`Edit`/`MultiEdit`,
+   or a `Bash` mutation (see BASH WRITES), whose target resolves to
+   `agents/blackgoat.md` -> DENY, always, lane or no lane, mirroring rule 4's
+   scope: this needs no lane detection either. `agents/blackgoat.md` is
+   CLAUDE.md convention #7's file -- the human author's psychological
+   profile -- and no agent may edit it, not even Forge, which edits every
+   other `SKILL.md`. The single sanctioned exception is an append to
+   `## Part VIII: Problem & Solution Ledger`, made from the main session with
+   the author's explicit in-session approval of the exact text. The carve-out
+   this rule checks for that exception: the environment variable
+   `BLACKGOAT_ALLOW_PART_VIII_APPEND=1` in the hook's own environment, AND --
+   checkable only for `Write`/`Edit`/`MultiEdit`, whose payload actually
+   carries the before/after text -- the edit is a pure append landing after
+   the Part VIII heading (old content unchanged, new content is old content
+   plus a suffix). `Bash` gets NO carve-out, env var or not: a shell command's
+   target is a path string, not a diff, so there is nothing cheap to check
+   that `>>` was the only thing done to the file, and "cannot check cheaply"
+   means deny here, not "trust the env var". The sanctioned append is
+   therefore always made through the Edit or Write tool, which also matches
+   this project's own working rule for editing files.
 
 RUNNER MATCHING (rule 5)
 -------------------------
@@ -196,6 +220,23 @@ whose directory name is `implementation` rather than a slug) the lane is
 treated as NOT closed -- fail-closed, and `--explain` says so. Quick keeps its
 own, older predicate: a `check_quick_close.py --commit` PASS removes the lane
 from detection entirely.
+
+A lane is ALSO closed -- for rule 1 (`Lane.closed`) and independently for
+rule 2 (`unfixed_bugfix_lanes()`) -- when its own `orchestrator-state.json`
+carries a terminal `status` of `escalated` or `closed`, written by
+`update_state.py --set-status` (`bgpdd-bugfix` Phase 2 step 5 / Phase 5 step
+4, both HALT branches, standalone route). Mirrors how `lane_halt()` already
+reads per-lane state, and needs no milestone: the escalation is the lane's
+own terminal act, not one more commit to scope. STANDALONE bugfix only -- the
+state file sits at `lane.root` there (`.docs/bugfix/{bug-slug}/
+orchestrator-state.json`). The FEATURE route's bugfix sub-lane has no state
+file of its own at `lane.root` (its `{state-file}` is the epic's, one level
+up, and `bgpdd-bugfix` §1 forbids this lane writing anything but a scoped
+blocker to it) -- so an escalated feature-route bug still arms rule 2 for the
+freshness window. Reading the epic's own `status` field would misattribute
+the WHOLE epic's status to one bug among possibly several open on that
+route; no per-bug-scoped status exists there to read. Unresolved -- tracked,
+not silently worked around.
 
 VERIFY LANES DO NOT ARM RULE 1
 ------------------------------
@@ -334,6 +375,16 @@ TEST_FILE_PATTERNS = (
 
 GATE_ARTIFACT_NAMES = ("gates.jsonl", "orchestrator-state.json", "run-log.jsonl")
 GATE_ARTIFACT_SUFFIX = ".meta.json"
+
+# A lane's own `status` (update_state.py --set-status) at one of these values
+# closes it -- see CLOSED LANES in the module docstring.
+TERMINAL_STATUSES = ("escalated", "closed")
+
+# Rule 7: the human author's persona file, never edited by an agent except a
+# sanctioned append to its Part VIII ledger (CLAUDE.md convention #7).
+BLACKGOAT_PERSONA_SEGMENTS = ("agents", "blackgoat.md")
+BLACKGOAT_PART_VIII_HEADING = "## Part VIII: Problem & Solution Ledger"
+BLACKGOAT_APPEND_ENV_VAR = "BLACKGOAT_ALLOW_PART_VIII_APPEND"
 
 # A pipeline whose lane has no commit gate: it arms every rule EXCEPT rule 1.
 NO_COMMIT_GATE_PIPELINES = ("bgpdd-verify",)
@@ -614,7 +665,7 @@ def detect_lanes(cwd, now=None, window_hours=WINDOW_HOURS_DEFAULT):
                 "" if arms else "; no commit gate, rule 1 not armed"),
             milestone=milestone,
             arms_commit_rule=arms,
-            closed=lane_is_closed(str(ledger), milestone),
+            closed=lane_is_closed(str(ledger), milestone, root=str(project)),
         ))
 
     # (b)+(c) BUGFIX -- standalone and feature route, ledger fresh.
@@ -628,7 +679,7 @@ def detect_lanes(cwd, now=None, window_hours=WINDOW_HOURS_DEFAULT):
             "check_commit_gate.py",
             detail="" if slug else "unscoped feature route: no readable slug",
             milestone=slug,
-            closed=lane_is_closed(str(ledger), slug),
+            closed=lane_is_closed(str(ledger), slug, root=str(bugdir)),
         ))
 
     # (d) QUICK -- .docs/quick/*/note.md fresh and not yet closed.
@@ -647,14 +698,40 @@ def detect_lanes(cwd, now=None, window_hours=WINDOW_HOURS_DEFAULT):
     return lanes
 
 
-def lane_is_closed(ledger, milestone):
-    """True when this lane's commit gate already committed its current milestone.
+def lane_status(root):
+    """The `status` string in `root`'s own orchestrator-state.json, or None.
 
-    See CLOSED LANES in the module docstring. `milestone` of None -> False:
-    a lane whose milestone cannot be read is never treated as closed, because
-    "any commit-gate PASS in this ledger" would disarm rule 1 for a whole epic
-    the moment its first milestone landed.
+    Fail-open like every other filesystem read in this module: a missing or
+    corrupt file, or a non-string/blank value, reads as None -- "no terminal
+    status", i.e. previous behavior. Mirrors `lane_halt()`'s per-lane read
+    (same file, different field). Only a lane whose own root carries a state
+    file has anything to read -- a FEATURE lane, or a STANDALONE bugfix lane
+    (`update_state.py --init` creates one at Phase 0 step 4); a feature-route
+    bugfix sub-lane has none of its own, so this reads absent there too (see
+    CLOSED LANES).
     """
+    state = _read_json(Path(root) / "orchestrator-state.json")
+    if not isinstance(state, dict):
+        return None
+    status = state.get("status")
+    return status if isinstance(status, str) and status.strip() else None
+
+
+def lane_is_closed(ledger, milestone, root=None):
+    """True when this lane's commit gate already committed its current
+    milestone, OR (when `root` is given) its own state carries a terminal
+    `status` (`escalated`/`closed` -- see TERMINAL_STATUSES).
+
+    See CLOSED LANES in the module docstring. `milestone` of None does not
+    block the status half: a lane whose milestone cannot be read is never
+    treated as closed BY THE COMMIT-GATE PREDICATE, because "any commit-gate
+    PASS in this ledger" would disarm rule 1 for a whole epic the moment its
+    first milestone landed -- but an escalated/closed status is the lane's
+    own terminal act, not one more commit to scope, so it closes the lane
+    regardless of whether a milestone was ever readable.
+    """
+    if root is not None and lane_status(root) in TERMINAL_STATUSES:
+        return True
     if not milestone:
         return False
     return ledger_has_pass(ledger, "check_commit_gate.py", "--commit", milestone)
@@ -686,10 +763,21 @@ def pending_bugfix_intakes(cwd, now=None, window_hours=WINDOW_HOURS_DEFAULT):
 
 
 def unfixed_bugfix_lanes(lanes):
-    """Active bugfix lanes whose ledger holds no commit-gate PASS (rule 2's)."""
+    """Active bugfix lanes whose ledger holds no commit-gate PASS AND whose
+    own state carries no terminal status (rule 2's predicate).
+
+    A lane escalated via `update_state.py --set-status escalated` (or
+    `closed`; `bgpdd-bugfix` Phase 2 step 5 / Phase 5 step 4, standalone
+    route) is done fixing even though no commit ever lands -- rule 2 exists
+    to stop the builder editing the RED while a fix is still open, and an
+    escalated lane is not open. `lane_status()` reads absent for the
+    feature route (no state file at `lane.root` there -- see CLOSED LANES),
+    so that route's behavior is unchanged by this check.
+    """
     return [lane for lane in lanes
             if lane.kind == "bugfix"
-            and not ledger_has_pass(lane.ledger, "check_commit_gate.py")]
+            and not ledger_has_pass(lane.ledger, "check_commit_gate.py")
+            and lane_status(lane.root) not in TERMINAL_STATUSES]
 
 
 def lane_halt(lane):
@@ -822,6 +910,74 @@ def is_gate_artifact(path):
     if name in GATE_ARTIFACT_NAMES:
         return True
     return name.endswith(GATE_ARTIFACT_SUFFIX)
+
+
+def is_blackgoat_persona_path(path):
+    """True when `path`'s last two segments are agents/blackgoat.md.
+
+    Segment-based, like `is_gate_artifact` and `is_test_path` -- not a
+    filesystem resolve, so it costs nothing, needs no existing file, and is
+    separator/case agnostic the same way. Rule 7's target: CLAUDE.md
+    convention #7's file.
+    """
+    parts = _segments(path)
+    return (len(parts) >= 2
+            and tuple(s.lower() for s in parts[-2:]) == BLACKGOAT_PERSONA_SEGMENTS)
+
+
+def _part_viii_append_only(current_text, old_text, new_text):
+    """True when `old_text` -> `new_text` only ADDS text after the Part VIII
+    heading. A cheap containment check, not a diff -- see rule 7 in the module
+    docstring. Fails closed (False) on anything that does not plainly fit:
+    heading missing, `old_text` not found in the current file, `old_text`
+    found before the heading, or `new_text` not an extension of `old_text`.
+    """
+    heading_at = current_text.find(BLACKGOAT_PART_VIII_HEADING)
+    if heading_at < 0:
+        return False
+    old_at = current_text.find(old_text)
+    if old_at < 0 or old_at < heading_at:
+        return False
+    return new_text.startswith(old_text)
+
+
+def _blackgoat_write_is_sanctioned(tool_name, tool_input, path, cwd):
+    """Rule 7's carve-out: the env var AND, where the payload allows it, a
+    checked pure append after the Part VIII heading. See rule 7's docstring
+    entry for why `Bash` gets no carve-out at all.
+    """
+    if os.environ.get(BLACKGOAT_APPEND_ENV_VAR) != "1":
+        return False
+    if tool_name not in ("Write", "Edit", "MultiEdit"):
+        return False
+    try:
+        target = Path(path)
+        if not target.is_absolute():
+            target = Path(cwd) / target
+        current_text = target.read_text(encoding=READ_ENCODING)
+    except OSError:
+        return False
+
+    if tool_name == "Write":
+        new_text = tool_input.get("content")
+        if not isinstance(new_text, str):
+            return False
+        return (new_text.startswith(current_text)
+                and len(new_text) > len(current_text)
+                and current_text.find(BLACKGOAT_PART_VIII_HEADING) >= 0)
+
+    edits = tool_input.get("edits") if tool_name == "MultiEdit" else [tool_input]
+    if not isinstance(edits, list) or not edits:
+        return False
+    for edit in edits:
+        if not isinstance(edit, dict):
+            return False
+        old_text, new_text = edit.get("old_string"), edit.get("new_string")
+        if not isinstance(old_text, str) or not isinstance(new_text, str):
+            return False
+        if not _part_viii_append_only(current_text, old_text, new_text):
+            return False
+    return True
 
 
 def bash_tokens(text):
@@ -1043,6 +1199,27 @@ def decide(tool_name, tool_input, cwd, now=None, window_hours=WINDOW_HOURS_DEFAU
                 .format(path, how)
             )
 
+    # Rule 7 next: agents/blackgoat.md, always -- also needs no lane detection.
+    for source, path in targets:
+        if not is_blackgoat_persona_path(path):
+            continue
+        if _blackgoat_write_is_sanctioned(tool_name, tool_input, path, cwd):
+            continue
+        how = ("" if source == "tool" else
+               " (matched the shell construct `{0}`)".format(source))
+        return "deny", "blackgoat_persona_is_hand_edited_only", (
+            "Blocked: `{0}` is agents/blackgoat.md{1} -- CLAUDE.md convention "
+            "#7: the human author's psychological profile, edited only by "
+            "the author, by hand. No agent, audit surgery plan or "
+            "improvement proposal may edit, slim, refactor or \"fix\" this "
+            "file. The single exception is an append to `## Part VIII: "
+            "Problem & Solution Ledger`, made from the main session with "
+            "the author's explicit in-session approval of the exact text: "
+            "set {2}=1 and make the edit a pure append after that heading "
+            "through the Edit or Write tool -- Bash gets no carve-out here."
+            .format(path, how, BLACKGOAT_APPEND_ENV_VAR)
+        )
+
     lanes = detect_lanes(cwd, now=now, window_hours=window_hours)
 
     # Rule 1 -- commit through the gate.
@@ -1251,6 +1428,10 @@ def run_explain(args):
     out.append("  6 delegation_halted_for_the_user    Task/Agent while any "
                "active lane's orchestrator-state.json carries a standing "
                "halt (check_redelegation.py / update_state.py --set-halt)")
+    out.append("  7 blackgoat_persona_is_hand_edited_only  write (tool OR "
+               "Bash mutation) to agents/blackgoat.md, always; carve-out is "
+               "BLACKGOAT_ALLOW_PART_VIII_APPEND=1 plus a checked pure "
+               "append after the Part VIII heading, Edit/Write only")
     out.append("")
     out.append("cwd            : {0}".format(cwd))
     out.append("window (hours) : {0:g}".format(args.window_hours))
@@ -1269,9 +1450,17 @@ def run_explain(args):
                 out.append("      rule 1: NOT armed (this pipeline has no "
                            "commit gate)")
             elif lane.closed:
-                out.append("      rule 1: NOT armed (closed -- the commit gate "
-                           "recorded a --commit PASS for this milestone, so "
-                           "the sanctioned local merge is allowed)")
+                status = lane_status(lane.root)
+                if status in TERMINAL_STATUSES:
+                    out.append("      rule 1: NOT armed (closed -- status="
+                               "{0!r} in this lane's own "
+                               "orchestrator-state.json, so the sanctioned "
+                               "local merge is allowed)".format(status))
+                else:
+                    out.append("      rule 1: NOT armed (closed -- the commit "
+                               "gate recorded a --commit PASS for this "
+                               "milestone, so the sanctioned local merge is "
+                               "allowed)")
             else:
                 out.append("      rule 1: armed")
     else:
@@ -1291,6 +1480,8 @@ def run_explain(args):
         ", ".join(l.root for l in lanes) if lanes else "nothing"))
     out.append("Rule 6 armed for: {0}".format(
         ", ".join(l.root for l in halted) if halted else "nothing"))
+    out.append("Rule 7 is always armed, for write tools AND for Bash, "
+               "against agents/blackgoat.md. No lane needed.")
     print("\n".join(out))
     return 0
 
@@ -1364,7 +1555,7 @@ def run_self_test():
         # -- fixtures ---------------------------------------------------
 
         def make_bugfix(self, slug="coupon-500", intake=True, commit=False,
-                        age_hours=0.0, commit_milestone=None):
+                        age_hours=0.0, commit_milestone=None, status=None):
             d = Path(self.root) / ".docs" / "bugfix" / slug
             touch(d / "bug-report.md", "# Bug report", age_hours)
             lines = ""
@@ -1374,6 +1565,9 @@ def run_self_test():
                 lines += ledger_line("check_commit_gate.py", argv=["--commit"],
                                      milestone=commit_milestone)
             touch(d / "gates.jsonl", lines or "", age_hours)
+            if status is not None:
+                touch(d / "orchestrator-state.json",
+                     json.dumps({"status": status}), age_hours)
             return str(d)
 
         def make_feature(self, name="demo", pipeline="bgpdd-build", age_hours=0.0,
@@ -1544,6 +1738,39 @@ def run_self_test():
             path = touch(Path(self.root) / "tests" / "test_api.py", "old")
             d, rule, _ = self.decide("MultiEdit", {"edits": [{"file_path": path}]})
             self.assertEqual((d, rule), ("deny", "frozen_tests_during_a_fix"))
+
+        def test_20b_escalated_status_disarms_frozen_tests_rule(self):
+            """update_state.py --set-status escalated (bgpdd-bugfix Phase 2
+            step 5 / Phase 5 step 4, standalone route) closes the lane even
+            though no commit ever lands -- a fix escalated away is not
+            "still open" for rule 2's purpose."""
+            self.make_bugfix(status="escalated")
+            path = touch(Path(self.root) / "tests" / "test_api.py", "old")
+            self.assertEqual(self.decide("Edit", {"file_path": path})[0], "allow")
+
+        def test_20c_active_status_still_arms_frozen_tests_rule(self):
+            self.make_bugfix(status="active")
+            path = touch(Path(self.root) / "tests" / "test_api.py", "old")
+            d, rule, _ = self.decide("Edit", {"file_path": path})
+            self.assertEqual((d, rule), ("deny", "frozen_tests_during_a_fix"))
+
+        def test_20d_unreadable_status_file_is_previous_behavior(self):
+            """A corrupt orchestrator-state.json fails open to the pre-status
+            behavior -- still denies, same as no state file at all, like
+            every other filesystem read in this module."""
+            d = self.make_bugfix()
+            touch(Path(d) / "orchestrator-state.json", "{not valid json")
+            path = touch(Path(self.root) / "tests" / "test_api.py", "old")
+            decision, rule, _ = self.decide("Edit", {"file_path": path})
+            self.assertEqual((decision, rule),
+                             ("deny", "frozen_tests_during_a_fix"))
+
+        def test_20e_escalated_status_also_disarms_commit_rule(self):
+            """The same closed flag feeds rule 1's arms_rule_1(): an escalated
+            bugfix lane has nothing left to route through the commit gate."""
+            self.make_bugfix(status="escalated")
+            self.assertEqual(
+                self.decide("Bash", {"command": "git commit -m x"})[0], "allow")
 
         # -- rule 3: no delegation before intake ------------------------
 
@@ -2200,6 +2427,100 @@ def run_self_test():
             self.make_feature(age_hours=13.0, halt=self._halt())
             self.assertEqual(detect_lanes(self.root), [])
             self.assertEqual(self.decide("Task", {"prompt": "go"})[0], "allow")
+
+        # -- rule 7: agents/blackgoat.md is hand-edited only (Metric 20) --
+
+        def make_blackgoat(self):
+            path = Path(self.root) / "agents" / "blackgoat.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                "# Blackgoat\n\nSome persona text.\n\n"
+                "## Part VIII: Problem & Solution Ledger\n\n- existing entry\n",
+                encoding="utf-8")
+            return str(path)
+
+        def test_101_edit_to_blackgoat_denied_without_env_var(self):
+            os.environ.pop(BLACKGOAT_APPEND_ENV_VAR, None)
+            path = self.make_blackgoat()
+            d, rule, reason = self.decide("Edit", {
+                "file_path": path, "old_string": "- existing entry\n",
+                "new_string": "- existing entry\n- new entry\n"})
+            self.assertEqual((d, rule),
+                             ("deny", "blackgoat_persona_is_hand_edited_only"))
+            self.assertIn("convention #7", reason)
+
+        def test_102_edit_allowed_with_env_and_pure_part_viii_append(self):
+            path = self.make_blackgoat()
+            os.environ[BLACKGOAT_APPEND_ENV_VAR] = "1"
+            try:
+                self.assertEqual(self.decide("Edit", {
+                    "file_path": path, "old_string": "- existing entry\n",
+                    "new_string": "- existing entry\n- new entry\n"})[0],
+                    "allow")
+            finally:
+                del os.environ[BLACKGOAT_APPEND_ENV_VAR]
+
+        def test_103_edit_denied_with_env_but_change_elsewhere_in_file(self):
+            path = self.make_blackgoat()
+            os.environ[BLACKGOAT_APPEND_ENV_VAR] = "1"
+            try:
+                d, rule, _ = self.decide("Edit", {
+                    "file_path": path, "old_string": "Some persona text.",
+                    "new_string": "Some rewritten persona text."})
+                self.assertEqual(
+                    (d, rule), ("deny", "blackgoat_persona_is_hand_edited_only"))
+            finally:
+                del os.environ[BLACKGOAT_APPEND_ENV_VAR]
+
+        def test_104_write_allowed_with_env_and_pure_append(self):
+            path = self.make_blackgoat()
+            current = Path(path).read_text(encoding="utf-8")
+            os.environ[BLACKGOAT_APPEND_ENV_VAR] = "1"
+            try:
+                self.assertEqual(self.decide("Write", {
+                    "file_path": path,
+                    "content": current + "- another new entry\n"})[0],
+                    "allow")
+            finally:
+                del os.environ[BLACKGOAT_APPEND_ENV_VAR]
+
+        def test_105_write_denied_with_env_but_not_a_pure_append(self):
+            path = self.make_blackgoat()
+            os.environ[BLACKGOAT_APPEND_ENV_VAR] = "1"
+            try:
+                d, rule, _ = self.decide("Write", {
+                    "file_path": path, "content": "# Rewritten from scratch\n"})
+                self.assertEqual(
+                    (d, rule), ("deny", "blackgoat_persona_is_hand_edited_only"))
+            finally:
+                del os.environ[BLACKGOAT_APPEND_ENV_VAR]
+
+        def test_106_bash_write_to_blackgoat_denied_even_with_env_var(self):
+            path = self.make_blackgoat()
+            os.environ[BLACKGOAT_APPEND_ENV_VAR] = "1"
+            try:
+                d, rule, _ = self.decide(
+                    "Bash", {"command": "echo '- new' >> " + path})
+                self.assertEqual(
+                    (d, rule), ("deny", "blackgoat_persona_is_hand_edited_only"))
+            finally:
+                del os.environ[BLACKGOAT_APPEND_ENV_VAR]
+
+        def test_107_other_agent_files_are_unaffected(self):
+            os.environ.pop(BLACKGOAT_APPEND_ENV_VAR, None)
+            path = touch(Path(self.root) / "agents" / "mason.md", "# Mason")
+            self.assertEqual(self.decide("Edit", {
+                "file_path": path, "old_string": "# Mason",
+                "new_string": "# Mason\n\nUpdated."})[0], "allow")
+
+        def test_108_rule_7_fires_regardless_of_active_lane(self):
+            self.make_feature()
+            os.environ.pop(BLACKGOAT_APPEND_ENV_VAR, None)
+            path = self.make_blackgoat()
+            d, rule, _ = self.decide(
+                "Write", {"file_path": path, "content": "# tampered\n"})
+            self.assertEqual((d, rule),
+                             ("deny", "blackgoat_persona_is_hand_edited_only"))
 
     suite = unittest.TestLoader().loadTestsFromTestCase(GuardTest)
     result = unittest.TextTestRunner(verbosity=2).run(suite)

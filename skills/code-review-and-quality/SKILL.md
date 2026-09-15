@@ -102,60 +102,13 @@ This template is the **single owner** of the review report format — reviewer p
 
 The `## Review:` heading MUST carry the milestone's leading identifier verbatim as written in `plan.md` — the gate matches it as a whole token.
 
-```markdown
-## Review: [Milestone/Task title]
+**Files reviewed — exact grammar.** One line per changed file, before any other subsection is treated as complete: `` - `<path>` — identity: <source>; failure paths: <disposition>; findings: <ids or none> `` — `identity` names where every authz/tenancy comparison's trusted side originates (or `n/a`), `failure paths` names what happens when each fallible call fails (or `n/a`). A file missing this line has not been reviewed. `check_commit_gate.py --require-files-reviewed` fails the commit for any declared path with no line here.
 
-<!-- The three machine-read lines come FIRST, before any ### subheading. -->
-**Verdict:** Approve | Request Changes
-**Rendered evidence:** <path>[, <path>]
-**Runtime evidence:** <path>[, <path>]
-
-### Context
-- [ ] I understand what this change does and why
-
-### Files reviewed
-<!-- One line per changed file - a file missing here has not been reviewed.
-     identity: where every authz/tenancy comparison's trusted side originates (or n/a)
-     failure paths: what happens when each fallible call fails (or n/a) -->
-- `<path>` — identity: <source>; failure paths: <disposition>; findings: <ids or none>
-
-### Correctness
-- [ ] Change matches spec/task requirements
-- [ ] Edge cases handled
-- [ ] Error paths handled
-- [ ] Tests cover the change adequately
-
-### Readability
-- [ ] Names are clear and consistent
-- [ ] Logic is straightforward
-- [ ] No unnecessary complexity
-
-### Architecture
-- [ ] Follows existing patterns
-- [ ] No unnecessary coupling or dependencies
-- [ ] Appropriate abstraction level
-
-### Security
-- [ ] No secrets in code
-- [ ] Input validated at boundaries
-- [ ] No injection vulnerabilities
-- [ ] Auth checks in place
-- [ ] External data sources treated as untrusted
-
-### Performance
-- [ ] No N+1 patterns
-- [ ] No unbounded operations
-- [ ] Pagination on list endpoints
-
-### Verification
-- [ ] Tests pass
-- [ ] Build succeeds
-- [ ] Manual verification done (if applicable)
-```
+The full report skeleton — the heading, the three machine-read lines, and every per-axis checklist (Context, Files reviewed, Correctness, Readability, Architecture, Security, Performance, Verification) — is `references/review-report-template.md`. Load it on demand when starting a review; copy it verbatim and fill it in.
 
 **The `**Verdict:**` line is mandatory, machine-read, and must come BEFORE the section's first `###` subheading.** `check_commit_gate.py` closes a `## Review:` section at ANY heading of level 2–6, so a verdict written under a trailing `### Verdict` heading — or under any addendum subsection — is outside the section the gate reads: the gate finds no verdict and **fails closed**. Write the verdict, and the evidence lines beside it, immediately under the `## Review:` heading. (Migration: reports authored against the older bottom-of-section template must move the line up; nothing else changes.) Every `## Review:` section carries exactly one line of the form `**Verdict:** Approve` or `**Verdict:** Request Changes` — the `bgpdd-build` gate reads the latest Verdict for the current milestone, so the exact token is required: no variants (`Approved`, `LGTM`, `approve with notes`), no prose in place of the token.
 
-**`Approve` is unavailable while any Critical or Important finding stands in the same report.** Before writing the verdict, re-read every finding you just wrote *in that report section*. Each Critical and Important one must be absent or carry an explicit `RESOLVED` marker naming the fix and the evidence that verified it. One standing unresolved → the verdict is `Request Changes`. There is no "approve with notes", no closing summary that outranks the findings above it, and no verdict carried over from a previous round. The findings are the review; the verdict is arithmetic over them, not a separate judgement. ([why](references/code-review-deep-dive.md#the-verdict-is-arithmetic-over-the-findings))
+**`Approve` is unavailable while any Critical or Important finding stands in the same report.** Before writing the verdict, re-read every finding you just wrote *in that report section*. Each Critical and Important one must be absent or carry an explicit `RESOLVED` marker naming the fix and the evidence that verified it. One standing unresolved → the verdict is `Request Changes`. There is no "approve with notes", no closing summary that outranks the findings above it, and no verdict carried over from a previous round. The findings are the review; the verdict is arithmetic over them, not a separate judgement. ([why](references/code-review-deep-dive.md#the-verdict-is-arithmetic-over-the-findings)) The `RESOLVED` marker's mechanical grammar is the literal, whole, UPPERCASE word `RESOLVED` (`\bRESOLVED\b`, case-sensitive) somewhere in the finding's own line or its continuation lines before the next blank line, sibling list item, or heading; `check_commit_gate.py` enforces both this grammar and the verdict arithmetic above — `{PLUGIN_ROOT}/pipeline-tools/SKILL.md` is the grammar authority, not this file.
 
 **The `**Rendered evidence:**` line is optional, but machine-read when present, on the same exact-token terms as the Verdict line.** Required whenever the review covers a `[UI]` milestone's design-critique axis: list the path(s) — comma-separated — that you (the reviewer) saved under `.docs/{project-name}/implementation/evidence/review/`, the rendered artifacts the design-critique verdict actually rests on. `check_commit_gate.py --require-rendered-evidence` parses this line for `[UI]` milestones; its grammar authority is `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
 

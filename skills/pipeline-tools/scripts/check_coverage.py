@@ -6,9 +6,18 @@ plan.md tasks (plan mode) or by passing tests in test-report.md (test mode).
 
 Usage:
     python check_coverage.py --requirements <path> --plan <path>
-    python check_coverage.py --requirements <path> --test-report <path>
+    python check_coverage.py --requirements <path> --test-report <path> [--repo <path>] [--strict-evidence]
     python check_coverage.py --requirements <path> --design <path>
     python check_coverage.py --self-test
+
+Test mode, a PASS ledger line's evidence half (agents/quinn.md §6 grammar):
+a `**Runtime evidence:**` / `evidence/runtime/` capture citation is trusted
+(check_runtime_evidence.py hash-verifies it elsewhere); a `file::test-name`
+reference is resolved against `--repo` (default `.`) — the file must exist
+and the `test-name` token must appear in its text, or the line is
+UNEVIDENCED; a bare exit code (`exit 0`) is accepted on its own unless
+`--strict-evidence` is set, in which case it is UNEVIDENCED too. Any one
+accepted form on a line is sufficient.
 
 Pure standard library. See ../SKILL.md for the full contract (JSON shape,
 exit codes, parsing rules).
@@ -67,6 +76,10 @@ EVIDENCE_EXIT_RE = re.compile(r"\bexit(?:\s+code)?\s+-?\d+\b", re.IGNORECASE)
 EVIDENCE_RUNTIME_RE = re.compile(
     r"\*\*Runtime\s+evidence:\*\*|evidence[\\/]runtime[\\/]", re.IGNORECASE)
 EVIDENCE_TEST_REF_RE = re.compile(r"\S+::\S+")
+# Punctuation trimmed off a `file::test-name` match's two halves before
+# resolving the file part against --repo — backticks/quotes/brackets an
+# author wrapped the citation in are not part of the path or identifier.
+CITATION_STRIP_CHARS = "`'\"()[]{}<>,;."
 
 # --- plan-mode lint vocabulary -------------------------------------------
 # Inventory nouns only: a count of artifacts that exists in a source table.
@@ -1132,27 +1145,86 @@ def strip_fenced_blocks(text):
     return "\n".join(out)
 
 
-def pass_is_evidenced(line):
-    """True when a PASS line cites something a reader could go and check.
+def _resolve_test_ref(match_text, repo_root):
+    """Validate a `file::test-name` citation's two halves against disk.
 
-    The gate is deterministic about the STATUS token and was completely
-    trusting about the EVIDENCE beside it, so `- FR-1: PASS — I did not run
-    anything` counted as coverage. Three accepted forms, matching what
-    agents/quinn.md §6 already requires: an exit code, a runtime-evidence
-    capture citation, or a `file::test-name` reference.
+    Returns (ok, reason). `reason` is set only when not ok:
+    `cited_test_file_missing: <path>` when the file half does not resolve to
+    a real file under `repo_root`, or `cited_test_not_found_in_file` when the
+    file exists but the identifier after `::` is not a substring of its text
+    (a cheap, language-neutral check — it does not run the test).
+    """
+    file_part, _, test_part = match_text.partition("::")
+    file_part = file_part.strip(CITATION_STRIP_CHARS)
+    test_part = test_part.strip(CITATION_STRIP_CHARS)
+    if not file_part:
+        return False, "cited_test_file_missing: (empty path)"
+    candidate = Path(repo_root) / file_part
+    if not candidate.is_file():
+        return False, f"cited_test_file_missing: {file_part}"
+    file_text, _read_error = read_text(candidate)
+    if file_text is None or (test_part and test_part not in file_text):
+        return False, "cited_test_not_found_in_file"
+    return True, None
 
-    SCOPE LIMIT: this checks the SHAPE of the citation, never its truth. A
-    fabricated `exit 0` still passes here — check_runtime_evidence.py and the
-    ledger are what make a citation costly to fake.
+
+def citation_status(line, repo_root=".", strict_evidence=False):
+    """(evidenced, reason) for a PASS line's evidence half.
+
+    The gate is deterministic about the STATUS token; this is what verifies
+    the EVIDENCE beside it, so `- FR-1: PASS — I did not run anything` does
+    not count as coverage. Three accepted forms, matching what agents/
+    quinn.md §6 already requires:
+
+    - a `**Runtime evidence:**` / `evidence/runtime/` capture citation is
+      trusted here — check_runtime_evidence.py hash-verifies the sidecar
+      elsewhere, and the ledger is what makes THAT citation costly to fake;
+    - a `file::test-name` reference is RESOLVED against `repo_root`: the file
+      half must exist on disk and the test-name half must appear (substring)
+      in its text, or the line is UNEVIDENCED with a specific reason. This
+      still does not run the test or prove it asserts this requirement's
+      criterion — only that the citation points at something real;
+    - a bare exit code (`exit 0`, `exit code 1`) is accepted on its own
+      unless `--strict-evidence` is set, in which case it is UNEVIDENCED too
+      (sanctioned as a standalone form by
+      skills/pipeline-tools/references/check_coverage.md; `--strict-evidence`
+      is a deliberately stricter opt-in, not a change to that default).
+
+    Any one accepted form on the line is sufficient — a bare exit code beside
+    an unresolvable `file::test-name` still passes unless `--strict-evidence`
+    is set, so a co-cited real exit code is not retroactively invalidated by
+    a separately bogus test-name citation on the same line.
     """
     m = PASS_TOKEN_RE.search(line)
     rest = line[m.end():] if m else line
-    return bool(EVIDENCE_EXIT_RE.search(rest)
-                or EVIDENCE_RUNTIME_RE.search(rest)
-                or EVIDENCE_TEST_REF_RE.search(rest))
+
+    if EVIDENCE_RUNTIME_RE.search(rest):
+        return True, None
+
+    test_ref_match = EVIDENCE_TEST_REF_RE.search(rest)
+    test_ref_reason = None
+    if test_ref_match:
+        test_ref_ok, test_ref_reason = _resolve_test_ref(test_ref_match.group(0), repo_root)
+        if test_ref_ok:
+            return True, None
+
+    exit_present = bool(EVIDENCE_EXIT_RE.search(rest))
+    if exit_present and not strict_evidence:
+        return True, None
+
+    if test_ref_match:
+        return False, test_ref_reason
+    if exit_present:
+        return False, "bare exit code rejected under --strict-evidence"
+    return False, "no checkable evidence"
 
 
-def parse_test_report(text):
+def pass_is_evidenced(line, repo_root=".", strict_evidence=False):
+    """Backward-compatible boolean wrapper around citation_status()."""
+    return citation_status(line, repo_root, strict_evidence)[0]
+
+
+def parse_test_report(text, repo_root=".", strict_evidence=False):
     """Parse a test-report.md body into (status_by_id, warnings).
 
     Latest status-bearing mention of an ID wins, so a BLOCKED line written
@@ -1169,13 +1241,18 @@ def parse_test_report(text):
     - a status is read only from a LIST ITEM (the ledger's own grammar);
       prose that merely contains an id and the word "pass" is a status-less
       mention, warned about and uncovered.
-    - a PASS whose evidence text cites nothing checkable is recorded as
-      `UNEVIDENCED`, which — like BLOCKED — is status-bearing and NOT covered.
+    - a PASS whose evidence text cites nothing checkable (see
+      citation_status()) is recorded as `UNEVIDENCED`, which — like BLOCKED —
+      is status-bearing and NOT covered.
+
+    `repo_root` and `strict_evidence` are forwarded to citation_status() for
+    every PASS line encountered.
     """
     warnings = []
     status_by_id = {}
     mentioned_ids = set()
     status_bearing_ids = set()
+    unevidenced_reason = {}
 
     for line in text.split("\n"):
         ids_in_line = {token.upper() for token in ID_TOKEN_RE.findall(line)}
@@ -1194,20 +1271,29 @@ def parse_test_report(text):
         if has_fail or has_blocked or has_pass:
             # Worst status on the line wins: FAIL > BLOCKED > PASS.
             status = "FAIL" if has_fail else "BLOCKED" if has_blocked else "PASS"
-            if status == "PASS" and not pass_is_evidenced(line):
-                status = "UNEVIDENCED"
+            reason = None
+            if status == "PASS":
+                evidenced, reason = citation_status(line, repo_root, strict_evidence)
+                if not evidenced:
+                    status = "UNEVIDENCED"
             for req_id in ids_in_line:
                 status_by_id[req_id] = status
                 status_bearing_ids.add(req_id)
+                if status == "UNEVIDENCED":
+                    unevidenced_reason[req_id] = reason
+                else:
+                    unevidenced_reason.pop(req_id, None)
 
     for req_id in sorted(mentioned_ids - status_bearing_ids, key=sort_key):
         warnings.append(f"{req_id} is only ever mentioned without a status token")
     for req_id in sorted((i for i, s in status_by_id.items()
                           if s == "UNEVIDENCED"), key=sort_key):
+        reason = unevidenced_reason.get(req_id) or "no checkable evidence"
         warnings.append(
-            f"{req_id}: latest PASS cites no checkable evidence — required is "
-            "an exit code ('exit 0'), a 'file::test-name' reference, or an "
-            "evidence/runtime/ capture citation; counted as NOT covered")
+            f"{req_id}: latest PASS cites unusable evidence ({reason}) — "
+            "required is a resolvable 'file::test-name' reference, an "
+            "evidence/runtime/ capture citation, or (unless --strict-evidence) "
+            "an exit code; counted as NOT covered")
 
     return status_by_id, warnings
 
@@ -1236,7 +1322,7 @@ def _base_report(mode, requirements_path, target_path):
     }
 
 
-def build_report(mode, requirements_path, target_path):
+def build_report(mode, requirements_path, target_path, repo_root=".", strict_evidence=False):
     report = _base_report(mode, requirements_path, target_path)
 
     requirements_text, read_error = read_text(requirements_path)
@@ -1287,7 +1373,7 @@ def build_report(mode, requirements_path, target_path):
             report["lint_failures"] = run_plan_lints(target_text)
         else:
             status_by_id, target_warnings = parse_test_report(
-                strip_fenced_blocks(target_text))
+                strip_fenced_blocks(target_text), repo_root, strict_evidence)
             covered_ids = {i for i, status in status_by_id.items() if status == "PASS"}
             # Reported the same way as `blocked`: unfiltered, so an id the
             # requirements never declared still surfaces. An UNEVIDENCED
@@ -1445,6 +1531,13 @@ def main(argv):
     parser.add_argument("--plan")
     parser.add_argument("--test-report")
     parser.add_argument("--design")
+    parser.add_argument("--repo", default=".",
+                        help="repo root a test-report.md 'file::test-name' citation "
+                             "resolves against (test mode only; default: '.')")
+    parser.add_argument("--strict-evidence", action="store_true",
+                        help="test mode: also reject a bare exit-code PASS citation "
+                             "with no file::test-name or runtime-evidence capture "
+                             "(default: accepted, per agents/quinn.md §6)")
     parser.add_argument("--ledger",
                         help="append one JSON record per run to this path")
     parser.add_argument("--self-test", action="store_true")
@@ -1475,7 +1568,7 @@ def main(argv):
 
     mode, target = _selected_mode(args)
 
-    report = build_report(mode, args.requirements, target)
+    report = build_report(mode, args.requirements, target, args.repo, args.strict_evidence)
     print(json.dumps(report))
 
     if report["result"] == "ERROR":

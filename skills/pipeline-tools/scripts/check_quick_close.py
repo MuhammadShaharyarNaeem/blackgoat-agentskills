@@ -55,6 +55,23 @@ Given the note, the capture and the declared file list, it verifies, in order:
     mechanical form of the lane's "never edit an existing test to make it
     pass" rule; a newly ADDED test is not an edit and passes, which is what
     keeps the rule from forbidding the lane's own use case.
+  * `test_authenticity_gate_missing` -- a declared file is a test (a
+    `--frozen` match or check_test_authenticity.py's own default test-glob
+    heuristic, copied in) and the ledger holds no PASSING
+    `check_test_authenticity.py` record exactly scoped to this
+    `--milestone` whose `inputs` cover it at its CURRENT hash.
+    `check_test_authenticity.py` is required IMPLICITLY the moment a test
+    file is declared -- `pipeline_driver.py`'s quick-lane step emission
+    cannot see `--changed-files`, so it can only remind the caller to run
+    the gate, never require it; this term is the actual enforcement
+    (convention #9). `--require-ledger-gates <name>` names any OTHER gate
+    this close must also find a fresh PASS for, in `check_commit_gate.py`'s
+    own syntax (`ledger_missing` / `ledger_failed` / `ledger_stale` /
+    `ledger_chain_broken`, reported here as
+    `required_ledger_gate_missing`) -- unlike the implied
+    `check_test_authenticity.py` entry, these are milestone-scoped-or-
+    unscoped like that sibling gate, with no input-coverage check, because
+    they are not necessarily about a specific set of changed files.
   * `size_bound_exceeded` -- the declared count is within
     `--max-changed-files`; the message names the lane to escalate to. There is
     deliberately NO `--waiver` here (convention #8, tighter than
@@ -122,6 +139,7 @@ Usage:
         --changed-files <p1> [<p2> ...] [--repo <dir>] \
         [--max-changed-files N] [--frozen <path>]... \
         [--milestone "<slug>"] [--ledger <path>] \
+        [--require-ledger-gates <name>[,<name>...]]... \
         [--commit --message "<msg>"]
     python check_quick_close.py --self-test
 """
@@ -241,6 +259,195 @@ def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code,
     except OSError as exc:
         print("Warning: could not append to ledger "
               "{0}: {1}".format(ledger_path, exc), file=sys.stderr)
+
+
+def read_ledger(ledger_path):
+    """Every parseable JSON-object line of the ledger, in file order.
+
+    Byte-identical to check_commit_gate.py's function of the same name
+    (family convention: duplicated, not imported).
+    """
+    p = Path(ledger_path)
+    if not p.is_file():
+        return []
+    records = []
+    for line in p.read_text(encoding="utf-8-sig", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(rec, dict):
+            records.append(rec)
+    return records
+
+
+def verify_ledger_chain(ledger_path):
+    """(ok, problem|None) -- walk the chain and stop at the FIRST break.
+
+    Byte-identical to check_commit_gate.py's function of the same name
+    (family convention: duplicated, not imported). A missing ledger file is
+    NOT a break here (there is no chain to break).
+    """
+    p = Path(ledger_path)
+    if not p.is_file():
+        return True, None
+    try:
+        data = p.read_bytes()
+    except OSError as exc:
+        return False, {"line": 0, "reason": "unreadable",
+                       "detail": "cannot read {0}: {1}".format(ledger_path, exc)}
+    chained_seen = False
+    prev_hash = "genesis"
+    for lineno, raw in enumerate(data.splitlines(), start=1):
+        if not raw.strip():
+            continue
+        try:
+            rec = json.loads(raw.decode("utf-8-sig", errors="replace"))
+        except ValueError:
+            return False, {"line": lineno, "reason": "unparseable",
+                           "detail": "line is not parseable JSON"}
+        if not isinstance(rec, dict):
+            return False, {"line": lineno, "reason": "unparseable",
+                           "detail": "line is not a JSON object"}
+        has_prev, has_self = "prev" in rec, "self" in rec
+        if not has_prev and not has_self:
+            if chained_seen:
+                return False, {
+                    "line": lineno, "reason": "legacy-after-chained",
+                    "detail": "an unchained record follows a chained one; a "
+                              "ledger that has started chaining cannot revert "
+                              "to unchained"}
+            prev_hash = ledger_line_hash(raw)
+            continue
+        if not (has_prev and has_self):
+            return False, {
+                "line": lineno, "reason": "incomplete-chain-fields",
+                "detail": "record carries only one of `prev`/`self`; a chained "
+                          "record carries both"}
+        if rec.get("self") != ledger_self_hash(rec):
+            return False, {
+                "line": lineno, "reason": "self-mismatch",
+                "detail": "`self` does not hash this record's own content -- "
+                          "the line was edited after it was written"}
+        if rec.get("prev") != prev_hash:
+            return False, {
+                "line": lineno, "reason": "prev-mismatch",
+                "detail": "`prev` is {0} but the preceding record hashes to "
+                          "{1} -- a record was inserted, removed or edited "
+                          "before this line".format(
+                              str(rec.get("prev"))[:16], prev_hash[:16])}
+        chained_seen = True
+        prev_hash = ledger_line_hash(raw)
+    return True, None
+
+
+def parse_gate_names(values):
+    """Flatten repeated and/or comma-separated --require-ledger-gates values.
+
+    Byte-identical to check_commit_gate.py's function of the same name
+    (family convention: duplicated, not imported).
+    """
+    names = []
+    for value in values or []:
+        for token in value.split(","):
+            token = token.strip()
+            if token and token not in names:
+                names.append(token)
+    return names
+
+
+def check_ledger_gates(ledger_path, gate_names, milestone, test_files=None,
+                       repo="."):
+    """Verify each named gate's ledger backs this run.
+
+    Same syntax and PASS/staleness semantics as check_commit_gate.py's
+    function of the same name (family convention: duplicated, not
+    imported): a gate name is looked up scoped to THIS milestone or
+    unscoped (null), its LATEST matching record must be PASS, and every
+    input it hashed must still hash the same on disk.
+
+    One name is special. When `test_files` is non-empty, `check_test_
+    authenticity.py` is EXACT-scoped to `milestone` -- no unscoped
+    fallback, deliberately tighter than every other name here (convention
+    #8: check_commit_gate.py's own ledger-gates, e.g. Cipher's or Vera's
+    report, legitimately cover a whole epic, but a quick change's
+    milestone IS the slug for its one run, so an unscoped record proves
+    nothing about which run it backs) -- and its recorded `inputs` must
+    additionally COVER every declared test file's CURRENT hash key, not
+    merely be internally fresh: a record whose own inputs stayed unchanged
+    proves nothing about a file it never looked at.
+
+    Returns [{"gate", "problem", "detail"}]; empty means every named gate
+    is backed.
+    """
+    if not ledger_path:
+        return [{"gate": name, "problem": "ledger_missing",
+                 "detail": "no --ledger given, so there is nowhere {0}'s "
+                           "PASS could have been recorded".format(name)}
+                for name in gate_names]
+    chain_ok, chain = verify_ledger_chain(ledger_path)
+    if not chain_ok:
+        return [{
+            "gate": ledger_path, "problem": "ledger_chain_broken",
+            "detail": "the gate ledger's hash chain is broken at line {0} "
+                      "({1}): {2}. Every verdict it records is "
+                      "unverifiable until the break is explained; run "
+                      "check_ledger.py --ledger {3}".format(
+                          chain["line"], chain["reason"], chain["detail"],
+                          ledger_path)}]
+    records = read_ledger(ledger_path)
+    wanted_keys = ({authenticity_input_key(f, repo) for f in test_files}
+                  if test_files else set())
+    problems = []
+    for name in gate_names:
+        exact = bool(test_files) and name == "check_test_authenticity.py"
+        candidates = [r for r in records if r.get("gate") == name and (
+            r.get("milestone") == milestone if exact else
+            r.get("milestone") is None or r.get("milestone") == milestone)]
+        if exact:
+            candidates = [r for r in candidates if wanted_keys <= set(
+                (r.get("inputs") or {}).keys())]
+        if not candidates:
+            if exact:
+                detail = ("no ledger entry for {0}, exactly scoped to "
+                          "milestone {1!r}, whose inputs cover {2} in "
+                          "{3}".format(name, milestone,
+                                       ", ".join(sorted(wanted_keys)),
+                                       ledger_path))
+            else:
+                detail = ("no ledger entry for {0} scoped to milestone "
+                          "{1!r} (or unscoped) in {2}".format(
+                              name, milestone, ledger_path))
+            problems.append({"gate": name, "problem": "ledger_missing",
+                             "detail": detail})
+            continue
+        latest = candidates[-1]
+        if latest.get("verdict") != "PASS":
+            problems.append({
+                "gate": name, "problem": "ledger_failed",
+                "detail": "the latest matching {0} ledger entry records "
+                          "verdict {1!r} (exit {2})".format(
+                              name, latest.get("verdict"), latest.get("exit"))})
+            continue
+        stale = []
+        for path, recorded in (latest.get("inputs") or {}).items():
+            if recorded is None:
+                continue
+            current = sha256_file(path)
+            if current is None:
+                stale.append("{0} (missing now)".format(path))
+            elif current != recorded:
+                stale.append("{0} (content changed since that run)".format(path))
+        if stale:
+            problems.append({
+                "gate": name, "problem": "ledger_stale",
+                "detail": "the latest {0} ledger entry passed over inputs "
+                          "that no longer match on disk: {1}".format(
+                              name, ", ".join(stale))})
+    return problems
 
 
 # ---------------------------------------------------------------------------
@@ -624,6 +831,73 @@ def check_frozen(entries, frozen, repo):
     return hits
 
 
+# Copied from check_test_authenticity.py's DEFAULT_TEST_GLOBS (family
+# convention: duplicated, not imported) -- what THAT gate treats as a test
+# file, so a file this gate must route to it is recognised the same way.
+DEFAULT_TEST_GLOBS = (
+    "**/*.spec.*", "**/*.test.*", "**/tests/**", "**/__tests__/**",
+    "**/*Tests.cs", "**/*Test.cs", "**/test_*.py", "**/*_test.py",
+)
+
+
+def looks_like_test_file(norm):
+    """True when a normalized repo-relative path matches a default test
+    glob. Mirrors check_test_authenticity.py's is_test_path(): a pattern
+    with no `/` also matches the bare basename.
+    """
+    base = norm.rsplit("/", 1)[-1]
+    for pattern in DEFAULT_TEST_GLOBS:
+        rx = glob_to_regex(pattern)
+        if rx.match(norm) or ("/" not in pattern and rx.match(base)):
+            return True
+    return False
+
+
+def matches_any_frozen(norm, frozen, repo):
+    """True when a normalized repo-relative path matches a --frozen
+    glob/prefix -- the same matcher check_frozen() builds per pattern,
+    applied directly to one declared path rather than to a dirty
+    working-tree entry.
+    """
+    for raw in frozen:
+        if GLOB_META_RE.search(str(raw)):
+            if glob_to_regex(normalize_frozen_pattern(raw, repo)).match(norm):
+                return True
+        else:
+            base = normalize_repo_path(raw, repo).rstrip("/")
+            if norm == base or norm.startswith(base + "/"):
+                return True
+    return False
+
+
+def declared_test_files(changed_files, frozen, repo):
+    """Declared --changed-files this gate treats as test files: a --frozen
+    glob/prefix match, or check_test_authenticity.py's own default
+    test-glob heuristic. Either is enough to require its PASS (SKILL.md
+    Phase 3, convention #9): pipeline_driver.py cannot see --changed-files,
+    so this gate is the only place that CAN require the reminder rather
+    than merely print it.
+    """
+    out = []
+    for f in changed_files:
+        norm = normalize_repo_path(f, repo)
+        if matches_any_frozen(norm, frozen, repo) or looks_like_test_file(norm):
+            out.append(f)
+    return out
+
+
+def authenticity_input_key(path, repo):
+    """The absolute, forward-slash key check_test_authenticity.py's own
+    ledger records for one input path -- byte-identical to that script's
+    ledger_inputs() (no .resolve(): that gate does not resolve either), so
+    this lookup finds what it actually wrote.
+    """
+    p = Path(path)
+    if not p.is_absolute():
+        p = Path(repo) / path
+    return str(p).replace("\\", "/")
+
+
 # ---------------------------------------------------------------------------
 # The note
 # ---------------------------------------------------------------------------
@@ -723,6 +997,9 @@ def build_report(args):
         "undeclared_changes": [],
         "frozen": list(args.frozen),
         "frozen_modified": [],
+        "test_files": [],
+        "required_ledger_gates": [],
+        "ledger_gate_problems": [],
         "problems": [],
         "problem_codes": [],
         "warnings": [],
@@ -906,6 +1183,27 @@ def build_report(args):
              "/bgpdd-bugfix, where a RED capture has to prove it.".format(
                  ", ".join(report["frozen_modified"])))
 
+    # --- 11b. test authenticity, required whenever a declared file is a
+    # test (convention #9: check_test_authenticity.py is IMPLIED here even
+    # with no --require-ledger-gates, because pipeline_driver.py cannot see
+    # --changed-files and so can only remind, never require) -------------
+    test_files = declared_test_files(args.changed_files, args.frozen, repo)
+    report["test_files"] = test_files
+    required_gates = parse_gate_names(args.require_ledger_gates)
+    if test_files and "check_test_authenticity.py" not in required_gates:
+        required_gates.append("check_test_authenticity.py")
+    report["required_ledger_gates"] = required_gates
+    if required_gates:
+        gate_problems = check_ledger_gates(args.ledger, required_gates,
+                                           args.milestone, test_files, repo)
+        report["ledger_gate_problems"] = gate_problems
+        for problem in gate_problems:
+            code = ("test_authenticity_gate_missing"
+                    if problem["gate"] == "check_test_authenticity.py"
+                    else "required_ledger_gate_missing")
+            fail(code, "{0} ({1}): {2}".format(
+                problem["gate"], problem["problem"], problem["detail"]))
+
     # --- 11. the size bound ------------------------------------------------
     report["size_ok"] = len(args.changed_files) <= args.max_changed_files
     if not report["size_ok"]:
@@ -945,6 +1243,18 @@ def build_parser():
     parser.add_argument("--milestone", help="the slug, scoping ledger records")
     parser.add_argument("--ledger",
                         help="append one JSON record per run to this path")
+    parser.add_argument(
+        "--require-ledger-gates", action="append", default=[],
+        help="comma-separated gate script names whose LATEST ledger entry, "
+             "scoped to --milestone (or unscoped), must be PASS over "
+             "unchanged inputs -- same repeatable/comma syntax as "
+             "check_commit_gate.py's flag of the same name. "
+             "check_test_authenticity.py is added to this list "
+             "automatically (exact-scoped to --milestone, with its inputs "
+             "checked for coverage of the changed test files) whenever a "
+             "declared --changed-files path matches --frozen or looks like "
+             "a test file; this flag is only needed to require OTHER gates "
+             "too.")
     parser.add_argument("--commit", action="store_true",
                         help="on a pass, commit exactly the declared files")
     parser.add_argument("--message", help="commit message (requires --commit)")
@@ -1136,6 +1446,40 @@ def run_self_test():
                     contextlib.redirect_stderr(err):
                 code = main(argv)
             return code, buf.getvalue() + err.getvalue()
+
+        def _gate_record(self, ledger_path, gate_name, milestone,
+                         inputs=None, verdict="PASS", exit_code=0):
+            """Append one ledger line shaped like a sibling gate's OWN
+            append_ledger() would write -- same field shape this file's own
+            append_ledger() uses, gate name substituted so this file's
+            reader (check_ledger_gates) finds it under that name."""
+            record = {
+                "ts": datetime.now(timezone.utc).strftime(TIMESTAMP_FMT),
+                "gate": gate_name,
+                "argv": ["--repo", str(self.repo), "--milestone", milestone],
+                "milestone": milestone,
+                "inputs": inputs or {},
+                "verdict": verdict,
+                "exit": exit_code,
+            }
+            p = Path(ledger_path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            record["prev"] = ledger_prev_hash(p)
+            record["self"] = ledger_self_hash(record)
+            with open(p, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record) + "\n")
+
+        def _authenticity_record(self, ledger_path, test_file, milestone,
+                                 verdict="PASS", exit_code=0, bad_hash=False):
+            """A `check_test_authenticity.py`-shaped record whose `inputs`
+            key matches that script's own ledger_inputs() (Path(repo)/raw,
+            forward slashes, unresolved) for ONE judged test file."""
+            key = authenticity_input_key(test_file, str(self.repo))
+            self._gate_record(
+                ledger_path, "check_test_authenticity.py", milestone,
+                inputs={key: ("0" * 64 if bad_hash else
+                             sha256_file(self.repo / test_file))},
+                verdict=verdict, exit_code=exit_code)
 
         def _happy(self):
             rel = self._edit()
@@ -1580,15 +1924,23 @@ def run_self_test():
             self.assertIn("frozen_path_modified", r["problem_codes"])
 
         def test_a_newly_added_test_passes_the_frozen_check(self):
-            """Adding a test is this lane's use case; editing one is not."""
+            """Adding a test is this lane's use case; editing one is not.
+
+            Backed by a passing check_test_authenticity.py record: adding a
+            test file now ALSO requires that gate (test authenticity check
+            above), a separate term from this one.
+            """
             rel = "tests/test_new.py"
             self._edit(rel, "def test_new():\n    assert True\n")
             time.sleep(0.01)
             note = self._note(what="add a regression test for coupon math",
                               where=rel)
             capture = self._capture()
+            ledger = str(self.repo / ".docs" / "quick" / "gates.jsonl")
+            self._authenticity_record(ledger, rel, "add-coupon-test")
             r = self._run(note, capture, [str(self.repo / rel)],
-                          ["--frozen", "tests"])
+                          ["--frozen", "tests", "--milestone",
+                           "add-coupon-test", "--ledger", ledger])
             self.assertEqual(r["result"], "PASS", r["problems"])
             self.assertEqual(r["frozen_modified"], [])
 
@@ -1597,6 +1949,86 @@ def run_self_test():
             r = self._run(note, capture, changed, ["--frozen", "tests"])
             self.assertEqual(r["result"], "PASS", r["problems"])
             self.assertEqual(r["frozen_modified"], [])
+
+        # -- test authenticity: implied when a test file is declared -----
+
+        def test_added_test_file_without_authenticity_record_fails_closed(self):
+            rel = self._edit("tests/test_new.py",
+                             "def test_new():\n    assert True\n")
+            time.sleep(0.01)
+            note = self._note(what="add a regression test", where=rel)
+            capture = self._capture()
+            ledger = str(self.repo / ".docs" / "quick" / "gates.jsonl")
+            r = self._run(note, capture, [str(self.repo / rel)],
+                          ["--milestone", "add-test", "--ledger", ledger])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("test_authenticity_gate_missing", r["problem_codes"])
+            self.assertIn("check_test_authenticity.py",
+                          r["required_ledger_gates"])
+
+        def test_added_test_file_with_a_valid_authenticity_record_passes(self):
+            rel = self._edit("tests/test_new.py",
+                             "def test_new():\n    assert True\n")
+            time.sleep(0.01)
+            note = self._note(what="add a regression test", where=rel)
+            capture = self._capture()
+            ledger = str(self.repo / ".docs" / "quick" / "gates.jsonl")
+            self._authenticity_record(ledger, rel, "add-test")
+            r = self._run(note, capture, [str(self.repo / rel)],
+                          ["--milestone", "add-test", "--ledger", ledger])
+            self.assertEqual(r["result"], "PASS", r["problems"])
+
+        def test_authenticity_record_for_a_different_milestone_does_not_count(self):
+            rel = self._edit("tests/test_new.py",
+                             "def test_new():\n    assert True\n")
+            time.sleep(0.01)
+            note = self._note(what="add a regression test", where=rel)
+            capture = self._capture()
+            ledger = str(self.repo / ".docs" / "quick" / "gates.jsonl")
+            self._authenticity_record(ledger, rel, "some-other-slug")
+            r = self._run(note, capture, [str(self.repo / rel)],
+                          ["--milestone", "add-test", "--ledger", ledger])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("test_authenticity_gate_missing", r["problem_codes"])
+
+        def test_authenticity_record_with_a_stale_hash_does_not_count(self):
+            """The file changed again after the authenticity check ran."""
+            rel = self._edit("tests/test_new.py",
+                             "def test_new():\n    assert True\n")
+            time.sleep(0.01)
+            note = self._note(what="add a regression test", where=rel)
+            capture = self._capture()
+            ledger = str(self.repo / ".docs" / "quick" / "gates.jsonl")
+            self._authenticity_record(ledger, rel, "add-test", bad_hash=True)
+            r = self._run(note, capture, [str(self.repo / rel)],
+                          ["--milestone", "add-test", "--ledger", ledger])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("test_authenticity_gate_missing", r["problem_codes"])
+
+        def test_non_test_file_change_never_requires_authenticity(self):
+            note, capture, changed = self._happy()
+            r = self._run(note, capture, changed)  # no --ledger at all
+            self.assertEqual(r["result"], "PASS", r["problems"])
+            self.assertEqual(r["test_files"], [])
+            self.assertEqual(r["required_ledger_gates"], [])
+
+        def test_require_ledger_gates_generic_flag_missing_fails(self):
+            note, capture, changed = self._happy()
+            ledger = str(self.repo / ".docs" / "quick" / "gates.jsonl")
+            r = self._run(note, capture, changed,
+                          ["--milestone", "rename-a", "--ledger", ledger,
+                           "--require-ledger-gates", "some_other_gate.py"])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("required_ledger_gate_missing", r["problem_codes"])
+
+        def test_require_ledger_gates_generic_flag_backed_passes(self):
+            note, capture, changed = self._happy()
+            ledger = str(self.repo / ".docs" / "quick" / "gates.jsonl")
+            self._gate_record(ledger, "some_other_gate.py", "rename-a")
+            r = self._run(note, capture, changed,
+                          ["--milestone", "rename-a", "--ledger", ledger,
+                           "--require-ledger-gates", "some_other_gate.py"])
+            self.assertEqual(r["result"], "PASS", r["problems"])
 
         # -- --frozen as a GLOB -------------------------------------------
 
@@ -1658,13 +2090,21 @@ def run_self_test():
             self.assertIn("frozen_path_modified", r["problem_codes"])
 
         def test_a_new_file_matching_a_glob_still_passes(self):
-            """The add-vs-edit rule is unchanged by glob matching."""
+            """The add-vs-edit rule is unchanged by glob matching.
+
+            Backed by a passing check_test_authenticity.py record: adding a
+            spec file now ALSO requires that gate, a separate term from
+            this one.
+            """
             rel = "src/new.spec.ts"
             self._edit(rel, "it('new', () => {});\n")
             time.sleep(0.01)
             note = self._note(what="add a spec for the widget", where=rel)
+            ledger = str(self.repo / ".docs" / "quick" / "gates.jsonl")
+            self._authenticity_record(ledger, rel, "add-widget-spec")
             r = self._run(note, self._capture(), [str(self.repo / rel)],
-                          ["--frozen", "**/*.spec.ts"])
+                          ["--frozen", "**/*.spec.ts", "--milestone",
+                           "add-widget-spec", "--ledger", ledger])
             self.assertEqual(r["result"], "PASS", r["problems"])
             self.assertEqual(r["frozen_modified"], [])
 

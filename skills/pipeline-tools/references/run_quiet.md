@@ -40,6 +40,24 @@ One combined, case-insensitive regex, grouped by the tool family it targets — 
 
 The **full** log is always written to `--log`, unabridged, on every run — success or failure. The transcript (stdout) only ever loses *noise*, never *diagnostics*: the excerpt/tail selection narrows what appears in the agent's context window, not what's recoverable. When a failure needs more than the excerpt shows, grep the log file directly rather than re-running the command.
 
+## `--ledger` / `--milestone` — the chained CAPTURED record
+
+The sidecar and body-agreement checks close the "hand-typed" and "edited
+after the fact" holes, but one omission remains: nothing on disk says a
+capture was ever *taken*, only that IF one exists it is internally
+consistent — a capture that was simply never produced looks the same as no
+claim at all. `--ledger <path>` closes that: after a `--capture` is written
+(and, when given, `--milestone` scopes the record the same way every other
+gate's `--milestone` does), it appends one chained record — `tool:
+"run_quiet.py"`, `verdict: "CAPTURED"`, the child's `exit`, and the capture's
+and sidecar's paths — to the shared gate ledger, using the same chained
+`append_ledger` every other gate in this family writes with. A forger now has
+to also append a chained ledger line in a file `check_ledger.py` walks and
+`check_commit_gate.py --require-ledger-gates` re-hashes, rather than only
+typing a capture. It does not make forgery impossible — the ledger is unkeyed
+too — it makes it a larger written act. Without `--ledger`, behavior is
+unchanged.
+
 ## The sidecar — why `--capture` alone was not enough
 
 This is the half of `--capture` that a reader cannot forge by typing carefully. Owning the load-bearing *fields* stopped an agent from writing `Exit code: 0` over a failure; it did nothing about a capture authored end-to-end, because a hand-typed artifact and an observed one are the same bytes. The sidecar is written by the tool, names the process that ran, and hashes the artifact — so a capture with no sidecar was never produced by a probe, and one whose `capture_sha256` no longer matches was edited after the fact. `check_runtime_evidence.py` requires it.
@@ -63,3 +81,9 @@ Separately, a `## Summary` section now prints first in both `--log` and `--captu
 `check_runtime_evidence.py`'s content checks (`--expect-status`, `--require-key`, the OpenAPI schema diff) now read the excerpt first and fall back to the full log named by the capture's `- Log:` field when the excerpt doesn't contain what they're looking for — scoped narrowly to those two checks. Every provenance check (`sidecar_capture_sha256_ok`, `sidecar_body_disagreement`, `probe_failed_exit`, transport/client checks) still reads only the capture's own hash-protected body; the fallback is never a way to satisfy a provenance check with unprotected log content.
 
 Self-test count: 27 → 41.
+
+`--ledger`/`--milestone` add seven more: the record appended for a capture;
+the record pinning the capture and sidecar paths; chaining (`prev`/`self`);
+recording a real non-zero exit; no ledger file written when the flag is
+absent; `--ledger` without `--capture` exiting 2; `--milestone` without
+`--capture` exiting 2. Self-test count: 41 → 48.

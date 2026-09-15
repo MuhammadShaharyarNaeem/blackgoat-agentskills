@@ -106,6 +106,7 @@ Ship behind feature flags to decouple deployment from release. **The flag contra
 ```bash
 python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py \
     --capture .docs/{project-name}/implementation/evidence/shipping/flag-expiry.md \
+    --ledger .docs/{project-name}/implementation/gates.jsonl \
     -- grep -rnE "expiry:|review:" <the committed flag config path>
 ```
 
@@ -117,7 +118,14 @@ python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py \
 
 ### Baseline Capture
 
-**Dep-owned. Before the first rollout step, not during it.** Read the current production values of three metrics from the project's monitoring source and save each reading as its own artifact under `.docs/{project-name}/implementation/evidence/baseline/`:
+**Dep-owned. Before the first rollout step, not during it.** Read the current production values of three metrics from the project's monitoring source and capture each reading through the wrapper, so it carries the provenance sidecar `check_ship_decision.py --require-baseline` now demands — a `touch`ed or hand-typed file at the cited path no longer satisfies it:
+
+```bash
+python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py \
+    --capture .docs/{project-name}/implementation/evidence/baseline/<metric>.md \
+    --ledger .docs/{project-name}/implementation/gates.jsonl \
+    -- <the read command for this metric>
+```
 
 1. **Error rate** — total, over a stated window
 2. **P95 latency** — on the endpoint or flow this release touches
@@ -199,13 +207,13 @@ A metric you cannot read is `BLOCKED`, named — never a remembered value and ne
 **Owner and artifact — this checklist is Dep's, it runs against the *deployed* environment, and it produces a report.** Until it named an owner and a destination it was a list nobody executed: the pipeline's last gate was the ship decision, which is taken *before* the deploy, so nothing downstream ever asked whether the deployed thing worked.
 
 - **Who**: Dep, freshly delegated after the deploy or merge lands — not the Dep who wrote the ship decision, whose context already recorded these items as expected-green.
-- **Where**: the deployed environment (production, or whichever environment the user named at deploy time). Every runtime probe is captured out-of-process via `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/runtime/<name>.md -- <the probe>`, per `{PLUGIN_ROOT}/runtime-evidence/SKILL.md`, and cited by path in the line it backs.
+- **Where**: the deployed environment (production, or whichever environment the user named at deploy time). Every runtime probe is captured out-of-process via `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/runtime/<name>.md --ledger .docs/{project-name}/implementation/gates.jsonl -- <the probe>`, per `{PLUGIN_ROOT}/runtime-evidence/SKILL.md`, and cited by path in the line it backs.
 - **What**: `.docs/{project-name}/implementation/post-deploy-report.md`, one line per numbered item above, in the check-line grammar the pipelines parse:
 
   `- <check>: PASS|FAIL|BLOCKED|NOT RUN — exit <N> — <detail> — capture: evidence/runtime/<file>.md`
 
   ending in a single `**Verdict:** Pass` or `**Verdict:** Fail` line. A `PASS` or `FAIL` line cites its exit code **and** the `run_quiet.py --capture` artifact whose sidecar recorded that same exit code — an uncited executed line is refused (`check_uncaptured`), because everything else on it is text a delegate types; a `BLOCKED` or `NOT RUN` line gives a reason and cites nothing. The grammar authority is `{PLUGIN_ROOT}/pipeline-tools/SKILL.md` (`check_agent_report.py`) — it is the same grammar as the Security and Verification reports, deliberately, so one parser reads all three.
-- **Item 6 is graded, not eyeballed**: each Baseline metric captured before rollout is re-read from the same monitoring source and compared against the Rollout Decision Thresholds table. Red on any row is a `FAIL`, and a `FAIL` verdict is a rollback decision — execute the Rollback Steps within the rehearsed Time to Rollback, then escalate.
+- **Item 6 is graded, not eyeballed**: each Baseline metric captured before rollout is re-read from the same monitoring source and compared against the Rollout Decision Thresholds table. Red on any row is a `FAIL`, and a `FAIL` verdict is a live production defect: stop taking further deploy actions, present the Rollback Steps and the rehearsed Time to Rollback to the Orchestrator in the `<handoff>` (blockers: Critical), and **HALT** — executing a production rollback is the user's to authorize via the Orchestrator, never the delegated agent's (Orchestrator Contract §1 — irreversible actions need explicit user confirmation; `bgpdd-shipping` Step 5.5).
 
 ### Rollback Strategy
 
@@ -244,7 +252,7 @@ Every deployment needs a rollback plan before it happens:
 
 1. **Run it end to end on a non-production environment** — the same command sequence the Rollback Steps above name, with the health check as the last command in the sequence so a revert that leaves the service down cannot record as a success.
 2. **Capture the run**, so the timing and the outcome are recorded by the tool rather than remembered by you:
-   `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/rollback/<date>-rehearsal.md -- <the revert command sequence, health check included>`
+   `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/rollback/<date>-rehearsal.md --ledger .docs/{project-name}/implementation/gates.jsonl -- <the revert command sequence, health check included>`
 3. **Record the result in `ship-decision.md`** on one line, in exactly this grammar:
 
    `Time to Rollback: <N><unit> — rehearsed <YYYY-MM-DD> on <env> — evidence: <path under evidence/rollback/>`
@@ -298,7 +306,7 @@ After deploying:
 - No viable rollback plan exists (e.g. an irreversible migration) → escalate to the Orchestrator before deploying, not after.
 - The rollback cannot be rehearsed (no non-production environment, no revert path) or the rehearsal fails → report the rehearsal `BLOCKED`/`FAIL` with a `NO-GO`; do not record a ladder estimate as a measured time.
 - No monitoring source exposes one of the three Baseline metrics → escalate as an Infrastructure gap before rollout; the threshold table cannot grade a canary without it.
-- The Post-Launch Verification report's verdict is `Fail` → this is a live production defect: execute the Rollback Steps within the rehearsed Time to Rollback and escalate to the Orchestrator immediately, in that order.
+- The Post-Launch Verification report's verdict is `Fail` → this is a live production defect: stop further deploy actions, present the Rollback Steps and the rehearsed Time to Rollback to the Orchestrator in the `<handoff>` (blockers: Critical), and **HALT** — do not execute the rollback yourself; authorization belongs to the user via the Orchestrator (Orchestrator Contract §1 — irreversible actions need explicit user confirmation; `bgpdd-shipping` Step 5.5).
 
 ## Deep Dive
 

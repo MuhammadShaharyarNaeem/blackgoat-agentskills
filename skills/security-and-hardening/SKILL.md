@@ -11,8 +11,6 @@ Security-first development practices for web applications. Treat every external 
 
 A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no editing tests to pass, no unobserved claims (`base-persona.md`, Evidence Integrity). Over three files, or shared behaviour: route via `/bg` to a lane.
 
-Data privacy checklist: `references/data-privacy-checklist.md` — PII classification, placement, retention, deletion-path, log-redaction and third-party-flow checks, rendered in Cipher's check-line grammar.
-
 ## Quick card
 
 Derived from the contract below for a ≤ 3-file change; no new rules (convention #8 — deliberately narrower than the full contract, which binds inside any lane).
@@ -51,6 +49,18 @@ Controls bolted on without a threat model are guesses. Before hardening, spend f
 4. **Write abuse cases next to use cases.** For each feature, ask "how would I misuse this?" — then make that your first test.
 
 If you can't name the trust boundaries for a feature, you're not ready to secure it. This is OWASP **A04: Insecure Design** — most breaches begin in design, not code.
+
+### The Assurance Case Artifact
+
+When the work produces a project security document — a `SECURITY.md`, Cipher's hardening record, the shipping lane's security appendix — it has exactly five sections, in this order, saved at `.docs/{project-name}/implementation/security/assurance-case.md` and cited from the security report:
+
+1. **Threat model** — each actor with its trust level (trusted / semi-trusted / untrusted) and the assets worth taking.
+2. **Trust boundaries** — a table: boundary, what crosses it, the control at the crossing.
+3. **Design principles applied** — each named principle (least privilege, fail-safe defaults, complete mediation, …) mapped to the file or function that embodies it.
+4. **Countermeasures** — one row per OWASP Top 10 item: the mitigation with a `path:line` citation, **or** `Not applicable — <reason>`. Silence on a row is not a verdict; an unnamed reason is not a reason.
+5. **Automated verification** — each claim above mapped to the gate, test or command that checks it, or marked `manual` with the evidence path.
+
+A mitigation without a citation is a claim (`base-persona.md`, Evidence Integrity); a `Not applicable` without a reason is a gap wearing a label.
 
 ### The Three-Tier Boundary System
 
@@ -185,3 +195,4 @@ For detailed security checklists and pre-commit verification steps, see `{PLUGIN
 Read on demand — not needed to execute the contract above:
 
 - [Security deep dive](references/security-deep-dive.md) — when to use, the full OWASP Top 10 pattern walkthroughs with code, input validation and file upload safety, npm-audit triage, supply-chain hygiene, rate limiting, secrets management detail, the full Securing AI/LLM Features section, common rationalizations, and red flags.
+- Data privacy checklist: `references/data-privacy-checklist.md` — PII classification, placement, retention, deletion-path, log-redaction and third-party-flow checks, rendered in Cipher's check-line grammar.
