@@ -3,6 +3,35 @@
 All notable changes to the `blackgoat-agentskills` plugin are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [2.8.0] — 2026-09-16
+
+The 2026-09-15 agent-audit fix release: 21 metrics, 30 review lenses, ten Blocker-tier findings closed. **Deliberate tightening — read before upgrading mid-epic:** several gates now refuse evidence they used to accept. An in-flight milestone whose blocker resolution, coverage citations, acceptance results or captures were authored under the old contract will block on its next gate run; existing ledger records are not retroactively invalidated.
+
+### Added
+- `run_quiet.py --ledger [--milestone]` — every capture appends a hash-chained `CAPTURED` record (capture sha256, command argv, exit). `check_agent_report.py`, `check_runtime_evidence.py` and `check_ship_decision.py` look each cited capture up in the ledger: `unledgered_capture` warns by default and fails under `--require-ledgered-captures` (one-release grace). A hand-forged capture + sidecar pair no longer passes on internal consistency alone.
+- `update_state.py --set-status {active,escalated,closed}` (+ `--reason`); `guard_action.py` treats a terminal status as a closed lane, so an escalated `/bgpdd-bugfix` no longer arms the frozen-test rule for 12 hours.
+- `guard_action.py` rule 7 `blackgoat_persona_is_hand_edited_only` — any write to `agents/blackgoat.md` is refused before it runs (convention #7); the Part VIII append is allowed only with `BLACKGOAT_ALLOW_PART_VIII_APPEND=1` and a checked pure append via Edit/Write.
+- `check_batch_close.py` and `pipeline_driver.py --lane batch` — `/bgpdd-bugfix-batch` gets a state file, a driver lane and a scripted close (every bug terminal, every worktree removed, chain intact, final table consistent); a PLAN-routed bug's evidence is copied to `{batch-root}/escalated/{slug}/` before `git worktree remove`.
+- `check_quick_close.py --require-ledger-gates`; `check_test_authenticity.py` is implied whenever a declared file is a test (`test_authenticity_gate_missing`) — the step `/bgpdd-quick` used to have to remember.
+- `check_ledger.py --require-chain` and `legacy_unchained_records` reporting; `check_coverage.py --repo` / `--strict-evidence`.
+- `skills/bgpdd-build/references/build-replan.md` — the Alex re-planning delegation contract (brief shape, artifact path, re-entry rule) the five routes used to name without defining.
+- `references/` splits: `code-review-and-quality/references/review-report-template.md`, `runtime-evidence/references/environment-manifest.md`.
+
+### Changed
+- `check_handoff.py` now runs on every delegation return in `/bgpdd-plan`, `/bgpdd-shipping`, `/bgpdd-discovery` and `/bgpdd-lite`; `check_redelegation.py` on all four `/bgpdd-plan` loops; `check_commit_gate.py --require-ledger-gates check_handoff.py` is unconditional in the build commit ladder. Game tape fires at every state persistence (Contract §4) in plan, lite and shipping; `pipeline-skeleton.md` no longer claims those lanes persist once.
+- `pipeline-tools/SKILL.md` § who-may-run-which — the absolute "never delegated to an agent" is a labelled carve-out: commit/ship/close gates and readers of agent output are Orchestrator-only; `run_quiet.py --log/--capture` and `check_openapi_diff.py` on the agent's own output are expected.
+- `/bgpdd-build`: `environment_manifest` is persisted at the path Phase 0 actually resolves; `update_state.py --set-branch` at hydration. `/bgpdd-shipping` Step 3 re-enters a build round-trip on the fresh-run branch (`--require-go`), not the interrupted-session resume branch. `/bgpdd-bugfix` closes the lane on both HALT exits.
+- Personas: Alex loads `runtime-evidence` § Verification Surfaces; Cipher defers controls to the checklist, one blocking rule, honest `depends-on`; Dep's and Nova's always-firing dependencies labelled Always; Luna's and Mason's `security-checklist` become table rows; Max's and Vera's overrides keep `<fix_verification>`; Quinn's TDD condition names the steps that fire it; Rex's open questions ride in `<blockers>` as `spec` items and his architecture mandate is gone; Quinn, Cipher and Vera load the `pipeline-tools` report grammar they defer to.
+- `agent-audit/references/heuristics.md` — the wake-up-load record is corrected to the measured 1,525-word `base-persona.md` with a squad-wide rule; six `## Direct invocation` sections trimmed to ≤ 60 words; two Quick card rules re-scoped to their cited section.
+
+### Fixed
+- **`shipping-and-launch/SKILL.md` told the delegated post-deploy agent to execute a production rollback** on a verification FAIL, against `bgpdd-shipping`'s own rule; it now presents the steps and rehearsed Time to Rollback and HALTs.
+- `update_state.py --resolve-blocker` cleared a Critical blocker on a typed string; `--evidence` must be an existing non-empty file, recorded with its sha256.
+- `check_coverage.py` accepted `file::test-name` citations to files that do not exist; the file must exist under `--repo` and contain the test name.
+- `check_acceptance_suite.py` required no evidence for `Mode: auto` steps (blank or missing `Mode` included); every non-`manual` PASS cites a sidecar-backed capture.
+- `check_ship_decision.py --require-baseline` accepted a `touch`ed file; a baseline reading needs a matching sidecar.
+- `test-driven-development/SKILL.md` cited a "Network Client Mocking Rule" that exists nowhere; README catalog gains `bg-eval`, agent count corrected to 16; CLAUDE.md convention #2 names Nova as the third hybrid persona.
+
 ## [2.7.2] — 2026-09-15
 
 ### Added
