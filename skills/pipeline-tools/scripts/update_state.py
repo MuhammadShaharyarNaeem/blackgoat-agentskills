@@ -14,11 +14,25 @@ Usage:
         [--set-feature <feature|null>] [--set-branch <name>] \
         [--set-artifact <name>=<path>] \
         [--add-blocker "<text>"] \
-        [--resolve-blocker "<substring>" --evidence "<text>"] \
+        [--resolve-blocker "<substring>" --evidence <path>] \
         [--set-halt '{"unit":...,"agent":...,"code":...,"reason":...}'] \
         [--clear-halt <unit>] \
         [--ledger <path>]
     python update_state.py --self-test
+
+`--resolve-blocker`/`--evidence`: the ledger doctrine (orchestrator-contract
+§4) says a blocker entry is removed only once its fix is VERIFIED, so
+`--evidence` is a path, not a sentence. It must resolve to an existing,
+non-empty file -- tried relative to the state file's own directory first
+(the docs root most evidence lives under, e.g. `evidence/none.md` next to
+`orchestrator-state.json`), then relative to the CWD, mirroring
+`mark_milestone.py --evidence`'s own rule of reading the path as given. A
+path that does not resolve (missing, empty, or a directory) fails the call
+closed at exit 1 with a `problems` entry, same shape as `--require-game-tape`
+below, and nothing is written. On success the resolved path (relative to the
+state file's directory when possible) and its sha256 are recorded on the
+matching ledger line next to the removed blocker entries, so a later reader
+can verify the file that was actually checked.
 
 `--set-halt`/`--clear-halt`: `state["halt"]` is a single standing entry so a
 future `guard_action.py` hook can deny delegation while it stands
@@ -116,10 +130,12 @@ def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code,
     The state file's hash is taken AFTER the write, so the record describes
     the state a later gate will actually read.
 
-    `--resolve-blocker` additionally records the action and the evidence
-    string, which is the load-bearing part: the CLI cannot judge whether
-    "trust me" is real evidence, but with a ledger the claim is durable,
-    attributable and reviewable rather than gone the moment the array shrinks.
+    `--resolve-blocker` additionally records the action, the evidence path
+    and its sha256, which is the load-bearing part: the CLI cannot judge
+    whether the file's CONTENTS are honest, but main()'s evidence gate does
+    require the file exist and be non-empty before the blocker is removed,
+    and with a ledger the claim is durable, attributable and reviewable
+    rather than gone the moment the array shrinks.
     """
     if not ledger_path:
         return
@@ -459,6 +475,47 @@ def parse_artifact_spec(spec):
     return name, (None if value == "null" else value)
 
 
+def resolve_evidence_path(state_path, evidence):
+    """Resolve --resolve-blocker's --evidence to an existing, non-empty file.
+
+    Tried in order: relative to the state file's own directory first (the
+    docs root most evidence lives under), then relative to the CWD --
+    `mark_milestone.py`'s own --evidence rule of reading the path as given.
+    An absolute path is tried once, as given.
+
+    Returns (path, problems): on success `path` is the resolved `Path` and
+    `problems` is `[]`; on failure `path` is None and `problems` is a
+    check_game_tape()-shaped list with one `evidence_not_found` /
+    `evidence_is_directory` / `evidence_empty` entry. A prose string like
+    "trust me" is a syntactically valid, simply nonexistent path, so it
+    falls out as `evidence_not_found` like any other typo -- the gate does
+    not need to tell prose apart from a bad filename to refuse both.
+    """
+    ev = Path(evidence)
+    candidates = [ev] if ev.is_absolute() else [Path(state_path).parent / ev, ev]
+    first_dir = None
+    for cand in candidates:
+        if cand.is_file():
+            if cand.stat().st_size == 0:
+                return None, [{
+                    "problem": "evidence_empty",
+                    "detail": f"--evidence {evidence!r} resolves to {cand}, "
+                              "which is empty"}]
+            return cand, []
+        if first_dir is None and cand.is_dir():
+            first_dir = cand
+    if first_dir is not None:
+        return None, [{
+            "problem": "evidence_is_directory",
+            "detail": f"--evidence {evidence!r} resolves to {first_dir}, "
+                      "which is a directory, not a file"}]
+    tried = "; ".join(str(c) for c in candidates)
+    return None, [{
+        "problem": "evidence_not_found",
+        "detail": f"--evidence {evidence!r} does not resolve to an existing "
+                  f"file (tried: {tried})"}]
+
+
 def resolve_blocker(state, target, evidence, timestamp):
     """Resolve one or more blockers matching `target`, in priority order:
 
@@ -648,7 +705,12 @@ def build_parser():
     parser.add_argument("--resolve-blocker",
                         help="an id (\"B-3\"), exact text, or a substring that "
                              "must match exactly one entry's text")
-    parser.add_argument("--evidence")
+    parser.add_argument(
+        "--evidence",
+        help="--resolve-blocker only: path to the evidence file proving the "
+             "fix (resolved relative to the state file's directory, then "
+             "the CWD). Must exist and be non-empty, or the call exits 1 "
+             "and nothing is written.")
     parser.add_argument(
         "--set-halt", dest="set_halt",
         help='JSON object {"unit":str,"agent":str,"code":str,"reason":str} '
@@ -698,6 +760,9 @@ def main(argv):
         if args.resolve_blocker is not None:
             extra = {"action": "resolve-blocker",
                      "evidence": args.evidence}
+            if getattr(args, "evidence_resolved", None):
+                extra["evidence_resolved"] = args.evidence_resolved
+                extra["evidence_sha256"] = args.evidence_sha256
             resolved = getattr(args, "resolved_entries", None)
             if resolved:
                 extra["resolved_ids"] = [e.get("id") for e in resolved]
@@ -749,6 +814,33 @@ def main(argv):
                              "Phase 6 game-tape checkpoint; nothing was "
                              "written"}, indent=2))
                 return finish(1, "FAIL")
+
+    # The evidence gate for --resolve-blocker (CLAUDE.md convention #9 /
+    # audit Metric 19.1): a blank --evidence is a usage error caught by
+    # validate_actions() below (exit 2); a non-blank --evidence that does not
+    # resolve to a real file is a FAILED gate, not a usage error, so it is
+    # checked here -- same FAIL-before-any-write shape as --require-game-tape
+    # above -- and exits 1 with nothing written.
+    args.evidence_resolved = None
+    args.evidence_sha256 = None
+    if args.resolve_blocker is not None and args.evidence and args.evidence.strip():
+        resolved, problems = resolve_evidence_path(args.state, args.evidence)
+        if problems:
+            print(json.dumps({
+                "result": "FAIL",
+                "resolve_blocker": args.resolve_blocker,
+                "evidence": args.evidence,
+                "problems": problems,
+                "error": "--resolve-blocker's evidence does not resolve to "
+                         "an existing, non-empty file; nothing was written"},
+                indent=2))
+            return finish(1, "FAIL")
+        args.evidence_sha256 = sha256_file(resolved)
+        state_dir = Path(args.state).parent
+        try:
+            args.evidence_resolved = str(resolved.relative_to(state_dir))
+        except ValueError:
+            args.evidence_resolved = str(resolved)
 
     try:
         state, warnings = apply_updates(args)
@@ -1027,13 +1119,15 @@ def run_self_test():
             import io
 
             ledger = self.dir / "gates.jsonl"
+            evidence = self.dir / "evidence.md"
+            evidence.write_text("retested, passes\n", encoding="utf-8")
             apply_updates(ns(self.state_path, init=True, project_name="demo",
                              add_blocker=["M3: placeholder route open"],
                              blocker_milestone="M3"))
             with contextlib.redirect_stdout(io.StringIO()):
                 rc = main(["--state", str(self.state_path),
                            "--resolve-blocker", "B-1",
-                           "--evidence", "retested, passes",
+                           "--evidence", str(evidence),
                            "--ledger", str(ledger)])
             self.assertEqual(rc, 0)
             rec = self._ledger_records(ledger)[-1]
@@ -1080,24 +1174,106 @@ def run_self_test():
                              sha256_file(self.state_path))
             self.assertNotIn("action", records[0])
 
-        def test_ledger_records_the_resolve_blocker_evidence(self):
-            """The evidence string is unjudgeable — so it must be durable."""
+        def test_resolve_blocker_evidence_prose_string_fails_closed(self):
+            """Metric 19.1: a typed sentence used to pass as evidence and
+            silently remove a Critical blocker. It must now resolve to an
+            existing, non-empty file -- "trust me" does not, so the call
+            fails closed at exit 1 and nothing is written or removed."""
             import contextlib
             import io
 
             ledger = self.dir / "gates.jsonl"
             apply_updates(ns(self.state_path, init=True, project_name="demo",
                              add_blocker=["M3: placeholder route open"]))
-            with contextlib.redirect_stdout(io.StringIO()):
+            before = self.state_path.read_text(encoding="utf-8")
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
                 rc = main(["--state", str(self.state_path),
                            "--resolve-blocker", "placeholder route",
                            "--evidence", "trust me",
                            "--ledger", str(ledger)])
+            self.assertEqual(rc, 1)
+            self.assertEqual(self.state_path.read_text(encoding="utf-8"), before)
+            payload = json.loads(buf.getvalue())
+            self.assertEqual(payload["result"], "FAIL")
+            self.assertEqual(payload["problems"][0]["problem"],
+                             "evidence_not_found")
+            rec = self._ledger_records(ledger)[-1]
+            self.assertEqual(rec["verdict"], "FAIL")
+
+        def test_resolve_blocker_evidence_nonexistent_path_fails_closed(self):
+            apply_updates(ns(self.state_path, init=True, project_name="demo",
+                             add_blocker=["M3: placeholder route open"]))
+            before = self.state_path.read_text(encoding="utf-8")
+            import contextlib
+            import io
+
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = main(["--state", str(self.state_path),
+                           "--resolve-blocker", "B-1",
+                           "--evidence", str(self.dir / "no-such-file.md")])
+            self.assertEqual(rc, 1)
+            self.assertEqual(self.state_path.read_text(encoding="utf-8"), before)
+            self.assertEqual(json.loads(buf.getvalue())["problems"][0]["problem"],
+                             "evidence_not_found")
+
+        def test_resolve_blocker_evidence_empty_file_fails_closed(self):
+            evidence = self.dir / "empty.md"
+            evidence.write_text("", encoding="utf-8")
+            apply_updates(ns(self.state_path, init=True, project_name="demo",
+                             add_blocker=["M3: placeholder route open"]))
+            import contextlib
+            import io
+
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = main(["--state", str(self.state_path),
+                           "--resolve-blocker", "B-1",
+                           "--evidence", str(evidence)])
+            self.assertEqual(rc, 1)
+            self.assertEqual(json.loads(buf.getvalue())["problems"][0]["problem"],
+                             "evidence_empty")
+
+        def test_resolve_blocker_evidence_directory_fails_closed(self):
+            apply_updates(ns(self.state_path, init=True, project_name="demo",
+                             add_blocker=["M3: placeholder route open"]))
+            import contextlib
+            import io
+
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = main(["--state", str(self.state_path),
+                           "--resolve-blocker", "B-1",
+                           "--evidence", str(self.dir)])
+            self.assertEqual(rc, 1)
+            self.assertEqual(json.loads(buf.getvalue())["problems"][0]["problem"],
+                             "evidence_is_directory")
+
+        def test_resolve_blocker_evidence_relative_to_state_dir(self):
+            """A relative --evidence resolves against the state file's own
+            directory first (the docs root), not just the CWD -- and the
+            resolved path plus its sha256 are recorded so a later reader can
+            verify the file that was actually checked."""
+            evidence = self.dir / "evidence" / "none.md"
+            evidence.parent.mkdir(parents=True, exist_ok=True)
+            evidence.write_text("verified\n", encoding="utf-8")
+            apply_updates(ns(self.state_path, init=True, project_name="demo",
+                             add_blocker=["M3: placeholder route open"]))
+            ledger = self.dir / "gates.jsonl"
+            import contextlib
+            import io
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = main(["--state", str(self.state_path),
+                           "--resolve-blocker", "B-1",
+                           "--evidence", "evidence/none.md",
+                           "--ledger", str(ledger)])
             self.assertEqual(rc, 0)
             rec = self._ledger_records(ledger)[-1]
-            self.assertEqual(rec["action"], "resolve-blocker")
-            self.assertEqual(rec["evidence"], "trust me")
-            self.assertEqual(rec["verdict"], "PASS")
+            self.assertEqual(rec["evidence_resolved"],
+                             str(Path("evidence") / "none.md"))
+            self.assertEqual(rec["evidence_sha256"], sha256_file(evidence))
 
         def test_invalid_json_file_raises(self):
             self.state_path.write_text("{not valid json")
