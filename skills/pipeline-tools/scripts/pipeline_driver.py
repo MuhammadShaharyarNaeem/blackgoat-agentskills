@@ -31,7 +31,7 @@ suggested check command in the quick lane's Phase 0 action; it is best-effort,
 and its absence or failure only drops that clause.
 
 Usage:
-    python pipeline_driver.py --root <lane root> [--lane bugfix|quick|auto] \
+    python pipeline_driver.py --root <lane root> [--lane bugfix|quick|batch|auto] \
         [--json] [--ledger <path>] [--milestone "<slug>"]
     python pipeline_driver.py --self-test
 
@@ -380,7 +380,8 @@ def detect_lane(root, requested):
     warnings = []
     has_note = (root / "note.md").is_file()
     has_report = (root / "bug-report.md").is_file()
-    if requested in ("bugfix", "quick"):
+    has_batch = (root / "batch.md").is_file()
+    if requested in ("bugfix", "quick", "batch"):
         return requested, warnings
     if has_note and has_report:
         warnings.append(
@@ -391,10 +392,12 @@ def detect_lane(root, requested):
         return "quick", warnings
     if has_report:
         return "bugfix", warnings
+    if has_batch:
+        return "batch", warnings
     raise DriverError(
-        "no lane detected in %s: no note.md (bgpdd-quick) and no "
-        "bug-report.md (bgpdd-bugfix). Pass --lane explicitly to start one "
-        "from Phase 0." % rp(root))
+        "no lane detected in %s: no note.md (bgpdd-quick), no "
+        "bug-report.md (bgpdd-bugfix) and no batch.md (bgpdd-bugfix-batch). "
+        "Pass --lane explicitly to start one from Phase 0." % rp(root))
 
 
 def detect_bugfix_route(root):
@@ -472,6 +475,14 @@ QUICK_PHASE_NAMES = {
     3: "Close (the gate)",
     4: "Complete",
 }
+
+BATCH_PHASE_NAMES = {
+    0: "Batch list (main session)",
+    1: "Waves - per-bug lane",
+    2: "Close",
+    3: "Complete",
+}
+TERMINAL_BUG_STATUSES = ("MERGED", "DROPPED-PLAN")
 
 
 def _script(name):
@@ -1061,6 +1072,125 @@ def build_quick_report(root, ledger, milestone_override):
 
 
 # ---------------------------------------------------------------------------
+# bgpdd-bugfix-batch
+# ---------------------------------------------------------------------------
+# Choreography only, matching the skill's own framing (`SKILL.md` Purpose):
+# this lane's driver never re-derives a per-bug phase -- it reads
+# `{batch-root}/orchestrator-state.json` for the bugs list and each bug's
+# `OPEN`/`MERGED`/`DROPPED-PLAN` status (written only through
+# `update_state.py --set-artifact`, SKILL.md §1), names the next open bug's
+# OWN `--lane bugfix` driver invocation, and once every bug is terminal names
+# the close gate (`check_batch_close.py`).
+
+def build_batch_report(root, ledger, milestone_override):
+    records = read_ledger(ledger)
+    slug = milestone_override or DATE_PREFIX_RE.sub("", root.name)
+
+    state_path = root / "orchestrator-state.json"
+    batch_md = root / "batch.md"
+
+    present, missing = {}, []
+    for name, path in (("batch.md", batch_md),
+                       ("orchestrator-state.json", state_path)):
+        if path.is_file():
+            present[name] = rp(path)
+        else:
+            missing.append(name)
+
+    out = {
+        "root": rp(root),
+        "lane": "batch",
+        "route": None,
+        "state_file": rp(state_path),
+        "milestone": slug,
+        "milestone_source": "override" if milestone_override else "root",
+        "ledger": rp(ledger),
+        "phase": 0,
+        "phase_name": BATCH_PHASE_NAMES[0],
+        "next_action": None,
+        "required_gate": None,
+        "required_gates": [],
+        "gate_status": None,
+        "blocked_by": [],
+        "artifacts_present": present,
+        "artifacts_missing": missing,
+        "warnings": [],
+        "error": None,
+    }
+
+    def emit(phase, action, gate_st=None):
+        out["phase"] = phase
+        out["phase_name"] = BATCH_PHASE_NAMES[phase]
+        out["next_action"] = action
+        out["required_gate"] = gate_st["gate"] if gate_st else None
+        out["required_gates"] = [gate_st["gate"]] if gate_st else []
+        out["gate_status"] = gate_st["status"] if gate_st else None
+        if gate_st and gate_st["status"] != "PASS":
+            out["blocked_by"].append(block_reason(gate_st))
+        return out
+
+    # --- Phase 0: batch list ------------------------------------------------
+    if not batch_md.is_file() or not state_path.is_file():
+        return emit(0,
+                    "Agree the bug list with the user, pick {batch-slug} and "
+                    "a {bug-slug} each, then write %s and initialize the "
+                    'batch state: %s --state %s --init --project-name "%s" '
+                    "--set-pipeline bgpdd-bugfix-batch --set-artifact "
+                    '"bugs=<bug-slug-1>,<bug-slug-2>,..."'
+                    % (rp(batch_md), _script("update_state.py"),
+                       rp(state_path), slug))
+
+    try:
+        state = json.loads(state_path.read_text(encoding=READ_ENCODING))
+    except (OSError, ValueError):
+        state = None
+    if not isinstance(state, dict):
+        return emit(0, "%s is not valid JSON -- fix it, or re-run --init."
+                    % rp(state_path))
+
+    artifacts = state.get("artifacts")
+    if not isinstance(artifacts, dict):
+        artifacts = {}
+    bugs_raw = artifacts.get("bugs")
+    bugs = ([s.strip() for s in bugs_raw.split(",") if s.strip()]
+           if isinstance(bugs_raw, str) else [])
+    if not bugs:
+        return emit(0,
+                    "%s carries no bugs list yet -- set it: %s --state %s "
+                    '--set-artifact "bugs=<bug-slug-1>,<bug-slug-2>,..."'
+                    % (rp(state_path), _script("update_state.py"),
+                       rp(state_path)))
+
+    open_bugs = [b for b in bugs
+                if artifacts.get("bug:%s:status" % b) not in TERMINAL_BUG_STATUSES]
+
+    # --- Phase 1: waves ------------------------------------------------------
+    if open_bugs:
+        bug_slug = open_bugs[0]
+        bug_root = artifacts.get("bug:%s:root" % bug_slug)
+        return emit(1,
+                    "Next open bug: %s. Run its own driver there: %s --root "
+                    '%s --lane bugfix --milestone "%s" --json'
+                    % (bug_slug, _script("pipeline_driver.py"),
+                       bug_root or "<its {bugfix-root}>", bug_slug))
+
+    # --- Phase 2: close --------------------------------------------------
+    close_cmd = ('%s --state %s --batch-md %s --repo <the target repo root> '
+                '--milestone "%s" --ledger %s'
+                % (_script("check_batch_close.py"), rp(state_path),
+                   rp(batch_md), slug, rp(ledger)))
+    close = gate_state(records, "check_batch_close.py", slug, check_inputs=False)
+    if close["status"] != "PASS":
+        return emit(2, "Run: %s" % close_cmd, close)
+
+    # --- complete ----------------------------------------------------------
+    return emit(3,
+                "Batch complete: check_batch_close.py PASSed -- every bug is "
+                "terminal, every worktree is gone, and the final table "
+                "matches. Nothing else to do.", close)
+
+
+# ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
 
@@ -1073,8 +1203,10 @@ def build_report(args):
     ledger = Path(args.ledger) if args.ledger else root / "gates.jsonl"
     if lane == "bugfix":
         out = build_bugfix_report(root, ledger, args.milestone)
-    else:
+    elif lane == "quick":
         out = build_quick_report(root, ledger, args.milestone)
+    else:
+        out = build_batch_report(root, ledger, args.milestone)
     out["warnings"] = warnings + out["warnings"]
     return out
 
@@ -1085,6 +1217,8 @@ def exit_code_for(report):
     if report["lane"] == "bugfix" and report["phase"] == 6:
         return EXIT_COMPLETE
     if report["lane"] == "quick" and report["phase"] == 4:
+        return EXIT_COMPLETE
+    if report["lane"] == "batch" and report["phase"] == 3:
         return EXIT_COMPLETE
     return EXIT_NEXT
 
@@ -1110,7 +1244,7 @@ def render_human(report, code):
 def build_parser():
     parser = argparse.ArgumentParser(prog="pipeline_driver.py")
     parser.add_argument("--root", help="the lane root directory")
-    parser.add_argument("--lane", choices=("bugfix", "quick", "auto"),
+    parser.add_argument("--lane", choices=("bugfix", "quick", "batch", "auto"),
                         default="auto",
                         help="force a lane; 'auto' (default) detects it from "
                              "the root's first artifact")
@@ -1887,6 +2021,101 @@ def run_self_test():
             self.assertTrue(any("both note.md and bug-report.md" in w
                                 for w in rep["warnings"]))
 
+    # ----------------------------------------------------------------- batch
+    class BatchTests(Base):
+        def setUp(self):
+            super(BatchTests, self).setUp()
+            self.root = self.dir / "2026-09-08-checkout-triage"
+            self.root.mkdir(parents=True)
+            self.ledger = self.root / "gates.jsonl"
+
+        def write_state(self, artifacts):
+            state = {"schema": "1",
+                     "project_name": "2026-09-08-checkout-triage",
+                     "feature": None, "pipeline": "bgpdd-bugfix-batch",
+                     "branch": None, "milestone_cursor": None,
+                     "artifacts": artifacts, "blockers": []}
+            self.write("orchestrator-state.json", json.dumps(state))
+
+        def batch_md(self, text="# Bug batch\n"):
+            self.write("batch.md", text)
+
+        def test_phase0_no_batch_md_or_state_asks_to_initialize(self):
+            rep, code = self.run_driver(lane="batch")
+            self.assertEqual((rep["phase"], code), (0, EXIT_NEXT))
+            self.assertIn("update_state.py", rep["next_action"])
+            self.assertIn("--init", rep["next_action"])
+
+        def test_phase0_state_without_bugs_list_asks_to_set_it(self):
+            self.batch_md()
+            self.write_state({})
+            rep, code = self.run_driver(lane="batch")
+            self.assertEqual((rep["phase"], code), (0, EXIT_NEXT))
+            self.assertIn('--set-artifact "bugs=', rep["next_action"])
+
+        def test_phase1_names_the_first_open_bugs_own_driver(self):
+            self.batch_md()
+            self.write_state({
+                "bugs": "bug-a,bug-b",
+                "bug:bug-a:status": "OPEN",
+                "bug:bug-a:root": "../wt/bug-a/.docs/bugfix/bug-a",
+                "bug:bug-b:status": "MERGED",
+            })
+            rep, code = self.run_driver(lane="batch")
+            self.assertEqual((rep["phase"], code), (1, EXIT_NEXT))
+            self.assertIn("bug-a", rep["next_action"])
+            self.assertIn("--lane bugfix", rep["next_action"])
+            self.assertIn("../wt/bug-a/.docs/bugfix/bug-a", rep["next_action"])
+            self.assertIsNone(rep["required_gate"])
+
+        def test_phase1_skips_terminal_bugs_and_moves_to_close(self):
+            self.batch_md()
+            self.write_state({
+                "bugs": "bug-a,bug-b",
+                "bug:bug-a:status": "MERGED",
+                "bug:bug-b:status": "DROPPED-PLAN",
+            })
+            rep, code = self.run_driver(lane="batch")
+            self.assertEqual(rep["phase"], 2)
+            self.assertIn("check_batch_close.py", rep["next_action"])
+
+        def test_phase2_close_gate_missing_gives_the_command(self):
+            self.batch_md()
+            self.write_state({"bugs": "bug-a", "bug:bug-a:status": "MERGED"})
+            rep, code = self.run_driver(lane="batch")
+            self.assertEqual((rep["phase"], code), (2, EXIT_BLOCKED))
+            self.assertEqual(rep["required_gate"], "check_batch_close.py")
+            self.assertIn("check_batch_close.py", rep["next_action"])
+
+        def test_phase2_close_gate_fail_blocks(self):
+            self.batch_md()
+            self.write_state({"bugs": "bug-a", "bug:bug-a:status": "MERGED"})
+            self.ledger_line("check_batch_close.py", verdict="FAIL",
+                             milestone="checkout-triage", exit_code=1)
+            rep, code = self.run_driver(lane="batch")
+            self.assertEqual((rep["phase"], code), (2, EXIT_BLOCKED))
+
+        def test_complete_when_close_gate_passes(self):
+            self.batch_md()
+            self.write_state({"bugs": "bug-a", "bug:bug-a:status": "MERGED"})
+            self.ledger_line("check_batch_close.py", milestone="checkout-triage")
+            rep, code = self.run_driver(lane="batch")
+            self.assertEqual((rep["phase"], code), (3, EXIT_COMPLETE))
+            self.assertIn("Batch complete", rep["next_action"])
+
+        def test_milestone_derived_from_root_basename_date_stripped(self):
+            self.batch_md()
+            self.write_state({"bugs": "bug-a", "bug:bug-a:status": "MERGED"})
+            self.ledger_line("check_batch_close.py", milestone="checkout-triage")
+            rep, _ = self.run_driver(lane="batch")
+            self.assertEqual(rep["milestone"], "checkout-triage")
+
+        def test_auto_detects_batch_from_batch_md(self):
+            self.batch_md()
+            self.write_state({"bugs": "bug-a", "bug:bug-a:status": "OPEN"})
+            rep, _ = self.run_driver()
+            self.assertEqual(rep["lane"], "batch")
+
     # -------------------------------------------------------------- generic
     class OutputTests(Base):
         def test_auto_detects_bugfix_from_bug_report(self):
@@ -1929,6 +2158,7 @@ def run_self_test():
         loader.loadTestsFromTestCase(BugfixPhaseTests),
         loader.loadTestsFromTestCase(BugfixRouteTests),
         loader.loadTestsFromTestCase(QuickTests),
+        loader.loadTestsFromTestCase(BatchTests),
         loader.loadTestsFromTestCase(OutputTests),
     ])
     result = unittest.TextTestRunner(verbosity=1).run(suite)
