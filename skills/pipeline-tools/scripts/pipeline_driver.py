@@ -882,6 +882,30 @@ def parse_where(raw):
     return out
 
 
+TEST_PATH_MARKERS = (".spec.", ".test.", "/tests/", "__tests__")
+
+
+def looks_like_test_path(path):
+    """A light textual heuristic over ONE note-declared Where path.
+
+    The driver reads only the note's text, never a real git diff, so this
+    cannot be check_test_authenticity.py's own glob match against the
+    working tree (copied loosely from that gate's DEFAULT_TEST_GLOBS
+    shape: family convention duplicated, not imported). Deliberately
+    permissive -- a false positive only prints an extra reminder here.
+    check_quick_close.py's own --frozen-and-default-glob check is the
+    actual enforcer either way (convention #9): this function only decides
+    what the driver PRINTS at Phase 3, never what the close gate accepts.
+    """
+    norm = path.replace("\\", "/").lower()
+    base = norm.rsplit("/", 1)[-1]
+    if any(m in norm for m in TEST_PATH_MARKERS) or norm.startswith("tests/"):
+        return True
+    if base.startswith("test_") and base.endswith(".py"):
+        return True
+    return base.endswith(("_test.py", "tests.cs", "test.cs"))
+
+
 def build_quick_report(root, ledger, milestone_override):
     records = read_ledger(ledger)
     slug, slug_source = derive_slug(root, "quick", records, milestone_override,
@@ -985,12 +1009,35 @@ def build_quick_report(root, ledger, milestone_override):
         return emit(1, prove_cmd)
 
     # --- Phase 3: close ----------------------------------------------------
+    # check_test_authenticity.py is IMPLIED by check_quick_close.py itself
+    # whenever a declared file looks like a test (convention #9: that gate
+    # is the actual enforcer). This driver only decides what to PRINT: when
+    # the note's Where line already flags a test file, emit that gate's own
+    # command as the next_action so it runs before the close attempt; when
+    # it does not (the driver has no git diff, only the note's text, so a
+    # colocated spec the Where line does not obviously name is invisible
+    # here), fold a conditional reminder into the close command's message
+    # instead.
+    test_paths = [p for p in where if looks_like_test_path(p)]
     close_cmd = ("%s --note %s --capture %s --changed-files %s --repo . "
                  '--max-changed-files 3 %s --milestone "%s" '
                  '--ledger %s --commit --message "<msg>"'
                  % (_script("check_quick_close.py"), rp(note_md), rp(check_md),
                     " ".join(where) or "<paths>", suggested_frozen_flags(root),
                     slug_label, rp(ledger)))
+    if test_paths:
+        auth = gate_state(records, "check_test_authenticity.py", slug,
+                          check_inputs=False)
+        if auth["status"] != "PASS":
+            auth_cmd = ('%s --repo . --changed-files %s --milestone "%s" '
+                       '--ledger %s'
+                       % (_script("check_test_authenticity.py"),
+                          " ".join(test_paths), slug_label, rp(ledger)))
+            return emit(3, "A declared file looks like a test (%s); "
+                        "check_quick_close.py refuses to close without a "
+                        "passing check_test_authenticity.py record for it "
+                        "(SKILL.md Phase 3). Run: %s"
+                        % (", ".join(test_paths), auth_cmd), auth)
     close = gate_state(records, "check_quick_close.py", slug,
                        check_inputs=False)
     if not gate_committed(close):
@@ -998,7 +1045,13 @@ def build_quick_report(root, ledger, milestone_override):
             out["warnings"].append(
                 "check_quick_close.py PASSed but its argv carries no "
                 "--commit, so nothing was committed: that was a dry run.")
-        return emit(3, "Run: %s" % close_cmd, close)
+        message = "Run: %s" % close_cmd
+        if not test_paths:
+            message += (" (If any changed file is a test, run %s first -- "
+                        "the close gate refuses to close a test-touching "
+                        "change without its PASS.)"
+                        % _script("check_test_authenticity.py"))
+        return emit(3, message, close)
 
     return emit(4,
                 "Lane complete: the close gate PASSed with --commit and "
@@ -1766,6 +1819,34 @@ def run_self_test():
             self.assertIn("--frozen tests/", rep["next_action"])
             self.assertIn("--changed-files src/a.py", rep["next_action"])
             self.assertIn('--milestone "rename-thing"', rep["next_action"])
+            # No Where path looks like a test: the driver has no view of a
+            # colocated spec the note's text does not name, so it folds a
+            # conditional reminder into the close message instead of
+            # requiring the gate outright.
+            self.assertIn("check_test_authenticity.py",
+                          rep["next_action"])
+
+        def test_phase3_requires_authenticity_gate_for_a_declared_test_file(self):
+            self.note(where="tests/test_a.py")
+            self.capture("evidence/check.md", 0)
+            rep, code = self.run_driver()
+            self.assertEqual((rep["phase"], code), (3, EXIT_BLOCKED))
+            self.assertEqual(rep["required_gate"],
+                             "check_test_authenticity.py")
+            self.assertIn("check_test_authenticity.py --repo . "
+                         "--changed-files tests/test_a.py", rep["next_action"])
+            self.assertIn("refuses to close", rep["next_action"])
+
+        def test_phase3_proceeds_to_close_once_authenticity_passed(self):
+            self.note(where="tests/test_a.py")
+            self.capture("evidence/check.md", 0)
+            self.ledger_line("check_test_authenticity.py",
+                             milestone="rename-thing")
+            rep, code = self.run_driver()
+            self.assertEqual((rep["phase"], code), (3, EXIT_BLOCKED))
+            self.assertEqual(rep["required_gate"], "check_quick_close.py")
+            self.assertIn("--changed-files tests/test_a.py",
+                          rep["next_action"])
 
         def test_close_gate_fail_blocks(self):
             self.note()
