@@ -42,6 +42,19 @@ already recorded -- the `- OpenAPI:` header field, and a saved OpenAPI JSON
 document on disk. They prove the probe REPORTED a reachable contract surface
 and what that document said, never that either is true right now.
 
+A CONSISTENT PAIR IS NOT AN OBSERVED RUN (`unledgered_capture`)
+---------------------------------------------------------------
+The sidecar checks above compare a capture with its own sidecar. Both files
+are plain text and both hashes are unkeyed, so a short script writes a
+mutually-consistent pair for a probe that never connected, and it passed here
+cleanly. With `--ledger`, each cited capture's current sha256 is additionally
+looked up among the `gate: "run_quiet.py"` records in that ledger, which
+`run_quiet.py --capture --ledger` appends as it takes each capture. A capture
+no record pins is reported `unledgered_capture`: a WARNING by default, a
+failure under `--require-ledgered-captures` (convention #8, deliberately
+LOOSER than every other code here) because captures taken before this release
+carry no record.
+
 Pure standard library.
 
 Usage:
@@ -51,6 +64,7 @@ Usage:
         [--forbid-host <pattern>]... [--require-build-marker <value>] \
         [--min-captures <N>] [--require-openapi-reachable] \
         [--allow-missing-sidecar] [--ledger <path>] \
+        [--require-ledgered-captures] \
         [--openapi-doc <path> --openapi-route <path> [--openapi-method <verb>]]
     python check_runtime_evidence.py --self-test
 """
@@ -877,7 +891,43 @@ def diff_declared_observed(declared, body_doc):
 # Per-capture evaluation
 # ---------------------------------------------------------------------------
 
-def evaluate_capture(candidate, args, patterns, newest_mtime, schema_ctx=None):
+def ledger_capture_hashes(ledger_path):
+    """Every `capture_sha256` a `run_quiet.py` record in this ledger carries.
+
+    `run_quiet.py --capture --ledger` appends one record per capture it takes,
+    pinning the artifact's sha256 as it landed on disk. A capture whose
+    current hash is absent from that set was never recorded by the tool,
+    however consistent its sidecar is with its body -- both files are plain
+    text and both hashes are unkeyed, so a consistent pair proves internal
+    agreement, not that a command ran (SKILL.md § The unkeyed-sidecar limit).
+
+    CHAIN INTEGRITY IS NOT CHECKED HERE, deliberately: `check_ledger.py` owns
+    it, and `--require-ledger-gates` re-walks it at commit time. A record
+    inside a broken chain still counts here; an absent or unreadable ledger
+    yields an empty set rather than an error.
+    """
+    hashes = set()
+    try:
+        raw = Path(ledger_path).read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return hashes
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(record, dict) or record.get("gate") != "run_quiet.py":
+            continue
+        digest = record.get("capture_sha256")
+        if isinstance(digest, str) and digest.strip():
+            hashes.add(digest.strip().lower())
+    return hashes
+
+
+def evaluate_capture(candidate, args, patterns, newest_mtime, schema_ctx=None,
+                     ledger_hashes=None):
     """Return a per-capture result dict. `problems` empty => accepted."""
     schema_ctx = schema_ctx or {"active": False, "declared": None, "reason": None}
     res = {
@@ -888,7 +938,7 @@ def evaluate_capture(candidate, args, patterns, newest_mtime, schema_ctx=None):
         "build_marker": None,
         "sidecar": None, "sidecar_present": None, "sidecar_exit_code": None,
         "sidecar_capture_sha256_ok": None, "sidecar_body_agrees": None,
-        "sidecar_waived": False,
+        "sidecar_waived": False, "ledgered": None,
         "probe_client": None, "probe_exempt_reason": None,
         "openapi_url": None, "openapi_status": None, "openapi_reachable": None,
         "schema_compared": None, "schema_skipped_reason": None,
@@ -982,6 +1032,25 @@ def evaluate_capture(candidate, args, patterns, newest_mtime, schema_ctx=None):
                  f"the probe client exited {exit_code} — a probe whose client "
                  "failed (connection refused, DNS failure, timeout) observed "
                  "nothing, no matter what its captured body says")
+
+    # --- provenance: was this capture RECORDED, or merely self-consistent? ---
+    # Everything above compares the capture with its own sidecar; both are
+    # typeable, so a forger writes a pair that agrees. The ledger record
+    # run_quiet.py appends as it takes a capture is the term that says the pair
+    # came from a run. DELIBERATELY LOOSER than every other code in this
+    # function (convention #8, which otherwise refuses an unverifiable
+    # capture outright): a missing record is a WARNING for one release,
+    # because captures taken before it carry none.
+    if ledger_hashes is not None:
+        res["ledgered"] = (sha256_file(resolved) or "").lower() in ledger_hashes
+        if not res["ledgered"] and getattr(
+                args, "require_ledgered_captures", False):
+            fail("unledgered_capture",
+                 "no `run_quiet.py` ledger record pins this capture's sha256, "
+                 "so nothing distinguishes it from a hand-authored "
+                 "capture+sidecar pair — re-take the probe with "
+                 "`run_quiet.py --capture <path> --ledger <the ledger> -- "
+                 "<command>`")
 
     # --- provenance: was this taken by a real client? ---
     res["probe_exempt_reason"] = probe_exempt_reason(res["probe_command"])
@@ -1199,6 +1268,9 @@ def build_report(args):
         "sidecar_missing": [], "sidecar_hash_mismatch": [],
         "sidecar_body_disagrees": [], "capture_header_missing": [],
         "probe_failed_exit": [], "probe_not_client": [], "probe_exempt": [],
+        "unledgered_captures": [],
+        "require_ledgered_captures": bool(
+            getattr(args, "require_ledgered_captures", False)),
         "allow_missing_sidecar": bool(args.allow_missing_sidecar),
         "openapi_unreachable": [],
         "require_openapi_reachable": bool(args.require_openapi_reachable),
@@ -1224,8 +1296,14 @@ def build_report(args):
         return report
 
     patterns = milestone_token_patterns(args.milestone)
+    # No --ledger, no lookup: there is nothing to look a capture up in, and
+    # the check is skipped rather than failed (--require-ledgered-captures
+    # without --ledger is refused as a usage error in main()).
+    ledger_hashes = (ledger_capture_hashes(args.ledger)
+                     if getattr(args, "ledger", None) else None)
     for candidate in report["citations"]:
-        res = evaluate_capture(candidate, args, patterns, newest, schema_ctx)
+        res = evaluate_capture(candidate, args, patterns, newest, schema_ctx,
+                               ledger_hashes)
         report["captures"].append(res)
         if not res["milestone_match"]:
             continue  # another milestone's capture; not this gate's business
@@ -1241,6 +1319,17 @@ def build_report(args):
                 f"{res['path']}: NO PROVENANCE SIDECAR, waived by "
                 "--allow-missing-sidecar — this capture's contents are "
                 "unverified and could have been typed by hand")
+        if res["ledgered"] is False:
+            report["unledgered_captures"].append(res["path"])
+            report["warnings"].append(
+                f"unledgered_capture: {res['path']} — no `run_quiet.py` ledger "
+                "record pins this capture's sha256, so nothing distinguishes "
+                "it from a hand-authored capture+sidecar pair"
+                + (" (FAILING under --require-ledgered-captures)"
+                   if report["require_ledgered_captures"] else
+                   " (WARNING ONLY this release — captures taken before it "
+                   "carry no record; pass --require-ledgered-captures to make "
+                   "this a failure)"))
         for code in ("sidecar_missing", "sidecar_hash_mismatch",
                       "sidecar_body_disagrees", "capture_header_missing",
                       "probe_failed_exit", "probe_not_client"):
@@ -1445,7 +1534,17 @@ def build_parser():
                          "run_quiet.py provenance sidecar. Its contents are "
                          "then unverified.")
     p.add_argument("--ledger",
-                    help="append one JSON audit line per run to this path")
+                    help="append one JSON audit line per run to this path; "
+                         "also the ledger every cited capture is looked up in "
+                         "(see --require-ledgered-captures)")
+    p.add_argument(
+        "--require-ledgered-captures", action="store_true",
+        help="fail (problem code `unledgered_capture`) when a cited capture's "
+             "sha256 is pinned by no `run_quiet.py --capture --ledger` record "
+             "in --ledger. WITHOUT this flag such a capture is a WARNING and "
+             "the exit code is unchanged — captures taken before this release "
+             "carry no record, so the default is one release of grace. "
+             "Requires --ledger.")
     p.add_argument("--openapi-doc")
     p.add_argument("--openapi-route")
     p.add_argument("--openapi-method")
@@ -1475,6 +1574,12 @@ def main(argv):
         print(json.dumps(payload, indent=2))
         return exit_code
 
+    if args.require_ledgered_captures and not args.ledger:
+        return emit({"result": "ERROR", "error_code": "missing_argument",
+                     "error": "--require-ledgered-captures requires --ledger "
+                              "(there is no ledger to look a capture up in "
+                              "otherwise)"}, 2, "ERROR")
+
     missing = [n for n, v in (("--report", args.report),
                               ("--milestone", args.milestone)) if not v]
     if missing:
@@ -1500,6 +1605,7 @@ def run_self_test():
     import contextlib
     import io
     import shutil
+    import subprocess
     import tempfile
     import unittest
 
@@ -1594,6 +1700,7 @@ def run_self_test():
                         forbid_host=[], require_build_marker=None,
                         min_captures=1, require_openapi_reachable=False,
                         allow_missing_sidecar=False, ledger=None,
+                        require_ledgered_captures=False,
                         openapi_doc=None, openapi_route=None, openapi_method=None,
                         self_test=False)
             base.update(kw)
@@ -2325,6 +2432,96 @@ def run_self_test():
             self._report(self._write(name="m3b.md", sidecar_hash="cd" * 32))
             r2 = build_report(self._args(allow_missing_sidecar=True))
             self.assertEqual(r2["result"], "FAIL")
+
+        # ---- provenance: was the capture RECORDED, or just self-consistent? ----
+
+        def _ledger_for(self, cited, path=None):
+            """A ledger holding the `run_quiet.py` record for this capture.
+
+            Shaped exactly as `run_quiet.py --capture --ledger` writes it;
+            `test_a_real_run_quiet_record_is_found_by_the_lookup` below is what
+            ties this fixture to the real writer.
+            """
+            path = path or (self.impl / "gates.jsonl")
+            cap = self.impl / cited
+            path.write_text(json.dumps({
+                "ts": "2026-08-12T14:03:11Z", "gate": "run_quiet.py",
+                "argv": ["--capture", str(cap)], "milestone": None,
+                "inputs": {str(cap): sha256_file(cap)},
+                "verdict": "CAPTURED", "exit": 0,
+                "command_argv": ["curl", "-sS", "-i",
+                                  "http://localhost:5142/api/orders"],
+                "capture_sha256": sha256_file(cap),
+                "prev": "genesis", "self": "f" * 64,
+            }) + "\n", encoding="utf-8")
+            return str(path)
+
+        def test_forged_pair_with_no_ledger_record_only_warns_by_default(self):
+            """The red-team artifact: consistent pair, command never run."""
+            cited = self._write()
+            self._report(cited)
+            ledger = self.impl / "gates.jsonl"
+            ledger.write_text("", encoding="utf-8")
+            r = build_report(self._args(ledger=str(ledger)))
+            self.assertEqual(r["result"], "PASS")       # one release of grace
+            self.assertEqual(r["unledgered_captures"], [cited])
+            self.assertIs(r["captures"][0]["ledgered"], False)
+            self.assertTrue(any("unledgered_capture" in w for w in r["warnings"]))
+
+        def test_forged_pair_with_no_ledger_record_fails_under_the_flag(self):
+            cited = self._write()
+            self._report(cited)
+            ledger = self.impl / "gates.jsonl"
+            ledger.write_text("", encoding="utf-8")
+            r = build_report(self._args(ledger=str(ledger),
+                                        require_ledgered_captures=True))
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("unledgered_capture", r["captures"][0]["problem_codes"])
+            self.assertEqual(r["rejected"], [cited])
+
+        def test_ledgered_capture_passes_under_the_flag(self):
+            """The honest input still passes with the strict flag on."""
+            cited = self._write()
+            self._report(cited)
+            r = build_report(self._args(ledger=self._ledger_for(cited),
+                                        require_ledgered_captures=True))
+            self.assertEqual(r["result"], "PASS", r)
+            self.assertIs(r["captures"][0]["ledgered"], True)
+            self.assertEqual(r["unledgered_captures"], [])
+
+        def test_a_real_run_quiet_record_is_found_by_the_lookup(self):
+            """Writer-to-reader tie: what run_quiet.py appends is what this
+            lookup reads. Without it the fixture above only tests itself."""
+            cap = self.impl / "evidence" / "runtime" / "real.md"
+            ledger = self.impl / "real-gates.jsonl"
+            proc = subprocess.run(
+                [sys.executable,
+                 str(Path(__file__).resolve().parent / "run_quiet.py"),
+                 "--capture", str(cap), "--ledger", str(ledger),
+                 "--", sys.executable, "-c", "print('{}')"],
+                capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn(sha256_file(cap), ledger_capture_hashes(str(ledger)))
+
+        def test_lookup_skipped_entirely_without_a_ledger(self):
+            """Default behavior is unchanged for every existing caller."""
+            cited = self._write()
+            self._report(cited)
+            r = build_report(self._args())
+            self.assertEqual(r["result"], "PASS")
+            self.assertIsNone(r["captures"][0]["ledgered"])
+            self.assertEqual(r["unledgered_captures"], [])
+
+        def test_require_ledgered_captures_without_ledger_is_exit_2(self):
+            cited = self._write()
+            self._report(cited)
+            self.assertEqual(
+                self._cli("--require-ledgered-captures")[0], 2)
+
+        def test_unreadable_ledger_reads_as_no_records(self):
+            """A ledger this gate cannot read never turns into an error."""
+            self.assertEqual(
+                ledger_capture_hashes(str(self.impl / "absent.jsonl")), set())
 
         # ---- provenance: was a real client used? ----
 
