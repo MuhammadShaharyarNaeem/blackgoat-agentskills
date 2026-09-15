@@ -4,12 +4,12 @@
 
 A Claude Code plugin that packages an **agent squad** and a **Prompt-Driven Development (PDD)** workflow into reusable skills and personas. An Orchestrator delegates self-contained tasks to specialized subagents, each of which runs in isolation and returns a structured `<handoff>`. Instead of one agent trying to hold an entire project in context, work is split across a squad of narrow specialists coordinated through slash-command SOPs — with requirement traceability enforced from the first honing question to the final pre-launch gate.
 
-- **Plugin:** `blackgoat-agentskills` v2.7.2 — see [CHANGELOG.md](CHANGELOG.md)
+- **Plugin:** `blackgoat-agentskills` v2.8.0 — see [CHANGELOG.md](CHANGELOG.md)
 - **Author:** shaharyar.naeem (shaharyar.naeem@gorelo.io)
 
 > Note: this repo's `AGENTS.md` is the Google Antigravity runtime contract, not the generic cross-tool "AGENTS.md" coding-agent convention — see [docs/cursor-setup.md](docs/cursor-setup.md).
 
-![blackgoat-agentskills: claude plugin validate passing, the plugin manifest, and the 15-agent squad inventory](assets/preview.svg)
+![blackgoat-agentskills: claude plugin validate passing, the plugin manifest, and the 16-agent squad inventory](assets/preview.svg)
 
 ---
 
@@ -413,6 +413,7 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **agent-audit** — audits personas/dependencies against 21 structural heuristics, starting with a mechanical preflight (frontmatter parse, dependency paths, runtime registration, self-tests, ledger grep). A whole-plugin audit runs as a **fan-out**: one read-only review agent per lens (pipeline flow, personas, methodology skills, tooling/evals/docs, cross-reference sweep, gate red-team, eval diagnosis), then the Orchestrator synthesizes and independently re-verifies every Blocker before reporting it as CONFIRMED rather than PLAUSIBLE
 - **agent-orchestration-improve-agent** — log parsing → procedural-memory generation (Forge's core methodology)
 - **bgpdd-learn** — `/bgpdd-learn`, the on-demand session-learning triage (Orchestrator + Forge)
+- **bg-eval** — `/bg-eval`, turns one sentence into a graded run of any `evals/` suite (antigravity, contract, trigger, outcome) against the current checkout via `evals/run_suite.py` — main-session only, Orchestrator-run
 
 ### Standalone tools
 - **pipeline-tools** — the deterministic gate CLI family (coverage, commit gate, agent report, runtime evidence, acceptance suite, ship decision, re-delegation halts, Tier-1 staleness, the review package — including the `--require-rehearsal` and `--require-baseline` flags that make a rollback rehearsal and a rollout baseline evidenced rather than asserted — milestone-scoped blockers, milestone read/write, state writes, quiet runs, and the two static lints) executed by the Orchestrator at every bgpdd gate; there is no manual open-and-read substitute. Alongside the gates: **`detect_stack.py`** gives "if the project uses X" a mechanical floor by reporting evidence-backed stacks and the skills they imply, and **`record_run.py` / `summarize_run.py`** are the run-telemetry pair — one JSON line per delegation, rolled up into the fired-versus-rubber-stamped block the game tape pastes instead of narrating

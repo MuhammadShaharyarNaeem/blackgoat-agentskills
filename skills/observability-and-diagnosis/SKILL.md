@@ -9,7 +9,7 @@ The cost of an incident is set long before it happens, by whether the failing pa
 
 ## Direct invocation
 
-A user can ask for this directly on named files outside a pipeline — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no claim without a capture (`base-persona.md`, Evidence Integrity). **Scope: three files or fewer.** Over three files, or new signal wiring: route through `/bg`.
+A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no claim without a capture (`base-persona.md`, Evidence Integrity). **Scope: three files or fewer.** Over three files, or new signal wiring: route through `/bg`.
 
 ## Quick card
 
@@ -89,7 +89,7 @@ The proof that a path is observable is **a log line carrying its correlation id,
 1. Start the service the way it runs, per the environment manifest (`{PLUGIN_ROOT}/runtime-evidence/SKILL.md`).
 2. Drive the path with a known correlation id — send it on the inbound `X-Correlation-Id` header rather than hunting a generated one afterwards.
 3. Read the line back **from where the manifest says logs are read** — the log sink, not the process's own stdout buffer inside the test host.
-4. Capture it with `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture <path> -- <command>`.
+4. Capture it with `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture <path> --ledger .docs/{project-name}/implementation/gates.jsonl -- <command>`.
 5. Cite it with the `**Runtime evidence:**` line whose grammar is owned by `{PLUGIN_ROOT}/runtime-evidence/SKILL.md`.
 
 An assertion that the logging call exists is not evidence the line reaches the sink — the gap between a logger and a log.

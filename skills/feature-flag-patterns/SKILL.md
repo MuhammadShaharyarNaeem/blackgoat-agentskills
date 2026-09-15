@@ -9,11 +9,7 @@ A feature flag is a branch that ships. It buys a decoupling of deploy from relea
 
 ## Direct invocation
 
-A user can ask for this directly on named files outside a pipeline — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract inline, in the main session: no delegation, no unobserved claims (`base-persona.md`, Evidence Integrity). **Scope: three files or fewer, and a flag that already exists.** Anything larger, and every new flag, routes through `/bg`:
-
-- `/bgpdd-plan` — creating a flag: creation and removal tasks are planned together.
-- `/bgpdd-lite` — flipping a default, widening a rollout, changing who it reads for.
-- `/bgpdd-quick` — removing a settled flag whose collapse touches three files or fewer. The lane admits any skill carrying a `## Quick card`, this one included.
+A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract inline, in the main session: no delegation, no unobserved claims (`base-persona.md`, Evidence Integrity). **Scope: three files or fewer, on an existing flag.** Anything larger, or a new flag, routes through `/bg`.
 
 ## Quick card
 

@@ -77,7 +77,7 @@ Four phases; do not skip or reorder.
 Run the `How verified` command **through the capture wrapper**, never bare:
 
 ```bash
-python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture {quick-root}/evidence/check.md -- <the command>
+python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture {quick-root}/evidence/check.md --ledger {quick-root}/gates.jsonl -- <the command>
 ```
 
 Exit 0 required; non-zero → fix and re-run (one round, §1). Phase 3 reads the `check.md.meta.json` sidecar — a hand-written `check.md` has none, and fails closed.
@@ -85,11 +85,11 @@ Exit 0 required; non-zero → fix and re-run (one round, §1). Phase 3 reads the
 ### Phase 3: Close (the gate)
 **Driver:** the driver must report `phase: 3`; after the gate it reports `phase: 4` at exit 3.
 
-**When the change adds or edits a test file**, run this before `check_quick_close.py` — that gate has no knowledge of it:
+**When the change adds or edits a test file**, run this before `check_quick_close.py`:
 ```bash
 python {PLUGIN_ROOT}/pipeline-tools/scripts/check_test_authenticity.py --repo . --changed-files <paths> --milestone "{slug}" --ledger {quick-root}/gates.jsonl
 ```
-Principle: `test-driven-development/SKILL.md` § Rules — not restated here. Exit 0 = proceed; cite the ledger entry in the `## Result` bullet (§1). Exit 1 = the one round §1 allows — fix and re-run. Exit 2 = artifact defect. **`pipeline_driver.py` does not emit this step yet** — nothing enforces remembering it.
+Principle: `test-driven-development/SKILL.md` § Rules — not restated here. Exit 0 = proceed; cite the ledger entry in the `## Result` bullet (§1). Exit 1 = the one round §1 allows — fix and re-run. Exit 2 = artifact defect. **Mechanical, not a reminder (convention #9):** `check_quick_close.py` refuses to close (`test_authenticity_gate_missing`) whenever a declared file matches `--frozen` or looks like a test file, unless the ledger holds a PASSING `check_test_authenticity.py` record exact-scoped to `{slug}` whose inputs cover it at its current hash — so skipping this step does not silently ship. `pipeline_driver.py` emits this command as the Phase 3 `next_action` whenever the note's `Where` line already names a test file, and folds a conditional reminder into the close command's message otherwise (it reads only the note's text, not the real diff) — either way, the close gate above is the actual enforcer.
 
 ```bash
 python {PLUGIN_ROOT}/pipeline-tools/scripts/check_quick_close.py \
@@ -103,11 +103,13 @@ python {PLUGIN_ROOT}/pipeline-tools/scripts/check_quick_close.py \
 **Pass Phase 0's `test_path_globs`, one `--frozen` per glob** (`tests/**`, `**/*.spec.ts`; a value with no `*`/`?`/`[` is a directory prefix). **The gate holds no default and must not**: a guessed freeze that misses is indistinguishable from a change with no test to protect. Adding a test passes.
 
 - **Exit 0** = every term held; the gate committed exactly the declared files. Append the `## Result` bullet (§1).
-- **Exit 1** = **BLOCK**; `problem_codes` names the term. Fix and re-run once. Three terms route differently:
+- **Exit 1** = **BLOCK**; `problem_codes` names the term. Fix and re-run once. Four terms route differently:
   - `size_bound_exceeded` is unfixable here — **no `--waiver`, deliberately tighter than `bgpdd-bugfix`'s `check_commit_gate.py --waiver` (convention #8)**: the bound *is* the lane, so an overrun means the wrong one — the message names where to escalate.
   - `frozen_path_modified` has an escape the gate's message does not name: **narrow the glob.** A rename touches its call sites and one of them is usually a test — this lane's headline case, not a defect, so do not take the message's routing to `/bgpdd-bugfix`, which has no reproduction to intake. Re-run with the narrower `--frozen` set that still covers the tests you must not edit, record which glob you narrowed and why in `## Result`, and count it as the one round.
   - `capture_command_mismatch` = the capture's recorded `argv` is not the note's `How verified` command. The capture must *be* that command's run: re-run it verbatim through `run_quiet.py --capture`, or correct the note first if the command you needed differed. Never edit the sidecar.
+  - `test_authenticity_gate_missing` = a declared file matches `--frozen` or looks like a test file and the ledger holds no PASSING `check_test_authenticity.py` record exact-scoped to `{slug}` covering it at its current hash. Run the command above, then re-run this gate; it is the same one round.
 - **Exit 2** = artifact or environment defect (missing flag, no Python, git unusable). Never hand-edit an artifact to pass a gate.
 
 ## Limitations
 - The gate proves the declared change was checked, not that it was honest about *scale* — three files can still be an architecture change, and Phase 0's table is the only (prose) guard.
+- `test_authenticity_gate_missing`'s "looks like a test file" term is a default-glob heuristic (`check_test_authenticity.py`'s own `DEFAULT_TEST_GLOBS`), not a parse of the diff; an unconventionally named test file that matches neither a `--frozen` glob nor that heuristic is invisible to this term — `--frozen`, sourced from Phase 0's `test_path_globs`, is the one input this lane actually controls, so keep it accurate.

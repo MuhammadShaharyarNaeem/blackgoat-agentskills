@@ -11,8 +11,6 @@ Security-first development practices for web applications. Treat every external 
 
 A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no editing tests to pass, no unobserved claims (`base-persona.md`, Evidence Integrity). Over three files, or shared behaviour: route via `/bg` to a lane.
 
-Data privacy checklist: `references/data-privacy-checklist.md` — PII classification, placement, retention, deletion-path, log-redaction and third-party-flow checks, rendered in Cipher's check-line grammar.
-
 ## Quick card
 
 Derived from the contract below for a ≤ 3-file change; no new rules (convention #8 — deliberately narrower than the full contract, which binds inside any lane).
@@ -197,3 +195,4 @@ For detailed security checklists and pre-commit verification steps, see `{PLUGIN
 Read on demand — not needed to execute the contract above:
 
 - [Security deep dive](references/security-deep-dive.md) — when to use, the full OWASP Top 10 pattern walkthroughs with code, input validation and file upload safety, npm-audit triage, supply-chain hygiene, rate limiting, secrets management detail, the full Securing AI/LLM Features section, common rationalizations, and red flags.
+- Data privacy checklist: `references/data-privacy-checklist.md` — PII classification, placement, retention, deletion-path, log-redaction and third-party-flow checks, rendered in Cipher's check-line grammar.

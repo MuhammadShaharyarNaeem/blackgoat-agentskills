@@ -11,7 +11,8 @@ Usage:
     python run_quiet.py --log <path> [--context N] [--tail N] \
         [--timeout SECONDS] -- <command and args...>
     python run_quiet.py --capture <path> [--capture-field K=V]... \
-        [--log <path>] [--full-body] -- <command and args...>
+        [--log <path>] [--full-body] [--ledger <path>] \
+        [--milestone "<title>"] -- <command and args...>
     python run_quiet.py --self-test
 
 `--capture` additionally writes a conforming runtime-evidence capture
@@ -67,6 +68,28 @@ can never be the thing that emits a disagreeing pair. `log_sha256` gives the
 same file-bytes guarantee to the full log that `capture_sha256` gives the
 capture -- an edited log is detectable, even though nothing downstream
 requires it yet.
+
+WHAT THE PAIR STILL CANNOT SAY, AND WHAT `--ledger` ADDS
+--------------------------------------------------------
+Everything above proves the capture and its sidecar are consistent WITH EACH
+OTHER. It does not prove a command ever ran: both files are plain text, both
+hashes are unkeyed sha256 over content anyone can produce, so a short script
+writes a mutually-consistent pair for a run that never happened, and every
+reader of the pair alone passes it (SKILL.md § The unkeyed-sidecar limit).
+
+`--ledger <path>` closes the omission half of that gap. After a `--capture`
+completes, this tool appends ONE hash-chained record -- `gate:
+"run_quiet.py"`, `verdict: "CAPTURED"`, the child's `exit`, the capture and
+sidecar paths hashed under `inputs`, plus `command_argv` and `capture_sha256`
+-- to the shared gate ledger, using the same chained `append_ledger` every
+gate in this family writes. A reader (`check_agent_report.py`,
+`check_runtime_evidence.py`, `check_ship_decision.py`) can then look a
+capture's current sha256 up in that ledger and tell an OBSERVED capture from
+an authored one: a forger must now also append a chained ledger line, in a
+file `check_ledger.py` walks and `check_commit_gate.py --require-ledger-gates`
+re-hashes. It does not make forgery impossible -- the ledger is unkeyed too --
+it makes it a larger written act. `--milestone` scopes the record the way
+every other gate's does. Without `--ledger`, behavior is unchanged.
 
 Pure standard library. Cross-platform (Windows/POSIX).
 """
@@ -450,6 +473,84 @@ def assert_capture_agrees(capture_text, meta):
             f"the sidecar records 'finished': {meta['finished']}")
 
 
+# ---------------------------------------------------------------------------
+# Gate ledger (the chained record that says this capture was TAKEN, not typed)
+#
+# Copied byte-identical from check_handoff.py per this family's one-file
+# convention -- check_ledger.py's drift guard compares the three helpers below
+# across every script that carries them.
+# ---------------------------------------------------------------------------
+
+def ledger_line_hash(raw):
+    """sha256 of one ledger LINE's bytes, ignoring its terminator.
+
+    Surrounding whitespace (CR included) is stripped so a ledger written on
+    Windows chains identically to the same file read on POSIX. Byte-identical
+    in every gate in this family and in check_ledger.py, which verifies the
+    chain (family convention: one file each, no shared module).
+    """
+    return hashlib.sha256(raw.strip()).hexdigest()
+
+
+def ledger_prev_hash(ledger_path):
+    """The `prev` value for the next record: hash of the last line on disk.
+
+    `"genesis"` when the ledger is missing or holds no non-blank line.
+    """
+    try:
+        with open(ledger_path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return "genesis"
+    last = None
+    for raw in data.splitlines():
+        if raw.strip():
+            last = raw
+    return "genesis" if last is None else ledger_line_hash(last)
+
+
+def ledger_self_hash(record):
+    """sha256 of the record serialized canonically WITHOUT its `self` field."""
+    body = {k: v for k, v in record.items() if k != "self"}
+    return hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":"))
+        .encode("utf-8")).hexdigest()
+
+
+def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code,
+                  extra=None):
+    """Append ONE JSON line recording this run. Best-effort by design.
+
+    `extra` merges into the record BEFORE `prev`/`self` are computed, so the
+    chain covers it: a capture records `command_argv` and `capture_sha256`,
+    which is the field a reader looks a capture up by.
+    """
+    if not ledger_path:
+        return
+    record = {
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "gate": Path(__file__).name,
+        "argv": list(argv),
+        "milestone": milestone,
+        "inputs": {str(p): sha256_file(p) for p in inputs if p},
+        "verdict": verdict,
+        "exit": exit_code,
+    }
+    if extra:
+        record.update(extra)
+    try:
+        p = Path(ledger_path)
+        if str(p.parent):
+            p.parent.mkdir(parents=True, exist_ok=True)
+        record["prev"] = ledger_prev_hash(p)
+        record["self"] = ledger_self_hash(record)
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+    except OSError as exc:
+        print(f"Warning: could not append to ledger {ledger_path}: {exc}",
+              file=sys.stderr)
+
+
 def write_sidecar(capture_path, meta):
     path = sidecar_path_for(capture_path)
     try:
@@ -523,13 +624,18 @@ def run_child(cmd, timeout):
 # ---------------------------------------------------------------------------
 
 def execute(log_path, context, tail_n, timeout, cmd,
-            capture_path=None, capture_fields=(), full_body=False):
+            capture_path=None, capture_fields=(), full_body=False,
+            ledger=None, milestone=None, own_argv=()):
     """Run cmd, write the full log and/or capture, build the plain-text report.
 
     The FULL merged output always lands on disk: at `log_path` if given, else
     (when only `capture_path` is given) at a sibling `<capture_path>.log`.
     The capture body embeds an excerpt of that output by default, or the
     full output when `full_body` is set.
+
+    With `ledger`, ONE chained record is appended after the capture and its
+    sidecar are on disk -- last, so `inputs` hashes both files as they finally
+    landed.
 
     Returns (report_text, exit_code).
     """
@@ -568,6 +674,12 @@ def execute(log_path, context, tail_n, timeout, cmd,
         # indistinguishable from a tampered sidecar.
         assert_capture_agrees(capture_text, meta)
         sidecar = write_sidecar(capture_path, meta)
+        # LAST, and only for a capture: the record says this artifact was
+        # observed, so it must hash the artifact exactly as it now stands.
+        append_ledger(ledger, own_argv, milestone,
+                      [capture_path, sidecar], "CAPTURED", exit_code,
+                      extra={"command_argv": list(cmd),
+                             "capture_sha256": meta["capture_sha256"]})
 
     report = [f"Summary: {line}" for line in summary_lines]
     report.append("")
@@ -604,6 +716,14 @@ def build_parser():
     parser.add_argument("--full-body", action="store_true",
                          help="embed the full raw output in --capture instead of "
                               "the default error-excerpt + tail")
+    parser.add_argument("--ledger",
+                         help="append ONE chained record for this --capture to "
+                              "the shared gate ledger, so a reader can tell an "
+                              "OBSERVED capture from an authored one (requires "
+                              "--capture)")
+    parser.add_argument("--milestone",
+                         help="scope this capture's ledger record to a milestone "
+                              "(requires --capture)")
     parser.add_argument("--self-test", action="store_true")
     return parser
 
@@ -622,13 +742,19 @@ def main(argv):
             raise RunQuietError("--capture-field requires --capture")
         if args.full_body and not args.capture:
             raise RunQuietError("--full-body requires --capture")
+        if args.ledger and not args.capture:
+            raise RunQuietError("--ledger requires --capture (the record is "
+                                 "about a capture; a --log-only run writes none)")
+        if args.milestone and not args.capture:
+            raise RunQuietError("--milestone requires --capture")
         if not cmd:
             raise RunQuietError("no command given after '--'")
         capture_fields = [parse_capture_field(s) for s in args.capture_field]
         report_text, exit_code = execute(args.log, args.context, args.tail,
                                           args.timeout, cmd,
                                           args.capture, capture_fields,
-                                          args.full_body)
+                                          args.full_body,
+                                          args.ledger, args.milestone, argv)
     except RunQuietError as exc:
         print(f"run_quiet: {exc}", file=sys.stderr)
         return 2
@@ -1014,6 +1140,90 @@ def run_self_test():
             self.assertEqual(meta["log_path"], str(self.log))
             self.assertIn(f"- Log sha256: {meta['log_sha256']}",
                           cap.read_text(encoding="utf-8"))
+
+        # ---- --ledger: the record that says this capture was TAKEN ----
+
+        def _ledger(self, path):
+            return [json.loads(l) for l in
+                    Path(path).read_text(encoding="utf-8").splitlines() if l.strip()]
+
+        def test_ledger_record_appended_for_a_capture(self):
+            cap = self.dir / "evidence" / "runtime" / "c.md"
+            led = self.dir / "logs" / "gates.jsonl"
+            code, _ = self._run_raw([
+                "--capture", str(cap), "--ledger", str(led),
+                "--milestone", "M1 — Orders [API]",
+                "--", sys.executable, "-c", "print('x')"])
+            self.assertEqual(code, 0)
+            records = self._ledger(led)
+            self.assertEqual(len(records), 1)
+            rec = records[0]
+            self.assertEqual(rec["gate"], "run_quiet.py")
+            self.assertEqual(rec["verdict"], "CAPTURED")
+            self.assertEqual(rec["exit"], 0)
+            self.assertEqual(rec["milestone"], "M1 — Orders [API]")
+            self.assertEqual(rec["command_argv"][0], sys.executable)
+            self.assertRegex(rec["ts"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+        def test_ledger_record_pins_the_capture_and_its_sidecar(self):
+            """The lookup key downstream: capture_sha256 as it landed on disk."""
+            cap = self.dir / "c.md"
+            led = self.dir / "gates.jsonl"
+            self._run_raw(["--capture", str(cap), "--ledger", str(led), "--",
+                            sys.executable, "-c", "print('x')"])
+            rec = self._ledger(led)[0]
+            meta = self._sidecar(cap)
+            self.assertEqual(rec["capture_sha256"], meta["capture_sha256"])
+            self.assertEqual(rec["capture_sha256"], sha256_file(cap))
+            self.assertEqual(rec["inputs"][str(cap)], sha256_file(cap))
+            side = sidecar_path_for(cap)
+            self.assertEqual(rec["inputs"][side], sha256_file(side))
+
+        def test_ledger_record_is_chained(self):
+            cap = self.dir / "c.md"
+            led = self.dir / "gates.jsonl"
+            for _ in range(2):
+                self._run_raw(["--capture", str(cap), "--ledger", str(led), "--",
+                                sys.executable, "-c", "print('x')"])
+            lines = [l for l in Path(led).read_text(encoding="utf-8").splitlines()
+                      if l.strip()]
+            first, second = json.loads(lines[0]), json.loads(lines[1])
+            self.assertEqual(first["prev"], "genesis")
+            self.assertEqual(second["prev"], ledger_line_hash(lines[0].encode()))
+            for rec in (first, second):
+                self.assertEqual(rec["self"], ledger_self_hash(rec))
+
+        def test_ledger_records_the_childs_real_nonzero_exit(self):
+            cap = self.dir / "c.md"
+            led = self.dir / "gates.jsonl"
+            code, _ = self._run_raw([
+                "--capture", str(cap), "--ledger", str(led), "--",
+                sys.executable, "-c", "raise SystemExit(3)"])
+            self.assertEqual(code, 3)
+            self.assertEqual(self._ledger(led)[0]["exit"], 3)
+
+        def test_no_ledger_file_when_the_flag_is_absent(self):
+            """Without --ledger, behavior is unchanged."""
+            cap = self.dir / "c.md"
+            self._run_raw(["--capture", str(cap), "--",
+                            sys.executable, "-c", "print('x')"])
+            self.assertEqual(sorted(p.name for p in self.dir.iterdir()),
+                             ["c.md", "c.md.log", "c.md.meta.json"])
+
+        def test_ledger_without_capture_exits_2(self):
+            code, out = self._run_raw([
+                "--log", str(self.log), "--ledger", str(self.dir / "g.jsonl"),
+                "--", sys.executable, "-c", "pass"])
+            self.assertEqual(code, 2)
+            self.assertIn("--ledger requires --capture", out)
+            self.assertFalse((self.dir / "g.jsonl").exists())
+
+        def test_milestone_without_capture_exits_2(self):
+            code, out = self._run_raw([
+                "--log", str(self.log), "--milestone", "M1",
+                "--", sys.executable, "-c", "pass"])
+            self.assertEqual(code, 2)
+            self.assertIn("--milestone requires --capture", out)
 
         # ---- per-runner summary extraction (fixture text, not real runners) ----
 

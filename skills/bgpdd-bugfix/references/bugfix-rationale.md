@@ -385,7 +385,7 @@ it does not -- and the run rides the `branch` that file already names, so there
 is no `--init`, no `--set-pipeline` and no `--set-branch`.)
 
 **Phase 1.** Quinn runs the reproduction through
-`run_quiet.py --capture .docs/bugfix/coupon-500/evidence/red/coupon-500.md -- curl --fail …`.
+`run_quiet.py --capture .docs/bugfix/coupon-500/evidence/red/coupon-500.md --ledger .docs/bugfix/coupon-500/gates.jsonl -- curl --fail …`.
 `curl --fail` exits 22; the sidecar records `exit_code: 22` and the argv. She
 reports the baseline suite green.
 

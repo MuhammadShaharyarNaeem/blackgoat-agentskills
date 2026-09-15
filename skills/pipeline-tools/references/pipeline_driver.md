@@ -139,6 +139,18 @@ The Phase 0 clause appears only while `How verified` is still unwritten, and its
 emitted text says *confirm or replace, never adopt silently* — the driver is the
 surface where that instruction actually gets read.
 
+### Phase 3 names the authenticity gate when the Where line looks like a test (Unreleased)
+
+`check_test_authenticity.py` is required by `check_quick_close.py` itself the
+moment a declared file looks like a test (convention #9: that gate is the
+actual enforcer, not this one). This driver only decides what to *print*: when
+the note's Where line already names a path that looks like a test, Phase 3's
+action emits `check_test_authenticity.py`'s own command as the next action so
+it runs before the close attempt is worth trying; when it does not — the
+driver has no git diff, only the note's text, so a colocated spec the Where
+line does not obviously name is invisible here — it folds a conditional
+reminder into the close command's message instead.
+
 ## What is deliberately NOT derived
 
 - **Whether a gate would pass.** The driver reads verdicts; it never re-runs a
@@ -204,6 +216,11 @@ Four suites, every case in a fresh temp directory.
 - **`OutputTests` (5)** — auto-detecting bugfix; every contract key present;
   the human render; the `exit 1` ⟺ `blocked_by` invariant; an explicit
   `--ledger` path honoured.
+
+Self-test count: 59 → 64, adding two `QuickTests` cases for the Phase 3
+authenticity-gate emission above (a declared test file naming
+`check_test_authenticity.py`'s command as the next action; the close command
+resuming once that gate has passed).
 
 ## Live walk (recorded 2026-09-07)
 

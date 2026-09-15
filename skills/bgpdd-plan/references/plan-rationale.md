@@ -51,7 +51,7 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
 │   └── design-review.md   # Phase 2.5 findings (Orchestrator)
 ├── implementation/        # Checklists (Alex)
 │   ├── plan.md            # Dependency-mapped task list
-│   └── game-tape.md       # Per-phase evidence checkpoints (Orchestrator, Phase 4)
+│   └── game-tape.md       # Evidence checkpoints (Orchestrator, Phase 3.6 and Phase 4)
 └── orchestrator-state.json # Handoff state for bgpdd-build (Phase 4)
 ```
 

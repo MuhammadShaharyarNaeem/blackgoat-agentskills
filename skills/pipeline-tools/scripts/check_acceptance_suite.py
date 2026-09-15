@@ -12,8 +12,20 @@ Quinn's end-of-build `acceptance-results.md` and verifies:
   2. every gated step's result is PASS (FAIL / BLOCKED / NOT RUN block);
   3. every `Mode: manual` step — and every step whose Mode cell is
      present but UNRECOGNIZED, which fails closed to manual — cites an
-     EXISTING evidence file under an `evidence/runtime/` directory; such
-     a step on an agent's word alone reads as NOT RUN and blocks;
+     EXISTING evidence file under an `evidence/runtime/` directory; every
+     OTHER step — a step whose Mode cell reads `auto`, WHETHER TYPED or
+     defaulted from a blank cell or a missing Mode column entirely — cites
+     a capture there too, additionally carrying a `.meta.json` sidecar
+     whose `capture_sha256` still matches the capture's bytes. An EARLIER
+     revision of this rule exempted a blank cell / missing column from the
+     evidence requirement (mirroring the UNRECOGNIZED-flagging boundary
+     below); that exemption reopened the exact bypass this rule exists to
+     close — a step with no Mode cell at all still read as `auto` and
+     still owed nothing — so the ONLY exemption from evidence is now an
+     EXPLICIT `Mode: manual` cell (whose evidence has no sidecar
+     requirement) or a step whose Mode is UNRECOGNIZED (which still fails
+     closed to the stricter manual rule, unchanged). Such a step on an
+     agent's word alone reads as NOT RUN and blocks;
   4. every step marked `[inverse of N]` names a real step N in the same
      scenario (blocking, at any priority) and has a result of its own.
 
@@ -77,6 +89,10 @@ FENCE_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
 # The structural tell of a runtime capture, per runtime-evidence/SKILL.md.
 CAPTURED_OUTPUT_RE = re.compile(r"(?m)^#{1,6}\s*Captured\s+output\b",
                                 re.IGNORECASE)
+# An auto step's cited capture must additionally carry this provenance
+# sidecar (see sidecar_problem() / needs_auto_evidence()) — the same suffix
+# check_agent_report.py checks an executed check line's capture against.
+SIDECAR_SUFFIX = ".meta.json"
 SCENARIO_ID_RE = re.compile(r"\b([A-Za-z]{1,6}-\d+)\b")
 PRIORITY_RE = re.compile(r"\bP([0-3])\b")
 PAREN_RE = re.compile(r"\(([^)]*)\)")
@@ -322,6 +338,43 @@ def capture_problem(path):
     if not CAPTURED_OUTPUT_RE.search(text):
         return ("has no '## Captured output' section — structurally not a "
                 "runtime capture")
+    return None
+
+
+def sidecar_problem(resolved):
+    """None if `resolved`'s `.meta.json` sidecar exists and its
+    `capture_sha256` still matches the capture file's current bytes; else a
+    `(code, detail)` pair.
+
+    An `auto` step's PASS is trusted on the agent's own word for it exactly
+    as easily as a hand-typed manual one is, so it now owes the same
+    provenance grammar `check_agent_report.py` already demands of an
+    executed check line's `capture:` citation. Copied in rather than
+    imported (family convention: one file each, no shared module) — this is
+    only the sidecar/hash half of that grammar; the command- and exit-code
+    tie check_agent_report.py also enforces has no equivalent here, because
+    an acceptance step names no single command to tie a capture to.
+    """
+    side_path = Path(str(resolved) + SIDECAR_SUFFIX)
+    if not side_path.is_file():
+        return ("auto_step_sidecar_missing",
+                f"has no {SIDECAR_SUFFIX} provenance sidecar — a capture "
+                "with no run_quiet.py sidecar is indistinguishable from a "
+                "hand-typed one")
+    try:
+        meta = json.loads(side_path.read_text(encoding="utf-8-sig",
+                                               errors="replace"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return ("auto_step_sidecar_missing",
+                f"sidecar is unreadable or not valid JSON: {exc}")
+    if not isinstance(meta, dict):
+        return ("auto_step_sidecar_missing", "sidecar is not a JSON object")
+    declared, actual = meta.get("capture_sha256"), sha256_file(resolved)
+    if not (declared and actual and declared == actual):
+        return ("auto_step_capture_hash_mismatch",
+                f"sha256 ({actual}) does not match its sidecar's "
+                f"capture_sha256 ({declared}) — the artifact was edited "
+                "after it was recorded")
     return None
 
 
@@ -859,6 +912,38 @@ def needs_manual_evidence(entry):
     return entry["mode"] in MANUAL_MODES or entry["mode_unrecognized"]
 
 
+def needs_auto_evidence(entry):
+    """ONE predicate for "this step, resolved as `auto`, owes a captured,
+    sidecar-backed evidence citation" (audit Metric 19.3, CONFIRMED Blocker).
+
+    DELIBERATE DIVERGENCE (CLAUDE.md convention #8 — this refines
+    `needs_manual_evidence`, until now the ONLY predicate that gated a step
+    on evidence): `Mode: auto` and `Mode: manual` were the same claim under
+    a different label — only the matrix's own prose distinguished a step an
+    agent actually ran from one it typed a PASS for. Two hand-typed lines
+    closed an acceptance suite at exit 0. A step that resolves to `auto`'s
+    PASS now owes the SAME grammar `check_agent_report.py` already applies
+    to an executed check line's `capture:` citation: an existing capture
+    under `evidence/runtime/` carrying a `.meta.json` sidecar whose
+    `capture_sha256` still matches the capture's bytes (see
+    sidecar_problem()).
+
+    UNCONDITIONAL on how the step arrived at `auto` — an EARLIER revision of
+    this fix gated on a `mode_explicit` field (only a cell that TYPED "auto"
+    owed evidence; a blank cell or a missing Mode column, which silently
+    DEFAULT to "auto", stayed exempt). That left the exact hole this predicate
+    exists to close open by one step: an author leaves the Mode cell blank
+    (or drops the column) and gets a step that both reads as `auto` AND owes
+    nothing, which is the two-typed-lines bypass the finding describes,
+    unchanged. So the ONLY escape from this predicate is `mode_unrecognized`
+    (kept as-is — an unrecognized Mode already falls back to the STRICTER
+    manual rule via `needs_manual_evidence`, and a step cannot owe both) and
+    an EXPLICIT `Mode: manual` cell, which owes the pre-existing (non-sidecar)
+    manual-evidence file instead. `mode_explicit` no longer exists as a field.
+    """
+    return entry["mode"] == "auto" and not entry["mode_unrecognized"]
+
+
 def new_report(args):
     """Pre-initialized report. EVERY key is present in BOTH modes so that the
     two modes' JSON can be diffed key-for-key; the arrays a mode cannot fill
@@ -883,6 +968,7 @@ def new_report(args):
         "not_run": [],
         "missing_results": [],
         "unevidenced_manual": [],
+        "unevidenced_auto": [],
         "dangling_inverse": [],
         "undeclared_inverse": [],
         "exempt_steps": [],
@@ -913,7 +999,7 @@ def step_entry(st, **overrides):
               "inverse_of", "state_changing", "exempt", "no_inverse_reason")}
     entry.update({"gated": False, "priority": None, "status": None,
                   "detail": None, "evidence": [], "evidence_ok": None,
-                  "problems": []})
+                  "problems": [], "problem_codes": []})
     entry.update(overrides)
     return entry
 
@@ -1060,7 +1146,8 @@ def build_report(args):
             entry["status"] = status
             entry["detail"] = rest.strip() or None
 
-            if needs_manual_evidence(entry):
+            auto_evidence = needs_auto_evidence(entry)
+            if needs_manual_evidence(entry) or auto_evidence:
                 entry["evidence"] = evidence_tokens(rest)
                 accepted = []
                 for token in entry["evidence"]:
@@ -1075,10 +1162,28 @@ def build_report(args):
                     if problem:
                         entry["problems"].append(
                             f"cited evidence {token} {problem}")
+                        if auto_evidence:
+                            entry["problem_codes"].append("auto_step_uncaptured")
                         continue
+                    # An auto step's capture additionally owes the sidecar/
+                    # hash provenance check_agent_report.py already applies.
+                    if auto_evidence:
+                        side = sidecar_problem(resolved)
+                        if side:
+                            code, detail = side
+                            entry["problems"].append(
+                                f"cited evidence {token} {detail}")
+                            entry["problem_codes"].append(code)
+                            continue
                     accepted.append(token)
                 entry["evidence_ok"] = bool(accepted)
                 entry["evidence"] = accepted or entry["evidence"]
+                # No token at all was ever cited (or none resolved to a real
+                # file) — the loop above never ran far enough to assign a
+                # code, so the citation itself is the missing piece.
+                if (auto_evidence and not entry["evidence_ok"]
+                        and not entry["problem_codes"]):
+                    entry["problem_codes"].append("auto_step_uncaptured")
 
             if not sc["gated"]:
                 report["steps"].append(entry)
@@ -1094,6 +1199,18 @@ def build_report(args):
             elif status == "NOT RUN":
                 report["not_run"].append(st["key"])
                 entry["problems"].append("result is NOT RUN")
+            elif auto_evidence and not entry["evidence_ok"]:
+                # The Metric 19.3 fix: an explicit `Mode: auto` step used to
+                # need nothing but its own PASS token. It now reads as NOT
+                # RUN exactly like an unevidenced manual step, for the same
+                # reason — an agent's word alone is not proof a check ran.
+                report["unevidenced_auto"].append(st["key"])
+                report["not_run"].append(st["key"])
+                entry["problems"].append(
+                    "auto step reports PASS but cites no captured evidence "
+                    "file under an 'evidence/runtime/' directory carrying a "
+                    f"matching {SIDECAR_SUFFIX} provenance sidecar (a '..' "
+                    "segment is also refused) — reads as NOT RUN")
             elif needs_manual_evidence(entry) and not entry["evidence_ok"]:
                 # The crux. Manual steps are first-class (a device check
                 # genuinely cannot be automated) but never trusted on an
@@ -1179,6 +1296,7 @@ def build_report(args):
                and not report["blocked"]
                and not report["not_run"]
                and not report["unevidenced_manual"]
+               and not report["unevidenced_auto"]
                and not report["dangling_inverse"]
                and not report["missing_step_table"])
     report["result"] = "PASS" if gate_ok else "FAIL"
@@ -1569,7 +1687,8 @@ Surface: web+api | Preconditions: integration connected (AS-1)
         "min_scenarios", "changed_files", "stale_results",
         "scenarios", "gated_scenarios", "linted_scenarios",
         "steps", "steps_gated", "passed", "failed", "blocked", "not_run",
-        "missing_results", "unevidenced_manual", "dangling_inverse",
+        "missing_results", "unevidenced_manual", "unevidenced_auto",
+        "dangling_inverse",
         "undeclared_inverse", "exempt_steps", "invalid_exemption",
         "missing_priority", "missing_step_table", "missing_columns",
         "unrecognized_mode", "missing_stores", "duplicate_keys",
@@ -1581,12 +1700,16 @@ Surface: web+api | Preconditions: integration connected (AS-1)
         return ("# Acceptance Results — slide-integration\n\n"
                 "## Execution — 2026-08-12\n\n" + "\n".join(lines) + "\n")
 
+    # Every explicit `Mode: auto` step (AS-1.1/1.2/2.1/2.2/2.3) now owes a
+    # captured, sidecar-backed citation just like AS-2.4 (manual) does — see
+    # Tests.setUp()'s _auto_capture() writes. AS-2.4 (manual) needs no
+    # sidecar: that grammar is unchanged by this fix.
     GREEN = [
-        "- AS-1.1: PASS — exit 0 — 200, token persisted",
-        "- AS-1.2: PASS — exit 0 — 200, token removed",
-        "- AS-2.1: PASS — exit 0 — 200 + mapping row",
-        "- AS-2.2: PASS — exit 0 — green tick rendered",
-        "- AS-2.3: PASS — exit 0 — 200 + row gone",
+        "- AS-1.1: PASS — exit 0 — 200, token persisted — capture: evidence/runtime/as1-1-connect.md",
+        "- AS-1.2: PASS — exit 0 — 200, token removed — capture: evidence/runtime/as1-2-disconnect.md",
+        "- AS-2.1: PASS — exit 0 — 200 + mapping row — capture: evidence/runtime/as2-1-map.md",
+        "- AS-2.2: PASS — exit 0 — green tick rendered — capture: evidence/runtime/as2-2-reload.md",
+        "- AS-2.3: PASS — exit 0 — 200 + row gone — capture: evidence/runtime/as2-3-unmap.md",
         "- AS-2.4: PASS — evidence/runtime/as2-4-device-install.md — agent 1.4.2 on device",
     ]
 
@@ -1600,9 +1723,27 @@ Surface: web+api | Preconditions: integration connected (AS-1)
             self.matrix.write_text(MATRIX, encoding="utf-8")
             (self.impl / "evidence" / "runtime" / "as2-4-device-install.md"
              ).write_text(CAPTURE, encoding="utf-8")
+            for name in ("as1-1-connect.md", "as1-2-disconnect.md",
+                        "as2-1-map.md", "as2-2-reload.md", "as2-3-unmap.md"):
+                self._auto_capture(name)
 
         def tearDown(self):
             shutil.rmtree(self.dir, ignore_errors=True)
+
+        def _auto_capture(self, name):
+            """Write a run_quiet.py-shaped capture plus a matching
+            `.meta.json` sidecar under evidence/runtime, the grammar an
+            explicit `Mode: auto` step's PASS now owes (needs_auto_evidence /
+            sidecar_problem)."""
+            p = self.impl / "evidence" / "runtime" / name
+            p.write_text(
+                "# Runtime capture\n\n- Probe command: `curl -s /api/x`\n"
+                "- Exit code: 0\n\n## Captured output\n\n```\nok\n```\n",
+                encoding="utf-8")
+            p.with_name(p.name + SIDECAR_SUFFIX).write_text(json.dumps({
+                "capture_sha256": sha256_file(p), "tool": "run_quiet.py",
+                "schema": 1}), encoding="utf-8")
+            return f"evidence/runtime/{name}"
 
         def _args(self, **kw):
             base = dict(matrix=str(self.matrix), results=str(self.results),
@@ -1933,10 +2074,85 @@ Surface: web+api | Preconditions: integration connected (AS-1)
             self.assertIsNone(records[0]["milestone"])
             self.assertIn(str(self.matrix), records[0]["inputs"])
 
-        def test_auto_step_needs_no_evidence_file(self):
-            r = self._run()
+        # ---- condition 3, audit Metric 19.3: `Mode: auto` now owes evidence too ----
+        # INVERTS the old test_auto_step_needs_no_evidence_file, which
+        # asserted step1["evidence_ok"] was None (never even checked) for a
+        # PASS with no citation at all — that was the confirmed Blocker: two
+        # hand-typed lines closed an acceptance suite at exit 0.
+
+        def test_auto_step_pass_without_citation_fails_closed(self):
+            lines = list(GREEN)
+            lines[2] = "- AS-2.1: PASS — exit 0 — 200 + mapping row"
+            r = self._run(lines)
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["unevidenced_auto"], ["AS-2.1"])
+            self.assertEqual(r["not_run"], ["AS-2.1"])
             step1 = [s for s in r["steps"] if s["key"] == "AS-2.1"][0]
-            self.assertIsNone(step1["evidence_ok"])
+            self.assertFalse(step1["evidence_ok"])
+            self.assertEqual(step1["problem_codes"], ["auto_step_uncaptured"])
+
+        def test_auto_step_cited_capture_missing_fails_closed(self):
+            lines = list(GREEN)
+            lines[2] = ("- AS-2.1: PASS — exit 0 — 200 + mapping row — "
+                        "capture: evidence/runtime/absent.md")
+            r = self._run(lines)
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["unevidenced_auto"], ["AS-2.1"])
+            step1 = [s for s in r["steps"] if s["key"] == "AS-2.1"][0]
+            self.assertEqual(step1["problem_codes"], ["auto_step_uncaptured"])
+
+        def test_auto_step_missing_sidecar_fails_closed(self):
+            (self.impl / "evidence" / "runtime"
+             / ("as2-1-map.md" + SIDECAR_SUFFIX)).unlink()
+            r = self._run()
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["unevidenced_auto"], ["AS-2.1"])
+            step1 = [s for s in r["steps"] if s["key"] == "AS-2.1"][0]
+            self.assertEqual(step1["problem_codes"],
+                             ["auto_step_sidecar_missing"])
+
+        def test_auto_step_capture_hash_mismatch_fails_closed(self):
+            cap = self.impl / "evidence" / "runtime" / "as2-1-map.md"
+            cap.write_text(cap.read_text(encoding="utf-8") + "tampered\n",
+                          encoding="utf-8")
+            r = self._run()
+            self.assertEqual(r["result"], "FAIL")
+            self.assertEqual(r["unevidenced_auto"], ["AS-2.1"])
+            step1 = [s for s in r["steps"] if s["key"] == "AS-2.1"][0]
+            self.assertEqual(step1["problem_codes"],
+                             ["auto_step_capture_hash_mismatch"])
+
+        def test_auto_step_with_captured_sidecar_evidence_passes(self):
+            """The honest case: a real run_quiet.py-shaped capture plus a
+            matching sidecar satisfies the gate (the happy path already
+            proves this suite-wide; this asserts it per-step)."""
+            r = self._run()
+            self.assertEqual(r["result"], "PASS", r)
+            step1 = [s for s in r["steps"] if s["key"] == "AS-2.1"][0]
+            self.assertTrue(step1["evidence_ok"])
+            self.assertEqual(step1["problem_codes"], [])
+
+        def test_blank_mode_cell_still_owes_auto_evidence(self):
+            """INVERTS test_blank_mode_cell_still_needs_no_evidence: a
+            blank cell (column present) still resolves to `auto`, and a
+            resolved `auto` now owes evidence regardless of how it got
+            there — the hole a prior `mode_explicit` gate left open. The
+            only remaining escape is an EXPLICIT `Mode: manual` cell, or an
+            unrecognized one (test_unrecognized_mode_without_evidence_blocks)."""
+            m = MATRIX.replace(
+                "| 1 | Clients list | map client A | 200 + mapping row | "
+                "api, db | auto |",
+                "| 1 | Clients list | map client A | 200 + mapping row | "
+                "api, db |  |")
+            lines = list(GREEN)
+            lines[2] = "- AS-2.1: PASS — exit 0 — 200 + mapping row"
+            r = self._run(lines, matrix=m)
+            self.assertEqual(r["result"], "FAIL")
+            step1 = [s for s in r["steps"] if s["key"] == "AS-2.1"][0]
+            self.assertEqual(step1["mode"], "auto")
+            self.assertFalse(step1["mode_unrecognized"])
+            self.assertEqual(r["unevidenced_auto"], ["AS-2.1"])
+            self.assertEqual(step1["problem_codes"], ["auto_step_uncaptured"])
 
         # ---- condition 3, fail-closed half: an unrecognized Mode owes evidence ----
 
@@ -1965,26 +2181,39 @@ Surface: web+api | Preconditions: integration connected (AS-1)
             self.assertTrue(step4["evidence_ok"])
 
         def test_empty_mode_cell_stays_auto_and_is_not_flagged(self):
-            """Scope boundary: absent is not unrecognized."""
+            """Scope boundary: absent is not unrecognized. A blank cell
+            resolves to `auto`, which (since the mode_explicit gate was
+            closed) owes the same sidecar-backed capture any resolved-auto
+            step does — so this now supplies one, rather than proving the
+            step needed none."""
             m = MATRIX.replace("| device | manual |", "| device |  |")
             r = self._run(GREEN[:-1]
-                          + ["- AS-2.4: PASS — confirmed the agent installed"],
+                          + ["- AS-2.4: PASS — exit 0 — confirmed the agent "
+                             "installed — capture: evidence/runtime/as2-1-map.md"],
                           matrix=m)
             self.assertEqual(r["result"], "PASS", r)
             step4 = [s for s in r["steps"] if s["key"] == "AS-2.4"][0]
             self.assertEqual(step4["mode"], "auto")
             self.assertFalse(step4["mode_unrecognized"])
             self.assertEqual(r["unevidenced_manual"], [])
+            self.assertEqual(r["unevidenced_auto"], [])
 
         def test_mode_unrecognized_is_a_step_key_in_both_modes(self):
             self.assertIn("mode_unrecognized", self._run()["steps"][0])
             self.assertIn("mode_unrecognized", self._lint(LINT_CLEAN)["steps"][0])
 
         def test_missing_mode_column_defaults_auto_and_warns(self):
+            """Every step, AS-2.4 included, resolves to `auto` with the
+            column gone entirely — and now owes the same sidecar-backed
+            evidence, so its result line points at an already sidecar-backed
+            capture instead of the plain (non-sidecar) manual-style one."""
             m = MATRIX.replace(" | Mode |", " |").replace("|--------|------|",
                                                           "|--------|")
             m = re.sub(r"\| (auto|manual) \|$", "|", m, flags=re.M)
-            r = self._run(GREEN, matrix=m)
+            lines = list(GREEN)
+            lines[-1] = ("- AS-2.4: PASS — exit 0 — agent 1.4.2 on device — "
+                        "capture: evidence/runtime/as2-1-map.md")
+            r = self._run(lines, matrix=m)
             self.assertEqual(r["result"], "PASS", r)
             self.assertTrue(any("no 'Mode' column" in w for w in r["warnings"]))
 
@@ -2130,7 +2359,7 @@ Surface: web+api | Preconditions: integration connected (AS-1)
             self.assertEqual(r["steps_gated"], 0)
             self.assertEqual(r["passed"], 0)
             for k in ("failed", "blocked", "not_run", "missing_results",
-                      "unevidenced_manual", "extra_results"):
+                      "unevidenced_manual", "unevidenced_auto", "extra_results"):
                 self.assertEqual(r[k], [], k)
 
         def test_lint_only_json_keys_match_execution_mode(self):

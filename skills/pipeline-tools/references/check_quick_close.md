@@ -114,6 +114,14 @@ than a missing flag — a missing flag is visible in `gates.jsonl` under `argv`,
 a wrong guess is not. The detector proposes, the spine passes the globs
 explicitly, the ledger records exactly which ones fired.
 
+## `test_authenticity_gate_missing` and `--require-ledger-gates` (Unreleased)
+
+A declared file that looks like a test — a `--frozen` match, or a match against `check_test_authenticity.py`'s own default test-glob heuristic, copied in — now has to be backed by a **passing `check_test_authenticity.py` record**, ledgered exactly scoped to this `--milestone`, whose `inputs` cover it at its **current** hash. No such record is `test_authenticity_gate_missing`. `pipeline_driver.py`'s quick-lane step emission cannot see `--changed-files` — only the note's Where line — so it can only remind the caller to run the gate; this gate's check is the actual enforcement (convention #9), required **implicitly** the moment a test file is declared, with no flag needed to turn it on.
+
+`--require-ledger-gates <name>[,<name>...]` names any OTHER gate this close must also find a fresh `PASS` for, in `check_commit_gate.py`'s own syntax and problem codes (`ledger_missing` / `ledger_failed` / `ledger_stale` / `ledger_chain_broken`, reported here as `required_ledger_gate_missing`). Unlike the implied `check_test_authenticity.py` entry, a gate named through this flag is milestone-scoped-or-unscoped like `check_commit_gate.py`'s own flag, with no input-coverage check — it is not necessarily about a specific set of changed files.
+
+`pipeline_driver.py`'s Phase 3 action reads the same signal from the note alone: when the Where line already names a path that looks like a test, it emits `check_test_authenticity.py`'s own command as the next action so it runs before the close attempt; when it does not (the driver has no git diff, only the note's text, so a colocated spec the Where line does not obviously name is invisible to it), it folds a conditional reminder into the close command's message instead.
+
 ## Two operational residuals, found in the shipping smoke
 
 1. **A repo that does not gitignore its build detritus blocks itself.** In the
@@ -146,7 +154,7 @@ from `check_commit_gate.py`, `check_red_green.py` and
 intentional differences (freshness comparison, the status-letter filter in the
 frozen check) are the divergences above, both asserted by a named self-test.
 
-## Self-test inventory (46 cases)
+## Self-test inventory (63 cases)
 
 Every case builds a real temp git repo (`git init`, one base commit) so the
 tree, staging and commit checks run against real `git`, not a mock.
@@ -199,6 +207,13 @@ nothing.
 
 **Usage and ledger** — six exit-2 usage forms; a PASS ledger record carrying the
 note's and the sidecar's hashes and the verbatim `argv`; FAIL and ERROR records.
+
+**`test_authenticity_gate_missing` and `--require-ledger-gates`** — a declared
+test file with no `check_test_authenticity.py` record blocked; the implicit
+requirement firing with no flag passed; a passing, milestone-scoped, input-
+covering record clearing it; a generic `--require-ledger-gates` name missing
+from the ledger failing the close; the same name backed by a passing record
+passing it.
 
 **End to end** — `test_real_run_quiet_capture_passes` drives the real
 `run_quiet.py` to produce the capture and sidecar, proving the composition

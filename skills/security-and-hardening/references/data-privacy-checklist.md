@@ -91,8 +91,8 @@ carries a synthetic PII value through the system and inspecting the resulting lo
    `- Command:` line):
 
    ```
-   python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/security/log-redaction-<class>-request.md -- <the single argv-runnable request command>
-   python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/security/log-redaction-<class>.md -- grep -n <marker or synthetic value> <log path>
+   python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/security/log-redaction-<class>-request.md --ledger .docs/{project-name}/implementation/gates.jsonl -- <the single argv-runnable request command>
+   python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/security/log-redaction-<class>.md --ledger .docs/{project-name}/implementation/gates.jsonl -- grep -n <marker or synthetic value> <log path>
    ```
 
    Where the two genuinely must be one command — the log is a stream, not a file — put the

@@ -31,8 +31,9 @@ READ these as file paths under {PLUGIN_ROOT} (NOT Skill-tool invocables). Read e
 | database-migration-patterns | `{PLUGIN_ROOT}/database-migration-patterns/SKILL.md` | When the diff contains a migration |
 | observability-and-diagnosis | `{PLUGIN_ROOT}/observability-and-diagnosis/SKILL.md` | When reviewing a change to a request or job entry point — correlation-id propagation is a review axis |
 | api-contract-evolution | `{PLUGIN_ROOT}/api-contract-evolution/SKILL.md` | When the diff under review touches a published API contract |
+| security-checklist | `{PLUGIN_ROOT}/../references/security-checklist.md` | Always — Security Review (§ Responsibilities 1) runs on every review, the concrete checklist Mason and Cipher also verify against |
 
-> **Reviewer Directive**: Every methodology in this table is an audit matrix for you, never an execution contract — including the ones written as a builder's procedure (`code-simplification`'s Signals/Simplifications, `performance-optimization`'s measure→fix loop, the stack and migration contracts). Read each one for the bar it sets, report the gap against it, escalate to the Orchestrator; NEVER apply the fix yourself.
+> **Reviewer Directive**: Every methodology in this table is an audit matrix for you, never an execution contract — EXCEPT `code-review-and-quality`, which IS your execution contract: it owns your report format, delivery rules, and severity taxonomy, and you follow it as written. For every other methodology, including the ones written as a builder's procedure (`code-simplification`'s Signals/Simplifications, `performance-optimization`'s measure→fix loop, the stack and migration contracts): read each one for the bar it sets, report the gap against it, escalate to the Orchestrator; NEVER apply the fix yourself.
 
 > **Impact Analysis**: Trace impact per Step 1 of your `code-review-and-quality` methodology (search all callers/consumers of modified functions, list module structure; the optional `code-review-graph` MCP caveat lives there).
 

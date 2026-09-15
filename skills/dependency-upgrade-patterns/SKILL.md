@@ -9,18 +9,14 @@ A version bump is the change most often made without reading anything. This cont
 
 ## Direct invocation
 
-A user can ask for this directly on named files outside a pipeline — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no unobserved claims (`base-persona.md`, Evidence Integrity). **Scope: one package, three files or fewer.** Anything larger routes through `/bg`, which picks the lane:
-
-- `/bgpdd-quick` — one patch or minor bump, no breaking change in the brief. The lane admits any skill carrying a `## Quick card`, this one included.
-- `/bgpdd-lite` — a breaking change with a migration, or one coherent group.
-- `/bgpdd-plan` — a framework major, or a breaking change with no migration.
+A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no unobserved claims (`base-persona.md`, Evidence Integrity). **Scope: one package, three files or fewer.** Anything larger, or a breaking or framework-major change, routes through `/bg`.
 
 ## Quick card
 
 Derived from the contract below for a ≤ 3-file change; no new rules (convention #8 — deliberately narrower than the full contract, which binds inside any lane).
 
 1. Read every version crossed, then write the `## Upgrade brief` — before the lockfile moves (§ Step 1).
-2. Capture the audit before the bump, re-run the same command after, state the delta (§ Step 5).
+2. Re-run the audit command after the bump, compare against the before capture, and state the delta (§ Step 5).
 3. Search the codebase for every removed or renamed API before running anything (§ Step 3).
 4. One package per commit, its lockfile with it, never a wildcard bump (§ Step 6).
 5. A framework major is not a quick change; report it (§ Framework majors).
@@ -59,7 +55,7 @@ Before the first edit, and in this order:
 2. **The audit command**, captured:
 
 ```
-python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/upgrade/audit-before-<package>.md -- <audit command>
+python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/upgrade/audit-before-<package>.md --ledger .docs/{project-name}/implementation/gates.jsonl -- <audit command>
 ```
 
 `<audit command>` is the stack's: `npm audit`, `dotnet list package --vulnerable`, `pip-audit`, or the wrapper the project declares — the same tool list `{PLUGIN_ROOT}/security-and-hardening/SKILL.md` (*Always Do*) owns for release-time auditing; this contract only adds the before/after pair. A non-zero exit is a legitimate capture: you are recording what the tree looked like, not asserting it was clean.

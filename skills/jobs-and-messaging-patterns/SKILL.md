@@ -9,7 +9,7 @@ A request that fails is retried by a person who sees the error. A message that f
 
 ## Direct invocation
 
-A user can ask for this directly on named files outside a pipeline — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no claim without the replay capture (`base-persona.md`, Evidence Integrity). **Scope: three files or fewer.** Over three files, or a new queue: route through `/bg`.
+A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no claim without the replay capture (`base-persona.md`, Evidence Integrity). **Scope: three files or fewer.** Over three files, or a new queue: route through `/bg`.
 
 ## Quick card
 
@@ -85,7 +85,7 @@ The proof that a handler is idempotent is **a replay observed out of process**, 
 1. Start the consumer the way it runs, per the environment manifest (`{PLUGIN_ROOT}/runtime-evidence/SKILL.md`).
 2. Publish the **same message twice** — same id, same body — through the real broker or the real scheduler entry point.
 3. Read the effect back from its sink and assert **one** effect: one row, one charge, one file, one downstream message.
-4. Capture the whole thing with `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture <path> -- <command>`.
+4. Capture the whole thing with `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture <path> --ledger .docs/{project-name}/implementation/gates.jsonl -- <command>`.
 5. Cite the capture with the `**Runtime evidence:**` line whose grammar is owned by `{PLUGIN_ROOT}/runtime-evidence/SKILL.md`. Do not invent a second citation form.
 
 An in-process double call proves the dedupe branch is reachable. It does not prove the broker's redelivery path reaches it, which is the claim.
