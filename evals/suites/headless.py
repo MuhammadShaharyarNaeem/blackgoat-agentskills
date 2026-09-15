@@ -310,7 +310,9 @@ def scope_preamble(workspace):
             "the network. Never open the plugin evals/ directory or any earlier "
             "runs artifacts, results, or transcripts; they are not part of the project. If "
             "something the task needs is not inside the working "
-            "copy, stop and say so.")
+            "copy, stop and say so. Repeat these restrictions, verbatim, at the top of every "
+            "briefing you write for a delegated worker; they bind the workers exactly as they "
+            "bind you.")
 
 
 def apply_scope_preamble(prompt, workspace):

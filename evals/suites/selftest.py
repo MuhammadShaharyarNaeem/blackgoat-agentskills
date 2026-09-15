@@ -787,7 +787,9 @@ class SelfTest(unittest.TestCase):
             "outside it; do not look for other repositories or projects on this "
             "machine; do not call external services, issue trackers, MCP tools, or "
             "the network. Never open the plugin evals/ directory or any earlier runs artifacts, results, or transcripts; they are not part of the project. If something the task needs is not inside the working "
-            "copy, stop and say so."))
+            "copy, stop and say so. Repeat these restrictions, verbatim, at the top of every "
+            "briefing you write for a delegated worker; they bind the workers exactly as they "
+            "bind you."))
 
         # A contract-shaped single-quoted prompt with an embedded double quote
         # (the exact shape `parse_quoted_prompt` produces) must survive
