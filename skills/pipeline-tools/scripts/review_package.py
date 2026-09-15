@@ -66,6 +66,66 @@ WORKTREE = "WORKTREE"
 GIT_TIMEOUT = 240
 TOOL = "review_package.py"
 
+# Files a human reviewer should not be asked to read line-by-line: lockfiles,
+# minified/compiled/generated output, and vendored trees. Deliberately a
+# short allow-nothing-surprising list, not a taxonomy -- add a pattern only
+# when a reviewer has actually been handed one of these to read.
+#
+# Every pattern is `**/`-prefixed so git's glob pathspec magic (fnmatch with
+# FNM_PATHNAME -- a bare `*` does not cross a `/`) reaches ANY depth, not
+# just the repo root: `frontend/package-lock.json` in a monorepo is exactly
+# the file this list exists to hide, and a lockfile excluded at the root but
+# rendered in a subfolder is a surprise, not a feature. Verified empirically
+# against a throwaway repo (no local `git help pathspec` man page on this
+# platform): `**/package-lock.json` matches both `package-lock.json` and
+# `frontend/package-lock.json`; `**/node_modules/**` matches both a
+# root-level and a nested `node_modules/` tree.
+DEFAULT_EXCLUDES = [
+    "**/package-lock.json",
+    "**/yarn.lock",
+    "**/pnpm-lock.yaml",
+    "**/Cargo.lock",
+    "**/poetry.lock",
+    "**/Pipfile.lock",
+    "**/composer.lock",
+    "**/Gemfile.lock",
+    "**/packages.lock.json",
+    "**/*.min.js",
+    "**/*.min.css",
+    "**/*.map",
+    "**/*.snap",
+    "**/*.g.cs",
+    "**/*.Designer.cs",
+    "**/*.generated.*",
+    "**/*.pb.go",
+    "**/*.pyc",
+    "**/node_modules/**",
+    "**/vendor/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/bin/**",
+    "**/obj/**",
+    "**/__pycache__/**",
+]
+
+# A `## Size waiver` heading at any level 2-4. Its body runs to the next
+# heading of level 2-6 (ANY_HEADING_RE), the same boundary rule
+# check_commit_gate.py's review-section parsing uses.
+#
+# Duplicated from check_commit_gate.py by family convention: stdlib-only,
+# one file each, no shared module.
+SIZE_WAIVER_HEADING_RE = re.compile(r"^#{2,4}\s*Size\s+waiver\s*:?\s*$",
+                                    re.IGNORECASE)
+# A waiver body line that is only a template stand-in. The waiver is
+# deliberately hand-typed -- see check_diff_size_bound() -- so the ONLY thing
+# worth rejecting is a section that was never filled in.
+WAIVER_PLACEHOLDER_RE = re.compile(
+    r"^(?:<[^>]*>|todo|tbd|fixme|n/?a|none|\?+|\.{3,}|xxx+)[.:]?$",
+    re.IGNORECASE)
+# ANY level-2..6 heading closes an open '## Size waiver' section.
+ANY_HEADING_RE = re.compile(r"^#{2,6}(?:\s|$)")
+FENCE_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
+
 
 class PackageError(Exception):
     """Structural/usage/git failure -- maps to exit 2."""
@@ -197,6 +257,160 @@ def resolve_rev(ref, repo, flag):
 
 
 # ---------------------------------------------------------------------------
+# excludes
+# ---------------------------------------------------------------------------
+
+def exclude_pathspecs(patterns):
+    """Git pathspec exclude-glob magic for each pattern, verified against a
+    real repo: `:(exclude,glob)<pattern>` (order-insensitive with
+    `:(glob,exclude)`) matches everything else when it is the only pathspec,
+    and subtracts from a positive pathspec when combined with one."""
+    return [":(exclude,glob)%s" % p for p in patterns]
+
+
+# ---------------------------------------------------------------------------
+# size waiver (duplicated from check_commit_gate.py by family convention:
+# stdlib-only, one file each, no shared module)
+# ---------------------------------------------------------------------------
+
+def strip_fenced_blocks(text):
+    """Blank out every ```/~~~ fenced region, preserving the line count.
+
+    A `## Size waiver` pasted inside a fence is a TEMPLATE or a captured
+    transcript, never a recorded decision. Line count is preserved so that
+    any line-indexed diagnostic stays honest.
+    """
+    out, fence = [], None
+    for line in text.split("\n"):
+        m = FENCE_RE.match(line)
+        if fence is None:
+            if m:
+                fence = m.group(1)
+                out.append("")
+                continue
+            out.append(line)
+        else:
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
+                fence = None
+            out.append("")
+    return "\n".join(out)
+
+
+def read_size_waiver(waiver_path):
+    """Return (section_found, body_nonempty) for `## Size waiver`.
+
+    Fences are stripped first, so a waiver section pasted as a TEMPLATE inside
+    an example block cannot license a commit -- the same rule the verdict
+    parser in check_commit_gate.py applies.
+
+    A body is a PLACEHOLDER in either of two shapes, and the second one is the
+    load-bearing addition: every line individually a stand-in, OR one `<...>`
+    span WRAPPED across several lines. The shipped `rca-template.md` writes the
+    second shape ("<Delete this whole section unless ...>"), and a line-by-line
+    test alone accepted it -- so copying the template was a complete bypass of
+    the file bound. Same fix as check_bugfix_intake.is_placeholder_body().
+    """
+    text = strip_fenced_blocks(read_text(waiver_path))
+    found, capturing, body = False, False, []
+    for line in text.splitlines():
+        if SIZE_WAIVER_HEADING_RE.match(line):
+            found, capturing, body = True, True, []   # LAST section wins
+            continue
+        if capturing and ANY_HEADING_RE.match(line):
+            capturing = False
+            continue
+        if capturing:
+            body.append(line)
+    real = [l.strip() for l in body if l.strip()]
+    if not real:
+        return found, False
+    if all(WAIVER_PLACEHOLDER_RE.match(l) for l in real):
+        return found, False
+    if WAIVER_PLACEHOLDER_RE.match(" ".join(real)):
+        return found, False   # one `<...>` span wrapped across several lines
+    return found, True
+
+
+def read_text(path):
+    """Read a UTF-8 artifact, tolerating a byte-order mark.
+
+    Duplicated from check_commit_gate.py by family convention (stdlib-only,
+    one file each, no shared module).
+    """
+    p = Path(path)
+    if not p.is_file():
+        raise PackageError(f"file not found or not readable: {path}")
+    return p.read_text(encoding="utf-8-sig", errors="replace")
+
+
+def check_diff_size_bound(diff_lines, max_diff_lines, waiver_path):
+    """Return (size_waiver dict, ok, note) for the diff-size ceiling.
+
+    **What is counted**: `diff_lines`, the count of `+`/`-` lines in the
+    filtered `## Diff` text (excludes already applied, `+++`/`---` file
+    headers excluded) -- see count_diff_lines().
+
+    **Why the waiver is hand-typed.** Same rationale as
+    check_commit_gate.py's check_size_bound(): the decision to exceed the
+    bound is the USER's, and no script can verify a judgement call. What the
+    gate buys is that the decision is durable and attributable -- written
+    into a file, hashed into the ledger record -- instead of spoken once in
+    chat. So the check is existence plus a non-placeholder body, and nothing
+    more. This converts `code-review-and-quality/SKILL.md`'s prose escalation
+    ("the change is too large to review properly -> request a split") into an
+    artifact per CLAUDE.md convention #9, and is a labeled divergence
+    (convention #8) of the same shape check_commit_gate.py --waiver already
+    makes -- deliberately, not a new rule.
+    """
+    waiver = {"path": waiver_path, "present": False, "section_found": False,
+              "body_nonempty": False, "satisfied": False}
+    if diff_lines <= max_diff_lines:
+        return waiver, True, None
+    if not waiver_path:
+        return waiver, False, (
+            f"{diff_lines} diff line(s) exceeds --max-diff-lines "
+            f"{max_diff_lines} and no --waiver was given -- the reviewable "
+            "diff is too large: split the milestone (route to /bgpdd-plan) "
+            "or record the user's decision under a '## Size waiver' heading")
+    if not Path(waiver_path).is_file():
+        return waiver, False, (
+            f"{diff_lines} diff line(s) exceeds --max-diff-lines "
+            f"{max_diff_lines} and the --waiver file {waiver_path} does not "
+            "exist")
+    waiver["present"] = True
+    found, nonempty = read_size_waiver(waiver_path)
+    waiver["section_found"] = found
+    waiver["body_nonempty"] = nonempty
+    if not found:
+        return waiver, False, (
+            f"{diff_lines} diff line(s) exceeds --max-diff-lines "
+            f"{max_diff_lines} and {waiver_path} has no '## Size waiver' "
+            "heading outside a fenced block")
+    if not nonempty:
+        return waiver, False, (
+            f"{diff_lines} diff line(s) exceeds --max-diff-lines "
+            f"{max_diff_lines} and the '## Size waiver' section in "
+            f"{waiver_path} is empty or still a placeholder -- an unwritten "
+            "waiver records no decision")
+    waiver["satisfied"] = True
+    return waiver, True, (
+        f"{diff_lines} diff line(s) exceeds --max-diff-lines "
+        f"{max_diff_lines}, waived by the '## Size waiver' section in "
+        f"{waiver_path}")
+
+
+def count_diff_lines(diff_text):
+    """Added + removed lines in a unified diff, `+++`/`---` headers excluded."""
+    count = 0
+    for line in diff_text.split("\n"):
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("+") or line.startswith("-"):
+            count += 1
+    return count
+
+
+# ---------------------------------------------------------------------------
 # rendering
 # ---------------------------------------------------------------------------
 
@@ -214,7 +428,8 @@ def fence_for(text):
 
 
 def build_package(repo, base_ref, head_ref, base_sha, head_sha, commits, stat,
-                  diff, changed_files, generated):
+                  diff, changed_files, generated, excluded_files,
+                  size_waiver_line=None):
     fence = fence_for(diff)
     lines = [
         "# Review package",
@@ -230,6 +445,17 @@ def build_package(repo, base_ref, head_ref, base_sha, head_sha, commits, stat,
         lines.append("- Scope: " + ", ".join(f"`{p}`" for p in changed_files))
     else:
         lines.append("- Scope: whole range (no `--changed-files` filter)")
+    # A reviewer writes a `### Files reviewed` line for every declared file,
+    # including excluded ones ("not reviewed: excluded from package") -- so
+    # this header must tell her which those were. Never silent.
+    if excluded_files:
+        lines.append(
+            f"- Excluded from diff ({len(excluded_files)}): "
+            + ", ".join(f"`{p}`" for p in excluded_files))
+    else:
+        lines.append("- Excluded from diff: none")
+    if size_waiver_line:
+        lines.append(size_waiver_line)
     lines += [
         "",
         "## Commits",
@@ -255,7 +481,9 @@ def build_package(repo, base_ref, head_ref, base_sha, head_sha, commits, stat,
 
 
 def build_sidecar(out_path, diff_argv, git_argv, base_sha, head_sha,
-                  started, finished, exit_code):
+                  started, finished, exit_code, excluded_files,
+                  exclude_patterns, diff_lines, max_diff_lines,
+                  size_waiver=None):
     """The machine-owned provenance record for a package.
 
     `argv` is the `git diff` argv that produced the load-bearing section --
@@ -263,7 +491,7 @@ def build_sidecar(out_path, diff_argv, git_argv, base_sha, head_sha,
     command. `git_argv` records all three commands so the whole package is
     reproducible, not just its diff.
     """
-    return {
+    sidecar = {
         "argv": list(diff_argv),
         "git_argv": [list(a) for a in git_argv],
         "cwd": os.getcwd(),
@@ -275,7 +503,14 @@ def build_sidecar(out_path, diff_argv, git_argv, base_sha, head_sha,
         "capture_sha256": sha256_file(out_path),
         "tool": TOOL,
         "schema": SIDECAR_SCHEMA,
+        "excluded_files": list(excluded_files),
+        "exclude_patterns": list(exclude_patterns),
+        "diff_lines": diff_lines,
+        "max_diff_lines": max_diff_lines,
     }
+    if size_waiver is not None:
+        sidecar["size_waiver"] = size_waiver
+    return sidecar
 
 
 def write_text(path, text):
@@ -305,6 +540,22 @@ def build_parser():
     parser.add_argument("--context", type=int, default=DEFAULT_CONTEXT)
     parser.add_argument("--ledger")
     parser.add_argument("--milestone")
+    parser.add_argument("--exclude", action="append", default=None,
+                        help="git pathspec glob pattern to exclude from "
+                             "## Stat/## Diff, in addition to the built-in "
+                             "DEFAULT_EXCLUDES. Repeatable.")
+    parser.add_argument("--no-default-excludes", action="store_true",
+                        help="disable the built-in DEFAULT_EXCLUDES list; "
+                             "only --exclude patterns (if any) apply")
+    parser.add_argument("--max-diff-lines", dest="max_diff_lines", type=int,
+                        help="ceiling on +/- lines in the filtered ## Diff "
+                             "(after excludes); over it with no satisfying "
+                             "--waiver is exit 2")
+    parser.add_argument(
+        "--waiver",
+        help="path to a file carrying the user's hand-typed '## Size "
+             "waiver' decision to exceed --max-diff-lines (typically "
+             "review/size-waiver.md or rca.md)")
     parser.add_argument("--self-test", action="store_true")
     return parser
 
@@ -326,29 +577,75 @@ def generate(args):
         log_range = f"{base_sha}..{head_sha}"
         diff_range = [log_range]
     files = [p for p in (args.changed_files or []) if p]
-    pathspec = (["--"] + files) if files else []
+    base_pathspec = (["--"] + files) if files else []
+
+    exclude_patterns = ([] if args.no_default_excludes else
+                        list(DEFAULT_EXCLUDES)) + list(args.exclude or [])
+    exclude_specs = exclude_pathspecs(exclude_patterns)
+    full_pathspec = ((["--"] + files + exclude_specs)
+                     if (files or exclude_specs) else [])
+
+    # Excluded files must be visible, not silent: diff the SAME range with and
+    # without the exclude magics and record the set difference, before ever
+    # rendering the filtered ## Stat/## Diff.
+    excluded_files = []
+    if exclude_specs:
+        unfiltered_out, _ = run_git(
+            ["diff", "--name-only"] + diff_range + base_pathspec, repo)
+        filtered_out, _ = run_git(
+            ["diff", "--name-only"] + diff_range + full_pathspec, repo)
+        unfiltered_names = [l.strip() for l in unfiltered_out.splitlines()
+                            if l.strip()]
+        filtered_names = set(l.strip() for l in filtered_out.splitlines()
+                             if l.strip())
+        excluded_files = [f for f in unfiltered_names if f not in filtered_names]
+    else:
+        unfiltered_names = None  # not computed -- no excludes, nothing to diff
 
     commits, log_argv = run_git(["log", "--oneline", log_range], repo)
-    stat, stat_argv = run_git(["diff", "--stat"] + diff_range + pathspec, repo)
+    stat, stat_argv = run_git(
+        ["diff", "--stat"] + diff_range + full_pathspec, repo)
     diff, diff_argv = run_git(
-        ["diff", "-U%d" % max(0, args.context)] + diff_range + pathspec, repo)
+        ["diff", "-U%d" % max(0, args.context)] + diff_range + full_pathspec,
+        repo)
 
     if not diff.strip():
+        if exclude_specs and unfiltered_names:
+            raise PackageError(
+                f"every changed path was excluded by pattern; pass "
+                "--no-default-excludes or narrow --exclude")
         raise PackageError(
             f"empty diff for {args.base}..{args.head}"
             + (f" restricted to {len(files)} path(s)" if files else "")
             + " -- an empty diff is not a review package")
 
+    diff_lines = count_diff_lines(diff)
+    size_waiver = None
+    size_waiver_line = None
+    if args.max_diff_lines is not None:
+        size_waiver, size_ok, note = check_diff_size_bound(
+            diff_lines, args.max_diff_lines, args.waiver)
+        if not size_ok:
+            raise PackageError(note)
+        if size_waiver["satisfied"]:
+            over_by = diff_lines - args.max_diff_lines
+            size_waiver_line = (
+                f"- Size waiver: `{args.waiver}` ({over_by} lines over "
+                f"--max-diff-lines {args.max_diff_lines})")
+
     generated = utc_now()
     package = build_package(repo, args.base, args.head, base_sha, head_sha,
-                            commits, stat, diff, files, generated)
+                            commits, stat, diff, files, generated,
+                            excluded_files, size_waiver_line)
     write_text(args.out, package)
     sidecar = build_sidecar(args.out, diff_argv,
                             [log_argv, stat_argv, diff_argv],
-                            base_sha, head_sha, started, utc_now(), 0)
+                            base_sha, head_sha, started, utc_now(), 0,
+                            excluded_files, exclude_patterns, diff_lines,
+                            args.max_diff_lines, size_waiver)
     write_text(str(args.out) + SIDECAR_SUFFIX,
                json.dumps(sidecar, indent=2) + "\n")
-    return {
+    payload = {
         "written": True,
         "out": str(args.out),
         "sidecar": str(args.out) + SIDECAR_SUFFIX,
@@ -359,10 +656,17 @@ def generate(args):
         "changed_files": files,
         "commit_count": len([l for l in commits.splitlines() if l.strip()]),
         "diff_bytes": len(diff.encode("utf-8", errors="replace")),
+        "excluded_files": excluded_files,
+        "exclude_patterns": exclude_patterns,
+        "diff_lines": diff_lines,
+        "max_diff_lines": args.max_diff_lines,
         "capture_sha256": sidecar["capture_sha256"],
         "result": "WRITTEN",
         "error": None,
     }
+    if size_waiver is not None:
+        payload["size_waiver"] = size_waiver
+    return payload
 
 
 def main(argv):
@@ -375,6 +679,12 @@ def main(argv):
         for name, value in (("--base", args.base), ("--out", args.out)):
             if not value:
                 raise PackageError(f"missing required argument: {name}")
+        if args.max_diff_lines is not None and args.max_diff_lines < 1:
+            raise PackageError("--max-diff-lines must be >= 1 (a bound of 0 "
+                               "can never be satisfied)")
+        if args.waiver and args.max_diff_lines is None:
+            raise PackageError("--waiver given without --max-diff-lines -- "
+                               "there is no bound for it to waive")
         payload = generate(args)
     except PackageError as exc:
         payload = {"written": False, "out": args.out, "result": "ERROR",
@@ -653,6 +963,205 @@ def run_self_test():
             self.assertEqual(
                 main(["--repo", str(self.repo), "--base", "HEAD~1",
                       "--out", str(blocker / "review-package.md")]), 2)
+
+        # -- 20: a lockfile is excluded by default: header + sidecar name it,
+        #        its hunk is absent from ## Diff -----------------------
+        def test_default_excludes_hide_lockfile_from_diff(self):
+            self._write("package-lock.json", "LOCK_V1\n")
+            self._commit("seed lockfile")
+            self._write("package-lock.json", "LOCK_V2\n")
+            self._write("src/app.py", "def a():\n    return 10\n")
+            self._commit("bump lockfile and change app")
+            self.assertEqual(main(self._args()), 0)
+            text = self._package()
+            self.assertIn("- Excluded from diff (1): `package-lock.json`",
+                          text)
+            self.assertNotIn("LOCK_V2", text)
+            self.assertIn("return 10", text)
+            meta = self._sidecar()
+            self.assertEqual(meta["excluded_files"], ["package-lock.json"])
+            self.assertIn("**/package-lock.json", meta["exclude_patterns"])
+
+        # -- 21: --no-default-excludes brings the lockfile back ------------
+        def test_no_default_excludes_flag_restores_lockfile(self):
+            self._write("package-lock.json", "LOCK_V1\n")
+            self._commit("seed lockfile")
+            self._write("package-lock.json", "LOCK_V2\n")
+            self._commit("bump lockfile only")
+            self.assertEqual(main(self._args("--no-default-excludes")), 0)
+            text = self._package()
+            self.assertIn("LOCK_V2", text)
+            self.assertIn("- Excluded from diff: none", text)
+
+        # -- 22: --exclude "*.md" removes a markdown file -------------------
+        # git's glob pathspec magic does not cross a `/` boundary (fnmatch
+        # with FNM_PATHNAME) -- `*.md` matches a ROOT-level file only, never
+        # `docs/notes.md`. Verified against a throwaway repo; see report.
+        def test_custom_exclude_pattern_removes_markdown_file(self):
+            self._write("notes.md", "old notes\n")
+            self._commit("seed doc")
+            self._write("notes.md", "new notes\n")
+            self._write("src/app.py", "def a():\n    return 11\n")
+            self._commit("edit doc and app")
+            self.assertEqual(main(self._args("--exclude", "*.md")), 0)
+            text = self._package()
+            self.assertNotIn("new notes", text)
+            self.assertIn("return 11", text)
+            self.assertIn("- Excluded from diff (1): `notes.md`", text)
+
+        # -- 23: the all-excluded case is exit 2 with the distinct message -
+        def test_all_excluded_diff_is_exit_2_with_distinct_message(self):
+            self._write("package-lock.json", "LOCK_V1\n")
+            self._commit("seed lockfile")
+            self._write("package-lock.json", "LOCK_V2\n")
+            self._commit("bump lockfile only")
+            self.assertEqual(main(self._args()), 2)
+            self.assertFalse(self.out.exists())
+            args = build_parser().parse_args(self._args())
+            with self.assertRaises(PackageError) as ctx:
+                generate(args)
+            self.assertIn("every changed path was excluded by pattern",
+                          str(ctx.exception))
+
+        # -- 24: excludes never filter ## Commits ---------------------------
+        def test_excludes_never_filter_commits_section(self):
+            self._write("package-lock.json", "LOCK_V1\n")
+            self._commit("seed lockfile")
+            self._write("package-lock.json", "LOCK_V2\n")
+            self._commit("lockfile-only bump")
+            self._write("src/app.py", "def a():\n    return 13\n")
+            self._commit("change app")
+            self.assertEqual(
+                main(["--repo", str(self.repo), "--base", "HEAD~2",
+                      "--out", str(self.out)]), 0)
+            text = self._package()
+            self.assertIn("lockfile-only bump", text)     # ## Commits
+            self.assertNotIn("LOCK_V2", text)              # ## Diff, filtered
+
+        # -- 25: --changed-files naming ONLY an excluded file is exit 2 ----
+        def test_changed_files_naming_only_excluded_file_is_exit_2(self):
+            self._write("package-lock.json", "LOCK_V1\n")
+            self._commit("seed lockfile")
+            self._write("package-lock.json", "LOCK_V2\n")
+            self._commit("bump lockfile only")
+            self.assertEqual(
+                main(self._args("--changed-files", "package-lock.json")), 2)
+            self.assertFalse(self.out.exists())
+            args = build_parser().parse_args(
+                self._args("--changed-files", "package-lock.json"))
+            with self.assertRaises(PackageError) as ctx:
+                generate(args)
+            self.assertIn("every changed path was excluded by pattern",
+                          str(ctx.exception))
+
+        # -- 26: under the ceiling passes and reports diff_lines -----------
+        def test_under_ceiling_passes_and_reports_diff_lines(self):
+            self._write("src/app.py", "def a():\n    return 14\n")
+            self._commit("small change")
+            self.assertEqual(main(self._args("--max-diff-lines", "10")), 0)
+            meta = self._sidecar()
+            self.assertEqual(meta["diff_lines"], 2)
+            self.assertEqual(meta["max_diff_lines"], 10)
+
+        # -- 27: over the ceiling with no waiver is exit 2, nothing written -
+        def test_over_ceiling_no_waiver_is_exit_2_nothing_written(self):
+            self._write("src/app.py", "def a():\n    return 15\n")
+            self._commit("small change")
+            self.assertEqual(main(self._args("--max-diff-lines", "1")), 2)
+            self.assertFalse(self.out.exists())
+            self.assertFalse(Path(str(self.out) + SIDECAR_SUFFIX).exists())
+            args = build_parser().parse_args(
+                self._args("--max-diff-lines", "1"))
+            with self.assertRaises(PackageError) as ctx:
+                generate(args)
+            self.assertIn("no --waiver was given", str(ctx.exception))
+
+        # -- 28: over the ceiling with a placeholder waiver body is exit 2 -
+        def test_over_ceiling_with_placeholder_waiver_is_exit_2(self):
+            self._write("src/app.py", "def a():\n    return 16\n")
+            self._commit("small change")
+            waiver = self.dir / "waiver.md"
+            waiver.write_text("## Size waiver\n\nTODO\n", encoding="utf-8")
+            self.assertEqual(
+                main(self._args("--max-diff-lines", "1",
+                                "--waiver", str(waiver))), 2)
+            self.assertFalse(self.out.exists())
+
+        # -- 29: over the ceiling with a real waiver body passes -----------
+        def test_over_ceiling_with_real_waiver_passes_and_renders_header(self):
+            self._write("src/app.py", "def a():\n    return 17\n")
+            self._commit("small change")
+            waiver = self.dir / "waiver.md"
+            waiver.write_text(
+                "## Size waiver\n\nApproved by the user: this touches only "
+                "one line and the fix is not worth splitting.\n",
+                encoding="utf-8")
+            self.assertEqual(
+                main(self._args("--max-diff-lines", "1",
+                                "--waiver", str(waiver))), 0)
+            text = self._package()
+            self.assertIn(
+                f"- Size waiver: `{waiver}` (1 lines over "
+                "--max-diff-lines 1)", text)
+            meta = self._sidecar()
+            self.assertTrue(meta["size_waiver"]["satisfied"])
+
+        # -- 30: --waiver without --max-diff-lines is exit 2 ---------------
+        def test_waiver_without_max_diff_lines_is_exit_2(self):
+            self._write("src/app.py", "def a():\n    return 18\n")
+            self._commit()
+            waiver = self.dir / "waiver.md"
+            waiver.write_text("## Size waiver\n\nfine\n", encoding="utf-8")
+            self.assertEqual(main(self._args("--waiver", str(waiver))), 2)
+            self.assertFalse(self.out.exists())
+
+        # -- 31: --max-diff-lines 0 is exit 2 -------------------------------
+        def test_max_diff_lines_zero_is_exit_2(self):
+            self._write("src/app.py", "def a():\n    return 19\n")
+            self._commit()
+            self.assertEqual(main(self._args("--max-diff-lines", "0")), 2)
+            self.assertFalse(self.out.exists())
+
+        # -- 32: the diff-line count ignores +++/--- file header lines -----
+        def test_diff_line_count_ignores_file_header_lines(self):
+            self._write("src/app.py", "def a():\n    return 20\n")
+            self._commit("small change")
+            args = build_parser().parse_args(self._args())
+            payload = generate(args)
+            self.assertIn("--- a/src/app.py", self._package())
+            self.assertIn("+++ b/src/app.py", self._package())
+            self.assertEqual(payload["diff_lines"], 2)
+
+        # -- 33: the diff-line count is taken AFTER excludes ---------------
+        def test_diff_line_count_is_taken_after_excludes(self):
+            self._write("package-lock.json", "LOCK_V1\n" * 50)
+            self._commit("seed big lockfile")
+            self._write("package-lock.json", "LOCK_V2\n" * 50)
+            self._write("src/app.py", "def a():\n    return 21\n")
+            self._commit("bump big lockfile and change app")
+            self.assertEqual(main(self._args("--max-diff-lines", "5")), 0)
+            meta = self._sidecar()
+            self.assertEqual(meta["diff_lines"], 2)
+
+        # -- 34: default excludes reach a NESTED lockfile, not just the root
+        #        (the monorepo case DEFAULT_EXCLUDES's `**/` prefix exists
+        #        for) ---------------------------------------------------
+        def test_default_excludes_reach_nested_lockfile(self):
+            self._write("frontend/package-lock.json", "LOCK_V1\n")
+            self._commit("seed nested lockfile")
+            self._write("frontend/package-lock.json", "LOCK_V2\n")
+            self._write("src/app.py", "def a():\n    return 22\n")
+            self._commit("bump nested lockfile and change app")
+            self.assertEqual(main(self._args()), 0)
+            text = self._package()
+            self.assertIn(
+                "- Excluded from diff (1): `frontend/package-lock.json`",
+                text)
+            self.assertNotIn("LOCK_V2", text)
+            self.assertIn("return 22", text)
+            meta = self._sidecar()
+            self.assertEqual(meta["excluded_files"],
+                             ["frontend/package-lock.json"])
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(
         ReviewPackageTests)
