@@ -25,6 +25,19 @@ forward by simply being appended to. Once a chained record exists, an
 unchained one after it is a refusal — reverting to unchained is exactly what
 deleting the chain looks like.
 
+LEGACY LEDGERS: a ledger holding ONLY legacy records (no `prev`/`self`
+anywhere) is indistinguishable, by the chain check alone, from a chain that
+was deleted wholesale rather than never started. That is reported, not
+silently passed: `legacy_unchained_records` in the JSON report carries the
+count, and a non-zero count prints a warning on stderr. The default is grace
+— `pass` stays true, since a ledger that genuinely predates chaining is
+legitimate and common right after the chain feature landed. `--require-chain`
+removes the grace: any legacy record at all then fails the run
+(`problem_codes: ["legacy_unchained_records"]`), for a caller that wants to
+assert the chain has actually been adopted. A ledger where chaining STARTS
+and then reverts to legacy already fails with or without this flag — that is
+`verify_ledger_chain`'s `legacy-after-chained` check above, unaffected by it.
+
 `--ledger` here is the SUBJECT under test, not an append target: unlike every
 other gate in the family this script writes nothing (convention #8, a
 deliberate divergence from the "every gate carries `--ledger`" rule).
@@ -144,11 +157,18 @@ def verify_ledger_chain(ledger_path):
     return True, None
 
 
-def build_report(ledger_path):
-    """The full JSON report: chain verdict plus the record census."""
+def build_report(ledger_path, require_chain=False):
+    """The full JSON report: chain verdict plus the record census.
+
+    `require_chain=True` fails the run when the ledger holds any legacy
+    record (`legacy_unchained_records` > 0), even though the chain itself is
+    otherwise intact — see LEGACY LEDGERS in the module docstring. Default is
+    grace: `pass` stays true, with a warning on stderr.
+    """
     report = {"ledger": ledger_path, "pass": False, "records": 0,
               "chained_records": 0, "legacy_records": 0,
-              "problem": None, "error": None}
+              "legacy_unchained_records": 0,
+              "problem": None, "problem_codes": [], "error": None}
     p = Path(ledger_path)
     if not p.is_file():
         report["error"] = "ledger not found: {0}".format(ledger_path)
@@ -170,10 +190,21 @@ def build_report(ledger_path):
             report["chained_records"] += 1
         else:
             report["legacy_records"] += 1
+    report["legacy_unchained_records"] = report["legacy_records"]
     ok, problem = verify_ledger_chain(ledger_path)
     report["pass"] = ok
     if not ok:
         report["problem"] = dict(problem, problem="chain_broken")
+    if report["legacy_unchained_records"]:
+        print(
+            "check_ledger: warning: {0} legacy record(s) in {1} carry no "
+            "prev/self chain fields -- indistinguishable from a deleted "
+            "chain unless every one of them predates chaining.".format(
+                report["legacy_unchained_records"], ledger_path),
+            file=sys.stderr)
+        if require_chain:
+            report["pass"] = False
+            report["problem_codes"].append("legacy_unchained_records")
     return report
 
 
@@ -182,6 +213,12 @@ def main(argv):
     parser.add_argument("--ledger",
                         help="the gate ledger whose hash chain to verify "
                              "(read only; this script never writes)")
+    parser.add_argument("--require-chain", action="store_true",
+                        help="fail (exit 1, problem_codes: "
+                             "legacy_unchained_records) if the ledger holds "
+                             "any legacy record with no prev/self chain "
+                             "fields, even when the chain itself is intact; "
+                             "default is grace (pass, with a warning)")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
 
@@ -193,7 +230,7 @@ def main(argv):
                           "error": "missing required argument: --ledger"}))
         return 2
 
-    report = build_report(args.ledger)
+    report = build_report(args.ledger, require_chain=args.require_chain)
     print(json.dumps(report, indent=2))
     if report["error"]:
         return 2
@@ -330,6 +367,51 @@ def run_self_test():
             legacy(self.ledger, "b.py")
             self.assertTrue(build_report(str(self.ledger))["pass"])
 
+        # ---- --require-chain (Metric 19 Warning) ------------------------
+
+        def test_all_legacy_passes_with_warning_by_default(self):
+            import contextlib
+            import io
+            legacy(self.ledger, "a.py")
+            legacy(self.ledger, "b.py")
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                r = build_report(str(self.ledger))
+            self.assertTrue(r["pass"], r)
+            self.assertEqual(r["legacy_unchained_records"], 2)
+            self.assertEqual(r["problem_codes"], [])
+            self.assertIn("legacy", err.getvalue().lower())
+            self.assertEqual(main(["--ledger", str(self.ledger)]), 0)
+
+        def test_all_legacy_fails_with_require_chain(self):
+            legacy(self.ledger, "a.py")
+            legacy(self.ledger, "b.py")
+            r = build_report(str(self.ledger), require_chain=True)
+            self.assertFalse(r["pass"])
+            self.assertEqual(r["legacy_unchained_records"], 2)
+            self.assertIn("legacy_unchained_records", r["problem_codes"])
+            self.assertEqual(
+                main(["--ledger", str(self.ledger), "--require-chain"]), 1)
+
+        def test_chained_then_legacy_fails_with_or_without_the_flag(self):
+            chained(self.ledger, "check_commit_gate.py")
+            legacy(self.ledger, "unchained_gate.py")
+            r = build_report(str(self.ledger))
+            self.assertFalse(r["pass"])
+            self.assertEqual(r["problem"]["reason"], "legacy-after-chained")
+            r2 = build_report(str(self.ledger), require_chain=True)
+            self.assertFalse(r2["pass"])
+
+        def test_fully_chained_passes_with_require_chain(self):
+            for gate in ("a.py", "b.py", "c.py"):
+                chained(self.ledger, gate)
+            r = build_report(str(self.ledger), require_chain=True)
+            self.assertTrue(r["pass"], r)
+            self.assertEqual(r["legacy_unchained_records"], 0)
+            self.assertEqual(r["problem_codes"], [])
+            self.assertEqual(
+                main(["--ledger", str(self.ledger), "--require-chain"]), 0)
+
         def test_empty_ledger_passes_with_zero_records(self):
             self.ledger.write_text("", encoding="utf-8")
             r = build_report(str(self.ledger))
@@ -450,6 +532,7 @@ def run_self_test():
             "mark_milestone.py",
             "next_bugfix_route.py",
             "review_package.py",
+            "run_quiet.py",
             "tier1_staleness.py",
             "update_state.py",
         )
