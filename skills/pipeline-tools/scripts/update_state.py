@@ -17,6 +17,7 @@ Usage:
         [--resolve-blocker "<substring>" --evidence <path>] \
         [--set-halt '{"unit":...,"agent":...,"code":...,"reason":...}'] \
         [--clear-halt <unit>] \
+        [--set-status <active|escalated|closed> [--reason "<text>"]] \
         [--ledger <path>]
     python update_state.py --self-test
 
@@ -44,6 +45,18 @@ exists AND its `unit` matches; a halt for a different unit, or no halt at
 all, is left untouched (a warning, not an error -- clearing what one unit's
 gate run does not own must never silently erase another unit's standing halt).
 
+`--set-status`: merges `state["status"] = STATUS` plus a `status_updated`
+timestamp, the same way `--set-halt` stamps `ts`. `STATUS` is validated
+against a small closed set (`active`, `escalated`, `closed`) via argparse
+`choices`, so an unknown value exits 2 before anything is read or written,
+same failure shape as every other usage error in this file. `--reason` is
+optional here (unlike `--clear-halt`, which requires it) and, when given, is
+recorded on the ledger line alongside the new status and the status this
+call overwrote. Written by `bgpdd-bugfix` Phase 2 step 5 and Phase 5 step 4
+(standalone route) when a lane HALTs and escalates to another pipeline, so
+`guard_action.py`'s `lane_is_closed()`/`unfixed_bugfix_lanes()` can treat the
+lane as closed without waiting on the 12h freshness window to age it out.
+
 Pure standard library. See ../SKILL.md for the full contract.
 """
 import argparse
@@ -58,6 +71,7 @@ from pathlib import Path
 
 SCHEMA_VERSION = "1"
 SEVERITIES = ("Critical", "Important", "Info")
+STATUSES = ("active", "escalated", "closed")
 BLOCKER_ID_RE = re.compile(r"^B-(\d+)$")
 
 
@@ -336,6 +350,7 @@ def validate_actions(args):
         args.resolve_blocker is not None,
         args.set_halt is not None,
         args.clear_halt is not None,
+        args.set_status is not None,
     ])
     if not has_action:
         raise GateError("at least one action is required (see --help)")
@@ -596,6 +611,14 @@ def apply_updates(args):
         state["branch"] = args.set_branch
     if args.set_feature is not None:
         state["feature"] = None if args.set_feature == "null" else args.set_feature
+    # Stashed on the Namespace (not returned) so main()'s ledger closure can
+    # record what status this call overwrote, the same pattern --clear-halt
+    # uses above for the halt it removed.
+    args.previous_status = None
+    if args.set_status is not None:
+        args.previous_status = state.get("status")
+        state["status"] = args.set_status
+        state["status_updated"] = timestamp
     for spec in args.set_artifact:
         name, value = parse_artifact_spec(spec)
         state.setdefault("artifacts", {})[name] = value
@@ -730,7 +753,18 @@ def build_parser():
         help="required with --clear-halt: what changed in the world that "
              "makes the blocker no longer true. Recorded in the ledger line "
              "alongside the cleared halt's unit and code. Blank is refused "
-             "the same way --resolve-blocker's --evidence is.")
+             "the same way --resolve-blocker's --evidence is. Optional with "
+             "--set-status, where it is recorded on the ledger line but not "
+             "required.")
+    parser.add_argument(
+        "--set-status", dest="set_status", choices=list(STATUSES),
+        help='merge state["status"] = STATUS plus a "status_updated" '
+             "timestamp. Optional --reason is recorded on the ledger line "
+             "alongside the status this call overwrote. Written by "
+             "bgpdd-bugfix Phase 2 step 5 / Phase 5 step 4 (standalone "
+             "route) so guard_action.py's lane_is_closed()/"
+             "unfixed_bugfix_lanes() can treat an escalated or closed lane "
+             "as closed without waiting on the freshness window.")
     parser.add_argument("--ledger",
                         help="append one JSON record per run to this path")
     parser.add_argument(
@@ -774,6 +808,13 @@ def main(argv):
             if cleared:
                 extra["cleared_code"] = cleared.get("code")
                 extra["cleared_halt"] = cleared
+        elif args.set_status is not None:
+            extra = {"action": "set-status", "status": args.set_status}
+            if args.reason:
+                extra["reason"] = args.reason
+            previous = getattr(args, "previous_status", None)
+            if previous is not None:
+                extra["previous_status"] = previous
         # The cursor names the milestone this run is about, when it names one;
         # the literal "null" clears it and is recorded as JSON null.
         milestone = args.milestone or (None if args.set_cursor in (None, "null")
@@ -873,7 +914,8 @@ def run_self_test():
                     blocker_severity=None, blocker_source=None,
                     blocker_evidence=None,
                     resolve_blocker=None, evidence=None,
-                    set_halt=None, clear_halt=None, reason=None)
+                    set_halt=None, clear_halt=None, reason=None,
+                    set_status=None)
         base.update(overrides)
         return argparse.Namespace(**base)
 
@@ -1492,6 +1534,74 @@ def run_self_test():
             rec = self._ledger_records(ledger)[-1]
             self.assertEqual(rec["action"], "clear-halt")
             self.assertNotIn("cleared_code", rec)
+
+        # ---- --set-status (bgpdd-bugfix escalation close) ----------------
+
+        def test_set_status_updates_state_and_stamps_timestamp(self):
+            apply_updates(ns(self.state_path, init=True, project_name="demo"))
+            state, warnings = apply_updates(ns(self.state_path,
+                                              set_status="escalated"))
+            self.assertEqual(warnings, [])
+            self.assertEqual(state["status"], "escalated")
+            self.assertIn("status_updated", state)
+
+        def test_set_status_without_reason_is_allowed(self):
+            """--reason is optional with --set-status, unlike --clear-halt."""
+            state, warnings = apply_updates(ns(self.state_path, init=True,
+                                              project_name="demo",
+                                              set_status="closed"))
+            self.assertEqual(warnings, [])
+            self.assertEqual(state["status"], "closed")
+
+        def test_set_status_invalid_value_exits_2(self):
+            """STATUS is validated against a closed set via argparse choices."""
+            import contextlib
+            import io
+
+            apply_updates(ns(self.state_path, init=True, project_name="demo"))
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as ctx:
+                    main(["--state", str(self.state_path),
+                          "--set-status", "bogus"])
+            self.assertEqual(ctx.exception.code, 2)
+
+        def test_set_status_ledger_omits_previous_status_when_none(self):
+            ledger = self.dir / "gates.jsonl"
+            apply_updates(ns(self.state_path, init=True, project_name="demo"))
+            import contextlib
+            import io
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = main(["--state", str(self.state_path),
+                           "--set-status", "active",
+                           "--ledger", str(ledger)])
+            self.assertEqual(rc, 0)
+            rec = self._ledger_records(ledger)[-1]
+            self.assertEqual(rec["action"], "set-status")
+            self.assertEqual(rec["status"], "active")
+            self.assertNotIn("previous_status", rec)
+            self.assertNotIn("reason", rec)
+
+        def test_set_status_ledger_records_reason_and_previous_status(self):
+            ledger = self.dir / "gates.jsonl"
+            apply_updates(ns(self.state_path, init=True, project_name="demo",
+                             set_status="active"))
+            import contextlib
+            import io
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = main(["--state", str(self.state_path),
+                           "--set-status", "escalated",
+                           "--reason", "blast radius: shared DTO",
+                           "--milestone", "fix-null-ptr",
+                           "--ledger", str(ledger)])
+            self.assertEqual(rc, 0)
+            rec = self._ledger_records(ledger)[-1]
+            self.assertEqual(rec["action"], "set-status")
+            self.assertEqual(rec["status"], "escalated")
+            self.assertEqual(rec["reason"], "blast radius: shared DTO")
+            self.assertEqual(rec["previous_status"], "active")
+            self.assertEqual(rec["milestone"], "fix-null-ptr")
 
         # ---- --require-game-tape harness --------------------------------
 

@@ -32,7 +32,10 @@ THE SEVEN RULES
    `check_commit_gate.py` PASS -> DENY. "A write" is a write TOOL (`Edit`,
    `Write`, `MultiEdit`, `NotebookEdit`) or a `Bash` command that mutates the
    path (see BASH WRITES). A path that does not exist yet is allowed: adding
-   a new test is not editing the RED.
+   a new test is not editing the RED. A lane whose own `orchestrator-state.json`
+   carries a terminal `status` of `escalated` or `closed` (standalone route
+   only; `update_state.py --set-status`) is treated as fixed too -- see
+   CLOSED LANES.
 3. `no_delegation_before_intake` -- a delegation tool while a fresh
    `bug-report.md` exists whose ledger lacks a `check_bugfix_intake.py` PASS
    -> DENY.
@@ -218,6 +221,23 @@ treated as NOT closed -- fail-closed, and `--explain` says so. Quick keeps its
 own, older predicate: a `check_quick_close.py --commit` PASS removes the lane
 from detection entirely.
 
+A lane is ALSO closed -- for rule 1 (`Lane.closed`) and independently for
+rule 2 (`unfixed_bugfix_lanes()`) -- when its own `orchestrator-state.json`
+carries a terminal `status` of `escalated` or `closed`, written by
+`update_state.py --set-status` (`bgpdd-bugfix` Phase 2 step 5 / Phase 5 step
+4, both HALT branches, standalone route). Mirrors how `lane_halt()` already
+reads per-lane state, and needs no milestone: the escalation is the lane's
+own terminal act, not one more commit to scope. STANDALONE bugfix only -- the
+state file sits at `lane.root` there (`.docs/bugfix/{bug-slug}/
+orchestrator-state.json`). The FEATURE route's bugfix sub-lane has no state
+file of its own at `lane.root` (its `{state-file}` is the epic's, one level
+up, and `bgpdd-bugfix` §1 forbids this lane writing anything but a scoped
+blocker to it) -- so an escalated feature-route bug still arms rule 2 for the
+freshness window. Reading the epic's own `status` field would misattribute
+the WHOLE epic's status to one bug among possibly several open on that
+route; no per-bug-scoped status exists there to read. Unresolved -- tracked,
+not silently worked around.
+
 VERIFY LANES DO NOT ARM RULE 1
 ------------------------------
 A state file whose `pipeline` is `bgpdd-verify` is detected as a lane (so
@@ -355,6 +375,10 @@ TEST_FILE_PATTERNS = (
 
 GATE_ARTIFACT_NAMES = ("gates.jsonl", "orchestrator-state.json", "run-log.jsonl")
 GATE_ARTIFACT_SUFFIX = ".meta.json"
+
+# A lane's own `status` (update_state.py --set-status) at one of these values
+# closes it -- see CLOSED LANES in the module docstring.
+TERMINAL_STATUSES = ("escalated", "closed")
 
 # Rule 7: the human author's persona file, never edited by an agent except a
 # sanctioned append to its Part VIII ledger (CLAUDE.md convention #7).
@@ -641,7 +665,7 @@ def detect_lanes(cwd, now=None, window_hours=WINDOW_HOURS_DEFAULT):
                 "" if arms else "; no commit gate, rule 1 not armed"),
             milestone=milestone,
             arms_commit_rule=arms,
-            closed=lane_is_closed(str(ledger), milestone),
+            closed=lane_is_closed(str(ledger), milestone, root=str(project)),
         ))
 
     # (b)+(c) BUGFIX -- standalone and feature route, ledger fresh.
@@ -655,7 +679,7 @@ def detect_lanes(cwd, now=None, window_hours=WINDOW_HOURS_DEFAULT):
             "check_commit_gate.py",
             detail="" if slug else "unscoped feature route: no readable slug",
             milestone=slug,
-            closed=lane_is_closed(str(ledger), slug),
+            closed=lane_is_closed(str(ledger), slug, root=str(bugdir)),
         ))
 
     # (d) QUICK -- .docs/quick/*/note.md fresh and not yet closed.
@@ -674,14 +698,40 @@ def detect_lanes(cwd, now=None, window_hours=WINDOW_HOURS_DEFAULT):
     return lanes
 
 
-def lane_is_closed(ledger, milestone):
-    """True when this lane's commit gate already committed its current milestone.
+def lane_status(root):
+    """The `status` string in `root`'s own orchestrator-state.json, or None.
 
-    See CLOSED LANES in the module docstring. `milestone` of None -> False:
-    a lane whose milestone cannot be read is never treated as closed, because
-    "any commit-gate PASS in this ledger" would disarm rule 1 for a whole epic
-    the moment its first milestone landed.
+    Fail-open like every other filesystem read in this module: a missing or
+    corrupt file, or a non-string/blank value, reads as None -- "no terminal
+    status", i.e. previous behavior. Mirrors `lane_halt()`'s per-lane read
+    (same file, different field). Only a lane whose own root carries a state
+    file has anything to read -- a FEATURE lane, or a STANDALONE bugfix lane
+    (`update_state.py --init` creates one at Phase 0 step 4); a feature-route
+    bugfix sub-lane has none of its own, so this reads absent there too (see
+    CLOSED LANES).
     """
+    state = _read_json(Path(root) / "orchestrator-state.json")
+    if not isinstance(state, dict):
+        return None
+    status = state.get("status")
+    return status if isinstance(status, str) and status.strip() else None
+
+
+def lane_is_closed(ledger, milestone, root=None):
+    """True when this lane's commit gate already committed its current
+    milestone, OR (when `root` is given) its own state carries a terminal
+    `status` (`escalated`/`closed` -- see TERMINAL_STATUSES).
+
+    See CLOSED LANES in the module docstring. `milestone` of None does not
+    block the status half: a lane whose milestone cannot be read is never
+    treated as closed BY THE COMMIT-GATE PREDICATE, because "any commit-gate
+    PASS in this ledger" would disarm rule 1 for a whole epic the moment its
+    first milestone landed -- but an escalated/closed status is the lane's
+    own terminal act, not one more commit to scope, so it closes the lane
+    regardless of whether a milestone was ever readable.
+    """
+    if root is not None and lane_status(root) in TERMINAL_STATUSES:
+        return True
     if not milestone:
         return False
     return ledger_has_pass(ledger, "check_commit_gate.py", "--commit", milestone)
@@ -713,10 +763,21 @@ def pending_bugfix_intakes(cwd, now=None, window_hours=WINDOW_HOURS_DEFAULT):
 
 
 def unfixed_bugfix_lanes(lanes):
-    """Active bugfix lanes whose ledger holds no commit-gate PASS (rule 2's)."""
+    """Active bugfix lanes whose ledger holds no commit-gate PASS AND whose
+    own state carries no terminal status (rule 2's predicate).
+
+    A lane escalated via `update_state.py --set-status escalated` (or
+    `closed`; `bgpdd-bugfix` Phase 2 step 5 / Phase 5 step 4, standalone
+    route) is done fixing even though no commit ever lands -- rule 2 exists
+    to stop the builder editing the RED while a fix is still open, and an
+    escalated lane is not open. `lane_status()` reads absent for the
+    feature route (no state file at `lane.root` there -- see CLOSED LANES),
+    so that route's behavior is unchanged by this check.
+    """
     return [lane for lane in lanes
             if lane.kind == "bugfix"
-            and not ledger_has_pass(lane.ledger, "check_commit_gate.py")]
+            and not ledger_has_pass(lane.ledger, "check_commit_gate.py")
+            and lane_status(lane.root) not in TERMINAL_STATUSES]
 
 
 def lane_halt(lane):
@@ -1372,9 +1433,17 @@ def run_explain(args):
                 out.append("      rule 1: NOT armed (this pipeline has no "
                            "commit gate)")
             elif lane.closed:
-                out.append("      rule 1: NOT armed (closed -- the commit gate "
-                           "recorded a --commit PASS for this milestone, so "
-                           "the sanctioned local merge is allowed)")
+                status = lane_status(lane.root)
+                if status in TERMINAL_STATUSES:
+                    out.append("      rule 1: NOT armed (closed -- status="
+                               "{0!r} in this lane's own "
+                               "orchestrator-state.json, so the sanctioned "
+                               "local merge is allowed)".format(status))
+                else:
+                    out.append("      rule 1: NOT armed (closed -- the commit "
+                               "gate recorded a --commit PASS for this "
+                               "milestone, so the sanctioned local merge is "
+                               "allowed)")
             else:
                 out.append("      rule 1: armed")
     else:
@@ -1469,7 +1538,7 @@ def run_self_test():
         # -- fixtures ---------------------------------------------------
 
         def make_bugfix(self, slug="coupon-500", intake=True, commit=False,
-                        age_hours=0.0, commit_milestone=None):
+                        age_hours=0.0, commit_milestone=None, status=None):
             d = Path(self.root) / ".docs" / "bugfix" / slug
             touch(d / "bug-report.md", "# Bug report", age_hours)
             lines = ""
@@ -1479,6 +1548,9 @@ def run_self_test():
                 lines += ledger_line("check_commit_gate.py", argv=["--commit"],
                                      milestone=commit_milestone)
             touch(d / "gates.jsonl", lines or "", age_hours)
+            if status is not None:
+                touch(d / "orchestrator-state.json",
+                     json.dumps({"status": status}), age_hours)
             return str(d)
 
         def make_feature(self, name="demo", pipeline="bgpdd-build", age_hours=0.0,
@@ -1649,6 +1721,39 @@ def run_self_test():
             path = touch(Path(self.root) / "tests" / "test_api.py", "old")
             d, rule, _ = self.decide("MultiEdit", {"edits": [{"file_path": path}]})
             self.assertEqual((d, rule), ("deny", "frozen_tests_during_a_fix"))
+
+        def test_20b_escalated_status_disarms_frozen_tests_rule(self):
+            """update_state.py --set-status escalated (bgpdd-bugfix Phase 2
+            step 5 / Phase 5 step 4, standalone route) closes the lane even
+            though no commit ever lands -- a fix escalated away is not
+            "still open" for rule 2's purpose."""
+            self.make_bugfix(status="escalated")
+            path = touch(Path(self.root) / "tests" / "test_api.py", "old")
+            self.assertEqual(self.decide("Edit", {"file_path": path})[0], "allow")
+
+        def test_20c_active_status_still_arms_frozen_tests_rule(self):
+            self.make_bugfix(status="active")
+            path = touch(Path(self.root) / "tests" / "test_api.py", "old")
+            d, rule, _ = self.decide("Edit", {"file_path": path})
+            self.assertEqual((d, rule), ("deny", "frozen_tests_during_a_fix"))
+
+        def test_20d_unreadable_status_file_is_previous_behavior(self):
+            """A corrupt orchestrator-state.json fails open to the pre-status
+            behavior -- still denies, same as no state file at all, like
+            every other filesystem read in this module."""
+            d = self.make_bugfix()
+            touch(Path(d) / "orchestrator-state.json", "{not valid json")
+            path = touch(Path(self.root) / "tests" / "test_api.py", "old")
+            decision, rule, _ = self.decide("Edit", {"file_path": path})
+            self.assertEqual((decision, rule),
+                             ("deny", "frozen_tests_during_a_fix"))
+
+        def test_20e_escalated_status_also_disarms_commit_rule(self):
+            """The same closed flag feeds rule 1's arms_rule_1(): an escalated
+            bugfix lane has nothing left to route through the commit gate."""
+            self.make_bugfix(status="escalated")
+            self.assertEqual(
+                self.decide("Bash", {"command": "git commit -m x"})[0], "allow")
 
         # -- rule 3: no delegation before intake ------------------------
 
