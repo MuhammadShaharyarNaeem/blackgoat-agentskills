@@ -205,7 +205,7 @@ A metric you cannot read is `BLOCKED`, named — never a remembered value and ne
   `- <check>: PASS|FAIL|BLOCKED|NOT RUN — exit <N> — <detail> — capture: evidence/runtime/<file>.md`
 
   ending in a single `**Verdict:** Pass` or `**Verdict:** Fail` line. A `PASS` or `FAIL` line cites its exit code **and** the `run_quiet.py --capture` artifact whose sidecar recorded that same exit code — an uncited executed line is refused (`check_uncaptured`), because everything else on it is text a delegate types; a `BLOCKED` or `NOT RUN` line gives a reason and cites nothing. The grammar authority is `{PLUGIN_ROOT}/pipeline-tools/SKILL.md` (`check_agent_report.py`) — it is the same grammar as the Security and Verification reports, deliberately, so one parser reads all three.
-- **Item 6 is graded, not eyeballed**: each Baseline metric captured before rollout is re-read from the same monitoring source and compared against the Rollout Decision Thresholds table. Red on any row is a `FAIL`, and a `FAIL` verdict is a rollback decision — execute the Rollback Steps within the rehearsed Time to Rollback, then escalate.
+- **Item 6 is graded, not eyeballed**: each Baseline metric captured before rollout is re-read from the same monitoring source and compared against the Rollout Decision Thresholds table. Red on any row is a `FAIL`, and a `FAIL` verdict is a live production defect: stop taking further deploy actions, present the Rollback Steps and the rehearsed Time to Rollback to the Orchestrator in the `<handoff>` (blockers: Critical), and **HALT** — executing a production rollback is the user's to authorize via the Orchestrator, never the delegated agent's (Orchestrator Contract §1 — irreversible actions need explicit user confirmation; `bgpdd-shipping` Step 5.5).
 
 ### Rollback Strategy
 
@@ -298,7 +298,7 @@ After deploying:
 - No viable rollback plan exists (e.g. an irreversible migration) → escalate to the Orchestrator before deploying, not after.
 - The rollback cannot be rehearsed (no non-production environment, no revert path) or the rehearsal fails → report the rehearsal `BLOCKED`/`FAIL` with a `NO-GO`; do not record a ladder estimate as a measured time.
 - No monitoring source exposes one of the three Baseline metrics → escalate as an Infrastructure gap before rollout; the threshold table cannot grade a canary without it.
-- The Post-Launch Verification report's verdict is `Fail` → this is a live production defect: execute the Rollback Steps within the rehearsed Time to Rollback and escalate to the Orchestrator immediately, in that order.
+- The Post-Launch Verification report's verdict is `Fail` → this is a live production defect: stop further deploy actions, present the Rollback Steps and the rehearsed Time to Rollback to the Orchestrator in the `<handoff>` (blockers: Critical), and **HALT** — do not execute the rollback yourself; authorization belongs to the user via the Orchestrator (Orchestrator Contract §1 — irreversible actions need explicit user confirmation; `bgpdd-shipping` Step 5.5).
 
 ## Deep Dive
 
