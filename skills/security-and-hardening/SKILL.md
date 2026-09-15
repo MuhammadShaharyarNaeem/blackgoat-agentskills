@@ -52,6 +52,18 @@ Controls bolted on without a threat model are guesses. Before hardening, spend f
 
 If you can't name the trust boundaries for a feature, you're not ready to secure it. This is OWASP **A04: Insecure Design** — most breaches begin in design, not code.
 
+### The Assurance Case Artifact
+
+When the work produces a project security document — a `SECURITY.md`, Cipher's hardening record, the shipping lane's security appendix — it has exactly five sections, in this order, saved at `.docs/{project-name}/implementation/security/assurance-case.md` and cited from the security report:
+
+1. **Threat model** — each actor with its trust level (trusted / semi-trusted / untrusted) and the assets worth taking.
+2. **Trust boundaries** — a table: boundary, what crosses it, the control at the crossing.
+3. **Design principles applied** — each named principle (least privilege, fail-safe defaults, complete mediation, …) mapped to the file or function that embodies it.
+4. **Countermeasures** — one row per OWASP Top 10 item: the mitigation with a `path:line` citation, **or** `Not applicable — <reason>`. Silence on a row is not a verdict; an unnamed reason is not a reason.
+5. **Automated verification** — each claim above mapped to the gate, test or command that checks it, or marked `manual` with the evidence path.
+
+A mitigation without a citation is a claim (`base-persona.md`, Evidence Integrity); a `Not applicable` without a reason is a gap wearing a label.
+
 ### The Three-Tier Boundary System
 
 #### Always Do (No Exceptions)

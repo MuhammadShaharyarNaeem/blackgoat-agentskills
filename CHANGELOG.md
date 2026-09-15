@@ -3,6 +3,13 @@
 All notable changes to the `blackgoat-agentskills` plugin are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [2.7.2] — 2026-09-15
+
+### Added
+- `agents/luna.md` — **scope fence on findings**: context reads may range over the whole repository (callers, consumers, tests), but every finding names a file in the packaged diff; a defect seen elsewhere is an out-of-scope note in the handoff, never a finding against the milestone. Closes the second-pass read of alibaba/open-code-review, whose main-task prompt fences the same way.
+- `skills/database-migration-patterns/SKILL.md` § The Reviewed SQL Diff Artifact — an **injection precision rule with an explicit do-not-report list**: flag only dynamic SQL spliced from a request-sourced value; parameterised bindings and static statements are never findings.
+- `skills/security-and-hardening/SKILL.md` § The Assurance Case Artifact — the required five-section shape (threat model, trust boundaries, design principles applied, OWASP countermeasures with `path:line` or `Not applicable — <reason>`, automated verification) for any project security document, saved under `implementation/security/assurance-case.md` and cited from the security report.
+
 ## [2.7.1] — 2026-09-15
 
 ### Migration notes — gate-contract changes

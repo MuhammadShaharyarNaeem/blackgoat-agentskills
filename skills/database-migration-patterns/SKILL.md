@@ -39,6 +39,7 @@ Generate the migration as SQL and review it as a diff before it runs anywhere:
 - Save the output to `.docs/{project-name}/implementation/evidence/migration/<name>.sql` and cite that path in your `<handoff>`.
 - Read the generated SQL. An auto-generated migration routinely contains an operation the model change did not intend — a dropped index, a re-created constraint, a table rebuild. An unread script is an unperformed check (`base-persona.md`, Evidence Integrity).
 - Scripts are **idempotent**, so a partially-applied migration can be re-run safely.
+- **Reading data-access code for injection — a precision rule.** Flag only dynamic SQL assembled from a request-sourced value by concatenation or interpolation (`FromSqlRaw`/`ExecuteSqlRaw` fed a `+`-built or `$"..."` string, an ORM `${...}`-style splice, a hand-built `WHERE` clause). **Do not report** parameterised bindings (`FromSqlInterpolated`, `@p0`/`:name` parameters, `#{...}`-style placeholders) or a static statement with no dynamic value: the binding *is* the fix, and a finding against it teaches the reader to skim real ones.
 
 ### Destructive Operations Require an Explicit Waiver
 
