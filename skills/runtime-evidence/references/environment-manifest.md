@@ -1,14 +1,16 @@
 # The Environment Manifest — authoring contract
 
-This is the **authoring** half of `SKILL.md` § *The Environment Manifest*: the block-by-block
+This is the depth half of `SKILL.md` § *The Environment Manifest*: the block-by-block
 format, the three entry points and their precedence, how to select the minimal bring-up subset,
-and the ledger mechanics of a missing-capability blocker.
+and the missing-capability ask-now/keep-working/stop protocol with its blocker ledger mechanics.
 
-**Audience: the Orchestrator, in the main session.** Three pipeline steps cite this file as their
-format authority — `/bgpdd-discovery` Phase 4b, `/bgpdd-plan` Phase 3.6, and `/bgpdd-build`
-Phase 0 — and each of them writes the manifest *with the user*. **No delegated agent authors this
-file or fills a gap in it**; that rule is in the spine, and it is why this half lives here rather
-than on every verifying agent's wake-up path.
+**Audience: mainly the Orchestrator, in the main session.** Three pipeline steps cite the block
+format and entry-point precedence below as their format authority — `/bgpdd-discovery` Phase 4b,
+`/bgpdd-plan` Phase 3.6, and `/bgpdd-build` Phase 0 — and each of them writes the manifest *with
+the user*. **No delegated agent authors this file or fills a gap in it**; that rule is stated in
+the spine, and it is why the authoring half lives here rather than on every verifying agent's
+wake-up path. The missing-capability protocol below (*Ledger mechanics*) is also read by any
+agent running a probe, on demand — the spine states only that the rule exists.
 
 ## The blocks
 
@@ -51,8 +53,22 @@ unstated assumption about what the claim covers.
 
 ## Ledger mechanics of a missing capability
 
-The spine states the rule: ask now, keep working, and stop at the first step that needs it. These
-are the mechanics that keep the deferral honest.
+**A missing capability is requested immediately and blocks at the evidence boundary — not at
+detection.** Docker is not installed, the browser tooling is absent, the test device is
+unprovisioned, a credential has no source. Halting the run on the spot wastes the one resource the
+situation actually gives you: the human can install Docker while you write the code. So:
+
+1. **Ask now**, naming exactly what and why — *"Docker Desktop, to run the local Postgres this
+   API's integration tier needs"*. Specific enough to act on without a follow-up question, and
+   **before the work starts**, never at capture time: at that point the only remaining move is a
+   lower tier, which the Tier Ladder forbids.
+2. **Keep working on everything that does not need it.** Write the code. Run the tiers you can
+   reach. A missing Tier-3 capability does not make Tier 1 and 2 unavailable.
+3. **Stop at the first step that needs it** — your own self-verification, the verifier's capture,
+   the gate that reads it. Not one step past. That boundary is exactly where a deferral would
+   otherwise turn into a shipped claim with nothing behind it.
+
+These are the mechanics that keep that deferral honest:
 
 1. **Record the request as a blocker in the same breath** (`update_state.py --add-blocker`). The
    request is what parallelizes the wait; the blocker is what keeps the deferral honest. Never one
