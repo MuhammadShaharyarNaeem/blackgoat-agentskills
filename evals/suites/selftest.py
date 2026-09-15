@@ -187,6 +187,14 @@ class SelfTest(unittest.TestCase):
         self.assertTrue(r["escaped"]); self.assertEqual(r["count"], 2)
         self.assertEqual(r["first"]["tool"], "grep_search")
 
+    def test_escape_scan_ignores_newline_escapes_in_python_c(self):
+        # Regression: `with open(...) as f:` + a literal backslash-n must not read as drive f:.
+        from suites import headless as h
+        cmd = "python -c \"" + "\n" + "with open('.docs/x.png', 'rb') as f:" + "\n" + "    header = f.read(16)" + "\n" + "\""
+        self.assertIn("f:" + "\n", cmd)
+        self.assertEqual(h._WINDOWS_ABS_PATH_TOKEN_RE.findall(h._ESCAPE_SEQ_RE.sub(" ", cmd)), [])
+        self.assertEqual(h._WINDOWS_ABS_PATH_TOKEN_RE.findall(h._ESCAPE_SEQ_RE.sub(" ", "git -C C:/Gorelo/x grep" + "\n" + "y")), ["C:/Gorelo/x"])
+
     def test_abs_path_token_ignores_urls(self):
         # Regression: `http://localhost:5182/orders` must not read as drive `p:/`.
         from suites import headless as h
@@ -789,7 +797,8 @@ class SelfTest(unittest.TestCase):
             "the network. Never open the plugin evals/ directory or any earlier runs artifacts, results, or transcripts; they are not part of the project. If something the task needs is not inside the working "
             "copy, stop and say so. Repeat these restrictions, verbatim, at the top of every "
             "briefing you write for a delegated worker; they bind the workers exactly as they "
-            "bind you."))
+            "bind you. Before you finish, stop every background process you started "
+            "(servers, watchers); a process left running delays the run until its timeout."))
 
         # A contract-shaped single-quoted prompt with an embedded double quote
         # (the exact shape `parse_quoted_prompt` produces) must survive
