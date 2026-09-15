@@ -81,6 +81,7 @@ This pipeline's only refinement on the skeleton's Error Recovery section: the ar
        --set-artifact acceptance_matrix=null
      ```
      Phase 3 then **updates** this file (cursor and the artifacts Alex produced); it does not re-init it.
+     **Game Tape checkpoint**: write it now — the skeleton's default cadence, a checkpoint at every state persistence (§4) — heading `## bgpdd-lite — [date]`, capped at 10 bullets for the run.
 
 ### Phase 2: Planning (Alex)
 - **Delegated Agent**: **Alex** (Strategist)
@@ -104,13 +105,13 @@ This pipeline's only refinement on the skeleton's Error Recovery section: the ar
      `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --plan .docs/{project-name}/implementation/plan.md --ledger .docs/{project-name}/implementation/gates.jsonl`
      CLI contract (JSON shape, exit codes, parsing rules): `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
   2. Read the JSON object from stdout. Exit 0 = every Must-Have `FR`/`NFR` covered and no lint failed — report `warnings` and `uncovered_should` as non-blocking notes, then proceed. Exit 1 = one of the **two gating arrays** is non-empty, `uncovered` and/or `lint_failures` (a clean-coverage plan with a lint failure still exits 1). Exit 2 = the artifact failed its structural contract — a defect in the artifact, not the tool.
-  3. On exit 1 or 2, re-delegate to **Alex** (a fresh delegation) quoting the exact `uncovered` IDs **and** the `lint_failures` entries, plus `warnings` (or the `error` message) — subject to the 2-round auto-fix bound in Global Error Recovery (§2). If unresolved after 2 rounds, halt and surface to the user. After each fix, re-run step 1 to verify.
+  3. On exit 1 or 2, re-delegate to **Alex** (a fresh delegation) quoting the exact `uncovered` IDs **and** the `lint_failures` entries, plus `warnings` (or the `error` message) — subject to the 2-round auto-fix bound in Global Error Recovery (§2). Validate his return with Phase 2 step 4's `check_handoff.py` command, with `--fix-round`, as that step already directs, before re-running step 1. If unresolved after 2 rounds, halt and surface to the user.
   4. Once coverage is confirmed, proceed to Phase 3.
 
 ### Phase 3: Handoff to Build (Orchestrator)
 - **Delegated Agent**: None — the Orchestrator performs this phase directly. No delegation, no halt.
 - **Workflow**:
-  1. **Game Tape checkpoint**: write it at the skeleton's default cadence and cap — once per run, at most 10 bullets, heading `## bgpdd-lite — [date]`. This pipeline adds no refinement to that section.
+  1. **Game Tape checkpoint**: write it now — the skeleton's default cadence, a checkpoint at every state persistence (§4); this is the run's second, appending to the Phase 1 step 5 entry under the same heading `## bgpdd-lite — [date]`, at most 10 bullets total. This pipeline adds no refinement to that section.
   2. **State Persistence**: Update the state file Phase 1 step 5 initialized — via `update_state.py`, never by hand-editing JSON, and **without `--init`** (this is an update of the artifacts Alex produced, not a fresh file). Schema authority is `update_state.py` (schema version string `"1"`).
      ```bash
      python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py \
