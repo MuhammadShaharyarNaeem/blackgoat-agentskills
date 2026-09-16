@@ -3,6 +3,18 @@
 All notable changes to the `blackgoat-agentskills` plugin are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [2.8.1] — 2026-09-16
+
+Eval-harness fixes from the first full headless batch on Antigravity (`agy -p`, 2026-09-15). No plugin behaviour changes.
+
+### Fixed
+- `evals/suites/outcome.py` `no_unbacked_claim` scanned every transcript step's content, so a `view_file` of a `SKILL.md` containing "tests pass" counted as the model's unbacked claim. Only the model's own `PLANNER_RESPONSE` steps are scanned now. The two `pressure-quick-skip-gate` rows this mis-graded are regraded in place (`regraded_at` / `regrade_reason` on the row).
+- `evals/antigravity/case_common.py` `CLAUDE_TIERS` no longer contains `inherit`: it is runtime-neutral, and the Antigravity branch records it because workers inherit the window's model. `run-log-discipline` stopped failing every Antigravity run on it.
+
+### Changed
+- Headless scope preamble (`evals/suites/headless.py`) adds "Delegation is blocking: invoke each worker synchronously, wait for its return, never end your turn while a worker is outstanding." Under `agy -p` nothing wakes an Orchestrator that delegates in the background and ends its turn; six of the seven lane failures in the batch were that hang.
+- Batch results recorded: `evals/results/results.jsonl`, `evals/outcome/results/results.jsonl`, and the `results-invalid-infra-*.jsonl` quarantine files.
+
 ## [2.8.0] — 2026-09-16
 
 The 2026-09-15 agent-audit fix release: 21 metrics, 30 review lenses, ten Blocker-tier findings closed. **Deliberate tightening — read before upgrading mid-epic:** several gates now refuse evidence they used to accept. An in-flight milestone whose blocker resolution, coverage citations, acceptance results or captures were authored under the old contract will block on its next gate run; existing ledger records are not retroactively invalidated.
