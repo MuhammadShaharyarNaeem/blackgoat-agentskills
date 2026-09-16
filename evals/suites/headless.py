@@ -312,7 +312,10 @@ def scope_preamble(workspace):
             "something the task needs is not inside the working "
             "copy, stop and say so. Repeat these restrictions, verbatim, at the top of every "
             "briefing you write for a delegated worker; they bind the workers exactly as they "
-            "bind you. Before you finish, stop every background process you started "
+            "bind you. Delegation is blocking: invoke each worker synchronously, wait for "
+            "its return before doing anything else, and never end your turn while a worker "
+            "is outstanding; nobody is at the keyboard to resume you. Before you finish, "
+            "stop every background process you started "
             "(servers, watchers); a process left running delays the run until its timeout.")
 
 
