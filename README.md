@@ -7,7 +7,7 @@ A Claude Code plugin that packages an **agent squad** and a **Prompt-Driven Deve
 - **Plugin:** `blackgoat-agentskills` v2.8.1 — see [CHANGELOG.md](CHANGELOG.md)
 - **Author:** shaharyar.naeem (shaharyar.naeem@gorelo.io)
 
-> Note: this repo's `AGENTS.md` is the Google Antigravity runtime contract, not the generic cross-tool "AGENTS.md" coding-agent convention — see [docs/cursor-setup.md](docs/cursor-setup.md).
+> Note: this plugin ships no `AGENTS.md`. Under Google Antigravity the runtime contract — how "delegate to \<Agent\>" maps to the registered squad agents, blocking delegation, and `{PLUGIN_ROOT}` resolution — lives in the user's global `~/.gemini/config/AGENTS.md`, outside the plugin. Cursor uses `rules/cursor-runtime.mdc` instead — see [docs/cursor-setup.md](docs/cursor-setup.md).
 
 ![blackgoat-agentskills: claude plugin validate passing, the plugin manifest, and the 16-agent squad inventory](assets/preview.svg)
 

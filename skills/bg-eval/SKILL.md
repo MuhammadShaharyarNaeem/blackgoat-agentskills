@@ -37,7 +37,7 @@ This is the heart of the lane. Every path a worker touches — fixture, `.docs/.
 - **Trigger prompts** (suite `trigger`): delegate one FRESH worker whose briefing is ONLY the bare prompt plus "Your working copy is `<workspace>`." — no persona, no lane name, no mention of skills, plugins, or evals. What's graded is which `skills/<name>/SKILL.md` that worker opens first, so the Orchestrator must not read any SKILL.md on the worker's behalf or hint at one. Deliberately refining (convention #8) `agent-squad/SKILL.md` §4's briefing format, which normally opens `BRIEFING FOR [AGENT NAME]` and names the persona — here the persona is exactly what must not be named.
 - **`--parallel N`**: launch up to N cases' delegations in one message, each with its own workspace and never a shared `.docs` root — lighter than `bgpdd-bugfix-batch`'s git-worktree isolation, deliberately (convention #8): these are throwaway fixture copies, not live branches sharing a merge queue.
 
-Delegation uses this session's own mechanism — native subagent delegation under Claude Code, or the `define_subagent` → `invoke_subagent` → `kill` lifecycle in `AGENTS.md` under Antigravity.
+Delegation uses this session's own mechanism — native subagent delegation under Claude Code, or synchronous invocation of the registered squad agents under Antigravity (the runtime contract in the user's global Antigravity rules).
 
 ### Phase 3 — Grade
 Per suite that ran: `python evals/run_suite.py grade --all-runs <this batch's ts> --record`. Paste each SUMMARY table verbatim, with a one-line reading of each FAIL, the INFRA count, and the reminder that one run is one of five (`evals/README.md`'s `runs=5`, 4/5 threshold) — a single run proves nothing on its own.

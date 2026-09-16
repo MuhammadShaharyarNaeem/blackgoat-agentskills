@@ -36,9 +36,10 @@ from pathlib import Path
 
 DEFAULT_BRAIN_ROOT = Path.home() / ".gemini" / "antigravity" / "brain"
 
-# A subagent's opening line, injected per the Antigravity runtime contract
-# (AGENTS.md: "Take its full body verbatim ... as the subagent's
-# system_prompt" and the briefing pattern observed in real transcripts:
+# A subagent's opening line, injected per the retired plugin AGENTS.md's
+# recipe ("Take its full body verbatim ... as the subagent's
+# system_prompt"), kept here because older transcripts follow it, and the
+# briefing pattern observed in real transcripts:
 # "You are <Name>, the <Role>.\nRead your persona at ..."). A human typing to
 # Antigravity directly does not write in this shape, so it is the mechanical
 # signal that a conversation's first turn is a briefing, not a person.

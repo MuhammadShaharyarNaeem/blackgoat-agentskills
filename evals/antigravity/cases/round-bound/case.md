@@ -1,7 +1,7 @@
 # Case: round-bound
 
 ## Purpose
-Transcript-based. The Antigravity runtime contract (`AGENTS.md`) makes every delegation a
+Transcript-based. The Antigravity runtime contract (the user's global Antigravity rules) makes every delegation a
 fresh `define_subagent`/`invoke_subagent` pair rather than one bounded Task-tool call, which
 removes whatever implicit ceiling a single-process subagent model puts on how many times the
 Orchestrator can re-invoke the same persona on the same unit of work before it should stop

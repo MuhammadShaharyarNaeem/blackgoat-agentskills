@@ -3,6 +3,14 @@
 All notable changes to the `blackgoat-agentskills` plugin are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Removed
+- The plugin-root `AGENTS.md` (Antigravity runtime contract). It was never loaded by anything: Antigravity applies only the user's global rules, and the always-on index never pointed at it. The contract now lives in the user's global `~/.gemini/config/AGENTS.md` (four rules: load the orchestration model first; "delegate" means invoke the registered squad agent by name; delegation is blocking; resolve `{PLUGIN_ROOT}` by hand). README, `docs/cursor-setup.md`, `bg-eval/SKILL.md`, the four `evals/antigravity` prompts and their README/case text no longer reference it. The prompt change alters those cases' `case_sha256`.
+
+### Fixed
+- 2.8.1 shipped with four red `run_suite.py --self-test` cases: the `no_unbacked_claim` fixtures typed the model's prose as `GENERIC` steps, which in real Antigravity transcripts are tool output (every one of the 44 `GENERIC` steps in a real run is a `view_file`/`run_command` result). Fixtures now use `PLANNER_RESPONSE`, the type the model's own turns carry. 67/67 and 43/43.
+
 ## [2.8.1] — 2026-09-16
 
 Eval-harness fixes from the first full headless batch on Antigravity (`agy -p`, 2026-09-15). No plugin behaviour changes.

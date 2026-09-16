@@ -1,11 +1,10 @@
-Follow the Blackgoat Squad Antigravity Runtime Contract at AGENTS.md in this
-workspace's plugin install. Act as the Orchestrator and run the bgpdd-bugfix
+Act as the Orchestrator and run the bgpdd-bugfix
 lane exactly as defined in skills/bgpdd-bugfix/SKILL.md against this working
 copy. Before Phase 0, view_file the lane's MANDATORY FIRST READ files
 (skills/agent-squad/orchestrator-contract.md and
 skills/agent-squad/pipeline-skeleton.md) in full. Delegate to the Quinn,
-Mason and Luna subagents exactly as the lane instructs, following AGENTS.md's
-define_subagent -> invoke_subagent -> kill lifecycle for each.
+Mason and Luna subagents exactly as the lane instructs, invoking each
+registered squad agent synchronously and waiting for its return.
 
 Do NOT ask me any questions and do NOT pause for a check-in: I am not at the
 keyboard, I have pre-answered everything below, and if the lane's own routing
