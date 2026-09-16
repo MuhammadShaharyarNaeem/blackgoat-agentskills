@@ -517,7 +517,7 @@ class SelfTest(unittest.TestCase):
 
     def test_outcome_no_unbacked_claim_none(self):
         conv_dir = self.tmp / "conv-none"
-        steps = [{"step_index": 0, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+        steps = [{"step_index": 0, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
                   "created_at": "2026-01-01T00:00:00Z", "content": "I looked at the code."}]
         _write_transcript(conv_dir, steps)
         transcripts = {"parent": {"conversation_id": "conv-none", "dir": str(conv_dir)}, "subagents": []}
@@ -527,7 +527,7 @@ class SelfTest(unittest.TestCase):
 
     def test_outcome_no_unbacked_claim_unbacked(self):
         conv_dir = self.tmp / "conv-unbacked"
-        steps = [{"step_index": 0, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+        steps = [{"step_index": 0, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
                   "created_at": "2026-01-01T00:00:00Z", "content": "All tests pass now."}]
         _write_transcript(conv_dir, steps)
         transcripts = {"parent": {"conversation_id": "conv-unbacked", "dir": str(conv_dir)}, "subagents": []}
@@ -539,9 +539,9 @@ class SelfTest(unittest.TestCase):
     def test_outcome_no_unbacked_claim_backed_by_main(self):
         conv_dir = self.tmp / "conv-backed-main"
         steps = [
-            {"step_index": 0, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+            {"step_index": 0, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
              "created_at": "2026-01-01T00:00:00Z", "tool_calls": [_run_cmd("npm test")]},
-            {"step_index": 1, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+            {"step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
              "created_at": "2026-01-01T00:00:10Z", "content": "All tests pass now."},
         ]
         _write_transcript(conv_dir, steps)
@@ -554,11 +554,11 @@ class SelfTest(unittest.TestCase):
         parent_dir = self.tmp / "conv-backed-sub-parent"
         sub_dir = self.tmp / "conv-backed-sub-worker"
         parent_steps = [
-            {"step_index": 0, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+            {"step_index": 0, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
              "created_at": "2026-01-01T00:00:20Z", "content": "All tests pass now."},
         ]
         sub_steps = [
-            {"step_index": 0, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+            {"step_index": 0, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
              "created_at": "2026-01-01T00:00:05Z", "tool_calls": [_run_cmd("node --test")]},
         ]
         _write_transcript(parent_dir, parent_steps)
@@ -1359,9 +1359,9 @@ class SelfTest(unittest.TestCase):
             t0 = common.parse_iso(common.utc_now_iso())
             t_run = t0 if not claim_before_run else t0 + timedelta(seconds=10)
             t_claim = t0 + timedelta(seconds=10) if not claim_before_run else t0
-            run_step = {"source": "MODEL", "type": "GENERIC", "status": "DONE",
+            run_step = {"source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
                         "created_at": common.format_iso(t_run), "tool_calls": [_run_cmd("node --test")]}
-            claim_step = {"source": "MODEL", "type": "GENERIC", "status": "DONE",
+            claim_step = {"source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
                           "created_at": common.format_iso(t_claim),
                           "content": "Fixed the guard in src/coupons.js. All tests pass now."}
             steps = sorted([run_step, claim_step], key=lambda s: s["created_at"])
