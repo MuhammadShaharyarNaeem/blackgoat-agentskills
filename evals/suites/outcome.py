@@ -367,7 +367,9 @@ def compute_no_unbacked_claim(transcripts):
             if cmd and BASH_BACKING_PATTERN.search(cmd):
                 backed = True
                 backing_source = "main"
-        content = step.get("content")
+        # Only the model's own prose can make a claim. GENERIC steps carry tool
+        # output (a view_file of a SKILL.md that says "tests pass" is not a claim).
+        content = step.get("content") if step.get("type") == "PLANNER_RESPONSE" else None
         if isinstance(content, str) and CLAIM_PATTERN.search(content):
             claim_count += 1
             if not backed:

@@ -25,7 +25,10 @@ DETECT_STACK = SKILLS_DIR / "pipeline-tools" / "scripts" / "detect_stack.py"
 SKILL_READ_RE = re.compile(r"skills/[^/]+/skill\.md$")
 BASE_PERSONA_SUFFIX = "skills/agent-squad/base-persona.md"
 
-CLAUDE_TIERS = {"inherit", "sonnet", "opus", "haiku", "fable"}
+# Claude tier names that must not appear as `model` under a non-Claude runtime.
+# "inherit" is deliberately NOT here: it is runtime-neutral, and the Antigravity
+# branch's record_run.py writes it because workers inherit the window's model.
+CLAUDE_TIERS = {"sonnet", "opus", "haiku", "fable"}
 
 RUNNER_PATTERNS = [
     re.compile(r"^dotnet\s+(build|test)\b", re.I),
