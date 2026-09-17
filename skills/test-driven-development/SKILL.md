@@ -42,6 +42,8 @@ NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST
 
 1. **RED**: Write one failing test for the next behavior. Verify it fails for the expected reason (feature missing — not a typo or error).
 2. **GREEN**: Write the minimum code to pass — no speculative features, options, or abstractions (YAGNI). Verify it passes; run the full suite and confirm all green, output pristine.
+   - **Retries are instrumentation, not treatment: a pass that needed a retry is a flake signal, not a GREEN.** Tightens this step's "Verify it passes" (convention #8 — deliberately narrower: a run that only went green after a retry no longer counts as "passes" here). Enforced mechanically (convention #9) by `check_red_green.py --no-flaky-pass`, which scans the GREEN capture's runner output for a pass-on-retry marker (Playwright's flaky summary or retry-attempt line, pytest-rerunfailures' `RERUN`) and fails closed when one is found.
+   - **A flaky test is quarantined within 24h**: pulled out of the merge-blocking suite into a named triage list kept in the project's `.docs/{project-name}/` memory — never deleted (deleting an unreconciled flake deletes a bug report, not the bug) — and re-enters the suite only after a retry-free GREEN. This stays prose (convention #9): which test is quarantined and when is a scheduling decision, not a moment where an agent is tempted to skip a restraint at the point of commit.
 3. **REFACTOR**: Clean up without changing behavior. Tests stay green.
 4. Repeat for the next behavior.
 
