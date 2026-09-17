@@ -81,7 +81,7 @@ Exit codes:
   2  usage error, a malformed registry, an unknown name or an unknown lane
 
 Self-test:
-  python tool_registry.py --self-test  (47 cases)
+  python tool_registry.py --self-test  (48 cases)
 """
 
 KINDS = ("gate", "writer", "detector", "lint", "driver", "hook")
@@ -396,7 +396,9 @@ def verify_registry(registry_path):
     # and an object whose template invokes some other script (template_drift).
     # Step B2 deletes the lanes' own inline copies; once it lands there are no
     # mentions left to scan and lane_unmapped goes vacuous BY DESIGN. It guards
-    # the window until then, and any mention re-introduced afterwards.
+    # the window until then, and any mention re-introduced afterwards. The one
+    # permanent exemption is this router: B2 has every lane cite it by path, and
+    # it carries no lanes[] objects of its own.
     by_script = {}
     for entry in tools:
         by_script.setdefault(Path(entry.get("script", "")).name, entry)
@@ -441,6 +443,8 @@ def verify_registry(registry_path):
         for lineno, line in enumerate(text.splitlines(), 1):
             for match in SCRIPT_MENTION.finditer(line):
                 basename = match.group(1) + ".py"
+                if basename == "tool_registry.py":
+                    continue  # the router itself: cited by every lane, has no lanes[]
                 entry = by_script.get(basename)
                 mapped = any(
                     isinstance(i, dict) and i.get("lane") == lane
@@ -1003,6 +1007,21 @@ def self_test():
               ":2 names demo.py" in report["problems"][0]["detail"]
               and report["problems"][0]["fix"],
               str(report["problems"][0]))
+
+        d = Path(tmp) / "lane_router_cite"
+        rreg = _fixture(
+            d,
+            [_entry()],
+            {"demo.py": _compliant("demo.py", desc)},
+            lanes={
+                "bgpdd-demo": "# demo lane\n1. Gate: run `python {PLUGIN_ROOT}"
+                "/pipeline-tools/scripts/tool_registry.py for --lane bgpdd-demo"
+                " --phase 2` and execute the `demo` line it prints.\n"
+            },
+        )
+        report = verify_registry(rreg)
+        check("a lane citing tool_registry.py alone passes verify",
+              report["result"] == "PASS", str(report["problems"]))
 
         d = Path(tmp) / "lane_missing"
         mreg = _fixture(
