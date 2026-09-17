@@ -1529,24 +1529,109 @@ def lint_report(report, scenarios, matrix_text, args):
 # CLI
 # ---------------------------------------------------------------------------
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Gates the feature-scoped acceptance walkthrough: that the matrix "
+           "was RUN, or that it is well-formed at plan time.")
+
+EPILOG = """\
+Reads:
+  --matrix <path>  Alex's acceptance-matrix.md. A scenario is a level-2
+    heading carrying an id, a priority and its requirement ids, followed by
+    a step table:
+      ## AS-2 Client mapping lifecycle -- P0 -- (FR-3, FR-4)
+      Surface: web+api | Preconditions: integration connected (AS-1)
+
+      | # | GO | DO | ASSERT | Stores | Mode |
+      |---|----|----|--------|--------|------|
+      | 1 | Clients list | map client A | 200 + row | api, db | auto |
+      | 3 | Clients list | unmap A [inverse of 1] | row gone | api | auto |
+      | 4 | Asset policies | distribute [no inverse: <why>] | ... | manual |
+    An explicit `Mode: manual` cell (and a step whose Mode is unrecognized,
+    which fails closed to manual) must cite an EXISTING file under an
+    `evidence/runtime/` directory carrying a `## Captured output` section;
+    every other step -- auto, blank, or with no Mode column at all -- must
+    cite one that ALSO carries a .meta.json sidecar whose capture_sha256
+    still matches. Whether that capture is honest stays
+    check_runtime_evidence.py's job.
+  --results <path>  Quinn's acceptance-results.md (execution mode only).
+    One result per line, keyed `<ScenarioId>.<StepNumber>` -- a DOT only:
+      - AS-2.3: PASS -- exit 0 -- capture: evidence/runtime/unmap.md
+    Status is PASS | FAIL | BLOCKED | NOT RUN.
+  --requirements <path>  requirements.md (--lint-only only): every
+    Must-Have FR/NFR must be cited by at least one scenario heading.
+  --changed-files <p>... (execution mode only) the results file's mtime
+    must be >= the newest of them.
+  --repo <dir>  default '.'.  --min-scenarios <N>  default 1.
+  --require-priority P0[,P1]  is "at or above", so P1 gates {P0, P1};
+    omitted, every scenario is gated.
+  --emit-gate-args  reads the matrix's `## Environment` preamble --
+    `- Key: value` lines under a level-2..4 Environment heading, up to the
+    next heading of that level or higher, fences blanked: `- Surface:`,
+    `- Expect status:` (or Expected status), `- Response keys:` (or
+    Require key(s), Response envelope keys, Envelope keys),
+    `- Forbidden hosts:` (or Forbidden host patterns, Forbid host(s)).
+    Values are comma- and/or whitespace-separated, backticks stripped;
+    none / n/a / TBD / - / unknown count as absent. Works in BOTH modes and
+    is ADVISORY -- it never changes an exit code. A REPEATED Surface or
+    Expect status is ambiguous, not last-wins: it emits nothing for that
+    field and names the conflict in warnings.
+
+JSON keys:
+  Always printed on stdout; every key is present in both modes.
+  matrix, results, requirements, lint_only, require_priority,
+  min_scenarios, changed_files, stale_results, scenarios,
+  gated_scenarios, steps, steps_gated, passed, failed, blocked, not_run,
+  missing_results, unevidenced_manual, dangling_inverse,
+  undeclared_inverse, extra_results, warnings, result, error;
+  structure mode adds linted_scenarios, exempt_steps, invalid_exemption,
+  missing_priority, missing_step_table, missing_columns,
+  unrecognized_mode, missing_stores, duplicate_keys, malformed_steps, and
+  -- only with --requirements -- must_have, should_have, uncovered_should,
+  lint_failures; plus gate_args {surface, expect_status, require_keys,
+  forbid_hosts, argv, source} with --emit-gate-args, else null.
+
+Exit codes:
+  0  gated scenarios >= --min-scenarios, at least one gated step had a
+     result, and the blocking arrays are empty.
+  1  any gated step missing a result, any gated FAIL / BLOCKED / NOT RUN,
+     an unevidenced gated manual step, any dangling [inverse of N], an
+     unparsed gated step table, stale_results, too few scenarios, zero
+     gated steps, or -- structure mode -- any structural defect or an
+     uncited Must-Have.
+  2  mode-separation violations (--results or --changed-files with
+     --lint-only, --requirements without it), a missing or unreadable
+     matrix or results file, no parseable scenario or result line,
+     changed_file_missing, a --requirements file with zero Must-Haves, or
+     a bad --require-priority token.
+
+Self-test:
+  python check_acceptance_suite.py --self-test   (107 cases)
+"""
+
+
 def build_parser():
-    p = argparse.ArgumentParser(
+    p = PurposeFirstParser(
         prog="check_acceptance_suite.py",
-        description="Gates the feature-scoped acceptance walkthrough. Execution "
-                    "mode (default) gates --matrix against --results (was the "
-                    "matrix RUN); --lint-only gates that --matrix is well-formed "
-                    "at plan time (before code exists). --results/--changed-files "
-                    "are execution-mode only; --requirements is lint-only.",
-        epilog="Exit codes: 0 gated scenarios >= --min-scenarios, at least one "
-               "gated step had a result, and the blocking arrays are empty; "
-               "1 a missing/failed/blocked/unrun gated step, an unevidenced "
-               "manual step, a dangling inverse, stale_results, too few "
-               "scenarios, or (lint-only) a structural defect or uncited "
-               "Must-Have; 2 mode-separation violations, missing/unreadable "
-               "matrix or results, no parseable line, changed_file_missing, or a "
-               "bad --require-priority token. Machine-readable detail is JSON on "
-               "stdout: 'result', 'failed', 'blocked', 'not_run', 'warnings', "
-               "'error'.",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--matrix")
     p.add_argument("--results")

@@ -165,6 +165,51 @@ def check_all(skills_dir):
     return violations
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Validates every agent's Methodology Dependencies table: guard "
+           "wording, resolvable {PLUGIN_ROOT} paths, non-empty When cells.")
+
+EPILOG = """\
+Reads:
+  <skills_dir>/../agents/*.md -- each persona's "## Methodology Dependencies"
+    section, which must contain the guard wording "NOT Skill-tool invocables".
+    Inside it, every `{PLUGIN_ROOT}<rel/path>` token (backticks optional) must
+    resolve to a file under <skills_dir>. On a markdown table row, the LAST
+    cell is the "When" cell and must be non-empty:
+      | `{PLUGIN_ROOT}/<skill>/SKILL.md` | <what> | <When> |
+    Prose mentions of a path carry no When cell and are path-checked only.
+    agents/blackgoat.md is excluded (CLAUDE.md convention #7).
+
+Exit codes:
+  0  every dependency table valid.
+  1  at least one violation, reported one per line on stdout: a dangling
+     {PLUGIN_ROOT} path, a missing guard sentence, an empty "When" cell, or
+     an agent with no Methodology Dependencies section at all.
+  2  usage error, or a missing/empty agents/ directory (fails closed rather
+     than reporting a vacuous pass).
+
+Self-test:
+  python check_dependency_tables.py --self-test   (20 cases)
+"""
+
+
 def build_parser():
     """Real argparse, so `-h`/`--help` works like every sibling script.
 
@@ -173,11 +218,11 @@ def build_parser():
     "error: --help is not a directory". Behaviour and exit codes are
     unchanged -- only the parsing and the help text are new.
     """
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="check_dependency_tables.py",
-        description="Validate the Methodology Dependencies tables in agents/*.md.",
-        epilog="Exit 0 PASS, 1 violations found, 2 usage error or unreadable "
-               "agents/ directory.")
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "skills_dir", nargs="?",
         help="the plugin's skills/ directory (i.e. {PLUGIN_ROOT}); agents/ is "

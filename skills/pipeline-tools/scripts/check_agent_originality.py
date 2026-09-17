@@ -44,7 +44,7 @@ Usage:
     python check_agent_originality.py --self-test
 
 With no paths, compares the plugin's own `agents/*.md` and
-`skills/*/SKILL.md` under --repo (default: two levels up from this
+`skills/*/SKILL.md` under --repo (default: three levels up from this
 script, i.e. the plugin root). Explicit paths are re-grouped by shape --
 a file named `SKILL.md` joins the skills group, anything else joins the
 agents group -- so a CI job can pass only the files a change touched.
@@ -100,6 +100,13 @@ GROUP_SKILLS = "skills"
 
 BLACKGOAT_BASENAME = "blackgoat.md"
 BLACKGOAT_NOTE = "N/A by design, see CLAUDE.md #7"
+
+# This script lives at <plugin root>/skills/pipeline-tools/scripts/, three
+# directories below the plugin root -- `parents[3]`, NOT `parents[2]` (that
+# lands on skills/, where no agents/ dir exists, so a bare run found zero
+# files and exited 2). check_section_anchors.py derives its default the same
+# way.
+DEFAULT_REPO = Path(__file__).resolve().parents[3]
 
 DEFAULT_FAIL = 45.0
 DEFAULT_WARN = 25.0
@@ -300,15 +307,67 @@ def print_report(report):
 # CLI
 # ---------------------------------------------------------------------------
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Flags near-duplicate agents/*.md or skills/*/SKILL.md pairs via "
+           "entity-neutralized 8-word shingle overlap.")
+
+EPILOG = """\
+Reads:
+  agents/*.md and skills/*/SKILL.md (whole files, as plain text). With no
+  positional paths, the default sets are this plugin's own, under --repo.
+  Explicit paths are re-grouped by shape: a SKILL.md basename joins the
+  skills group, anything else joins the agents group. Only pairs WITHIN a
+  group are scored -- a persona is never compared to a methodology skill.
+
+  Neutralized before scoring, so none of it can manufacture or hide
+  overlap: this tree's agent names, stack words, the CLAUDE.md convention
+  #10 Quick card disclaimer and inline mapping (deliberately verbatim
+  across 17 skills), and the "## Worker Execution Contract" heading.
+
+  agents/blackgoat.md (CLAUDE.md convention #7) is compared but a pair
+  naming it can never FAIL or WARN; its tag reads
+  "N/A by design, see CLAUDE.md #7".
+
+JSON keys:
+  With --json:
+  result, files_checked, pairs_total,
+  stats      per-group count / worst / median
+  top_pairs, fails, warns
+
+Exit codes:
+  0  no pair at or above --fail.
+  1  at least one pair at or above --fail.
+  2  usage error: --repo is not a directory, --fail < --warn, a named path
+     does not exist, or no files were found.
+
+Self-test:
+  python check_agent_originality.py --self-test   (15 cases)
+"""
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="check_agent_originality.py",
-        description="Flag near-duplicate agents/*.md or skills/*/SKILL.md "
-                    "pairs via entity-neutralized 8-word shingle overlap.",
-        epilog="Exit codes: 0 no pair at/above --fail; 1 at least one pair "
-               "at/above --fail; 2 usage error (bad --repo, no files found, "
-               "an unreadable file). Machine-readable detail with --json: "
-               "'result', 'fails', 'warns', 'top_pairs', 'stats'.")
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("paths", nargs="*",
                         help="files to check (default: this plugin's own "
                              "agents/*.md and skills/*/SKILL.md under "
@@ -316,7 +375,7 @@ def build_parser():
                              "skills group; anything else joins the agents "
                              "group. Only pairs WITHIN a group are scored.")
     parser.add_argument("--repo",
-                        help="plugin root (default: two levels up from "
+                        help="plugin root (default: three levels up from "
                              "this script). Used to locate the default "
                              "file sets and to render relative paths in "
                              "the report.")
@@ -343,7 +402,7 @@ def main(argv):
     if args.self_test:
         return run_self_test()
 
-    repo = args.repo or str(Path(__file__).resolve().parents[2])
+    repo = args.repo or str(DEFAULT_REPO)
     if not Path(repo).is_dir():
         print("error: --repo {0} is not a directory".format(repo),
               file=sys.stderr)
@@ -557,6 +616,17 @@ def run_self_test():
                 main(["-h"])
             self.assertEqual(ctx.exception.code, 0)
             self.assertIn("usage:", out.getvalue())
+
+        def test_default_repo_is_the_plugin_root(self):
+            """A bare run must find this tree's own agents/ and skills/.
+
+            `parents[2]` landed on skills/, which has no agents/ dir, so the
+            default file set was empty and a bare run exited 2.
+            """
+            self.assertTrue((DEFAULT_REPO / "agents").is_dir(),
+                            "{0}/agents missing".format(DEFAULT_REPO))
+            self.assertTrue((DEFAULT_REPO / "skills").is_dir(),
+                            "{0}/skills missing".format(DEFAULT_REPO))
 
         def test_fail_below_warn_is_exit_2(self):
             err = io.StringIO()

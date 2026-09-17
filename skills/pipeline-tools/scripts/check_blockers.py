@@ -206,16 +206,68 @@ def build_report(state_path, milestone=None, severity_floor=DEFAULT_SEVERITY_FLO
     }
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Exits non-zero when a blocker in orchestrator-state.json still "
+           "stands at or above the severity floor for this milestone.")
+
+EPILOG = """\
+Reads:
+  --state <path>  the pipeline's orchestrator-state.json. Its blockers list
+  may hold either shape; both normalize to one schema before scoping:
+      {"id", "text", "milestone", "capability", "severity", "source",
+       "added", "evidence"}
+  A legacy freeform STRING normalizes to:
+      {"id": null, "text": <the string>, "milestone": null,
+       "capability": null, "severity": "Critical", "source": null,
+       "added": null, "evidence": null}
+  -- unscoped and Critical, the fail-safe reading. Normalization never
+  mutates the stored entry.
+
+  Scoping with --milestone: an entry blocks iff its milestone equals the
+  title exactly (case- and whitespace-insensitive) OR is null (an unscoped
+  entry still blocks). Entries scoped to another milestone land in
+  other_milestone_blockers and never block. Without --milestone, legacy
+  behaviour (gate on all) is unchanged.
+
+JSON keys:
+  Always printed on stdout (there is no --json flag):
+  state_file, milestone, severity_floor, pass, blocker_count, blockers,
+  blocking, other_milestone_blockers, pipeline, error
+
+Exit codes:
+  0  'blocking' is empty.
+  1  'blocking' is non-empty.
+  2  usage error (missing --state) or a structural failure (unreadable or
+     non-JSON state file).
+
+Self-test:
+  python check_blockers.py --self-test   (16 cases)
+"""
+
+
 def main(argv):
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="check_blockers.py",
-        description="Reads --state's orchestrator-state.json, normalizes every "
-                    "blocker entry (legacy freeform string or structured object) "
-                    "to one shape, and exits non-zero when one still blocks at "
-                    "or above --severity-floor.",
-        epilog="Exit codes: 0 'blocking' is empty; 1 non-empty; 2 usage/"
-               "structural failure. Machine-readable detail is JSON on stdout: "
-               "'blockers', 'blocking', 'other_milestone_blockers', 'pipeline'.",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--state")
     parser.add_argument("--milestone",

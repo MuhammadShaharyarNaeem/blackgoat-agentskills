@@ -756,16 +756,97 @@ def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code):
               file=sys.stderr)
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Deterministic gate for a security attack-matrix table: lints its "
+           "authoring, then gates its verdicts against Cipher's report.")
+
+EPILOG = """\
+Reads:
+  --matrix <path>  the attack-matrix markdown file. Its table:
+      | Category | Surface | Tier | Preconditions | Planned evidence | Verdict |
+    Tier is a bare token: provable | partial | not agent-testable.
+    Verdict is PASS | FAIL | BLOCKED (blank at lint time).
+    The document also carries an environment preamble naming
+    `Authorization:` and `Scope exclusions:`.
+  --report <path>  (results mode only) Cipher's security-report.md, read
+    under check_agent_report.py's check-line grammar:
+      - <name>: PASS|FAIL|BLOCKED|NOT RUN -- `<command>` -- exit <N> -- <counts> -- capture: evidence/<dir>/<file>.md
+    and its finding lines, for --require-priority's severity floor.
+  --repo <dir>     a Planned-evidence capture path resolves against it
+    first, then as given (default '.'; replaces the old --root).
+
+  Modes: --lint-only (Phase 1, before any probe runs, so no verdict-
+  dependent rule fires) and results mode (Phase 3, default).
+
+Problem codes:
+  Emitted in failures[].rule.
+  Lint mode:
+  row-incomplete               a row is missing one of the six fields
+  tier-token                   Tier is not one bare recognized token
+  not-agent-testable-evidence  such a row plans an actual capture probe
+  bac-precondition-lint        a BAC/IDOR/BOLA/BFLA row lacks two accounts
+  preamble-missing             no Authorization / Scope exclusions block
+  Results mode (tier-token repeats against the final table):
+  verdict-missing              a row carries no PASS/FAIL/BLOCKED verdict
+  not-agent-testable-pass      such a row's own Verdict cell says PASS
+  partial-uncovered            a partial row names no gap
+  pass-uncited                 a PASS row cites no capture path
+  pass-capture-missing         the cited capture is not on disk
+  precondition-missing         a provable/partial row has empty Preconditions
+  With --report:
+  row-uncited-in-report        no check line corresponds to the row
+  report-not-agent-testable-pass  its report check line was closed PASS
+  two-account-evidence-missing    its check line cites one identity only
+  With --require-priority:
+  finding-at-or-above-floor    a Finding at or above the given floor stands
+
+JSON keys:
+  Always printed on stdout (there is no --json flag):
+  mode (lint report only), matrix_file, repo, report_file,
+  require_priority (sorted list or null), rows_checked,
+  failures ([{line, category, rule, detail}]), result, error
+
+Exit codes:
+  0  no rule violation.
+  1  any row or finding fails a rule.
+  2  missing --matrix, an unreadable matrix or report, no table found, a
+     malformed row, --require-priority without --report, or an
+     unrecognized --require-priority token.
+
+Self-test:
+  python check_attack_matrix.py --self-test   (57 cases)
+"""
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="check_attack_matrix.py",
-        description="Deterministic gate for a security attack-matrix table.",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--matrix", help="path to the attack-matrix markdown file")
     parser.add_argument(
         "--repo", default=".",
         help="repo root a Planned-evidence capture path resolves against "
-             "(default: '.') — replaces the old --root",
+             "(default: '.') -- replaces the old --root",
     )
     parser.add_argument(
         "--lint-only", action="store_true",
@@ -774,7 +855,7 @@ def build_parser():
     )
     parser.add_argument(
         "--report",
-        help="Cipher's security-report.md — when given in results mode, "
+        help="Cipher's security-report.md -- when given in results mode, "
              "cross-references the matrix's rows against its check lines",
     )
     parser.add_argument(

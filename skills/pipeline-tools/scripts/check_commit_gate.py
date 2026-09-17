@@ -1711,6 +1711,112 @@ def build_report(args):
     return report
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("The bgpdd-build milestone commit gate: an approved, fresh review "
+           "over clean blockers, then it performs the commit itself.")
+
+EPILOG = """\
+Reads:
+  --review-report <path>  the LATEST `## Review: <milestone>` section only.
+    ANY level-2..6 heading closes that section's BODY, so
+    `**Verdict:** Approve | Request Changes` must come BEFORE any
+    subheading or the section reads as no-verdict and fails closed. Two
+    terms instead scan the WIDER matched_section_range, that heading
+    forward to the next level-2 `##`:
+    (a) verdict/severity consistency, DEFAULT ON, no flag. A FINDING LINE
+    is one whose first non-list-marker content is `**Critical:**` or
+    `**Important:**` (a `|`-prefixed row never counts); its block runs to a
+    blank line, a heading, or a sibling list item, and is resolved only if
+    that block holds the literal uppercase RESOLVED. Approve with one
+    standing unresolved fails; Request Changes is unaffected.
+    (b) --require-files-reviewed: a level 3-4 `Files reviewed` heading in
+    that range, first backticked path per list item. Every resolved
+    --changed-files path must appear (forward-slash, case-sensitive) --
+    presence only, not what the line says about it.
+  --state <path>  orchestrator-state.json; check_blockers.py's
+    normalization and exact-equality scoping. Scoped AND unscoped block;
+    --ignore-unscoped skips the unscoped; another milestone's never
+    blocks; Info never blocks (fixed floor).
+  --changed-files <p>...  required. A relative path resolves against
+    --repo then the cwd (accepted only if it then lies under --repo); an
+    absolute one must lie under --repo. --repo defaults to '.'; --docs-root
+    to the nearest '.docs' ancestor of --review-report or --state, else
+    --repo/.docs.
+  --max-changed-files <N>  counts the DECLARED paths; --verify-tree makes
+    that count the real diff. N < 1 is exit 2; unset, unapplied.
+    --waiver <path> (exit 2 without it) waives an overrun when it carries a
+    `## Size waiver` heading (level 2-4, outside a fence) with a non-empty,
+    non-placeholder body.
+  --ledger + --require-ledger-gates <name>[,...]  the chain must be
+    intact and each named gate's LATEST entry for this milestone PASS
+    over unchanged inputs.
+  --require-run-log <path> + --require-agents <name>[,...]  inseparable
+    (either alone is exit 2). Each agent needs a record_run.py delegation
+    record scoped EXACTLY to --milestone, carrying a non-null model.
+  Runtime-evidence flags forward to check_runtime_evidence.py; one passed
+  without --require-runtime-evidence is exit 2, never a no-op.
+
+Problem codes:
+  ledger_gate_problems[]: ledger_chain_broken, ledger_missing,
+    ledger_failed, ledger_stale
+  run_log_problems[]: run_log_missing, run_log_agent_missing,
+    run_log_model_missing
+  rendered_evidence warnings, per cited .png under
+    --require-rendered-evidence: sidecar_missing, sidecar_bad_origin
+    (non-http(s) url), sidecar_sha_mismatch (bytes changed),
+    sidecar_malformed
+  exit-2: changed_file_missing, changed_file_outside_repo
+
+JSON keys:
+  milestone, review_report, state_file, docs_root, review_found, verdict,
+  ambiguous_review_section, standing_findings ([{severity, line, text}]),
+  findings_consistent, stale, blocking, unscoped_blockers,
+  other_milestone_blockers, ignored_unscoped_ids, rendered_evidence,
+  rendered_evidence_ok, undeclared_changes, tree_verified,
+  require_files_reviewed, files_reviewed, files_unreviewed,
+  files_reviewed_ok, max_changed_files, changed_file_count, size_waiver
+  ({path, present, section_found, body_nonempty, satisfied}), size_ok,
+  already_committed, runtime_evidence, runtime_evidence_ok, ledger,
+  require_ledger_gates, ledger_gate_problems, ledger_gates_ok, run_log,
+  require_agents, run_log_problems, run_log_ok, warnings, committed,
+  result, error
+
+Exit codes:
+  0  gate passed (and committed, under --commit).
+  1  verdict not Approve, ambiguous_review_section, stale, non-empty
+     blocking, unignored unscoped_blockers, any of findings_consistent /
+     rendered_evidence_ok / runtime_evidence_ok / ledger_gates_ok /
+     run_log_ok / size_ok / tree_verified / files_reviewed_ok false, or
+     already_committed true (committed outside this gate: reset it,
+     keeping the tree, and re-run).
+  2  usage error (--waiver without --max-changed-files,
+     --max-changed-files 0, --require-agents without --require-run-log or
+     vice versa), changed_file_missing, changed_file_outside_repo, an
+     unreadable artifact, invalid state JSON, a git failure, or a
+     delegated runtime-gate structural failure.
+
+Self-test:
+  python check_commit_gate.py --self-test   (131 cases)
+"""
+
+
 def build_parser():
     """Single source of truth for the CLI surface.
 
@@ -1718,28 +1824,11 @@ def build_parser():
     hand-building argparse.Namespace objects -- every hand-built namespace is
     a place a newly-added flag raises AttributeError instead of being tested.
     """
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="check_commit_gate.py",
-        description="The bgpdd-build milestone commit gate: checks --milestone's "
-                    "latest --review-report verdict, whether that review "
-                    "postdates the diff, and whether the --state blockers ledger "
-                    "is clean, then on a pass performs the commit itself with "
-                    "--commit --message. --changed-files is required; every "
-                    "other flag beginning --require-* turns on one optional "
-                    "assertion (rendered evidence, files-reviewed coverage, size "
-                    "ceiling, runtime evidence, OpenAPI reachability, ledger-gate "
-                    "freshness, run-log delegation records) -- each documented in "
-                    "SKILL.md's '## check_commit_gate.py' section.",
-        epilog="Exit codes: 0 gate passed (and committed, with --commit); "
-               "1 gate failed (verdict not Approve, stale, standing blockers, "
-               "findings_consistent false, any --require-* assertion false, or "
-               "already_committed true); 2 usage error (a --waiver without "
-               "--max-changed-files, --require-agents without --require-run-log "
-               "or vice versa, etc), a --changed-files path missing or outside "
-               "--repo, unreadable artifact, invalid state JSON, or a git/"
-               "delegated-gate failure. Machine-readable detail is JSON on "
-               "stdout, keyed 'result'/'error', with problem arrays such as "
-               "'ledger_gate_problems' and 'run_log_problems'.",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--review-report")
     parser.add_argument("--state")
@@ -1750,24 +1839,20 @@ def build_parser():
     parser.add_argument("--repo", default=".")
     parser.add_argument(
         "--docs-root",
-        help="where pipeline artifacts (.docs/) live. Default: the nearest "
-             "ancestor of --review-report (or --state) named '.docs'; else "
-             "--repo/.docs. Needed when .docs is not inside --repo, e.g. one "
-             "shared .docs/ above several sibling repos")
+        help="where pipeline artifacts (.docs/) live; see Reads below")
     parser.add_argument("--ignore-unscoped", action="store_true")
     parser.add_argument("--require-rendered-evidence", action="store_true")
     parser.add_argument(
         "--require-files-reviewed", action="store_true",
-        help="every --changed-files path must have a line in the matched "
-             "review section's '### Files reviewed' subsection")
+        help="gate --changed-files against '### Files reviewed'")
     parser.add_argument("--verify-tree", action="store_true")
     # Fix-size bound (bgpdd-bugfix Phase 5; lane default 5). Counts the
     # DECLARED --changed-files paths -- see check_size_bound().
     parser.add_argument("--max-changed-files", type=int)
     parser.add_argument(
         "--waiver",
-        help="a document whose '## Size waiver' section records the user's "
-             "decision to exceed --max-changed-files (typically rca.md)")
+        help="a document whose '## Size waiver' section records the "
+             "overrun decision")
     # Runtime-evidence delegation. This gate owns the commit, so the restraint
     # has to live here -- but the checking logic lives once, in
     # check_runtime_evidence.py, rather than being duplicated across two files.
@@ -1786,23 +1871,19 @@ def build_parser():
     parser.add_argument("--allow-missing-sidecar", action="store_true")
     # The shared gate ledger.
     parser.add_argument("--ledger",
-                        help="append one JSON record per run to this path")
+                        help="append one JSON record per run")
     parser.add_argument(
         "--require-ledger-gates", action="append", default=[],
-        help="comma-separated gate script names whose LATEST ledger entry for "
-             "this milestone must be PASS over unchanged inputs")
+        help="comma-separated gate script names; see Reads below")
     # Did the delegation the review report claims actually happen?
     parser.add_argument(
         "--require-run-log", dest="require_run_log",
-        help="record_run.py's run log; the source --require-agents reads. The "
-             "run log is AUTHORED, not tool-provenanced: this pair proves a "
-             "delegation record exists, is scoped to the milestone and names "
-             "a tier — not that the delegation happened. --require-ledger-"
-             "gates is the flag that re-hashes what it read.")
+        help="record_run.py's run log. It is AUTHORED, not tool-provenanced: "
+             "this pair proves a record exists, not that the delegation "
+             "happened.")
     parser.add_argument(
         "--require-agents", action="append", default=[],
-        help="comma-separated agent names that must each carry a delegation "
-             "record for this milestone, with a model, in --require-run-log")
+        help="comma-separated agent names; see Reads below")
     parser.add_argument("--self-test", action="store_true")
     return parser
 

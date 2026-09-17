@@ -908,27 +908,101 @@ def build_report(args):
     return report
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Verifies a durable agent report backs its Pass verdict with "
+           "captured, evidenced check lines and zero Critical findings.")
+
+EPILOG = """\
+Reads:
+  --report <path>  Cipher's security-report.md, Vera's
+    verification-report.md or Dep's post-deploy-report.md. Only the LAST
+    `## ` section carrying a `**Verdict:**` line is graded.
+
+  Check-line grammar (one per check, in that section):
+    - <name>: PASS|FAIL|BLOCKED|NOT RUN -- `<command>` -- exit <N> -- <terse counts> -- capture: evidence/<dir>/<file>.md
+  An EXECUTED line (PASS/FAIL) carries both an exit code and the `capture:`
+  citation; BLOCKED / NOT RUN carry their reason and cite nothing. The
+  citation path may be backticked, must contain an `evidence/` segment and
+  no '..', and resolves against the report's directory, then --repo, then
+  the cwd. The cited capture must exist, carry its <capture>.meta.json
+  sidecar, still hash to it, and record an exit_code EQUAL to the line's.
+  Each executed line's backticked command -- read from the text BEFORE the
+  `capture:` citation; a backticked path cannot stand in for it -- must
+  token-match the sidecar's argv. Never waived.
+
+  Finding-line grammar (same section), read by --emit-fingerprints:
+    - **<Severity>** -- <finding> -- <file:line>
+
+  --ledger <path>  the append target, and the ledger a cited capture's
+    sha256 is looked up in. Ledger inputs are the report PLUS every cited
+    capture and its sidecar, so a later re-hash catches one edited after
+    this gate passed.
+
+  --emit-fingerprints REPORT is a separate read-only mode, independent of
+  --report and every other flag: it prints `<fp>  <category>  <file>
+  <title>` per finding line and exits 0 (2 on the same structural
+  failures). The fingerprint is a 12-hex-char sha256 of the normalized
+  (file, category, title) key; the ':<line>' suffix is EXCLUDED, category
+  is the nearest PRECEDING check-line name ('uncategorized' if none), and
+  title has every digit run collapsed to '#'. Feed it to diff_findings.py.
+
+Problem codes:
+  In capture_problems[].problem:
+  check_uncaptured          an executed line cites no capture
+  check_capture_disagrees   the capture's exit_code differs from the line
+  capture_command_mismatch  the line's command is not the capture's argv
+  unledgered_capture        no run_quiet.py ledger record pins its sha256;
+                            the only one here that does not gate unless
+                            --require-ledgered-captures is passed
+
+JSON keys:
+  Always printed on stdout (there is no --json flag):
+  report, section, verdict, checks, passed, failed, blocked, not_run,
+  unevidenced, uncaptured, capture_disagrees, capture_command_mismatches,
+  unledgered_captures, capture_problems ([{check, problem, detail}]),
+  capture_inputs, allow_uncaptured, require_ledgered_captures,
+  critical_findings, warnings, result, error
+
+Exit codes:
+  0  verdict exactly Pass, at least one check line, every line PASS,
+     evidenced and captured, zero Critical findings.
+  1  any other verdict (an unparseable latest verdict fail-safes to
+     no-verdict), a non-empty failed / blocked / not_run / unevidenced /
+     uncaptured (unwaived) / capture_disagrees /
+     capture_command_mismatches / unledgered_captures (only under
+     --require-ledgered-captures), a standing Critical, or zero check lines.
+  2  usage error (--require-ledgered-captures without --ledger), a
+     missing / empty / unreadable report, or no `## ` section carrying a
+     `**Verdict:**` line.
+
+Self-test:
+  python check_agent_report.py --self-test   (62 cases)
+"""
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="check_agent_report.py",
-        description="Verifies a durable agent report (Cipher's security-report.md, "
-                    "Vera's verification-report.md, Dep's post-deploy-report.md) "
-                    "backs its Pass verdict with evidenced check lines (command + "
-                    "exit code + counts + the run_quiet.py capture that recorded "
-                    "the run) and zero Critical findings.",
-        epilog="Exit codes: 0 verdict exactly Pass, >=1 check line, every line "
-               "PASS/evidenced/captured, zero Critical findings; 1 any other "
-               "verdict, a non-empty failed/blocked/not_run/unevidenced/"
-               "uncaptured(unwaived)/capture_disagrees/capture_command_mismatches"
-               "/unledgered_captures (under --require-ledgered-captures), a "
-               "standing Critical, or zero check lines; 2 usage error "
-               "(--require-ledgered-captures without --ledger), missing/empty/"
-               "unreadable report, or no section with a **Verdict:** line. "
-               "Machine-readable detail is JSON on stdout: 'capture_problems' "
-               "array of {check, problem, detail}. --emit-fingerprints is a "
-               "separate read-only mode: 0 on success with fingerprint "
-               "lines on stdout, 2 on the same structural failures as "
-               "above; it never evaluates a verdict.",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--report")
     parser.add_argument(
@@ -959,7 +1033,7 @@ def build_parser():
         help="fail (problem code `unledgered_capture`) when a cited capture's "
              "sha256 is pinned by no `run_quiet.py --capture --ledger` record "
              "in --ledger. WITHOUT this flag such a capture is a WARNING and "
-             "the exit code is unchanged — captures taken before this release "
+             "the exit code is unchanged -- captures taken before this release "
              "carry no record, so the default is one release of grace. "
              "Requires --ledger.")
     parser.add_argument("--self-test", action="store_true")

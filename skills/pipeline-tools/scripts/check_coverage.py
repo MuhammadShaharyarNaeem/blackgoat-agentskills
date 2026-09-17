@@ -1522,24 +1522,94 @@ def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code):
               file=sys.stderr)
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Verifies every Must-Have FR/NFR in requirements.md is covered by "
+           "a plan task, an evidenced passing test, or a supersession.")
+
+EPILOG = """\
+Reads:
+  --requirements <path>  requirements.md. Required in EVERY mode. Tier
+    headings are `## Must Have` / `Should Have` / ...; an ID is a bold
+    token, `**FR-3**` or `**NFR-7**`, and an NFR may carry its tier inline:
+      - **NFR-7** (Must Have) -- p95 under 200ms
+  Exactly one of the three target flags -- more than one, or none, is
+  exit 2:
+  --plan <path>          plan.md (plan mode). Tasks are `## Task 3:`
+    headings, each carrying a `**Requirements covered:**` field naming its
+    FR/NFR tokens. Plan mode also runs five gating lints.
+  --test-report <path>   test-report.md (test mode). A status is read ONLY
+    from a list item:
+      - FR-3: PASS -- <evidence>
+    A PASS whose evidence half cites nothing checkable (an exit code, a
+    `file::test-name`, or a `**Runtime evidence:**` / `evidence/runtime/`
+    citation) is recorded UNEVIDENCED: status-bearing, NOT covered, so the
+    Must-Have lands in `uncovered`.
+  --design <path>        detailed-design.md (design mode). A Must-Have is
+    covered by an in-place supersession annotation (the ID struck through,
+    `~~**FR-3**~~`) whose design-register row cites an `ADR-NNNN` token or
+    an `adr/NNNN-` path. Design mode runs the supersession/citation lints
+    only. Scope limit: the TOKEN is matched, not the file, so `ADR-9999`
+    satisfies it even when no such file exists.
+  --repo <dir>           (test mode) what a `file::test-name` citation
+    resolves against; default '.'.
+  --ledger <path>        append one JSON record per run.
+
+Problem codes:
+  In lint_failures[].check --
+  Plan mode:
+  literal-count      a task's literal/count claim is unsupported
+  consumes-provides  a task's boundary contract has no producer/consumer
+  path-hygiene       a task names a path that is malformed or unscoped
+  runtime-criterion  a task states no runtime-observable criterion
+  domain-tag         a task carries no [UI] / [API] domain tag
+  Design mode:
+  supersession-annotation  a superseded ID carries no in-place annotation
+  fr-citation              a register row names no FR/NFR it supersedes
+  adr-citation             such a row cites no ADR-NNNN and no adr/NNNN-
+
+JSON keys:
+  Always printed on stdout (there is no --json flag):
+  mode, requirements_file, target_file, must_have, should_have, covered,
+  uncovered, uncovered_should, blocked, unevidenced, warnings,
+  lint_failures ([{check, task, detail}]), result, error.
+  `uncovered` and `lint_failures` are the two gating arrays.
+
+Exit codes:
+  0  every Must-Have covered and no lint failed.
+  1  a Must-Have gap or any lint failure.
+  2  usage error (none or several of --plan/--test-report/--design), a
+     missing or unreadable file, or a structural contract failure (no
+     Must-Have requirements, no task blocks).
+
+Self-test:
+  python check_coverage.py --self-test   (138 cases; the same suite runs
+  directly as `python test_check_coverage.py`)
+"""
+
+
 def main(argv):
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="check_coverage.py",
-        description="Deterministic requirements coverage gate for bgPDD pipelines: "
-                     "verifies every Must-Have FR/NFR in --requirements is covered -- "
-                     "by --plan tasks (plan mode), by evidenced passing tests in "
-                     "--test-report (test mode), or by a supersession annotation in "
-                     "--design (design mode). Exactly one of --plan/--test-report/"
-                     "--design is required.",
-        epilog="Flags: --requirements is requirements.md, required in every mode. "
-               "--plan is plan.md (plan mode); --test-report is test-report.md "
-               "(test mode); --design is detailed-design.md (design mode). "
-               "Exit codes: 0 every Must-Have covered and no lint failed; "
-               "1 a Must-Have gap or any lint failure; 2 usage error, missing/"
-               "unreadable file, or a structural contract failure (no Must-Have "
-               "requirements, no task blocks). Machine-readable detail is JSON on "
-               "stdout: 'uncovered' and 'lint_failures' are the two gating arrays "
-               "(each lint_failures entry is {check, task, detail}).",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--requirements")
     parser.add_argument("--plan")
@@ -1551,7 +1621,7 @@ def main(argv):
     parser.add_argument("--strict-evidence", action="store_true",
                         help="test mode: also reject a bare exit-code PASS citation "
                              "with no file::test-name or runtime-evidence capture "
-                             "(default: accepted, per agents/quinn.md §6)")
+                             "(default: accepted, per agents/quinn.md sec. 6)")
     parser.add_argument("--ledger",
                         help="append one JSON record per run to this path")
     parser.add_argument("--self-test", action="store_true")
