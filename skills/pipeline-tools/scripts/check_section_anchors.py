@@ -45,8 +45,8 @@ determinable target, and a lint that failed on it would be pure noise.
   `.docs/{project-name}/` semantic-memory model, never a file in this
   static repo -- so it is not attempted at all; that citation is
   `unresolved`, not dangling. Once a file is found, the section text must
-  match a `##`/`###` heading in it, case-insensitively, backticks and
-  punctuation stripped, WORD-PREFIX match allowed (a citation commonly
+  match a `##`/`###`/`####` heading in it, case-insensitively, backticks
+  and punctuation stripped, WORD-PREFIX match allowed (a citation commonly
   trims a long heading, and a numbered heading like `### 4. Security
   Report` is cited as bare `§ 4`). Dangling = file missing, or file found
   but no heading matches.
@@ -105,8 +105,12 @@ FORM_A_AFTER_RE = re.compile(r"^\s*`?([A-Za-z0-9_-]+\.py)`?")
 # `before`-the-§ substring via `$`.
 FORM_B_BEFORE_RE = re.compile(r"`([^`\n]+\.md)`\s*$")
 
-# `##`/`###` headings, read from fence-stripped text.
-HEADING_RE = re.compile(r"^(##|###)[ \t]+(.+?)[ \t]*$", re.MULTILINE)
+# `##`/`###`/`####` headings, read from fence-stripped text. `#{2,4}` is
+# exact -- a run of 5+ `#` (an h5 the tree doesn't otherwise use) never
+# matches, since the greedy group backtracks down to 2 and still can't
+# find the required space/tab right after (the next character is always
+# another `#`).
+HEADING_RE = re.compile(r"^(#{2,4})[ \t]+(.+?)[ \t]*$", re.MULTILINE)
 
 
 class GateError(Exception):
@@ -154,7 +158,7 @@ def rel(path, repo):
 
 
 def find_headings(text):
-    """Return [(level, heading_text), ...] for every ##/### heading."""
+    """Return [(level, heading_text), ...] for every ##/###/#### heading."""
     stripped = strip_fenced_blocks(text)
     return [(len(m.group(1)), m.group(2)) for m in HEADING_RE.finditer(stripped)]
 
@@ -675,6 +679,26 @@ def run_self_test():
             self._write_agent(
                 "Per `skills/agent-squad/base-persona.md` § Evidence "
                 "Integrity.\n"
+            )
+            report = build_report(self.root)
+            self.assertEqual(report["dangling"], 0)
+            self.assertEqual(report["resolved"], 1)
+
+        # -- Form B: a #### heading resolves too -----------------------------
+
+        def test_form_b_resolves_against_a_level_4_heading(self):
+            # Real case: `#### Contract-change tags` in
+            # planning-and-task-breakdown/SKILL.md, cited from three other
+            # files -- the lint was missing this because HEADING_RE only
+            # read ##/###.
+            (self.skills / "planning-like").mkdir()
+            (self.skills / "planning-like" / "SKILL.md").write_text(
+                "# planning-like\n\n#### Contract-change tags\n\nBody.\n",
+                encoding="utf-8",
+            )
+            self._write_agent(
+                "Per `skills/planning-like/SKILL.md` § Contract-change "
+                "tags.\n"
             )
             report = build_report(self.root)
             self.assertEqual(report["dangling"], 0)
