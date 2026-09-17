@@ -238,14 +238,16 @@ the WHOLE epic's status to one bug among possibly several open on that
 route; no per-bug-scoped status exists there to read. Unresolved -- tracked,
 not silently worked around.
 
-VERIFY LANES DO NOT ARM RULE 1
-------------------------------
-A state file whose `pipeline` is `bgpdd-verify` is detected as a lane (so
-`--explain` shows it) but does not arm rule 1. `bgpdd-verify` has no commit
-gate: its only durable output is Quinn's Playwright specs, which are committed
-by hand outside the lane, so arming rule 1 there names a gate that does not
-exist and leaves the lane with no commit path at all. Rules 2, 3 and 4 are
-unaffected -- rule 4 in particular still guards the verify lane's ledger.
+VERIFY AND SECURE LANES DO NOT ARM RULE 1
+-----------------------------------------
+A state file whose `pipeline` is `bgpdd-verify` or `bgpdd-secure` is detected
+as a lane (so `--explain` shows it) but does not arm rule 1. Neither lane has
+a commit gate. `bgpdd-verify`'s only durable output is Quinn's Playwright
+specs, which are committed by hand outside the lane; `bgpdd-secure` lands
+nothing in the product repo at all -- it produces findings and routes them
+out. Arming rule 1 for either names a gate that does not exist and leaves the
+lane with no commit path at all. Rules 2, 3 and 4 are unaffected -- rule 4 in
+particular still guards both lanes' ledgers.
 
 Known failure modes, each deliberate rather than overlooked:
 
@@ -387,7 +389,7 @@ BLACKGOAT_PART_VIII_HEADING = "## Part VIII: Problem & Solution Ledger"
 BLACKGOAT_APPEND_ENV_VAR = "BLACKGOAT_ALLOW_PART_VIII_APPEND"
 
 # A pipeline whose lane has no commit gate: it arms every rule EXCEPT rule 1.
-NO_COMMIT_GATE_PIPELINES = ("bgpdd-verify",)
+NO_COMMIT_GATE_PIPELINES = ("bgpdd-verify", "bgpdd-secure")
 
 # `git`, any number of global options, then a history-writing subcommand.
 # `stash` captures its `pop`/`apply` tail so the deny message can name it.
@@ -2504,6 +2506,14 @@ def run_self_test():
                 "Write", {"file_path": path, "content": "# tampered\n"})
             self.assertEqual((d, rule),
                              ("deny", "blackgoat_persona_is_hand_edited_only"))
+
+        # -- secure lanes have no commit gate either (mirrors test_80) --
+
+        def test_109_a_secure_lane_does_not_arm_rule_1(self):
+            self.make_feature(pipeline="bgpdd-secure")
+            for command in ("git commit -m x", "git merge main"):
+                self.assertEqual(self.decide("Bash", {"command": command})[0],
+                                 "allow", command)
 
     suite = unittest.TestLoader().loadTestsFromTestCase(GuardTest)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
