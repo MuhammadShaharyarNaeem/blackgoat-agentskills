@@ -702,6 +702,58 @@ def _image_magic_problem(path):
     return f"does not start with the magic bytes for a .{ext} image"
 
 
+# --- PNG provenance (record_capture.py's sidecar) ---------------------------
+# A screenshot's magic bytes and mtime prove it depicts SOMETHING recent; they
+# cannot show WHAT was on screen. The incident this closes: a UI builder could
+# not reach the running app, rendered a static file:// mockup instead,
+# screenshotted THAT, and the magic-byte/mtime checks above passed it cleanly.
+# `record_capture.py` writes `<png>.meta.json` recording the URL open at
+# capture time; a cited PNG with no such sidecar, a non-http(s) `url`, or a
+# `sha256` that no longer matches the PNG's current bytes (the file was
+# swapped after being recorded) fails here with its own problem code --
+# `sidecar_missing`, `sidecar_bad_origin`, `sidecar_sha_mismatch` or
+# `sidecar_malformed` -- each a fixed prefix on the returned string so a
+# caller can identify it without parsing the rest of the sentence.
+def _rendered_capture_sidecar_problem(resolved_path):
+    """None if `resolved_path`'s record_capture.py sidecar is valid, else why not.
+
+    Called only for a '.png' candidate (see check_rendered_evidence) -- the
+    sidecar requirement is PNG-specific, matching what record_capture.py
+    writes for.
+    """
+    sidecar = Path(str(resolved_path) + ".meta.json")
+    if not sidecar.is_file():
+        return (f"sidecar_missing: no {sidecar} -- a rendered PNG is "
+                "evidence only with its record_capture.py provenance "
+                "sidecar; a file:// mockup screenshot and a real capture "
+                "look identical without one")
+    try:
+        rec = json.loads(sidecar.read_text(encoding="utf-8-sig",
+                                           errors="replace"))
+    except (OSError, ValueError) as exc:
+        return f"sidecar_malformed: {sidecar} is not readable/parseable JSON: {exc}"
+    if not isinstance(rec, dict):
+        return f"sidecar_malformed: {sidecar} does not contain a JSON object"
+    if rec.get("schema") != 1:
+        return (f"sidecar_malformed: {sidecar} carries schema "
+                f"{rec.get('schema')!r}, expected 1")
+    url, sha = rec.get("url"), rec.get("sha256")
+    if not isinstance(url, str) or not isinstance(sha, str) or not sha:
+        return (f"sidecar_malformed: {sidecar} is missing a string `url` "
+                "and/or `sha256` field")
+    if not url.startswith(("http://", "https://")):
+        return (f"sidecar_bad_origin: {sidecar} records url {url!r}, not an "
+                "http(s) origin -- a file://, about:, data: or empty origin "
+                "proves a static document was open, not the running "
+                "application")
+    actual = sha256_file(resolved_path)
+    if actual != sha:
+        return (f"sidecar_sha_mismatch: {sidecar} records sha256 {sha!r} but "
+                f"{resolved_path} currently hashes to {actual!r} -- the PNG "
+                "was replaced after being recorded")
+    return None
+
+
 def check_rendered_evidence(candidates, review_report, repo, newest_changed=None):
     """Return (ok, problems) for the cited rendered-evidence candidates.
 
@@ -740,6 +792,11 @@ def check_rendered_evidence(candidates, review_report, repo, newest_changed=None
         if magic_problem:
             problems.append(f"{c}: {magic_problem}")
             continue
+        if resolved.suffix.lower() == ".png":
+            sidecar_problem = _rendered_capture_sidecar_problem(resolved)
+            if sidecar_problem:
+                problems.append(f"{c}: {sidecar_problem}")
+                continue
         if newest_changed is not None and stat.st_mtime < newest_changed:
             problems.append(
                 f"{c}: predates the newest declared changed file — the "
@@ -2032,13 +2089,33 @@ def run_self_test():
             os.utime(older, (1000, 1000))
             os.utime(newer, (2000, 2000))
 
-        def _evidence(self, name="m3-table.png", data=None, under="review"):
-            """Write a real, non-empty evidence file and return its path."""
+        def _evidence(self, name="m3-table.png", data=None, under="review",
+                     sidecar=True):
+            """Write a real, non-empty evidence file and return its path.
+
+            When it's a `.png` and `sidecar` is true (the default), also
+            write a valid record_capture.py provenance sidecar next to it,
+            so every existing PASS-path test keeps passing under the new
+            --require-rendered-evidence sidecar requirement without
+            individually opting in.
+            """
             d = self.dir / "evidence" / under
             d.mkdir(parents=True, exist_ok=True)
             p = d / name
-            p.write_bytes(PNG if data is None else data)
+            body = PNG if data is None else data
+            p.write_bytes(body)
+            if sidecar and p.suffix.lower() == ".png":
+                self._sidecar_for(p, body)
             return p
+
+        def _sidecar_for(self, png_path, body, url="http://localhost:5173/x",
+                         sha256=None):
+            """Write `<png_path>.meta.json` -- record_capture.py's shape."""
+            rec = {"schema": 1, "url": url, "tool": "chrome-devtools",
+                  "captured_at": "2026-08-12T14:03:11Z",
+                  "sha256": sha256 or hashlib.sha256(body).hexdigest()}
+            Path(str(png_path) + ".meta.json").write_text(
+                json.dumps(rec), encoding="utf-8")
 
         def _ns(self, milestone="M3", changed=None, repo=None, extra=None,
                 commit=False, message=None):
@@ -3253,6 +3330,82 @@ def run_self_test():
             self.assertEqual(r["result"], "FAIL")
             self.assertFalse(r["rendered_evidence_ok"])
             self.assertEqual(r["rendered_evidence"], [])
+
+        # ---- record_capture.py provenance sidecar -----------------------
+        # The incident this closes: a UI builder rendered a static file://
+        # mockup, screenshotted it, and the checks above (magic bytes, mtime)
+        # passed the PNG cleanly. record_capture.py's sidecar is what lets
+        # this gate tell a mockup render apart from a captured one.
+
+        def test_rendered_evidence_missing_sidecar_fails(self):
+            self.review.write_text(REVIEW_EVIDENCE_LINE)
+            self._order(self.changed, self.review)
+            self._evidence(sidecar=False)  # PNG present, no .meta.json at all
+            r = self._run(["--require-rendered-evidence"])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertFalse(r["rendered_evidence_ok"])
+            self.assertTrue(
+                any("sidecar_missing" in w for w in r["warnings"]))
+
+        def test_rendered_evidence_file_url_sidecar_fails(self):
+            """The exact incident: a sidecar recording a file:// mockup URL."""
+            self.review.write_text(REVIEW_EVIDENCE_LINE)
+            self._order(self.changed, self.review)
+            evidence = self._evidence(sidecar=False)
+            self._sidecar_for(evidence, PNG, url="file:///C:/tmp/mock.html")
+            r = self._run(["--require-rendered-evidence"])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertFalse(r["rendered_evidence_ok"])
+            self.assertTrue(
+                any("sidecar_bad_origin" in w for w in r["warnings"]))
+
+        def test_rendered_evidence_sidecar_sha_mismatch_fails(self):
+            """A PNG swapped out after being recorded must not pass silently."""
+            self.review.write_text(REVIEW_EVIDENCE_LINE)
+            self._order(self.changed, self.review)
+            evidence = self._evidence(sidecar=False)
+            self._sidecar_for(evidence, PNG, sha256="0" * 64)
+            r = self._run(["--require-rendered-evidence"])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertFalse(r["rendered_evidence_ok"])
+            self.assertTrue(
+                any("sidecar_sha_mismatch" in w for w in r["warnings"]))
+
+        def test_rendered_evidence_malformed_sidecar_fails(self):
+            self.review.write_text(REVIEW_EVIDENCE_LINE)
+            self._order(self.changed, self.review)
+            evidence = self._evidence(sidecar=False)
+            Path(str(evidence) + ".meta.json").write_text(
+                "not json at all", encoding="utf-8")
+            r = self._run(["--require-rendered-evidence"])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertFalse(r["rendered_evidence_ok"])
+            self.assertTrue(
+                any("sidecar_malformed" in w for w in r["warnings"]))
+
+        def test_rendered_evidence_wrong_schema_is_malformed(self):
+            self.review.write_text(REVIEW_EVIDENCE_LINE)
+            self._order(self.changed, self.review)
+            evidence = self._evidence(sidecar=False)
+            sidecar = Path(str(evidence) + ".meta.json")
+            sidecar.write_text(json.dumps({
+                "schema": 2, "url": "http://localhost/x", "tool": "x",
+                "captured_at": "2026-08-12T14:03:11Z",
+                "sha256": hashlib.sha256(PNG).hexdigest()}),
+                encoding="utf-8")
+            r = self._run(["--require-rendered-evidence"])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertTrue(
+                any("sidecar_malformed" in w for w in r["warnings"]))
+
+        def test_rendered_evidence_valid_sidecar_passes(self):
+            """The positive case: a real capture with a conforming sidecar."""
+            self.review.write_text(REVIEW_EVIDENCE_LINE)
+            self._order(self.changed, self.review)
+            self._evidence()  # sidecar=True by default
+            r = self._run(["--require-rendered-evidence"])
+            self.assertEqual(r["result"], "PASS")
+            self.assertTrue(r["rendered_evidence_ok"])
 
         def test_provenance_refuses_parent_traversal(self):
             """`lstrip("./")` collapsed '../evidence/review/x' to a passing path."""
