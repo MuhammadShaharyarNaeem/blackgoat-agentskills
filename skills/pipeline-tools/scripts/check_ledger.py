@@ -515,6 +515,7 @@ def run_self_test():
             "check_acceptance_suite.py",
             "check_agent_report.py",
             "check_always_on.py",
+            "check_attack_matrix.py",
             "check_batch_close.py",
             "check_blockers.py",
             "check_bugfix_intake.py",

@@ -26,6 +26,7 @@ Check the **state rows** first; if none matches, answer the three questions in o
 | "map this codebase" / "how does this repo work" — or the ask needs today's behaviour and there is no `.docs/summary/` | `bgpdd-discovery` | Iris, Scout and Echo write the Tier-1 knowledge base. |
 | "it's built — ship it" | `bgpdd-shipping` | Launch Squad — Vera, Cipher, Dep — plus the ship-decision gate. |
 | "prove a discovered feature still works", no code change | `bgpdd-verify` | Quinn automates the acceptance matrix against the running app; runtime-evidence gate. |
+| "security audit this app" / "pentest this app" / "check for vulnerabilities" | `bgpdd-secure` | Cipher (and Quinn for browser-side probes) execute the attack matrix against the running app; runtime-evidence gate. |
 | "what did we learn" | `bgpdd-learn` | One Forge triage; nothing is written without your approval. |
 | "get <squad member> to do this" | *no lane* | Ad-hoc squad use — routing triggers live in `{PLUGIN_ROOT}/agent-squad/SKILL.md`. |
 

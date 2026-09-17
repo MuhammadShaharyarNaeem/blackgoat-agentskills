@@ -49,6 +49,7 @@ Before reaching for controls, spend five minutes thinking like an attacker:
 
 - [ ] Every protected endpoint checks authentication
 - [ ] Every resource access checks ownership/role (prevents IDOR)
+- [ ] IDOR/ownership checks proven with two accounts in different tenants or privilege levels — a code read alone is BLOCKED, not PASS
 - [ ] Admin endpoints require admin role verification
 - [ ] API keys scoped to minimum necessary permissions
 - [ ] JWT tokens validated (signature, expiration, issuer)

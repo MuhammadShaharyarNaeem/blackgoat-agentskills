@@ -1,6 +1,6 @@
 ---
 name: runtime-evidence
-description: Squad-internal execution contract for proving a claim against the actually-running application rather than an in-process test host — the tier ladder, the verification-surface registry, the out-of-process probe, and the capture artifact that gates on it. Loaded by agents via their Methodology Dependencies table whenever a requirement asserts behavior a client, device, or human can observe. Owns the `**Runtime evidence:**` citation grammar; user-facing triggers belong to the /bgpdd-build, /bgpdd-verify, and /bgpdd-shipping pipelines.
+description: Squad-internal execution contract for proving a claim against the actually-running application rather than an in-process test host — the tier ladder, the verification-surface registry, the out-of-process probe, and the capture artifact that gates on it. Loaded by agents via their Methodology Dependencies table whenever a requirement asserts behavior a client, device, or human can observe. Owns the `**Runtime evidence:**` citation grammar; user-facing triggers belong to the /bgpdd-build, /bgpdd-verify, /bgpdd-secure, and /bgpdd-shipping pipelines.
 ---
 
 # Runtime Evidence

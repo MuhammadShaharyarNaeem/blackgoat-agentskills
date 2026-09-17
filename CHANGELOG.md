@@ -5,6 +5,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Added
+- `bgpdd-secure` — new standalone security-assessment lane for an application that already exists. Derives a lint-gated attack matrix (`Category | Surface | Tier | Preconditions | Planned evidence | Verdict`) from `security-and-hardening`'s Coverage & Provability table plus the web and API OWASP Top 10, delegates Cipher (primary, Phase 2) and Quinn (browser-rendered probes only, diagnostic captures folded into Cipher's report, never permanent specs) to run safe read-only probes against the running application, and gates the results on runtime evidence — audit-only v1, staging/local only, no destructive payloads. No builder loop and no commit step: a confirmed vulnerability is a finding that routes to a fresh `/bgpdd-bugfix` session, one per finding. Registered in `always-on.md`, `bg/SKILL.md`, `pipeline-skeleton.md`, `agents/cipher.md`, `agents/quinn.md`, `agents/scout.md`, `bgpdd-build/SKILL.md`'s hydration whitelist, `runtime-evidence/SKILL.md`, and the README.
+- `check_attack_matrix.py` — the mechanical gate for the attack-matrix table above: bare tier tokens, a Verdict on every row, `not agent-testable` never PASS, a `partial` row naming its gap, a PASS row's cited capture path resolved and verified on disk, and provable/partial rows carrying non-empty Preconditions. 25 self-test cases.
+
 ### Removed
 - The plugin-root `AGENTS.md` (Antigravity runtime contract). It was never loaded by anything: Antigravity applies only the user's global rules, and the always-on index never pointed at it. The contract now lives in the user's global `~/.gemini/config/AGENTS.md` (four rules: load the orchestration model first; "delegate" means invoke the registered squad agent by name; delegation is blocking; resolve `{PLUGIN_ROOT}` by hand). README, `docs/cursor-setup.md`, `bg-eval/SKILL.md`, the four `evals/antigravity` prompts and their README/case text no longer reference it. The prompt change alters those cases' `case_sha256`.
 

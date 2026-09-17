@@ -62,6 +62,8 @@ When the work produces a project security document — a `SECURITY.md`, Cipher's
 
 A mitigation without a citation is a claim (`base-persona.md`, Evidence Integrity); a `Not applicable` without a reason is a gap wearing a label.
 
+Order remediation by proven exploitability, not CVSS severity alone. Keep proven findings separate from unconfirmed observations, and deduplicate findings that recur across runs before they reach the report.
+
 ### The Three-Tier Boundary System
 
 #### Always Do (No Exceptions)
@@ -112,6 +114,24 @@ One-line prevention rule per category. For code patterns and worked examples, se
 - **Sensitive Data Exposure:** strip sensitive fields from API responses; secrets come from environment variables.
 - **SSRF:** allowlist scheme + host for any server-side fetch of user-influenced URLs, reject private/reserved IPs, forbid redirects.
 
+### Coverage & Provability
+
+Not every category above admits agent-executed proof. This table names what closes each row and how far that evidence reaches.
+
+| Category | How it is proven | Tier |
+|---|---|---|
+| Injection | Query construction read, plus a payload probe against the boundary | provable |
+| Broken Authentication | Hash/session config read, plus a login probe capturing cookie flags | provable |
+| XSS | Render path read, plus a payload probe against the rendered output | provable |
+| Broken Access Control | Ownership check exercised across two accounts (§ Authorization); a code read alone does not cover enforcement | partial |
+| Security Misconfiguration | Headers/CORS captured from a live response, not just the config read | provable |
+| Sensitive Data Exposure | Response body inspected for excluded fields; source/history searched for secrets | provable |
+| SSRF | An out-of-allowlist target probed and observed rejected | provable |
+| Logging & Monitoring Failures | — | not agent-testable |
+| Business Logic Flaws | — | not agent-testable |
+
+A category in the `not agent-testable` tier reports `BLOCKED`, never `PASS` (`base-persona.md`, Evidence Integrity) — absence of a finding there is absence of a test. A `partial` row names which part was not covered. "Reviewed" is not evidence; the `How it is proven` cell names the artifact that is.
+
 ### AI / LLM Rule
 
 Treat all model output as untrusted input — never pass it into `eval`, SQL, a shell, or `innerHTML`. Keep secrets and cross-tenant data out of prompts. Full OWASP-LLM mapping and code patterns are in the [security deep dive](references/security-deep-dive.md).
@@ -137,6 +157,7 @@ The checklist below is a **condensation of the root `{PLUGIN_ROOT}/../references
 - [ ] Users can only access their own resources
 - [ ] Admin actions require admin role verification
 - [ ] Roles/tenancy resolved server-side — no client-supplied role or tenant claim is trusted
+- [ ] IDOR checks proven with two accounts in different tenants/privilege levels — a code read alone is BLOCKED, not PASS
 
 ### Input
 - [ ] All user input validated at the boundary
@@ -179,6 +200,7 @@ After implementing security-relevant code:
 - [ ] Rate limiting active on auth endpoints
 - [ ] Server-side URL fetches validated against an allowlist (no SSRF)
 - [ ] LLM/model output validated and encoded before use (if AI features present)
+- [ ] Original reproduction re-run and no longer reproduces before calling a fix done — patching root cause and asserting closed is not verification; reuses `{PLUGIN_ROOT}/test-driven-development/SKILL.md` (§ Workflow)'s RED/GREEN discipline, deliberately (convention #8)
 
 ### Escalate When
 

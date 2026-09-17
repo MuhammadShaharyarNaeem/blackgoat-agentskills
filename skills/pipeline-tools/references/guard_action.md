@@ -236,10 +236,13 @@ is what stops it becoming a blanket disarm; an unreadable milestone (a null
 cursor, or the unscoped feature-route folder named `implementation`) is
 treated as NOT closed, and `--explain` prints which lanes are armed and why.
 
-**Verify lanes never armed rule 1 to begin with.** `bgpdd-verify` has no
-commit gate -- Quinn's specs are committed by hand outside the lane -- so
-arming rule 1 named a gate that does not exist and left the lane with no
-commit path. The lane is still detected and rules 2-4 still apply.
+**Verify and secure lanes never armed rule 1 to begin with.** `bgpdd-verify`
+has no commit gate -- Quinn's specs are committed by hand outside the lane --
+and `bgpdd-secure` has no commit step at all -- its only durable outputs are
+the attack matrix, security report, and evidence captures under `.docs/` --
+so arming rule 1 for either named a gate that does not exist and left the
+lane with no commit path. Both lanes are still detected and rules 2-4 still
+apply.
 
 Plus `GIT_WRITE_RE` widened to `am|rebase|stash [pop|apply]|notes|tag` beside
 the original four, and a separate match for `gh pr merge`. `git push` and
