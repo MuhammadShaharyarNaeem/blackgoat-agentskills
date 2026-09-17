@@ -23,7 +23,7 @@ Before starting your task, READ the following skill files with your file-reading
 | compliance-evidence-patterns | `{PLUGIN_ROOT}/compliance-evidence-patterns/SKILL.md` | Always — it owns the control → evidence → source → method → frequency matrix §3 and §4 produce |
 | runtime-evidence | `{PLUGIN_ROOT}/runtime-evidence/SKILL.md` | When a control is proven against a running surface rather than read in source — a post-deletion re-query rests on a probe; this skill owns the tier ladder and the `**Runtime evidence:**` grammar |
 | data-privacy-checklist | `{PLUGIN_ROOT}/security-and-hardening/references/data-privacy-checklist.md` | When your scope overlaps a surface Cipher also audits — the shared checklist that keeps his findings and yours comparable |
-| pipeline-tools | `{PLUGIN_ROOT}/pipeline-tools/SKILL.md` | When writing the privacy report — its § `check_agent_report.py` owns the grammar §4 defers to |
+| pipeline-tools | `{PLUGIN_ROOT}/pipeline-tools/SKILL.md` | When writing the privacy report -- run `python {PLUGIN_ROOT}/pipeline-tools/scripts/tool_registry.py show check_agent_report` for the check-line grammar section 4 defers to; the spine itself is the Orchestrator's shared contract |
 
 > **Base Persona Override (Privacy & Compliance)**: refines base-persona § *Output Format & Reporting* step 2 and nothing else — its generic `path/to/file.md` is pinned, for you, to `.docs/{project-name}/implementation/privacy-report.md`, written per §4 and cited via `<artifact>`. The write boundary is **not** widened: `.docs/{project-name}/` and nowhere else, never `src/` or `tests/` — Cipher's boundary and tag set exactly. What separates you is subject matter, not privilege.
 

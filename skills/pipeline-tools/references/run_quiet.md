@@ -87,3 +87,18 @@ the record pinning the capture and sidecar paths; chaining (`prev`/`self`);
 recording a real non-zero exit; no ledger file written when the flag is
 absent; `--ledger` without `--capture` exiting 2; `--milestone` without
 `--capture` exiting 2. Self-test count: 41 → 48.
+
+## From the retired spine
+
+### Field ownership is the integrity property of `--capture` mode
+
+`--capture-field` supplies the capture's **descriptive** header — what the probe was, which milestone and surface, which base URL and environment. A small set of fields is owned by the tool instead: the command it actually ran, when it finished, the exit code, the duration, and the log it wrote alongside.
+
+An attempt to supply one of those is **rejected outright, not overwritten**. That distinction is the whole point of the mode. Silently overwriting would mean the caller's value was accepted and discarded, so a caller who believed they had set the exit code would be told nothing; rejecting means the only way a capture can carry an exit code is for a child process to have produced one. Every gate downstream reads those owned fields and nothing else as evidence.
+
+### The Windows shim caveat
+
+The child is launched **without a shell**, which is what makes the recorded argv a faithful record of what ran. The cost is that a shim implemented as a `.cmd`/`.bat` wrapper cannot be executed directly on Windows: the interpreter has no shell to resolve it through. Invoke the shim's own `.cmd` name explicitly, or bypass it and invoke the underlying entry point.
+
+This is a limitation stated rather than worked around: routing the child through a shell to make shims work would let a shell construct into the recorded command, and the whole family's command-matching — the gates that compare a note's declared check, or a report's check line, against this sidecar's argv — assumes argv is argv.
+

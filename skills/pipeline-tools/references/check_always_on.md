@@ -47,3 +47,12 @@ The index earns its always-on injection by being small. Twenty words is the boun
 ## Self-test
 
 `python scripts/check_always_on.py --self-test` runs 18 in-process cases against a synthetic plugin tree: a complete index passing, a lane with no row, a row with no lane, a lane folder without `SKILL.md` correctly ignored, a duplicated row, a 21-word cell failing and a 20-word cell passing, `--max-words` honored, an unresolvable path, a bare script name resolved both ways, lane commands and `{placeholder}` paths not treated as path claims, a rule with no owner, a rule whose owner does not exist, the wrong rule count, both sections missing, unreadable index and root erroring, the ledger recording all three exit paths — and finally `test_the_shipped_index_passes`, which runs the gate against the real `always-on.md` so the file the gate was written for is proven, not assumed.
+
+## From the retired spine
+
+### `--require-row-agreement` is unarmed by default, on purpose
+
+The flag promotes "this lane's row is not a trim of that lane's own `description` frontmatter" from a warning to a finding. It is **off** by default because the shipped rows legitimately paraphrase, and the index itself says so: the skill's `description` is canonical, and the row is a reading of it sized for an injected index.
+
+Arming it by default would fail the real file on its first run, and a lint that fails the artifact it ships with teaches its reader to pass a flag that turns it off. Left opt-in, it is available to a caller who *has* decided the rows should be mechanical trims — and the decision is recorded in the invocation rather than assumed.
+

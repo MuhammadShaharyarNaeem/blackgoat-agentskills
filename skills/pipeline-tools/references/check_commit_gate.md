@@ -151,3 +151,20 @@ Self-test 94 → 105.
 **What this does NOT check.** The line's disposition. `review_package.py` is gaining default exclude patterns, and a reviewer records an excluded file as e.g. `` `<path>` — not reviewed: excluded from package``. That line still satisfies this gate — it checks presence of the path, not what the line says happened to it. Judging whether an exclusion was legitimate is a review-quality question, not a mechanical one.
 
 Self-test 105 → 121 → 125 (the fourth case set added when review found `check_finding_consistency` scoped to the wrong body).
+
+## From the retired spine
+
+### The fix-size bound and its waiver
+
+`--max-changed-files` is the bugfix lane's fix-size bound. It counts the **declared** changed-file paths — the same list the staleness check already validates — so pairing it with the tree-verification flag is what makes that count equal the real diff; on its own it counts a declaration. Unset, the bound is simply not applied, so every invocation that predates it behaves as it did.
+
+The waiver is **deliberately hand-typed** (CLAUDE.md convention #8, the same labelled exception `review_package.py`'s size ceiling makes): exceeding the bound is the *user's* decision, and no script can verify a judgement call. What the flag buys is durability and attributability — the decision written into the root-cause document and hashed into the ledger record — not verification. It is satisfied only by a real, non-placeholder waiver body, in either of the two shapes a placeholder takes: every line individually a stand-in, or one bracketed span wrapped across several lines, which is the shape the shipped template writes. A self-test asserts the shipped template's own waiver section **fails** — a template that satisfied the gate would be a bypass shipped with the plugin.
+
+### Why the delegation scoping is exact
+
+`--require-agents` scopes on the run-log record's unit **exactly**, which is deliberately tighter than `--require-ledger-gates`, where an unscoped entry is also accepted (convention #8). A gate ledger line legitimately covers a whole epic, so an unscoped one is still evidence there. A delegation record with no unit does not say which milestone it built, and the whole point of the flag is to tell a milestone whose review round happened from one whose round was skipped outright — which leaves a green report and an empty run log.
+
+### The pipeline field changes nothing
+
+A self-test asserts the verdict JSON is byte-identical across every `pipeline` value and with the field absent, and that the report never echoes it. The bugfix lane's feature route shares the epic's state file and never stamps its own pipeline, so it cites that test rather than asserting the property in prose (convention #9).
+

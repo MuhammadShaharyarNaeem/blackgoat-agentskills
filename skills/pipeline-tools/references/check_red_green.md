@@ -195,3 +195,35 @@ size of it is now stated in `../SKILL.md` § *The unkeyed-sidecar limit: one
 forger, seven gates* rather than only here. Read that section for the count
 and the list; the framing is unchanged, and so is the conclusion: closing it
 needs a secret the runtime does not have.
+
+## From the retired spine
+
+### `--no-flaky-pass` — retries are instrumentation, not treatment
+
+The flag is the mechanical form of a TDD workflow rule
+(`test-driven-development/SKILL.md`, Workflow step 2): a test that passed
+because it was retried has not been shown to pass. Without it, a GREEN capture
+whose runner quietly re-ran the failing test and recorded the second attempt is
+indistinguishable from a clean one — the exit code is zero either way, and the
+exit code is what the rest of this gate reads.
+
+It is **GREEN-only and opt-in**. RED is never scanned: a RED that needed
+retries is still a RED, and scanning it would fail the capture that is supposed
+to fail.
+
+Two bounds on the scan are deliberate:
+
+- **It reads the runner's own transcript, never the capture's header lines.**
+  The header is written by `run_quiet.py` and says nothing about retries; a
+  marker matched there would be matching the capture format.
+- **The markers are cited, not guessed.** Each one comes from its runner's own
+  documentation. Jest and Vitest are a **documented gap rather than a guess**:
+  both retry without a citable marker in their default reporters, so this gate
+  says nothing about them rather than pattern-matching something that looks
+  close. A gap stated is a gap a reader can route around; a guess that
+  half-works is a green nobody questions.
+
+Line-anchored matching also tolerates `run_quiet.py`'s own summary and
+numbered-tail prefixes, since those are this family's output shape wrapped
+around the runner's line, not a runner's own marker.
+
