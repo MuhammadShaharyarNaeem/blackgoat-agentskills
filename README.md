@@ -40,7 +40,7 @@ The plugin is designed with a deliberate adoption gradient. Each step gives you 
 | Fix a bug | `/bgpdd-bugfix` | Main session (intake, RCA, route) + spawns agents (Quinn RED, Mason/Nova fix, Quinn GREEN, Luna) |
 | Fix two to five independent bugs in one session | `/bgpdd-bugfix-batch` | Main session (intake, merges) + the bugfix squad per bug, in waves, one git worktree each |
 | Verify an already-discovered feature still works | `/bgpdd-verify {feature}` | Main session (matrix) + spawns Quinn |
-| Security-audit an existing application | `/bgpdd-secure {target}` | Main session (matrix) + spawns Cipher, optionally Quinn |
+| Security-audit an existing application | `/bgpdd-secure {target}` | Main session (matrix) + spawns Cipher, Ward for privacy rows, optionally Quinn |
 | Capture lessons from a session | `/bgpdd-learn` | Main session + spawns Forge |
 | Audit the plugin itself | `agent-audit` skill | Main session |
 | Ad-hoc delegation to one specialist | `agent-squad` (e.g. "have Luna review this diff") | Spawns the named agent |
@@ -204,7 +204,7 @@ flowchart TD
         V3 --> V4["Mechanical gates + verdict"] -.-> V5["Product defects → fresh /bgpdd-bugfix session"]
     end
     subgraph SS["Standalone: /bgpdd-secure (any time, no discovery dependency)"]
-        Z1["Authorization gate: target, non-production, scope exclusions"] --> Z2["Derive + lint attack-matrix.md"] --> Z3["Cipher (+ Quinn for browser-rendered rows): safe read-only probes against running app"]
+        Z1["Authorization gate: target, non-production, scope exclusions"] --> Z2["Derive + lint attack-matrix.md"] --> Z3["Cipher (+ Ward for privacy rows, Quinn for browser-rendered rows): safe read-only probes against running app"]
         Z3 --> Z4["Mechanical gates + verdict"] -.-> Z5["Confirmed findings → fresh /bgpdd-bugfix session"]
     end
     S1 -- "Tier 1 knowledge base" --> S2
@@ -224,7 +224,7 @@ Phase by phase:
 - **`/bgpdd-build` (Phase 2)** — the milestone loop, detailed below.
 - **`/bgpdd-shipping` (Phase 3)** — the Launch Squad, gates, PR, and the epic's single Forge run, detailed below.
 - **`/bgpdd-verify` (standalone, not part of the four-phase chain)** — usable any time after `/bgpdd-discovery` has documented a feature. Derives a lint-gated `acceptance-matrix.md` from Echo's QA baseline, has Quinn automate it as permanent Playwright specs and execute them against the running application, and gates the results through the same mechanical checks the build pipeline uses — without running plan or build. It never fixes what it measures: product defects it finds route to a fresh `/bgpdd-bugfix` session, and its re-verify shortcut makes repeat regression runs cheap.
-- **`/bgpdd-secure` (standalone, not part of the four-phase chain)** — usable any time an application exists, with no discovery dependency. Derives a lint-gated `attack-matrix.md` from `security-and-hardening`'s Coverage & Provability table plus the web and API OWASP Top 10, has Cipher (and Quinn, for browser-rendered rows) run safe read-only probes against the running application, and gates the results through the same mechanical checks the other lanes use. Audit-only: no destructive payloads, no exfiltration, staging/local only. It never fixes what it measures: confirmed vulnerabilities route to a fresh `/bgpdd-bugfix` session, one per finding.
+- **`/bgpdd-secure` (standalone, not part of the four-phase chain)** — usable any time an application exists, with no discovery dependency. Derives a lint-gated `attack-matrix.md` from `security-and-hardening`'s Coverage & Provability table plus the web and API OWASP Top 10, has Cipher (and Ward, for the privacy and compliance rows; Quinn, for browser-rendered rows) run safe read-only probes against the running application, and gates the results through the same mechanical checks the other lanes use. Audit-only: no destructive payloads, no exfiltration, staging/local only. It never fixes what it measures: confirmed vulnerabilities route to a fresh `/bgpdd-bugfix` session, one per finding.
 
 ### The state file
 
@@ -388,7 +388,7 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **bgpdd-bugfix** — evidence-gated bugfix lane: lint-gated intake → Quinn's RED capture → RCA and mechanical FAST/FULL/PLAN route (main session) → fix (Mason and/or Nova) → same-command GREEN + red/green gate → fresh Luna → bounded commit gate → Tier-1 prevent write-back
 - **bgpdd-bugfix-batch** — thin choreography over the lane above for two to five independent bugs in one session: a git worktree and a `fix/{bug-slug}` branch per bug, the bugfix contract run per bug in waves (parallel REDs, per-route builders, per-bug GREEN and a fresh Luna), each bug closing through its own commit gate, then one merge at a time ordered by surface overlap and gated on that bug's ledger chain. It restates no bugfix rule; a `PLAN` route drops that bug to `/bgpdd-plan`
 - **bgpdd-verify** — standalone regression-verification lane for an already-discovered feature: derives a lint-gated acceptance matrix from Echo's QA baseline, Quinn automates and executes it as permanent Playwright specs against the running application, gated on runtime evidence; product defects it finds route to `/bgpdd-bugfix`
-- **bgpdd-secure** — standalone security-assessment lane for an existing application, no discovery dependency: derives a lint-gated attack matrix from security-and-hardening's Coverage & Provability table plus the web and API OWASP Top 10, Cipher (and Quinn for browser-rendered rows) run safe read-only probes against the running application, gated on runtime evidence; audit-only, staging/local only; confirmed findings route to `/bgpdd-bugfix`
+- **bgpdd-secure** — standalone security-assessment lane for an existing application, no discovery dependency: derives a lint-gated attack matrix from security-and-hardening's Coverage & Provability table plus the web and API OWASP Top 10, Cipher (and Ward for the privacy and compliance rows, Quinn for browser-rendered rows) run safe read-only probes against the running application, gated on runtime evidence; audit-only, staging/local only; confirmed findings route to `/bgpdd-bugfix`
 
 ### Methodology skills (execution contracts loaded by agents via their dependency tables)
 - **blackgoat-idea-honing** — interactive requirements refinement (Rex / main session)

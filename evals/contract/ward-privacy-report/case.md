@@ -97,20 +97,21 @@ contract drifted back toward Cipher's, and the per-round append breaks silently;
 arithmetic rule regressed in §4 or the audit is passing a store it never searched;
 5/6 failing = the report is prose wearing a verdict.
 
-## Open question (blocking a first run)
-- **No `grade.ps1` and no `fixture/` in this directory.** `run-evals.ps1` lists a contract
-  case only when the directory carries **both** `case.md` and `grade.ps1`, so this case is
-  inert until a grader is written — it cannot break a batch, and it will not run in one.
-  The grader is deliberately out of this package's scope (documentation and registration
-  only, no new script logic).
-- **A purpose-built fixture would raise the ceiling.** Detection depth across the six
-  data-handling Category tokens needs a fixture that actually carries them: a consent
-  column the write path never reads (Consent), a second store and a vendor call a deletion
-  must propagate to (Deletion propagation, Third-party data flow), an `email`/`dob` pair
-  with no stated purpose (PII exposure), rows past their purpose with no expiry job
-  (Retention), and a claimed control with no evidence row (Compliance evidence). Until
-  that exists, criteria 1–3 and 6 are the load-bearing ones; 4 and 5 are weaker here than
-  they would be against planted findings.
+## Open question (fixture depth)
+`grade.ps1` now exists in this directory, so the case is live: `run-evals.ps1` lists a
+contract case when the directory carries **both** `case.md` and `grade.ps1`, and both are
+present. It is discovered and runs in the next contract batch.
+
+- **The fixture is still borrowed.** Nothing in `evals/contract/` carries a privacy
+  surface, so this case reads `../cipher-security-report/fixture/` — the closest existing
+  one — rather than authoring its own, and a purpose-built fixture would raise the
+  ceiling. Detection depth across the six data-handling Category tokens needs one planted
+  finding per token: a consent column the write path never reads (Consent), a second store
+  and a vendor call a deletion must propagate to (Deletion propagation, Third-party data
+  flow), an `email`/`dob` pair with no stated purpose (PII exposure), rows past their
+  purpose with no expiry job (Retention), and a claimed control with no evidence row
+  (Compliance evidence). Until that exists, criteria 1–3 and 6 are the load-bearing ones;
+  4 and 5 are weaker here than they would be against planted findings.
 
 ## Future (not implemented)
 - **The Ward/Cipher boundary.** A fixture carrying both an identity defect and a
