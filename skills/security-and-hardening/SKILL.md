@@ -217,4 +217,4 @@ For detailed security checklists and pre-commit verification steps, see `{PLUGIN
 Read on demand — not needed to execute the contract above:
 
 - [Security deep dive](references/security-deep-dive.md) — when to use, the full OWASP Top 10 pattern walkthroughs with code, input validation and file upload safety, npm-audit triage, supply-chain hygiene, rate limiting, secrets management detail, the full Securing AI/LLM Features section, common rationalizations, and red flags.
-- Data privacy checklist: `references/data-privacy-checklist.md` — PII classification, placement, retention, deletion-path, log-redaction and third-party-flow checks, rendered in Cipher's check-line grammar.
+- Data privacy checklist: `references/data-privacy-checklist.md` — PII classification, placement, retention, deletion-path, log-redaction and third-party-flow checks, rendered in Cipher's check-line grammar. **Scope split**: identity, authentication, session and SSO stay Cipher's (§ Authentication, § Authorization above); the privacy and compliance surface this checklist covers is Ward's, and `{PLUGIN_ROOT}/bgpdd-secure/SKILL.md` Phase 1 fixes the Category values that route a row to him.
