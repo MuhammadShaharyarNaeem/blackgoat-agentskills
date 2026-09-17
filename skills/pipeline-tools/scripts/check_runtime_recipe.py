@@ -327,8 +327,8 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("Gates runtime-environment.md: the six manifest blocks present, "
-           "and one start command and one readiness check filled in.")
+PURPOSE = ("Decides whether the runtime-environment recipe names a real "
+           "service start command and readiness check, or a reasoned skip.")
 
 EPILOG = """\
 Reads:

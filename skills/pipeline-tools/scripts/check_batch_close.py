@@ -439,8 +439,9 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("The bgpdd-bugfix-batch Phase 4 close gate: every bug terminal, "
-           "committed, its worktree gone, and named in the Final table.")
+PURPOSE = ("Decides whether every bug in a bugfix batch is terminal, "
+           "committed, worktree-removed and recorded in the batch's Final "
+           "table.")
 
 EPILOG = """\
 Reads:

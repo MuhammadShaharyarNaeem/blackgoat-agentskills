@@ -919,28 +919,29 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("Parses the <handoff> block an agent returned and asserts it "
-           "against that persona's contract.")
+PURPOSE = ("Decides whether an agent's handoff block satisfies that persona's "
+           "contract: required elements, real paths, honest status, "
+           "categorised blockers.")
 
 EPILOG = """\
 Reads:
-  --handoff  the agent's returned text (stdin when the flag is omitted). One
+  --handoff  the agent's returned text (stdin when omitted). One
     well-formed <handoff>...</handoff> block OUTSIDE fenced code: fences are
-    blanked first, so an illustration never satisfies the gate.
+    blanked first, so an illustration never satisfies it.
     Required elements per persona (base-persona.md plus the persona's own
     "Base Persona Override"): mason, max -> <changed_files>; dep, quinn, nova
     -> <changed_files> + <artifact>; forge -> <changed_skills>; all others ->
     <artifact>. <status> and <blockers> are always required;
     <fix_verification> is required under --fix-round, and <consumers>
     (mason, nova) under --require consumers. agents/blackgoat.md is not a
-    persona here: a usage error.
+    persona here: usage error.
       <status>    COMPLETE | PARTIAL | BLOCKED -- the DELIVERY state, not a
                   verification verdict, which belongs in the body.
       <blockers>  on PARTIAL or BLOCKED, at least one line
                     blocked_on: <category> - <reason>
                   with <category> one of environment, credentials,
-                  dependency, spec, defect. COMPLETE is exempt; an entirely
-                  absent <blockers> is element_missing instead, never both.
+                  dependency, spec, defect. COMPLETE is exempt; an absent
+                  <blockers> is element_missing instead, never both.
       <consumers> lines in path::symbol grammar.
     Honesty rules: an upper-case PASS/GREEN token beside a NOT VERIFIED or
     BLOCKED marker in the SAME element, and BLOCKED beside
@@ -954,7 +955,7 @@ Reads:
     <artifact>/<changed_skills> is read for base-persona's placeholder marker
     (an underscore joined to TODO), a TODO-colon-pending phrase, an HTML
     comment opening TODO or skeleton, and any line EXPLAINING the markers. A
-    marker in an inline code span is not a hit; one inside a fence IS.
+    marker in an inline code span is not a hit; one in a fence IS.
     PARTIAL/BLOCKED are exempt; <changed_files> is not swept.
 
 Problem codes:

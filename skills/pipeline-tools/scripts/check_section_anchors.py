@@ -506,13 +506,15 @@ def build_report(repo, include_fixtures=False):
 # ---------------------------------------------------------------------------
 
 def format_dangling(a):
-    return (f"{a['file']}:{a['line']}: § {a['anchor']} -> {a['target']} — "
+    # ASCII only: this line is printed, and a raw section sign or em dash
+    # mangles under a cp1252 console.
+    return (f"{a['file']}:{a['line']}: anchor {a['anchor']} -> {a['target']} -- "
             f"{a['reason']}; fix: repoint the citation or restore the section")
 
 
 def print_report(report, verbose):
     print(f"Scanned {report['files_scanned']} file(s), found "
-          f"{report['anchors_found']} § anchor(s): {report['resolved']} "
+          f"{report['anchors_found']} section anchor(s): {report['resolved']} "
           f"resolved, {report['dangling']} dangling, {report['unresolved']} "
           f"unresolved")
     if report["dangling_detail"]:
@@ -525,7 +527,7 @@ def print_report(report, verbose):
         print(f"UNRESOLVED ({report['unresolved']}) -- not a failure, listed "
               f"for review:")
         for a in report["unresolved_detail"]:
-            print(f"  {a['file']}:{a['line']}: § {a['anchor']}")
+            print(f"  {a['file']}:{a['line']}: anchor {a['anchor']}")
     print()
     print("PASS" if report["result"] == "PASS" else "FAIL")
 
@@ -534,17 +536,85 @@ def print_report(report, verbose):
 # CLI
 # ---------------------------------------------------------------------------
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Decides whether every section-anchor citation under agents and "
+           "skills resolves to a real heading or file.")
+
+EPILOG = """\
+Reads:
+  --repo <dir>  the plugin root holding agents/ and skills/ (default: this
+    script's own plugin root). Every *.md under them is scanned line by
+    line for the section mark (U+00A7); skills/**/fixtures/** is skipped
+    unless --include-fixtures.
+  Form A -- SCRIPT ANCHOR: the mark followed by `<name>.py` (backticks
+    optional), matched anywhere on the line, even right after a citation
+    of pipeline-tools/SKILL.md itself (the .py name is the more specific
+    target, so it wins). It resolves against EITHER a `## <name>.py`
+    heading in skills/pipeline-tools/SKILL.md OR the post-split file
+    skills/pipeline-tools/references/<name>.md. Accepting either is
+    deliberate (CLAUDE.md convention #8): it lets the split land commit by
+    commit instead of on one flag day where every citation would go
+    dangling at once.
+  Form B -- EXPLICIT FILE ANCHOR: a backtick-quoted path ending in .md,
+    followed on the same line (whitespace only between) by the mark and
+    section text. The path resolves in order as {PLUGIN_ROOT}/... under
+    skills/; as given from the repo root; under skills/; relative to the
+    CITING file's own directory (when it contains a /); and finally as a
+    bare filename anywhere under the repo. The section text must then
+    match a heading in that file.
+  Anything else -- a bare mark, or one with no file attached -- is
+  unresolved, not a failure.
+
+Problem codes:
+  Each anchor carries a status; only dangling fails the lint.
+  dangling    a determinable citation whose target is gone
+  unresolved  no determinable target; counted and listed, never a failure
+  A dangling anchor carries one reason:
+    file missing       a Form B path resolved nowhere
+    heading not found  the file exists, but carries no matching heading
+
+JSON keys:
+  --json prints repo, files_scanned, anchors_found, resolved, dangling,
+  unresolved, dangling_detail, unresolved_detail, result. Each *_detail
+  entry is {file, line, form, anchor, target, status, reason}. Without
+  --json the same report prints as text, with the unresolved list shown
+  only under --verbose.
+
+Exit codes:
+  0  no dangling anchor
+  1  at least one dangling anchor
+  2  usage error: --repo is not a directory, or the repo holds no
+     agents/ and skills/ pair
+
+Self-test:
+  python check_section_anchors.py --self-test   (26 cases)
+"""
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="check_section_anchors.py",
-        description="Validate that every `§` section-anchor citation "
-                     "under agents/ and skills/ resolves to a real heading "
-                     "or file.",
-        epilog="Exit codes: 0 no dangling anchor; 1 at least one dangling "
-               "anchor; 2 usage error (bad --repo, or a repo missing "
-               "agents/ or skills/). --json prints 'result', "
-               "'dangling_detail', 'unresolved_detail', and the summary "
-               "counts.")
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--repo",
                         help="plugin root containing agents/ and skills/ "
                              "(default: this script's own plugin root)")

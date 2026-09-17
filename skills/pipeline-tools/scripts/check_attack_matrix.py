@@ -774,8 +774,8 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("Deterministic gate for a security attack-matrix table: lints its "
-           "authoring, then gates its verdicts against Cipher's report.")
+PURPOSE = ("Decides whether a security attack matrix is well-formed, or "
+           "whether its rows were probed and evidenced, for the secure lane.")
 
 EPILOG = """\
 Reads:

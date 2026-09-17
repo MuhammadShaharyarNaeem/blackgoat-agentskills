@@ -1239,13 +1239,13 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("The bgpdd-quick Phase 3 gate, and that lane's only one: a declared,"
-           " small, checked-after-the-edit change, optionally committed.")
+PURPOSE = ("Decides whether a quick-lane change was declared, checked after "
+           "the edit, small, froze no test, and may now be committed.")
 
 EPILOG = """\
 Reads:
   --note  the lane's note.md. Three labelled lines, case-insensitive, as list
-    items or bare lines, outside fences:
+    items or bare, outside fences:
       - What:
       - Where:
       - How verified:
@@ -1258,13 +1258,13 @@ Reads:
     capture must hold "## Captured output"; its header region (above that
     heading, fences blanked) carries "- Exit code: <N>" and
     "- Captured: <ts>", agreeing with the sidecar's exit_code and finished.
-    Its capture_sha256 must still match the capture's bytes, and its
+    Its capture_sha256 must still match the capture's bytes, and
     exit_code must be 0. Its recorded child argv is compared
     with How verified on TOKEN LISTS, any of three tokenizations matching:
     shlex.split(posix=True); the same with backslashes doubled; a raw
     whitespace split. Freshness: the sidecar's finished (whole seconds) must
     be >= each changed file's mtime floored to the second.
-  --changed-files, --repo  a relative entry resolves against --repo, not the
+  --changed-files, --repo  a relative entry resolves against --repo, not
     cwd. git status porcelain supplies the undeclared-change and frozen
     checks; frozen fires only on a status meaning an EXISTING TRACKED file
     changed (M/D/R/C/U in either column), so adding a test passes and editing
@@ -1277,7 +1277,7 @@ Reads:
     inputs: the note, the capture, ITS SIDECAR, every declared file.
 
 Problem codes:
-  In evaluation order; every one is reported, none short-circuits.
+  In evaluation order; all are reported, none short-circuits.
   note_missing                    the --note file does not exist
   note_incomplete                 a required note line is absent or placeholder
   note_where_mismatch             Where's paths are not the --changed-files set
@@ -1296,7 +1296,7 @@ Problem codes:
   test_authenticity_gate_missing  no fresh scoped check_test_authenticity PASS
   required_ledger_gate_missing    a --require-ledger-gates entry has no fresh
                                   PASS (ledger_missing, ledger_failed,
-                                  ledger_stale, ledger_chain_broken all
+                                  ledger_stale, ledger_chain_broken
                                   report here)
   size_bound_exceeded             more declared files than --max-changed-files
   problems entries read "<code>: <prose>".

@@ -361,7 +361,7 @@
     {
       "name": "record_run",
       "script": "scripts/record_run.py",
-      "description": "Appends one run-telemetry record per delegation, refusing a missing model, missing tokens, a duplicate, or a verifier below its producer.",
+      "description": "Appends one run-telemetry record per delegation, gate, phase or note, refusing a missing model, missing tokens, a duplicate, or an inverted tier.",
       "kind": "writer",
       "runner": "orchestrator",
       "agents": [],
@@ -387,7 +387,7 @@
       "kind": "writer",
       "runner": "either",
       "agents": ["alex", "aria", "cipher", "dep", "echo", "forge", "iris", "luna", "mason", "max", "nova", "quinn", "rex", "scout", "vera", "ward"],
-      "reason": "base-persona.md section Timeouts: EVERY agent wraps the commands it runs in run_quiet.py --log, and agents/cipher.md and agents/vera.md take each check through --capture. An agent running it is doing its own work properly, not adjudicating it; the gate that reads the capture still runs in the main session.",
+      "reason": "base-persona.md section Command Timeout Discipline (Anti-Hang): EVERY agent wraps the commands it runs in run_quiet.py --log, and agents/cipher.md and agents/vera.md take each check through --capture. An agent running it is doing its own work properly, not adjudicating it; the gate that reads the capture still runs in the main session.",
       "lanes": [],
       "reads": ["<the child command's merged stdout and stderr>"],
       "writes": ["<the log path>", "<the capture path>", "<the capture path>.meta.json", "gates.jsonl"]

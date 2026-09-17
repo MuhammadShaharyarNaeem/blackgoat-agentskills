@@ -548,8 +548,9 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("Walks a repo tree and reports evidence-backed technology stacks, "
-           "their check commands, test globs and methodology skills.")
+PURPOSE = ("Reports evidence-backed technology stacks for a repository, and "
+           "which methodology skills, check commands and test globs follow "
+           "from them.")
 
 EPILOG = """\
 Reads:

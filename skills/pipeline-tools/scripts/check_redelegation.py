@@ -558,8 +558,8 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("Decides whether re-delegating an agent that already returned on a "
-           "unit should halt for the user instead.")
+PURPOSE = ("Decides whether an agent may be re-delegated on a unit, or "
+           "whether the lane must halt for the user instead.")
 
 EPILOG = """\
 Reads:

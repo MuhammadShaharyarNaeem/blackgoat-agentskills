@@ -1729,8 +1729,8 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("The bgpdd-build milestone commit gate: an approved, fresh review "
-           "over clean blockers, then it performs the commit itself.")
+PURPOSE = ("Decides whether a milestone may be committed, and performs the "
+           "commit, from its review verdict, blockers, evidence and ledger.")
 
 EPILOG = """\
 Reads:

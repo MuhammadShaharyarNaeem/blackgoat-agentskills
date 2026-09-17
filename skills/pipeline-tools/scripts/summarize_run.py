@@ -297,10 +297,9 @@ def render_markdown(summary):
     return "\n".join(out)
 
 
-PURPOSE = (
-    "Aggregates the run log and gate ledger into per-pipeline, unit and agent "
-    "totals and the fired-versus-rubber-stamped classification."
-)
+PURPOSE = ("Summarizes a run log and gate ledger into cost, rounds and "
+           "fired-versus-rubber-stamped gate counts, optionally as a "
+           "game-tape block.")
 
 EPILOG = """Reads:
   --run-log -- record_run.py's run-log.jsonl, one JSON object per line, with

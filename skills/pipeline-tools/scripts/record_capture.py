@@ -144,10 +144,8 @@ def build_record(url, tool, sha256):
     }
 
 
-PURPOSE = (
-    "Records a PNG's provenance sidecar naming the http(s) URL the browser "
-    "had open, so a mockup render stops looking real."
-)
+PURPOSE = ("Records a PNG's provenance sidecar naming the URL the browser had "
+           "open, so a mockup render stops looking real.")
 
 EPILOG = """Reads:
   <png> -- the screenshot's bytes: its leading bytes must be the PNG magic

@@ -527,10 +527,8 @@ def write_text(path, text):
 # main
 # ---------------------------------------------------------------------------
 
-PURPOSE = (
-    "Materializes the diff a reviewer is told to review as one markdown file "
-    "plus a provenance sidecar."
-)
+PURPOSE = ("Renders the diff a reviewer was told to review as one markdown "
+           "file plus a provenance sidecar.")
 
 EPILOG = """Reads:
   --repo -- a git repository (default "."). Three commands are run:

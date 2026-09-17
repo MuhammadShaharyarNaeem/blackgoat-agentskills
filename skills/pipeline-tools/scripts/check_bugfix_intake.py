@@ -458,8 +458,8 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("The bgpdd-bugfix Phase 0 intake gate: lints bug-report.md for "
-           "required sections, a re-runnable reproduction, and two enums.")
+PURPOSE = ("Decides whether a bug report is complete, non-placeholder and "
+           "re-runnable before any delegation in the bugfix lane happens.")
 
 EPILOG = """\
 Reads:

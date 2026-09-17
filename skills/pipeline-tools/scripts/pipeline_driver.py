@@ -1241,10 +1241,8 @@ def render_human(report, code):
     return "\n".join(lines)
 
 
-PURPOSE = (
-    "Emits the one next mandatory action for a bgpdd-bugfix, bgpdd-quick or "
-    "bgpdd-bugfix-batch lane, with its exact command."
-)
+PURPOSE = ("Emits the one next mandatory action for a bugfix, quick or batch "
+           "lane, with its exact flags.")
 
 EPILOG = """Reads:
   --root -- the lane's artifacts. bugfix: bug-report.md, rca.md,

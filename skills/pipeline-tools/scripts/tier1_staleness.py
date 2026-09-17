@@ -610,10 +610,8 @@ def render_markdown(report):
     return "\n".join(lines)
 
 
-PURPOSE = (
-    "Reports which Tier-1 docs under a summary feature folder are stale, by "
-    "diffing each stamped repo and matching cited paths."
-)
+PURPOSE = ("Reports which Tier-1 discovery docs are stale against their "
+           "stamped shas, so a refresh re-runs only the affected ones.")
 
 EPILOG = """Reads:
   Scope -- every .md under <summary-root>/<feature>/ (recursively), plus

@@ -1009,8 +1009,8 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("Makes a ship-decision.md GO/NO-GO machine-verifiable, optionally "
-           "with a performed rollback rehearsal and an evidenced baseline.")
+PURPOSE = ("Decides whether a ship decision is GO, rehearsed and baselined, "
+           "for the shipping lane's final gate.")
 
 EPILOG = """\
 Reads:

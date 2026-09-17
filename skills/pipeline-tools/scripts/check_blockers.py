@@ -224,8 +224,8 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("Exits non-zero when a blocker in orchestrator-state.json still "
-           "stands at or above the severity floor for this milestone.")
+PURPOSE = ("Decides whether any blocker in the orchestrator state still "
+           "stands for this milestone at or above a severity floor.")
 
 EPILOG = """\
 Reads:
@@ -245,6 +245,17 @@ Reads:
   entry still blocks). Entries scoped to another milestone land in
   other_milestone_blockers and never block. Without --milestone, legacy
   behaviour (gate on all) is unchanged.
+
+Problem codes:
+  This gate prints no `problem` field: its failure vocabulary is the report
+  arrays and the `error` string.
+  blocking                  a counted entry scoped here, or unscoped
+  other_milestone_blockers  a counted entry scoped elsewhere -- never blocks
+  error                     prose naming a usage or structural failure
+  The `error` cases: missing --state; a state file that is missing,
+  unreadable, not JSON or not an object; no `blockers` field; `blockers`
+  present but not an array. Below --severity-floor is not a code: such an
+  entry is reported in `blockers` and counted nowhere else.
 
 JSON keys:
   Always printed on stdout (there is no --json flag):

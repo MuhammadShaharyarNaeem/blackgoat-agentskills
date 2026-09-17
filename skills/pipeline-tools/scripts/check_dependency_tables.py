@@ -183,8 +183,9 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("Validates every agent's Methodology Dependencies table: guard "
-           "wording, resolvable {PLUGIN_ROOT} paths, non-empty When cells.")
+PURPOSE = ("Decides whether every agent's Methodology Dependencies table "
+           "resolves to real files, carries the guard wording, and fills each "
+           "When cell.")
 
 EPILOG = """\
 Reads:

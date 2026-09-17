@@ -1540,8 +1540,8 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("Verifies every Must-Have FR/NFR in requirements.md is covered by "
-           "a plan task, an evidenced passing test, or a supersession.")
+PURPOSE = ("Decides whether every Must-Have requirement is covered by plan "
+           "tasks, evidenced passing tests, or a filed design supersession.")
 
 EPILOG = """\
 Reads:

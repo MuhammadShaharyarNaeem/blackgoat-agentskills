@@ -226,8 +226,8 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("Verifies a gate ledger's prev/self hash chain and reports the "
-           "first broken link; read-only, it never appends.")
+PURPOSE = ("Decides whether a gate ledger's hash chain is intact, naming the "
+           "first broken link, before any verdict is read out of it.")
 
 EPILOG = """\
 Reads:

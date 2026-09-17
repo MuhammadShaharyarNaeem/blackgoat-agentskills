@@ -31,10 +31,13 @@ Reads:
     `description`), the argparse usage and arguments, then an epilog whose
     headings each sit on their own line:
       Reads:
+      Writes:             (optional; only a script that writes)
       Problem codes:      (gates only)
-      JSON keys:          (when --json exists)
+      JSON keys:          (whenever a machine report is printed, with or
+                           without a --json flag)
       Exit codes:         (mandatory)
       Self-test:          (mandatory)
+  Each registered script's source, for the `PurposeFirstParser` family block.
 
 Problem codes:
   script_missing         registry entry names a file that does not exist
@@ -47,6 +50,7 @@ Problem codes:
   no_self_test_flag      --help never mentions --self-test
   duplicate_name         two entries share one name
   bad_enum               kind or runner outside the allowed set
+  class_drift            this script's PurposeFirstParser block differs
 
 JSON keys:
   list:   registry, count, tools[{name, description, kind, runner, agents, lanes}]
@@ -61,7 +65,7 @@ Exit codes:
   2  usage error, an unreadable or malformed registry, or an unknown name
 
 Self-test:
-  python tool_registry.py --self-test  (32 cases)
+  python tool_registry.py --self-test  (35 cases)
 """
 
 KINDS = ("gate", "writer", "detector", "lint", "driver", "hook")
@@ -71,6 +75,7 @@ MAX_DESCRIPTION_WORDS = 25
 MAX_HELP_WORDS = 700
 MANDATORY_HEADINGS = ("Exit codes:", "Self-test:")
 GATE_HEADINGS = ("Problem codes:",)
+PARSER_CLASS_MARKER = "class PurposeFirstParser("
 
 RUNNER_REASON = {
     "self-gating": (
@@ -138,6 +143,29 @@ def has_heading(text, heading):
 
 def word_count(text):
     return len(text.split())
+
+
+def purpose_parser_block(source):
+    """The `PurposeFirstParser` class block, or None when there is none.
+
+    One file each, no shared module -- so drift is what to test, exactly as
+    check_ledger.py guards the chain helper it shares by copy. The block runs
+    from the class statement to the blank-line pair that ends it; a copy that
+    is not byte-identical prints a --help the registry cannot compare.
+    """
+    # Only a definition at column 0 counts: the marker also appears inside
+    # this file's own self-test fixture string, which defines nothing.
+    if source.startswith(PARSER_CLASS_MARKER):
+        start = 0
+    else:
+        found = source.find("\n" + PARSER_CLASS_MARKER)
+        if found == -1:
+            return None
+        start = found + 1
+    end = source.find("\n\n\n", start)
+    if end == -1:
+        return None
+    return source[start:end + 1]
 
 
 # ---------------------------------------------------------------- verify
@@ -243,6 +271,37 @@ def verify_registry(registry_path):
                 "--help never mentions --self-test",
                 "add a --self-test flag and name it under the `Self-test:` heading",
             )
+
+    # class_drift: the PurposeFirstParser block is copied into every script
+    # that has one (no shared module), so the only thing that can be checked
+    # is that the copies agree. The largest group is taken as canonical.
+    blocks = {}
+    for entry in tools:
+        script_path = root / entry.get("script", "")
+        if not script_path.is_file():
+            continue
+        try:
+            source = script_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        block = purpose_parser_block(source)
+        if block is not None:
+            blocks.setdefault(block, []).append(
+                entry.get("name", script_path.stem))
+    if len(blocks) > 1:
+        groups = sorted(blocks.values(), key=lambda g: (-len(g), g[0]))
+        canonical = groups[0][0]
+        for group in groups[1:]:
+            for name in group:
+                add(
+                    "class_drift",
+                    name,
+                    "its `PurposeFirstParser` block is not byte-identical to "
+                    "%s's, which %d script(s) share"
+                    % (canonical, len(groups[0])),
+                    "copy the `PurposeFirstParser` class verbatim from %s"
+                    % canonical,
+                )
 
     registered = set()
     for entry in tools:
@@ -476,8 +535,21 @@ def _fixture(tmp, tools, scripts):
     return registry
 
 
+PARSER_BLOCK = '''class PurposeFirstParser(argparse.ArgumentParser):
+    """A fixture stand-in for the family's real block."""
+
+    def format_help(self):
+        return super().format_help()
+'''
+
+
 def _compliant(name, purpose):
     return COMPLIANT_TEMPLATE % {"purpose": purpose, "name": name}
+
+
+def _compliant_with_parser(name, purpose, block=PARSER_BLOCK):
+    """A compliant script that also carries a PurposeFirstParser copy."""
+    return "import argparse\n\n\n" + block + "\n\n" + _compliant(name, purpose)
 
 
 def _entry(**kw):
@@ -623,7 +695,38 @@ def self_test():
         report = verify_registry(reg)
         check("bad_enum fires on runner", "bad_enum" in report["problem_codes"])
 
-        # 16. verify --json lists every problem
+        # 16a/16b. class_drift, both ways. The block is copied per file, so
+        # the only checkable property is that the copies agree byte for byte.
+        two = [_entry(name="one", script="scripts/demo.py"),
+               _entry(name="two", script="scripts/demo2.py")]
+        d = Path(tmp) / "classsame"
+        reg = _fixture(
+            d, two,
+            {"demo.py": _compliant_with_parser("demo.py", desc),
+             "demo2.py": _compliant_with_parser("demo2.py", desc)},
+        )
+        report = verify_registry(reg)
+        check("identical PurposeFirstParser copies pass",
+              report["result"] == "PASS", str(report["problems"]))
+
+        d = Path(tmp) / "classdrift"
+        drifted = PARSER_BLOCK.replace("A fixture stand-in",
+                                       "A DRIFTED fixture stand-in")
+        reg = _fixture(
+            d, two,
+            {"demo.py": _compliant_with_parser("demo.py", desc),
+             "demo2.py": _compliant_with_parser("demo2.py", desc,
+                                                block=drifted)},
+        )
+        report = verify_registry(reg)
+        check("class_drift fires on a diverged copy",
+              report["problem_codes"] == ["class_drift"],
+              str(report["problem_codes"]))
+        check("class_drift names the drifted entry, not the canonical one",
+              [p["name"] for p in report["problems"]] == ["two"],
+              str([p["name"] for p in report["problems"]]))
+
+        # 17. verify --json lists every problem
         d = Path(tmp) / "jsonverify"
         reg = _fixture(
             d,

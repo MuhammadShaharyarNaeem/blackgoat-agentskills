@@ -1534,8 +1534,9 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("Verifies the runtime captures a durable report cites: an "
-           "in-process observation can fail a wire claim but never pass one.")
+PURPOSE = ("Decides whether a report's runtime-evidence citations are real "
+           "out-of-process observations: provenance, transport, freshness, "
+           "required response keys.")
 
 EPILOG = """\
 Reads:

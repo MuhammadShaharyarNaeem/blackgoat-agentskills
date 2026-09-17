@@ -616,10 +616,8 @@ def build_report(args):
     return report
 
 
-PURPOSE = (
-    "Derives the bgpdd-bugfix FAST, FULL or PLAN route mechanically from "
-    "bug-report.md, rca.md and a ledger-recorded intake PASS."
-)
+PURPOSE = ("Derives the bugfix lane's FAST, FULL or PLAN route from the bug "
+           "report, its RED capture and the RCA.")
 
 EPILOG = """Reads:
   --ledger -- REQUIRED, and an INPUT as well as an append target. The latest

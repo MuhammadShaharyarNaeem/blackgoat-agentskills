@@ -541,8 +541,9 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("Enforces the Tier-1 provenance stamp: a date and a resolvable "
-           "commit sha per in-scope repo on every root artifact.")
+PURPOSE = ("Decides whether every Tier-1 discovery artifact carries a "
+           "resolvable date-and-sha provenance stamp per in-scope repo, "
+           "optionally gating drift.")
 
 EPILOG = """\
 Reads:

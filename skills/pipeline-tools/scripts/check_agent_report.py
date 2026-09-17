@@ -926,8 +926,8 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("Verifies a durable agent report backs its Pass verdict with "
-           "captured, evidenced check lines and zero Critical findings.")
+PURPOSE = ("Decides whether a durable agent report backs its Pass verdict "
+           "with captured, evidenced check lines and zero Critical findings.")
 
 EPILOG = """\
 Reads:

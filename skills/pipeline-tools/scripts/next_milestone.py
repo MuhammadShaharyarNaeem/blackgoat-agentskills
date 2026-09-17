@@ -452,10 +452,8 @@ def build_report(args):
     return report
 
 
-PURPOSE = (
-    "Derives the next milestone to build from plan.md, detects a stale "
-    "cursor, and can emit the runtime gate's arguments."
-)
+PURPOSE = ("Derives the next milestone to build from the plan, detects a "
+           "stale cursor, and can emit the runtime gate's arguments.")
 
 EPILOG = """Reads:
   --plan -- headings matching "^#{2,3}\\s*Milestone\\b\\s+\\d", i.e.

@@ -834,8 +834,9 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("Diffs two OpenAPI documents and exits non-zero when the head one "
-           "breaks the published contract.")
+PURPOSE = ("Decides whether a head OpenAPI document breaks the published "
+           "contract, for the agent evolving an API and for the shipping "
+           "gate.")
 
 EPILOG = """\
 Reads:

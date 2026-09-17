@@ -475,10 +475,9 @@ def append_record(log_path, record):
         raise RecordError(f"could not append to run log {log_path}: {exc}")
 
 
-PURPOSE = (
-    "Appends one run-telemetry record per delegation or state persistence to "
-    "the run log, refusing unmeasured, duplicate or inverted delegations."
-)
+PURPOSE = ("Appends one run-telemetry record per delegation, gate, phase or "
+           "note, refusing a missing model, missing tokens, a duplicate, or "
+           "an inverted tier.")
 
 EPILOG = """Reads:
   --log -- the existing run-log.jsonl, one JSON object per line, for two

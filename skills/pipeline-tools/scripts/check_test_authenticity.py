@@ -1393,8 +1393,9 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("Reads the test files in a changed set and exits non-zero when one "
-           "of them tests itself rather than the product.")
+PURPOSE = ("Decides whether a changed test tests the product or only itself: "
+           "inline reimplementation, source eval, synthetic DOM, no "
+           "production import.")
 
 EPILOG = """\
 Reads:

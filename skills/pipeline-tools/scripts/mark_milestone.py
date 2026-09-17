@@ -671,10 +671,8 @@ def resolve_require_gates(values):
     return names or list(DEFAULT_REQUIRE_GATES)
 
 
-PURPOSE = (
-    "Appends the [x] completion marker to a plan milestone only when gates, "
-    "commit and game tape back it; also reopens one."
-)
+PURPOSE = ("Appends or removes a milestone's completion marker in the plan, "
+           "only when gates, commit and game tape back the claim.")
 
 EPILOG = """Reads:
   --plan -- a plan with "## Milestone <n>..." or "### Milestone <n>..."

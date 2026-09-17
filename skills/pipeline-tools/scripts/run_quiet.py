@@ -696,10 +696,8 @@ def execute(log_path, context, tail_n, timeout, cmd,
     return "\n".join(report), (124 if timed_out else exit_code)
 
 
-PURPOSE = (
-    "Runs a command, writes its full output to a log, prints a short report, "
-    "and optionally writes a runtime-evidence capture."
-)
+PURPOSE = ("Runs a command, writes its full output to disk, prints a short "
+           "report, and optionally writes a runtime-evidence capture.")
 
 EPILOG = """Reads:
   the child command's merged stdout+stderr. Everything after "--" is passed

@@ -1489,10 +1489,8 @@ def read_stdin():
     return data.decode("utf-8-sig", errors="replace").lstrip("﻿")
 
 
-PURPOSE = (
-    "PreToolUse hook that denies a tool call violating one of eight bgPDD "
-    "restraints; fails open on any internal error."
-)
+PURPOSE = ("PreToolUse hook that denies a tool call violating one of eight "
+           "pipeline restraints; the model never invokes it directly.")
 
 EPILOG = """Reads:
   stdin -- one PreToolUse hook payload as JSON, read ONLY when neither

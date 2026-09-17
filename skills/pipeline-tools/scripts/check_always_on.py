@@ -450,8 +450,8 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("Lints skills/agent-squad/always-on.md, the injected session-start "
-           "index, for missing lane rows and dead pointers.")
+PURPOSE = ("Lints the session-start always-on index for missing lane rows, "
+           "over-long cells, dangling paths and broken rule owners.")
 
 EPILOG = """\
 Reads:

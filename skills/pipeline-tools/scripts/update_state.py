@@ -697,10 +697,9 @@ def apply_updates(args):
     return state, warnings
 
 
-PURPOSE = (
-    "The sanctioned read-modify-write path for orchestrator-state.json: "
-    "validates, applies actions, stamps updated, and writes atomically."
-)
+PURPOSE = ("The sanctioned read-modify-write path for "
+           "orchestrator-state.json: cursor, artifacts, blockers, halts and "
+           "status, gated by evidence.")
 
 EPILOG = """Reads:
   --state -- orchestrator-state.json; must be a JSON OBJECT. --init writes

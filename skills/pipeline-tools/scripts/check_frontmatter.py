@@ -396,9 +396,9 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("Validates the YAML frontmatter of every agents/*.md and "
-           "skills/*/SKILL.md, so a block that silently fails to register is "
-           "caught.")
+PURPOSE = ("Decides whether every agent and skill frontmatter block parses "
+           "and carries its required keys, so nothing silently fails to "
+           "register.")
 
 EPILOG = """\
 Reads:

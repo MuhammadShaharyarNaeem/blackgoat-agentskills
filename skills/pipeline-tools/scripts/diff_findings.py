@@ -255,10 +255,8 @@ def render_table(diff):
     return "\n".join(lines)
 
 
-PURPOSE = (
-    "Classifies a report's findings across a rescan as RESOLVED, PERSISTENT "
-    "or NEW by fingerprint, reading each report's gated section only."
-)
+PURPOSE = ("Classifies a security report's findings across a rescan as "
+           "RESOLVED, PERSISTENT or NEW, by fingerprint rather than position.")
 
 EPILOG = """Reads:
   OLD_REPORT, NEW_REPORT -- agent reports (the Cipher/Vera shape). Only each

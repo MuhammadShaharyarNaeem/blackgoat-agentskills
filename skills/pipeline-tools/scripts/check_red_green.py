@@ -634,8 +634,8 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("Verifies one RED and one or more GREEN captures are a real "
-           "before/after of the same command, not two unrelated runs.")
+PURPOSE = ("Decides whether a RED capture and its GREEN captures constitute a "
+           "real before/after proof of one bugfix.")
 
 EPILOG = """\
 Reads:

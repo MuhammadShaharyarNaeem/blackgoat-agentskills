@@ -325,8 +325,9 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("Flags near-duplicate agents/*.md or skills/*/SKILL.md pairs via "
-           "entity-neutralized 8-word shingle overlap.")
+PURPOSE = ("Flags near-duplicate agent personas or methodology skills by "
+           "entity-neutralized shingle overlap, for the agent-audit DRY "
+           "metric.")
 
 EPILOG = """\
 Reads:
