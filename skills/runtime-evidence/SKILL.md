@@ -84,6 +84,8 @@ Required wherever the running artifact can echo any identity, and **the identity
 
 Captures are **gating** and belong to whoever verifies. A builder's own self-check capture goes to `evidence/build/` instead and does not satisfy a gate — the same producer split `evidence/review/` already uses for rendered evidence.
 
+A rendered capture (screenshot) is evidence only when `{PLUGIN_ROOT}/pipeline-tools/scripts/record_capture.py` has recorded its provenance sidecar — invoked before the path is cited, never bypassed. A `file://` origin is a mockup, not evidence. When the running application cannot be reached, the state is **BLOCKED** (see *When You Cannot Probe* below) — never a substitute render of a document that was never running.
+
 ### Citation
 
 This file is the single owner of the grammar. Emit it in your report — `test-report.md` during build and verify runs, `verification-report.md` during shipping — inside the block for the unit being reported:
