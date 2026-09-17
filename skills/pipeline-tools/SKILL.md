@@ -590,7 +590,7 @@ python summarize_run.py --self-test
 
 ## check_dependency_tables.py
 
-Statically validates every agent's `## Methodology Dependencies` section: (a) the section carries the canonical "NOT Skill-tool invocables" wording, and (b) every `{PLUGIN_ROOT}` path in its table resolves to a real file. `agents/blackgoat.md` is excluded (CLAUDE.md convention #7).
+Statically validates every agent's `## Methodology Dependencies` section: (a) the section carries the canonical "NOT Skill-tool invocables" wording, (b) every `{PLUGIN_ROOT}` path in its table resolves to a real file, and (c) every table row carrying such a path has a non-empty `When` cell. `agents/blackgoat.md` is excluded (CLAUDE.md convention #7).
 
 ```bash
 python check_dependency_tables.py <skills_dir>
@@ -598,8 +598,9 @@ python check_dependency_tables.py --self-test
 ```
 
 - **Flags** — `<skills_dir>` is the plugin's `skills/` directory (i.e. `{PLUGIN_ROOT}`); `agents/` is located as its sibling. Paths are matched **with or without surrounding backticks**.
-- **Exit codes** — **0** every table valid; **1** at least one violation, with a per-violation report on stdout (a dangling path, a missing guard sentence, or an agent with no Methodology Dependencies section at all); **2** usage error, or a missing/empty `agents/` directory — it fails closed rather than reporting a vacuous pass.
-- **Self-test** — **14** cases. Depth: `references/check_dependency_tables.md`.
+- **Empty `When` cell** — a dependency row whose last cell is blank or whitespace is a violation, reported as `<agent>:<line>` with the path and the fix. An empty cell is ambiguous between "Always" and "never loaded": a reader resolves it either way, and a skill split that moves the file leaves a silently unloaded dependency behind. Only markdown rows are checked — prose in the section that mentions a path has no `When` cell to carry.
+- **Exit codes** — **0** every table valid; **1** at least one violation, with a per-violation report on stdout (a dangling path, a missing guard sentence, an empty `When` cell, or an agent with no Methodology Dependencies section at all); **2** usage error, or a missing/empty `agents/` directory — it fails closed rather than reporting a vacuous pass.
+- **Self-test** — **20** cases. Depth: `references/check_dependency_tables.md`.
 
 ## check_frontmatter.py
 

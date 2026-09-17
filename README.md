@@ -9,7 +9,7 @@ A Claude Code plugin that packages an **agent squad** and a **Prompt-Driven Deve
 
 > Note: this plugin ships no `AGENTS.md`. Under Google Antigravity the runtime contract — how "delegate to \<Agent\>" maps to the registered squad agents, blocking delegation, and `{PLUGIN_ROOT}` resolution — lives in the user's global `~/.gemini/config/AGENTS.md`, outside the plugin. Cursor uses `rules/cursor-runtime.mdc` instead — see [docs/cursor-setup.md](docs/cursor-setup.md).
 
-![blackgoat-agentskills: claude plugin validate passing, the plugin manifest, and the 16-agent squad inventory](assets/preview.svg)
+![blackgoat-agentskills: claude plugin validate passing, the plugin manifest, and the 17-agent squad inventory](assets/preview.svg)
 
 ---
 
@@ -163,10 +163,11 @@ Every agent lives in `agents/<name>.md` with frontmatter declaring its `role`, `
 | **Max** | Optimizer / Refactorer | sonnet | Ad hoc, on request — not a bgpdd-build pipeline stage |
 | **Vera** | Launch Verifier — pre-launch checklist verification | opus | Shipping — Verification (parallel with Cipher) |
 | **Cipher** | Security Auditor | opus | Shipping — Security (parallel with Vera); Build [SEC]-milestone reviews |
+| **Ward** | Privacy & Compliance Engineer | opus | Deployment — Privacy & Compliance (after the build cycle); Secure — the data-handling rows of the attack matrix (parallel with Cipher) |
 | **Dep** | DevOps Engineer | sonnet | Build 5 — Deployment Prep + epic gate; Shipping rollout |
 | **Forge** | Meta-Engineer / System Coach | opus | End of epic (bgpdd-shipping Step 7); `/bgpdd-learn` on demand — always human-approved |
 
-Blurbs, in one line each: Iris scans repos and records the tech stack and Target Scope. Scout maps one feature's fragments inside one API and writes exactly one file. Echo reverse-engineers how an existing feature behaves today, from the Scouts' maps, before any requirements exist. Rex turns a honing transcript into an ID'd, testable spec. Aria designs the data model, contracts, and file structure (design only — a learned squad rule forbids delegating coding to the Architect). Alex converts the blueprint into a dependency-ordered task plan where every task cites the requirements it covers. Mason writes the code for `[API]` milestones, TDD-first, inside a strict blast radius. Nova builds `[UI]` milestones, translating Aria's contracts and the committed design direction into interfaces verified against the rendered result. Quinn proves the build-phase implementation works against the requirements. Luna reviews for correctness, readability, architecture, security, and performance without rewriting anything. Max refactors for clarity with tests staying green, on ad-hoc request outside the build pipeline. Vera runs the pre-launch verification checklist against the finished codebase. Cipher hardens boundaries. Dep owns containers, CI/CD, rollback plans, and the GO/NO-GO verdict. Forge coaches the squad itself.
+Blurbs, in one line each: Iris scans repos and records the tech stack and Target Scope. Scout maps one feature's fragments inside one API and writes exactly one file. Echo reverse-engineers how an existing feature behaves today, from the Scouts' maps, before any requirements exist. Rex turns a honing transcript into an ID'd, testable spec. Aria designs the data model, contracts, and file structure (design only — a learned squad rule forbids delegating coding to the Architect). Alex converts the blueprint into a dependency-ordered task plan where every task cites the requirements it covers. Mason writes the code for `[API]` milestones, TDD-first, inside a strict blast radius. Nova builds `[UI]` milestones, translating Aria's contracts and the committed design direction into interfaces verified against the rendered result. Quinn proves the build-phase implementation works against the requirements. Luna reviews for correctness, readability, architecture, security, and performance without rewriting anything. Max refactors for clarity with tests staying green, on ad-hoc request outside the build pipeline. Vera runs the pre-launch verification checklist against the finished codebase. Cipher hardens boundaries. Ward audits the data itself — where personal data actually lives, on what basis it was collected, whether consent is enforced at the write path, whether a deletion provably reached every store, and whether every control claimed carries evidence (identity, SSO and secrets stay Cipher's). Dep owns containers, CI/CD, rollback plans, and the GO/NO-GO verdict. Forge coaches the squad itself.
 
 ---
 
@@ -400,6 +401,8 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **code-simplification** — behavior-preserving cleanup (Luna, Max)
 - **performance-optimization** — profiling and bottleneck fixes (Luna, Max)
 - **security-and-hardening** — vulnerability hardening (Cipher)
+- **privacy-engineering-patterns** — personal-data discovery sweep and classification tiers, consent enforced at the write path, deletion fan-out across every store, retention as an automated clock (Ward)
+- **compliance-evidence-patterns** — the control → evidence → source → collection method → frequency matrix, and the rule that evidence must show a control *operated*, not that it exists (Ward)
 - **dependency-upgrade-patterns** — dependency bumps done safely: upgrade brief from the changelog, audit captured before and after, one package per commit; framework majors route to lite (Mason, Nova, Max, Dep; conditional)
 - **feature-flag-patterns** — flag lifecycle: owner, expiry and removal task at creation, default-off, kill switch, both branches tested (Alex, Mason, Nova, Dep, Vera; conditional)
 - **jobs-and-messaging-patterns** — idempotent handlers, bounded retries, dead-lettering, the outbox pattern, run records; verified by an out-of-process replay capture (Aria, Mason, Quinn; conditional)
