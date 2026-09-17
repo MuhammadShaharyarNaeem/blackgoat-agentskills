@@ -9,6 +9,7 @@ helps still agree. Pure stdlib.
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -26,6 +27,16 @@ Reads:
   `tools` array carries one object per script:
     {"name", "script", "description", "kind", "runner", "agents", "lanes",
      "reads", "writes", "reason" (optional, used by `for --agent`)}
+  `lanes` carries one object per invocation site in the lane SKILL.md files:
+    {"lane", "phase", "step", "template", "gate"}. `template` is that lane's
+    invocation verbatim, placeholders untouched, and is the ONLY copy of it.
+    Phase is the lane's own heading number ("0", "2.5", "4b"), with three
+    conventions: "*" = a lane-wide rule firing at every phase, "-" = a lane
+    that declares no phases (bgpdd-learn), and "step-N"/"pre-flight" where the
+    heading says Step or Pre-Flight rather than Phase (bgpdd-shipping,
+    bgpdd-plan). Step is the enclosing numbered item as the file writes it
+    ("3b"), or "-" in an unnumbered bullet.
+  Each lane's skills/<lane>/SKILL.md, for the lane checks below.
   Each registered script's own `--help` output, which must carry, in order:
     a one-line purpose (<= 25 words, ending in a period, equal to the entry's
     `description`), the argparse usage and arguments, then an epilog whose
@@ -51,21 +62,26 @@ Problem codes:
   duplicate_name         two entries share one name
   bad_enum               kind or runner outside the allowed set
   class_drift            this script's PurposeFirstParser block differs
+  lane_unmapped          a lane SKILL.md names a script with no `lanes` object
+  lane_missing           a `lanes[].lane` value has no skills/<lane>/SKILL.md
+  template_drift         a `lanes[].template` invokes a different script
 
 JSON keys:
   list:   registry, count, tools[{name, description, kind, runner, agents, lanes}]
   show:   registry, entry, help, help_exit, help_error
-  for:    registry, mode, agent|lane, phase, count, tools[], note
+  for:    registry, mode, agent|lane, phase, count, note, plus tools[] for
+          --agent and gates[{name, script, lane, phase, step, template, gate}]
+          for --lane
   verify: registry, root, entries, scripts_checked, problems[{code, name,
           detail, fix}], problem_codes, result
 
 Exit codes:
   0  the command answered (a clean --verify included)
   1  --verify found at least one problem
-  2  usage error, an unreadable or malformed registry, or an unknown name
+  2  usage error, a malformed registry, an unknown name or an unknown lane
 
 Self-test:
-  python tool_registry.py --self-test  (35 cases)
+  python tool_registry.py --self-test  (47 cases)
 """
 
 KINDS = ("gate", "writer", "detector", "lint", "driver", "hook")
@@ -91,8 +107,78 @@ RUNNER_REASON = {
 }
 
 
+LANE_GLOBS = ("bgpdd-*/SKILL.md", "bg/SKILL.md")
+SCRIPT_MENTION = re.compile(r"pipeline-tools/scripts/([a-z_0-9]+)\.py")
+
+
 def default_registry_path():
     return Path(__file__).resolve().parent.parent / "registry.json"
+
+
+def skills_root(registry_root):
+    """The plugin's skills/ directory: the registry root's own parent."""
+    return registry_root.parent
+
+
+def lane_files(skills_dir):
+    """Every lane SKILL.md, in a stable order."""
+    paths = []
+    for pattern in LANE_GLOBS:
+        paths.extend(sorted(skills_dir.glob(pattern)))
+    return paths
+
+
+def template_script(template):
+    """The basename a lanes[] template actually invokes.
+
+    The first `scripts/<x>.py` in the string, never a later bare name: a
+    template may carry other script names as flag VALUES (check_commit_gate's
+    `--require-ledger-gates check_red_green.py,...`), and grading on those
+    would report drift on every correct composite gate.
+    """
+    text = template or ""
+    match = SCRIPT_MENTION.search(text)
+    if match:
+        return match.group(1) + ".py"
+    match = re.search(r"([a-z_0-9]+\.py)", text)
+    return match.group(1) if match else ""
+
+
+def _order_key(value):
+    """Sort key for a phase or step: `*` first, `-` next, then natural order."""
+    text = str(value)
+    key = [({"*": 0, "-": 1}.get(text, 2), 0, "")]
+    for chunk in re.findall(r"\d+|[A-Za-z]+", text):
+        key.append((0, int(chunk), "") if chunk.isdigit() else (1, 0, chunk.lower()))
+    return key
+
+
+def known_lanes(tools):
+    lanes = set()
+    for entry in tools:
+        for item in entry.get("lanes") or []:
+            if isinstance(item, dict) and item.get("lane"):
+                lanes.add(item["lane"])
+    return sorted(lanes)
+
+
+def lane_gates(tools, lane, phase=None):
+    """Every lanes[] object for one lane (optionally one phase), in run order."""
+    rows = []
+    for entry in tools:
+        for item in entry.get("lanes") or []:
+            if not isinstance(item, dict) or item.get("lane") != lane:
+                continue
+            if phase is not None and str(item.get("phase")) != str(phase):
+                continue
+            row = dict(item)
+            row["name"] = entry.get("name")
+            row["script"] = entry.get("script")
+            rows.append(row)
+    rows.sort(key=lambda r: (_order_key(r.get("phase")),
+                             _order_key(r.get("step")),
+                             r.get("name") or ""))
+    return rows
 
 
 class RegistryError(Exception):
@@ -303,6 +389,74 @@ def verify_registry(registry_path):
                     % canonical,
                 )
 
+    # ---- lane coverage.
+    # `lanes[]` is the only copy of each gate invocation, so three things can
+    # rot: a lane SKILL.md still naming a script that has no object of its own
+    # (lane_unmapped), an object naming a lane with no SKILL.md (lane_missing),
+    # and an object whose template invokes some other script (template_drift).
+    # Step B2 deletes the lanes' own inline copies; once it lands there are no
+    # mentions left to scan and lane_unmapped goes vacuous BY DESIGN. It guards
+    # the window until then, and any mention re-introduced afterwards.
+    by_script = {}
+    for entry in tools:
+        by_script.setdefault(Path(entry.get("script", "")).name, entry)
+
+    declared = set()
+    for entry in tools:
+        name = entry.get("name", "<unnamed>")
+        own = Path(entry.get("script", "")).name
+        for item in entry.get("lanes") or []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("lane"):
+                declared.add(item["lane"])
+            invoked = template_script(item.get("template"))
+            if invoked and invoked != own:
+                add(
+                    "template_drift",
+                    name,
+                    "its %s/phase %s template invokes %s, not %s"
+                    % (item.get("lane"), item.get("phase"), invoked, own),
+                    "fix the `template` to the lane's own %s invocation, or move "
+                    "the object to the entry for %s" % (own, invoked),
+                )
+
+    skills_dir = skills_root(root)
+    for lane in sorted(declared):
+        if not (skills_dir / str(lane) / "SKILL.md").is_file():
+            add(
+                "lane_missing",
+                str(lane),
+                "a lanes[] object names lane %r, but %s/SKILL.md does not exist"
+                % (lane, lane),
+                "correct the `lane` value, or drop the object if that lane is gone",
+            )
+
+    for path in lane_files(skills_dir):
+        lane = path.parent.name
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for lineno, line in enumerate(text.splitlines(), 1):
+            for match in SCRIPT_MENTION.finditer(line):
+                basename = match.group(1) + ".py"
+                entry = by_script.get(basename)
+                mapped = any(
+                    isinstance(i, dict) and i.get("lane") == lane
+                    for i in (entry.get("lanes") or []) if entry
+                )
+                if mapped:
+                    continue
+                add(
+                    "lane_unmapped",
+                    entry.get("name") if entry else match.group(1),
+                    "%s:%d names %s, which has no lanes[] object for %s"
+                    % (path.as_posix(), lineno, basename, lane),
+                    "add a lanes[] object for %s to that entry, or delete the "
+                    "mention from the lane (step B2 does the latter)" % lane,
+                )
+
     registered = set()
     for entry in tools:
         script_rel = entry.get("script", "")
@@ -393,9 +547,24 @@ def render_entry(entry):
     lines = []
     for key in ("name", "script", "kind", "runner", "description"):
         lines.append("%-12s %s" % (key + ":", entry.get(key, "")))
-    for key in ("agents", "lanes", "reads", "writes"):
+    for key in ("agents", "reads", "writes"):
         value = entry.get(key, [])
         lines.append("%-12s %s" % (key + ":", ", ".join(str(v) for v in value) if value else "(none)"))
+    # lanes hold whole invocation objects; name the lanes and the phases and
+    # leave the templates to `for --lane`, which is what renders them.
+    lanes = [i for i in (entry.get("lanes") or []) if isinstance(i, dict)]
+    if lanes:
+        grouped = {}
+        for item in lanes:
+            grouped.setdefault(item.get("lane"), []).append(str(item.get("phase")))
+        summary = "; ".join(
+            "%s (phase %s)" % (lane, ", ".join(sorted(set(phases), key=_order_key)))
+            for lane, phases in sorted(grouped.items())
+        )
+        lines.append("%-12s %s" % ("lanes:", summary))
+        lines.append("%-12s %s" % ("", "templates: tool_registry.py for --lane <lane>"))
+    else:
+        lines.append("%-12s %s" % ("lanes:", "(none)"))
     if entry.get("reason"):
         lines.append("%-12s %s" % ("reason:", entry["reason"]))
     return "\n".join(lines)
@@ -432,48 +601,31 @@ def cmd_show(registry_path, name, as_json=False):
     return 0, "\n".join(out)
 
 
-def _lane_matches(lanes, lane, phase):
-    for item in lanes:
-        if isinstance(item, dict):
-            if item.get("lane") != lane:
-                continue
-            if phase is None or str(item.get("phase")) == str(phase):
-                return True
-        elif item == lane:
-            if phase is None:
-                return True
-    return False
-
-
 def cmd_for(registry_path, agent=None, lane=None, phase=None, as_json=False):
     data, resolved = load_registry(registry_path)
     tools = data["tools"]
-    note = ""
     if agent:
-        matched = [t for t in tools if agent in (t.get("agents") or [])]
-        mode = "agent"
-        subject = agent
-        if not matched:
-            note = (
-                "no tool is carved out for %r - everything else in this registry is "
-                "Orchestrator-run (pipeline-tools/SKILL.md carve-out)." % agent
-            )
-    else:
-        matched = [t for t in tools if _lane_matches(t.get("lanes") or [], lane, phase)]
-        mode = "lane"
-        subject = lane
-        if not matched:
-            note = (
-                "no tool declares a lane yet: `lanes` is empty for every entry today. "
-                "Step B of the pipeline-tools split fills it from the pipeline SKILL.md files."
-            )
-    matched = sorted(matched, key=lambda t: t.get("name", ""))
+        return _for_agent(resolved, tools, agent, as_json)
+    return _for_lane(resolved, tools, lane, phase, as_json)
+
+
+def _for_agent(resolved, tools, agent, as_json):
+    matched = sorted(
+        [t for t in tools if agent in (t.get("agents") or [])],
+        key=lambda t: t.get("name", ""),
+    )
+    note = ""
+    if not matched:
+        note = (
+            "no tool is carved out for %r - everything else in this registry is "
+            "Orchestrator-run (pipeline-tools/SKILL.md carve-out)." % agent
+        )
     if as_json:
         payload = {
             "registry": str(resolved),
-            "mode": mode,
-            mode: subject,
-            "phase": phase,
+            "mode": "agent",
+            "agent": agent,
+            "phase": None,
             "count": len(matched),
             "tools": matched,
             "note": note,
@@ -483,12 +635,45 @@ def cmd_for(registry_path, agent=None, lane=None, phase=None, as_json=False):
     for entry in matched:
         lines.append("%s  %s" % (entry.get("name"), entry.get("description")))
         reason = entry.get("reason") or RUNNER_REASON.get(entry.get("runner"), "")
-        if mode == "agent" and reason:
+        if reason:
             lines.append("    reason: %s" % reason)
     if note:
         if lines:
             lines.append("")
         lines.append(note)
+    return 0, "\n".join(lines)
+
+
+def _for_lane(resolved, tools, lane, phase, as_json):
+    lanes = known_lanes(tools)
+    if lane not in lanes:
+        raise RegistryError(
+            "unknown lane %r - known lanes: %s"
+            % (lane, ", ".join(lanes) if lanes else "(none declared)")
+        )
+    gates = lane_gates(tools, lane, phase)
+    note = ""
+    if not gates:
+        # A phase with no gate of its own is legitimate, not an error.
+        note = "no gates in phase %s" % phase
+    if as_json:
+        payload = {
+            "registry": str(resolved),
+            "mode": "lane",
+            "lane": lane,
+            "phase": phase,
+            "count": len(gates),
+            "gates": gates,
+            "note": note,
+        }
+        return 0, json.dumps(payload, indent=2)
+    if not gates:
+        return 0, note
+    lines = []
+    for row in gates:
+        lines.append("phase %s step %s  %s" % (row.get("phase"), row.get("step"), row.get("name")))
+        lines.append("    %s" % row.get("template", ""))
+        lines.append("    %s" % row.get("gate", ""))
     return 0, "\n".join(lines)
 
 
@@ -524,12 +709,21 @@ raise SystemExit(0)
 '''
 
 
-def _fixture(tmp, tools, scripts):
-    """Build a registry root under tmp. `scripts` maps filename -> source text."""
-    root = Path(tmp)
+def _fixture(tmp, tools, scripts, lanes=None):
+    """Build a skills tree under tmp: the registry root plus any lane SKILL.md.
+
+    The registry lives at <tmp>/pipeline-tools/registry.json so that the lane
+    checks have a real skills/ directory to resolve `skills/<lane>/SKILL.md`
+    against -- the same shape the plugin has on disk.
+    """
+    skills = Path(tmp)
+    root = skills / "pipeline-tools"
     (root / "scripts").mkdir(parents=True, exist_ok=True)
     for filename, source in scripts.items():
         (root / "scripts" / filename).write_text(source, encoding="utf-8")
+    for lane, text in (lanes or {}).items():
+        (skills / lane).mkdir(parents=True, exist_ok=True)
+        (skills / lane / "SKILL.md").write_text(text, encoding="utf-8")
     registry = root / "registry.json"
     registry.write_text(json.dumps({"schema": 1, "tools": tools}, indent=2), encoding="utf-8")
     return registry
@@ -563,6 +757,18 @@ def _entry(**kw):
         "lanes": [],
         "reads": [],
         "writes": [],
+    }
+    base.update(kw)
+    return base
+
+
+def _lane_object(**kw):
+    base = {
+        "lane": "bgpdd-demo",
+        "phase": "2",
+        "step": "1",
+        "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/demo.py --milestone \"{slug}\"",
+        "gate": "Exit 1 = BLOCK: the lane fixes the named term and re-runs.",
     }
     base.update(kw)
     return base
@@ -763,11 +969,99 @@ def self_test():
         code, out = cmd_for(reg, agent="cipher", as_json=True)
         check("for --agent --json is parseable", json.loads(out)["count"] == 1)
 
-        # 20. for --lane says step B fills it
-        code, out = cmd_for(reg, lane="bgpdd-build")
-        check("for --lane reports the empty schema", code == 0 and "Step B" in out)
-        code, out = cmd_for(reg, lane="bgpdd-build", phase="2", as_json=True)
-        check("for --lane --phase is accepted", json.loads(out)["count"] == 0)
+        # 20. the lane checks: a clean lane fixture, then one failure each.
+        lane_md = (
+            "# demo lane\n"
+            "1. Gate: `python {PLUGIN_ROOT}/pipeline-tools/scripts/demo.py"
+            " --milestone \"{slug}\"`\n"
+        )
+        two_gates = [
+            _lane_object(phase="0", step="2"),
+            _lane_object(phase="2", step="1"),
+        ]
+        d = Path(tmp) / "lanes_clean"
+        lreg = _fixture(
+            d,
+            [_entry(lanes=two_gates)],
+            {"demo.py": _compliant("demo.py", desc)},
+            lanes={"bgpdd-demo": lane_md},
+        )
+        report = verify_registry(lreg)
+        check("a mapped lane passes verify", report["result"] == "PASS", str(report["problems"]))
+
+        d = Path(tmp) / "lane_unmapped"
+        ureg = _fixture(
+            d,
+            [_entry()],
+            {"demo.py": _compliant("demo.py", desc)},
+            lanes={"bgpdd-demo": lane_md},
+        )
+        report = verify_registry(ureg)
+        check("lane_unmapped fires on an unmapped mention",
+              report["problem_codes"] == ["lane_unmapped"], str(report["problem_codes"]))
+        check("lane_unmapped names file:line and a fix",
+              ":2 names demo.py" in report["problems"][0]["detail"]
+              and report["problems"][0]["fix"],
+              str(report["problems"][0]))
+
+        d = Path(tmp) / "lane_missing"
+        mreg = _fixture(
+            d,
+            [_entry(lanes=[_lane_object(lane="bgpdd-gone")])],
+            {"demo.py": _compliant("demo.py", desc)},
+        )
+        report = verify_registry(mreg)
+        check("lane_missing fires on a lane with no SKILL.md",
+              report["problem_codes"] == ["lane_missing"], str(report["problem_codes"]))
+
+        d = Path(tmp) / "template_drift"
+        treg = _fixture(
+            d,
+            [_entry(lanes=[_lane_object(
+                template="python {PLUGIN_ROOT}/pipeline-tools/scripts/other.py --x")])],
+            {"demo.py": _compliant("demo.py", desc)},
+            lanes={"bgpdd-demo": "# demo lane, no mentions\n"},
+        )
+        report = verify_registry(treg)
+        check("template_drift fires on a mismatched template",
+              report["problem_codes"] == ["template_drift"], str(report["problem_codes"]))
+
+        d = Path(tmp) / "template_flagvalue"
+        freg = _fixture(
+            d,
+            [_entry(lanes=[_lane_object(
+                template="python {PLUGIN_ROOT}/pipeline-tools/scripts/demo.py"
+                         " --require-ledger-gates check_red_green.py,check_handoff.py")])],
+            {"demo.py": _compliant("demo.py", desc)},
+            lanes={"bgpdd-demo": "# demo lane, no mentions\n"},
+        )
+        report = verify_registry(freg)
+        check("a script name used as a flag VALUE is not drift",
+              report["result"] == "PASS", str(report["problems"]))
+
+        # 20b. for --lane renders phase/step, template and gate, in run order.
+        code, out = cmd_for(lreg, lane="bgpdd-demo")
+        check("for --lane prints every gate", code == 0 and out.count("phase ") == 2, out)
+        check("for --lane sorts by phase then step", out.index("phase 0") < out.index("phase 2"))
+        check("for --lane prints the template and the gate",
+              "scripts/demo.py --milestone" in out and "Exit 1 = BLOCK" in out, out)
+        code, out = cmd_for(lreg, lane="bgpdd-demo", phase="2")
+        check("for --lane --phase filters", code == 0 and out.count("phase ") == 1, out)
+        code, out = cmd_for(lreg, lane="bgpdd-demo", phase="9")
+        check("an empty phase exits 0 saying so", code == 0 and out == "no gates in phase 9", out)
+        code, out = cmd_for(lreg, lane="bgpdd-demo", as_json=True)
+        payload = json.loads(out)
+        check("for --lane --json carries the objects",
+              payload["count"] == 2 and payload["gates"][0]["template"]
+              and payload["gates"][0]["name"] == "demo", out[:200])
+        try:
+            cmd_for(lreg, lane="bgpdd-nope")
+            check("an unknown lane raises, naming the known lanes", False)
+        except RegistryError as exc:
+            check("an unknown lane raises, naming the known lanes",
+                  "bgpdd-demo" in str(exc), str(exc))
+        check("lane-wide `*` sorts before a numbered phase",
+              _order_key("*") < _order_key("0") < _order_key("2.5") < _order_key("step-0"))
 
         # 21. show concatenates the entry and the help
         code, out = cmd_show(reg, "self_gated")

@@ -1,9 +1,20 @@
 {
   "schema": 1,
   "root": "skills/pipeline-tools",
-  "note": "Canonical data for tool_registry.py. Each script's own --help is the contract of record; this file is the router. `lanes` is intentionally empty everywhere: step B fills it from the pipeline SKILL.md files.",
-  "kinds": ["gate", "writer", "detector", "lint", "driver", "hook"],
-  "runners": ["orchestrator", "self-gating", "either"],
+  "note": "Canonical data for tool_registry.py. Each script's own --help is the contract of record; this file is the router. `lanes` carries one object per invocation site in the lane SKILL.md files: {lane, phase, step, template, gate}. `template` is the invocation verbatim, placeholders untouched - it is the only copy.",
+  "kinds": [
+    "gate",
+    "writer",
+    "detector",
+    "lint",
+    "driver",
+    "hook"
+  ],
+  "runners": [
+    "orchestrator",
+    "self-gating",
+    "either"
+  ],
   "tools": [
     {
       "name": "check_acceptance_suite",
@@ -12,9 +23,45 @@
       "kind": "gate",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["acceptance-matrix.md", "acceptance-results.md", "requirements.md", "evidence/runtime/*.md"],
-      "writes": ["gates.jsonl"]
+      "lanes": [
+        {
+          "lane": "bgpdd-plan",
+          "phase": "3.5",
+          "step": "4",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_acceptance_suite.py --lint-only --matrix .docs/{project-name}/acceptance-matrix.md --requirements .docs/{project-name}/requirements.md --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = the JSON names the defect; exit 2 = usage or an unparseable matrix - re-delegate to Alex quoting the exact arrays under the same 2-round bound."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-3",
+          "step": "3",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_acceptance_suite.py --matrix <artifacts.acceptance_matrix> --results .docs/{project-name}/implementation/acceptance-results.md --repo . --changed-files <see below> --ledger .docs/{project-name}/implementation/gates.jsonl [--require-priority P0,P1]",
+          "gate": "Exit 1 = BLOCK: a failure here is a regression since build; exit 2 = a structural defect or a nonexistent `--changed-files` path, routed back to Alex (matrix) or Quinn (results)."
+        },
+        {
+          "lane": "bgpdd-verify",
+          "phase": "1",
+          "step": "5",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_acceptance_suite.py --lint-only --matrix .docs/{project-name}/acceptance-matrix.md --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 0 is required before Phase 2; on exit 1/2 fix the named arrays and re-run under the 2-round bound, then halt and surface."
+        },
+        {
+          "lane": "bgpdd-verify",
+          "phase": "3",
+          "step": "1",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_acceptance_suite.py --matrix .docs/{project-name}/acceptance-matrix.md --results .docs/{project-name}/implementation/acceptance-results.md --repo <target repo root> --require-priority <the Phase 0 floor> --emit-gate-args --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Results or capture defects (`missing_results`, `unevidenced_manual`, an unreadable results file) are a delta-only follow-up to Quinn; a matrix defect re-opens Phase 1 and consumes none of her rounds."
+        }
+      ],
+      "reads": [
+        "acceptance-matrix.md",
+        "acceptance-results.md",
+        "requirements.md",
+        "evidence/runtime/*.md"
+      ],
+      "writes": [
+        "gates.jsonl"
+      ]
     },
     {
       "name": "check_agent_originality",
@@ -24,7 +71,10 @@
       "runner": "orchestrator",
       "agents": [],
       "lanes": [],
-      "reads": ["agents/*.md", "skills/*/SKILL.md"],
+      "reads": [
+        "agents/*.md",
+        "skills/*/SKILL.md"
+      ],
       "writes": []
     },
     {
@@ -34,9 +84,61 @@
       "kind": "gate",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["security-report.md", "verification-report.md", "post-deploy-report.md", "evidence/**/*.md", "evidence/**/*.meta.json", "gates.jsonl"],
-      "writes": ["gates.jsonl"]
+      "lanes": [
+        {
+          "lane": "bgpdd-build",
+          "phase": "3",
+          "step": "1b",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_agent_report.py --report .docs/{project-name}/implementation/security-report.md --milestone \"<milestone title>\" --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = BLOCK: the JSON names the cause, routed into the step 4 remediation cycle exactly as a Critical finding; exit 2 = a structurally non-conforming report, back to Cipher."
+        },
+        {
+          "lane": "bgpdd-secure",
+          "phase": "3",
+          "step": "2",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_agent_report.py --report .docs/{project-name}/implementation/security-report.md --milestone \"<run title>\" --repo <target repo root> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "A report or capture defect is a delta-only follow-up to Cipher under the 2-round bound; a confirmed vulnerability is a finding carried to Phase 4, never a loop."
+        },
+        {
+          "lane": "bgpdd-secure",
+          "phase": "3",
+          "step": "3",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_agent_report.py --report .docs/{project-name}/implementation/privacy-report.md --milestone \"<run title>\" --repo <target repo root> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Step 2 re-pointed at Ward's report, same routing; Ward not delegated means no rows for it to gate, so it does not run."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-3",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_agent_report.py --report .docs/{project-name}/implementation/verification-report.md --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Route per the default exit-code convention; on exit 1 the JSON body names the failing, blocked, unrun and unevidenced items and Critical findings in Vera's report."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-3",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_agent_report.py --report .docs/{project-name}/implementation/security-report.md --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Route per the default exit-code convention; on exit 1 the JSON body names the failing, blocked, unrun and unevidenced items and Critical findings in Cipher's report."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-5.5",
+          "step": "3",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_agent_report.py --report .docs/{project-name}/implementation/post-deploy-report.md --milestone \"post-deploy\" --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 2 = an artifact defect routed back to this same Dep; exit 1, or a `**Verdict:** Fail`, is a live production defect - take the rollback decision and HALT for the user."
+        }
+      ],
+      "reads": [
+        "security-report.md",
+        "verification-report.md",
+        "post-deploy-report.md",
+        "evidence/**/*.md",
+        "evidence/**/*.meta.json",
+        "gates.jsonl"
+      ],
+      "writes": [
+        "gates.jsonl"
+      ]
     },
     {
       "name": "check_always_on",
@@ -46,8 +148,14 @@
       "runner": "orchestrator",
       "agents": [],
       "lanes": [],
-      "reads": ["skills/agent-squad/always-on.md", "skills/*/SKILL.md", "skills/pipeline-tools/scripts/*.py"],
-      "writes": ["gates.jsonl"]
+      "reads": [
+        "skills/agent-squad/always-on.md",
+        "skills/*/SKILL.md",
+        "skills/pipeline-tools/scripts/*.py"
+      ],
+      "writes": [
+        "gates.jsonl"
+      ]
     },
     {
       "name": "check_attack_matrix",
@@ -56,9 +164,30 @@
       "kind": "gate",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["attack-matrix.md", "security-report.md", "evidence/**"],
-      "writes": ["gates.jsonl"]
+      "lanes": [
+        {
+          "lane": "bgpdd-secure",
+          "phase": "1",
+          "step": "4",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_attack_matrix.py --lint-only --matrix .docs/{project-name}/attack-matrix.md --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 0 is required before Phase 2; on exit 1/2 fix the named rows and re-run under the 2-round bound, then halt and surface."
+        },
+        {
+          "lane": "bgpdd-secure",
+          "phase": "3",
+          "step": "1",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_attack_matrix.py --matrix .docs/{project-name}/attack-matrix.md --report .docs/{project-name}/implementation/security-report.md --repo <target repo root> --require-priority <the Phase 0 floor> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "A matrix defect re-opens Phase 1 with the user rather than routing to Cipher, and consumes none of his rounds."
+        }
+      ],
+      "reads": [
+        "attack-matrix.md",
+        "security-report.md",
+        "evidence/**"
+      ],
+      "writes": [
+        "gates.jsonl"
+      ]
     },
     {
       "name": "check_batch_close",
@@ -67,9 +196,23 @@
       "kind": "gate",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["{batch-root}/orchestrator-state.json", "{batch-root}/batch.md", "{bugfix-root}/gates.jsonl"],
-      "writes": ["{batch-root}/gates.jsonl"]
+      "lanes": [
+        {
+          "lane": "bgpdd-bugfix-batch",
+          "phase": "4",
+          "step": "3",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_batch_close.py --state {batch-root}/orchestrator-state.json --batch-md {batch-root}/batch.md --repo <the target repo root> --milestone \"{batch-slug}\" --ledger {batch-root}/gates.jsonl",
+          "gate": "Exit 1 = BLOCK and the JSON names the open bug, the leftover worktree, the broken chain or the table mismatch - fix it and re-run; never hand-close a batch this gate has not PASSed."
+        }
+      ],
+      "reads": [
+        "{batch-root}/orchestrator-state.json",
+        "{batch-root}/batch.md",
+        "{bugfix-root}/gates.jsonl"
+      ],
+      "writes": [
+        "{batch-root}/gates.jsonl"
+      ]
     },
     {
       "name": "check_blockers",
@@ -78,9 +221,21 @@
       "kind": "gate",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["orchestrator-state.json"],
-      "writes": ["gates.jsonl"]
+      "lanes": [
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-0",
+          "step": "5",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_blockers.py --state .docs/{project-name}/orchestrator-state.json --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = standing blockers - HALT and list them from the JSON stdout."
+        }
+      ],
+      "reads": [
+        "orchestrator-state.json"
+      ],
+      "writes": [
+        "gates.jsonl"
+      ]
     },
     {
       "name": "check_bugfix_intake",
@@ -89,9 +244,21 @@
       "kind": "gate",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["{bugfix-root}/bug-report.md"],
-      "writes": ["gates.jsonl"]
+      "lanes": [
+        {
+          "lane": "bgpdd-bugfix",
+          "phase": "0",
+          "step": "3",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_bugfix_intake.py --report {bugfix-root}/bug-report.md --milestone \"{bug-slug}\" --ledger {bugfix-root}/gates.jsonl",
+          "gate": "Exit 1 = BLOCK: fix the named section, placeholder or unanswered enum with the user and re-run; exit 2 = not a bug report; no delegation until this exits 0."
+        }
+      ],
+      "reads": [
+        "{bugfix-root}/bug-report.md"
+      ],
+      "writes": [
+        "gates.jsonl"
+      ]
     },
     {
       "name": "check_commit_gate",
@@ -100,9 +267,28 @@
       "kind": "gate",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["review-report.md", "orchestrator-state.json", "gates.jsonl", "run-log.jsonl", "test-report.md", "evidence/**/*.meta.json", "rca.md"],
-      "writes": ["gates.jsonl", "the repository commit (with --commit)"]
+      "lanes": [
+        {
+          "lane": "bgpdd-bugfix",
+          "phase": "5",
+          "step": "5",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_commit_gate.py --review-report {report-root}/review-report.md --state {state-file} --milestone \"{bug-slug}\" --changed-files <the builder's paths> --verify-tree --require-files-reviewed --max-changed-files 5 --waiver {bugfix-root}/rca.md --require-ledger-gates check_bugfix_intake.py,check_red_green.py,check_handoff.py,check_test_authenticity.py --require-run-log {bugfix-root}/run-log.jsonl --require-agents quinn,luna,<the builder(s) Phase 3 delegated> --ledger {bugfix-root}/gates.jsonl --repo <the target repo root — REQUIRED whenever the invocation's cwd is not that repo> [--docs-root <the shared .docs/ root, only if it is not --repo/.docs>] --commit --message \"<the commit message>\"",
+          "gate": "Exit 1 = BLOCK and the JSON names the stale verdict, standing blocker, standing Critical/Important finding, unreviewed file, tree mismatch, size overrun or unbacked sibling gate; exit 2 = non-conforming report, back to Luna."
+        }
+      ],
+      "reads": [
+        "review-report.md",
+        "orchestrator-state.json",
+        "gates.jsonl",
+        "run-log.jsonl",
+        "test-report.md",
+        "evidence/**/*.meta.json",
+        "rca.md"
+      ],
+      "writes": [
+        "gates.jsonl",
+        "the repository commit (with --commit)"
+      ]
     },
     {
       "name": "check_coverage",
@@ -111,9 +297,45 @@
       "kind": "gate",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["requirements.md", "plan.md", "test-report.md", "detailed-design.md"],
-      "writes": ["gates.jsonl"]
+      "lanes": [
+        {
+          "lane": "bgpdd-lite",
+          "phase": "2.5",
+          "step": "1",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --plan .docs/{project-name}/implementation/plan.md --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = one of the two gating arrays is non-empty, `uncovered` and/or `lint_failures`; exit 2 = the artifact failed its structural contract - re-delegate to Alex quoting the exact entries."
+        },
+        {
+          "lane": "bgpdd-plan",
+          "phase": "2.5",
+          "step": "1",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --design .docs/{project-name}/design/detailed-design.md --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "This is the supersession-annotation lint, not full FR-to-design coverage: fix every reported `lint_failures` entry before the adversarial pass."
+        },
+        {
+          "lane": "bgpdd-plan",
+          "phase": "3.5",
+          "step": "1",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --plan .docs/{project-name}/implementation/plan.md --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = one of the two gating arrays is non-empty, `uncovered` and/or `lint_failures`; exit 2 = the artifact failed its structural contract - re-delegate to Alex quoting the exact arrays."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-3.5",
+          "step": "1",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --test-report .docs/{project-name}/implementation/test-report.md --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = the `uncovered` array lists the Must-Have gaps; exit 2 = the artifact failed its structural contract; either way BLOCK and route back to `/bgpdd-build` Phase 2."
+        }
+      ],
+      "reads": [
+        "requirements.md",
+        "plan.md",
+        "test-report.md",
+        "detailed-design.md"
+      ],
+      "writes": [
+        "gates.jsonl"
+      ]
     },
     {
       "name": "check_dependency_tables",
@@ -123,7 +345,10 @@
       "runner": "orchestrator",
       "agents": [],
       "lanes": [],
-      "reads": ["agents/*.md", "skills/**"],
+      "reads": [
+        "agents/*.md",
+        "skills/**"
+      ],
       "writes": []
     },
     {
@@ -134,7 +359,10 @@
       "runner": "orchestrator",
       "agents": [],
       "lanes": [],
-      "reads": ["agents/*.md", "skills/*/SKILL.md"],
+      "reads": [
+        "agents/*.md",
+        "skills/*/SKILL.md"
+      ],
       "writes": []
     },
     {
@@ -144,9 +372,113 @@
       "kind": "gate",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["<the agent's handoff file or stdin>", "<the repo's git diff since a ref>"],
-      "writes": ["gates.jsonl"]
+      "lanes": [
+        {
+          "lane": "bgpdd-bugfix",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <quinn|mason|nova|luna> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched that delegation> --ledger {bugfix-root}/gates.jsonl",
+          "gate": "Exit 1 = the agent's contract was not met: return it to that same agent, counting a round under this lane's 2-round bound."
+        },
+        {
+          "lane": "bgpdd-build",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <name> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched that delegation> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = the agent's contract was not met - back to that agent, counting the round its own phase counts."
+        },
+        {
+          "lane": "bgpdd-discovery",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <iris|scout|echo> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched that delegation> --ledger .docs/summary/gates.jsonl",
+          "gate": "Exit 1 = the agent's contract was not met: return it to that same agent, subject to the error-recovery bound in section 2."
+        },
+        {
+          "lane": "bgpdd-lite",
+          "phase": "2",
+          "step": "4",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <alex|scout> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched the delegation> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = his contract was not met - back to Alex under section 2's 2-round bound, not on to the coverage gate."
+        },
+        {
+          "lane": "bgpdd-plan",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <rex|aria|alex> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched that delegation> --milestone \"<phase>\" --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = the agent's contract was not met - return to that same agent, counting the round its own loop's bound counts; exit 2 = usage or an artifact defect - fix the invocation or the artifact, not the agent."
+        },
+        {
+          "lane": "bgpdd-secure",
+          "phase": "2",
+          "step": "6",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona cipher --repo . --since <the sha HEAD held when you launched him> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = a delta-only follow-up under section 2's bound, not a Phase 3 gate run."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-3",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <Vera's saved handoff> --persona vera --repo . --since <the sha HEAD held when you launched Stage 1> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = Vera's contract was not met - back to her, counting the round under the Fix-routing bound."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-3",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <Cipher's saved handoff> --persona cipher --repo . --since <the sha HEAD held when you launched Stage 2> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = Cipher's contract was not met - back to him, counting the round under the Fix-routing bound."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-3",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <Dep's saved handoff> --persona dep --repo . --since <the sha HEAD held when you launched Stage 2> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = Dep's contract was not met - back to him, counting the round under the Fix-routing bound."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-3",
+          "step": "2b",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <her saved handoff> --persona quinn --repo . --since <the sha HEAD held when you launched this fresh delegation> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = back to her, counting the round under this gate's own bound."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-5.5",
+          "step": "2b",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <his saved handoff> --persona dep --repo . --since <the sha HEAD held when you launched this fresh delegation> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = back to him, counting the round under Step 3's fix-and-reverify bound."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-7",
+          "step": "2b",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <his saved handoff> --persona forge --advisory --repo . --since <the sha HEAD held when you launched this delegation> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = the proposal's contract was not met - do not HALT for approval on it; return to Forge for a conforming proposal."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-7",
+          "step": "5b",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <his saved handoff> --persona forge --repo . --since <the sha HEAD held when you launched the apply delegation> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = back to Forge for a conforming `<changed_skills>` list."
+        },
+        {
+          "lane": "bgpdd-verify",
+          "phase": "2",
+          "step": "5",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona quinn --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched her> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = a delta-only follow-up under section 2's bound, not a Phase 3 gate run."
+        }
+      ],
+      "reads": [
+        "<the agent's handoff file or stdin>",
+        "<the repo's git diff since a ref>"
+      ],
+      "writes": [
+        "gates.jsonl"
+      ]
     },
     {
       "name": "check_ledger",
@@ -155,8 +487,18 @@
       "kind": "gate",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["gates.jsonl"],
+      "lanes": [
+        {
+          "lane": "bgpdd-bugfix-batch",
+          "phase": "3",
+          "step": "2",
+          "template": "{PLUGIN_ROOT}/pipeline-tools/scripts/check_ledger.py --ledger <that bug's root>/gates.jsonl",
+          "gate": "A non-zero exit means that bug's chain is broken, so its `check_commit_gate.py` PASS cannot be trusted and the merge precondition does not hold."
+        }
+      ],
+      "reads": [
+        "gates.jsonl"
+      ],
       "writes": []
     },
     {
@@ -165,11 +507,30 @@
       "description": "Decides whether a head OpenAPI document breaks the published contract, for the agent evolving an API and for the shipping gate.",
       "kind": "gate",
       "runner": "either",
-      "agents": ["alex", "aria", "luna", "mason", "nova"],
+      "agents": [
+        "alex",
+        "aria",
+        "luna",
+        "mason",
+        "nova"
+      ],
       "reason": "api-contract-evolution/SKILL.md step 5 and its Verification section: the agent that just changed the contract document runs the diff on its OWN output before handing it back. bgpdd-shipping runs the epic-wide diff itself.",
-      "lanes": [],
-      "reads": ["<base openapi.json|yaml>", "<head openapi.json|yaml>"],
-      "writes": ["gates.jsonl"]
+      "lanes": [
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-3",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_openapi_diff.py --base <that path> --head <the working doc> --milestone \"<the epic or feature name>\" --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = BLOCK per `api-contract-evolution`; a break authorized by a plan task re-runs with `--allow-breaking \"<the task id and reason>\"`; exit 2 routes per the default convention."
+        }
+      ],
+      "reads": [
+        "<base openapi.json|yaml>",
+        "<head openapi.json|yaml>"
+      ],
+      "writes": [
+        "gates.jsonl"
+      ]
     },
     {
       "name": "check_quick_close",
@@ -178,9 +539,25 @@
       "kind": "gate",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["{quick-root}/note.md", "{quick-root}/evidence/check.md", "{quick-root}/evidence/check.md.meta.json", "gates.jsonl"],
-      "writes": ["gates.jsonl", "the repository commit (with --commit)"]
+      "lanes": [
+        {
+          "lane": "bgpdd-quick",
+          "phase": "3",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_quick_close.py --note {quick-root}/note.md --capture {quick-root}/evidence/check.md --changed-files <paths> --repo . --max-changed-files 3 --frozen '<glob>' [--frozen '<glob>']... --milestone \"{slug}\" --ledger {quick-root}/gates.jsonl --commit --message \"<msg>\"",
+          "gate": "Exit 1 = BLOCK and `problem_codes` names the term - `size_bound_exceeded` is unfixable here because the bound is the lane; exit 2 = artifact or environment defect, never hand-edited to pass."
+        }
+      ],
+      "reads": [
+        "{quick-root}/note.md",
+        "{quick-root}/evidence/check.md",
+        "{quick-root}/evidence/check.md.meta.json",
+        "gates.jsonl"
+      ],
+      "writes": [
+        "gates.jsonl",
+        "the repository commit (with --commit)"
+      ]
     },
     {
       "name": "check_red_green",
@@ -189,9 +566,23 @@
       "kind": "gate",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["evidence/red/*.md", "evidence/green/*.md", "evidence/**/*.meta.json"],
-      "writes": ["gates.jsonl"]
+      "lanes": [
+        {
+          "lane": "bgpdd-bugfix",
+          "phase": "4",
+          "step": "6",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_red_green.py --red {bugfix-root}/evidence/red/{bug-slug}.md --green <her green capture> --no-flaky-pass --milestone \"{bug-slug}\" --ledger {bugfix-root}/gates.jsonl",
+          "gate": "Exit 1 = BLOCK and the JSON names the failing term; `--no-flaky-pass` is always on here, so a GREEN that only passed on a retry is the false-fixed case this lane exists to catch."
+        }
+      ],
+      "reads": [
+        "evidence/red/*.md",
+        "evidence/green/*.md",
+        "evidence/**/*.meta.json"
+      ],
+      "writes": [
+        "gates.jsonl"
+      ]
     },
     {
       "name": "check_redelegation",
@@ -201,8 +592,16 @@
       "runner": "orchestrator",
       "agents": [],
       "lanes": [],
-      "reads": ["run-log.jsonl", "<the agent's last handoff file>", "<the previous handoff file>", "orchestrator-state.json"],
-      "writes": ["orchestrator-state.json (the standing halt)", "gates.jsonl"]
+      "reads": [
+        "run-log.jsonl",
+        "<the agent's last handoff file>",
+        "<the previous handoff file>",
+        "orchestrator-state.json"
+      ],
+      "writes": [
+        "orchestrator-state.json (the standing halt)",
+        "gates.jsonl"
+      ]
     },
     {
       "name": "check_runtime_evidence",
@@ -211,9 +610,54 @@
       "kind": "gate",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["test-report.md", "verification-report.md", "evidence/runtime/*.md", "evidence/runtime/*.meta.json", "gates.jsonl", "<the openapi document>"],
-      "writes": ["gates.jsonl"]
+      "lanes": [
+        {
+          "lane": "bgpdd-bugfix",
+          "phase": "4",
+          "step": "7",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_runtime_evidence.py --report {report-root}/test-report.md --milestone \"{bug-slug}\" --changed-files <the builder's paths> --repo . --surface <api|ui> --ledger {bugfix-root}/gates.jsonl",
+          "gate": "A non-zero exit means the runtime claim is unbacked: an in-process test can fail this bug but never prove it fixed, and neither gate substitutes for the other."
+        },
+        {
+          "lane": "bgpdd-secure",
+          "phase": "3",
+          "step": "4",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_runtime_evidence.py --report .docs/{project-name}/implementation/security-report.md --milestone \"<run title>\" --repo <target repo root> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "A stale or non-conforming capture is a delta-only follow-up to whoever owns it; never loosen or invent a `--surface`/`--forbid-host` value the Phase 1 preamble does not carry."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-3",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_runtime_evidence.py --report .docs/{project-name}/implementation/verification-report.md --milestone \"<the epic or feature name Vera scoped her report to>\" --changed-files <the epic's changed-files union> --repo . --ledger .docs/{project-name}/implementation/gates.jsonl [--require-key <k> ...] [--forbid-host <pattern> ...] [--require-openapi-reachable]",
+          "gate": "Exit 0 = at least one fresh out-of-process capture backs Vera's runtime claims; exit 1/2 route per the default convention, and exit 2's producing agent is Vera."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-5.5",
+          "step": "3",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_runtime_evidence.py --report .docs/{project-name}/implementation/post-deploy-report.md --milestone \"post-deploy\" --changed-files <the epic's changed-files union, the same set Step 3 derived> --repo . --ledger .docs/{project-name}/implementation/gates.jsonl [--require-key <k> ...] [--forbid-host <pattern> ...]",
+          "gate": "Not redundant on the report gate: exit 2 is an artifact defect back to the same Dep, exit 1 is a live production defect and the rollback decision is the user's."
+        },
+        {
+          "lane": "bgpdd-verify",
+          "phase": "3",
+          "step": "2",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_runtime_evidence.py --report .docs/{project-name}/implementation/test-report.md --milestone \"<run title>\" --changed-files <Quinn's spec-file union> --repo <target repo root> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "A field emitted as null is a Phase 1 defect - fix the preamble with the user, re-lint, re-emit; never fill it in by hand."
+        }
+      ],
+      "reads": [
+        "test-report.md",
+        "verification-report.md",
+        "evidence/runtime/*.md",
+        "evidence/runtime/*.meta.json",
+        "gates.jsonl",
+        "<the openapi document>"
+      ],
+      "writes": [
+        "gates.jsonl"
+      ]
     },
     {
       "name": "check_runtime_recipe",
@@ -222,9 +666,21 @@
       "kind": "gate",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["runtime-environment.md"],
-      "writes": ["gates.jsonl"]
+      "lanes": [
+        {
+          "lane": "bgpdd-discovery",
+          "phase": "4b",
+          "step": "6",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_runtime_recipe.py --recipe .docs/summary/{feature}/QA/runtime-environment.md --ledger .docs/summary/gates.jsonl",
+          "gate": "Exit 1 means the recipe names no start command, no readiness check, or is missing a manifest block - fix it with the user now, while they are still here to ask."
+        }
+      ],
+      "reads": [
+        "runtime-environment.md"
+      ],
+      "writes": [
+        "gates.jsonl"
+      ]
     },
     {
       "name": "check_section_anchors",
@@ -234,7 +690,10 @@
       "runner": "orchestrator",
       "agents": [],
       "lanes": [],
-      "reads": ["agents/*.md", "skills/**/*.md"],
+      "reads": [
+        "agents/*.md",
+        "skills/**/*.md"
+      ],
       "writes": []
     },
     {
@@ -244,9 +703,39 @@
       "kind": "gate",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["ship-decision.md", "evidence/rollback/*.md", "evidence/baseline/*.md", "evidence/**/*.meta.json", "gates.jsonl"],
-      "writes": ["gates.jsonl"]
+      "lanes": [
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-0",
+          "step": "4",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_ship_decision.py --report .docs/{project-name}/implementation/ship-decision.md --require-go --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 0 = prep GO present; exit 1 = NO-GO or incomplete decision, HALT; exit 2 = structural or missing."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-0",
+          "step": "4",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_ship_decision.py --report .docs/{project-name}/implementation/ship-decision.md --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "The resume branch's structural check only: exit 1/2 = malformed decision, HALT; do NOT add `--require-go` here, it would block re-entry to the only stage that can resolve a NO-GO."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-3",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_ship_decision.py --report .docs/{project-name}/implementation/ship-decision.md --require-go --require-rehearsal --require-baseline --repo . --ledger .docs/{project-name}/implementation/gates.jsonl --require-ledger-gates check_coverage.py,check_acceptance_suite.py,check_openapi_diff.py",
+          "gate": "Exit 1/2 = BLOCK; on a `rehearsal_*` or `baseline_*` problem code the route is back to Dep, because no re-wording of the decision document closes it."
+        }
+      ],
+      "reads": [
+        "ship-decision.md",
+        "evidence/rollback/*.md",
+        "evidence/baseline/*.md",
+        "evidence/**/*.meta.json",
+        "gates.jsonl"
+      ],
+      "writes": [
+        "gates.jsonl"
+      ]
     },
     {
       "name": "check_test_authenticity",
@@ -255,9 +744,36 @@
       "kind": "gate",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["<the changed test files>", "<the repo's src roots>"],
-      "writes": ["gates.jsonl"]
+      "lanes": [
+        {
+          "lane": "bgpdd-bugfix",
+          "phase": "2",
+          "step": "3b",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_test_authenticity.py --repo . --changed-files <Quinn's RED changed_files> --milestone \"{bug-slug}\" --ledger {bugfix-root}/gates.jsonl",
+          "gate": "Exit 1 = back to Quinn (Phase 1), counts as a round; exit 2 = artifact defect - a RED that does not exercise production code is not a reproduction."
+        },
+        {
+          "lane": "bgpdd-quick",
+          "phase": "3",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_test_authenticity.py --repo . --changed-files <paths> --milestone \"{slug}\" --ledger {quick-root}/gates.jsonl",
+          "gate": "Exit 1 = the one round this lane allows - fix and re-run; exit 2 = artifact defect; skipping it makes the close gate refuse with `test_authenticity_gate_missing`."
+        },
+        {
+          "lane": "bgpdd-verify",
+          "phase": "2",
+          "step": "6",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_test_authenticity.py --repo . --changed-files <Quinn's spec-file union> --milestone \"<run title>\" --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = a delta-only follow-up to Quinn under section 2's 2-round bound; exit 2 = artifact defect."
+        }
+      ],
+      "reads": [
+        "<the changed test files>",
+        "<the repo's src roots>"
+      ],
+      "writes": [
+        "gates.jsonl"
+      ]
     },
     {
       "name": "check_tier1_provenance",
@@ -266,9 +782,65 @@
       "kind": "gate",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": [".docs/summary/context.md", ".docs/summary/{feature}/overview.md", "<each in-scope repo's git history>"],
-      "writes": ["gates.jsonl"]
+      "lanes": [
+        {
+          "lane": "bgpdd-build",
+          "phase": "0",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_tier1_provenance.py --verify-current --summary-root .docs/summary --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Drift warns, never halts: relay the artifact, its stamped sha and current HEAD, and pass `--allow-drift \"<reason>\"` only on the user's explicit word, recording it."
+        },
+        {
+          "lane": "bgpdd-discovery",
+          "phase": "1",
+          "step": "8",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_tier1_provenance.py --summary-root .docs/summary --repo <name>=<path> [--repo ...] --warn-on-drift [--previous .docs/summary/context.<stamp>.bak.md] --ledger .docs/summary/gates.jsonl",
+          "gate": "Exit 1 means Iris's `context.md` header is unstamped, undated, or names a sha that resolves to nothing - return it to her rather than stamping it yourself; `tier1_repo_dropped` means a repo the backup recorded is gone from the new file."
+        },
+        {
+          "lane": "bgpdd-discovery",
+          "phase": "4",
+          "step": "5",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_tier1_provenance.py --summary-root .docs/summary --feature {feature} --repo <name>=<path> [--repo ...] --warn-on-drift --ledger .docs/summary/gates.jsonl",
+          "gate": "Exit 1 returns to Echo; do not stamp her artifact for her."
+        },
+        {
+          "lane": "bgpdd-lite",
+          "phase": "0",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_tier1_provenance.py --verify-current --summary-root .docs/summary --feature {feature} --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Drift warns, never halts: relay the artifact, its stamped sha and current HEAD, and let the user choose between planning against this map and re-running `/bgpdd-discovery`."
+        },
+        {
+          "lane": "bgpdd-plan",
+          "phase": "pre-flight",
+          "step": "5",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_tier1_provenance.py --verify-current --summary-root .docs/summary --feature {feature} --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Drift warns, never halts: relay the artifact, its stamped sha and current HEAD, and let the user decide whether to plan against this map or re-run `/bgpdd-discovery` first."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-0",
+          "step": "2c",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_tier1_provenance.py --verify-current --summary-root .docs/summary --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Drift warns, never halts: relay the named artifact, its stamped sha and current HEAD, and pass `--allow-drift \"<their reason>\"` only on the user's explicit word."
+        },
+        {
+          "lane": "bgpdd-verify",
+          "phase": "0",
+          "step": "1b",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_tier1_provenance.py --verify-current --summary-root .docs/summary --feature {feature} --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Drift warns, never halts: a stale baseline is a stale matrix, so the user decides before you transcribe."
+        }
+      ],
+      "reads": [
+        ".docs/summary/context.md",
+        ".docs/summary/{feature}/overview.md",
+        "<each in-scope repo's git history>"
+      ],
+      "writes": [
+        "gates.jsonl"
+      ]
     },
     {
       "name": "detect_stack",
@@ -277,8 +849,39 @@
       "kind": "detector",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["<the repository tree>"],
+      "lanes": [
+        {
+          "lane": "bgpdd-build",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/detect_stack.py --repo . --json",
+          "gate": "Its `skills` array is the resolved stack list injected into every builder, Quinn and Luna brief when Tier 1 has none; without it the stack skills are decided by prose."
+        },
+        {
+          "lane": "bgpdd-discovery",
+          "phase": "0",
+          "step": "1",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/detect_stack.py --repo . --markdown",
+          "gate": "An empty detection supports treating the repo as greenfield, but is not itself the fit-check answer."
+        },
+        {
+          "lane": "bgpdd-discovery",
+          "phase": "1",
+          "step": "2",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/detect_stack.py --repo . --markdown",
+          "gate": "Its block is the mechanical floor a stack-specific skill's dependency row checks against; Iris may add a stack on her own evidence but never remove a detected one."
+        },
+        {
+          "lane": "bgpdd-quick",
+          "phase": "0",
+          "step": "3",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/detect_stack.py --repo . --json",
+          "gate": "Propose, never adopt, its defaults: the user confirms or replaces the `How verified` command and the `test_path_globs` Phase 3 passes as `--frozen`, never you silently."
+        }
+      ],
+      "reads": [
+        "<the repository tree>"
+      ],
       "writes": []
     },
     {
@@ -288,8 +891,19 @@
       "kind": "detector",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["<the old report>.md", "<the new report>.md"],
+      "lanes": [
+        {
+          "lane": "bgpdd-secure",
+          "phase": "0",
+          "step": "5",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/diff_findings.py .docs/{project-name}/implementation/evidence/security/prior-security-report.md .docs/{project-name}/implementation/security-report.md --fail-on-new",
+          "gate": "A NEW finding is treated as a Phase 3 report-gate failure - the live report alone cannot tell a fixed finding from a standing one."
+        }
+      ],
+      "reads": [
+        "<the old report>.md",
+        "<the new report>.md"
+      ],
       "writes": []
     },
     {
@@ -300,7 +914,13 @@
       "runner": "orchestrator",
       "agents": [],
       "lanes": [],
-      "reads": ["<the PreToolUse hook payload on stdin>", "orchestrator-state.json", "gates.jsonl", "bug-report.md", "note.md"],
+      "reads": [
+        "<the PreToolUse hook payload on stdin>",
+        "orchestrator-state.json",
+        "gates.jsonl",
+        "bug-report.md",
+        "note.md"
+      ],
       "writes": []
     },
     {
@@ -310,9 +930,32 @@
       "kind": "writer",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["plan.md", "gates.jsonl", "game-tape.md", "<the repo's git log>"],
-      "writes": ["plan.md", "gates.jsonl"]
+      "lanes": [
+        {
+          "lane": "bgpdd-build",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/mark_milestone.py --plan .docs/{project-name}/implementation/plan.md --milestone \"<milestone title>\" --repo . --require-commit --require-game-tape .docs/{project-name}/implementation/game-tape.md --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "It refuses the `[x]` without a commit naming the milestone, a PASS `check_commit_gate.py` entry in an intact-chain ledger, and a conforming Phase 6 checkpoint - completion is recorded only here, never by hand."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-3",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/mark_milestone.py --plan .docs/{project-name}/implementation/plan.md --reopen \"<the milestone the finding affects>\" --evidence <the shipping report or capture the finding came from> --reason \"<the gate that produced it>\" --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Without the reopen every milestone is `[x]`, `next_milestone.py` returns `DONE`, and build's re-entry has nothing pending to route to."
+        }
+      ],
+      "reads": [
+        "plan.md",
+        "gates.jsonl",
+        "game-tape.md",
+        "<the repo's git log>"
+      ],
+      "writes": [
+        "plan.md",
+        "gates.jsonl"
+      ]
     },
     {
       "name": "next_bugfix_route",
@@ -321,9 +964,24 @@
       "kind": "driver",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["bug-report.md", "rca.md", "gates.jsonl", "evidence/red/*.meta.json"],
-      "writes": ["gates.jsonl"]
+      "lanes": [
+        {
+          "lane": "bgpdd-bugfix",
+          "phase": "2",
+          "step": "4",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/next_bugfix_route.py --report {bugfix-root}/bug-report.md --rca {bugfix-root}/rca.md --red {bugfix-root}/evidence/red/{bug-slug}.md --milestone \"{bug-slug}\" --ledger {bugfix-root}/gates.jsonl --max-changed-files 5",
+          "gate": "Exit 1 = `INCOMPLETE` (rca.md lacks a routing field) or `BLOCKED` (`red_command_mismatch`/`red_sidecar_missing`); exit 2 = `--red` missing when required, or the intake PASS absent or no longer matching the report's bytes."
+        }
+      ],
+      "reads": [
+        "bug-report.md",
+        "rca.md",
+        "gates.jsonl",
+        "evidence/red/*.meta.json"
+      ],
+      "writes": [
+        "gates.jsonl"
+      ]
     },
     {
       "name": "next_milestone",
@@ -332,8 +990,34 @@
       "kind": "writer",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["plan.md", "orchestrator-state.json", "gates.jsonl"],
+      "lanes": [
+        {
+          "lane": "bgpdd-build",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/next_milestone.py --plan .docs/{project-name}/implementation/plan.md --state .docs/{project-name}/orchestrator-state.json --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "The plan is the single authority on what to build next: on `stale: true` reset the cursor and tell the user, and treat any `unbacked_complete` entry as a state defect."
+        },
+        {
+          "lane": "bgpdd-build",
+          "phase": "1",
+          "step": "1",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/next_milestone.py --plan .docs/{project-name}/implementation/plan.md --state .docs/{project-name}/orchestrator-state.json --emit-gate-args --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Result `MIXED` (exit 1), including an `UNTAGGED` milestone treated as `MIXED`, is a planning defect - halt and surface it, do not improvise a split."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-0",
+          "step": "3",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/next_milestone.py --plan .docs/{project-name}/implementation/plan.md --state .docs/{project-name}/orchestrator-state.json --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Result `DONE` proceeds; any other result HALTs - `NEXT` means build is unfinished, `MIXED`/`UNTAGGED` means the plan is malformed, and a stale-cursor verdict means unchecked work sits behind the stored cursor."
+        }
+      ],
+      "reads": [
+        "plan.md",
+        "orchestrator-state.json",
+        "gates.jsonl"
+      ],
       "writes": []
     },
     {
@@ -343,8 +1027,42 @@
       "kind": "driver",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["{lane-root}/**", "gates.jsonl", "orchestrator-state.json", "run-log.jsonl"],
+      "lanes": [
+        {
+          "lane": "bgpdd-bugfix",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/pipeline_driver.py --root {bugfix-root} --lane bugfix --milestone \"{bug-slug}\" --json",
+          "gate": "Exit 1 means a gate for the current phase has not passed - run that gate, never the next phase (exit 3 = the lane is closed; exit 2 = the root or route is mis-resolved)."
+        },
+        {
+          "lane": "bgpdd-bugfix-batch",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/pipeline_driver.py --root {batch-root} --lane batch --milestone \"{batch-slug}\" --json",
+          "gate": "It prints the next open bug's own driver invocation, or the close gate, or - at exit 3 - that the batch is complete; deciding what to do next without it is recalling a phase rather than emitting it."
+        },
+        {
+          "lane": "bgpdd-bugfix-batch",
+          "phase": "2",
+          "step": "-",
+          "template": "{PLUGIN_ROOT}/pipeline-tools/scripts/pipeline_driver.py --root {bugfix-root} --lane bugfix --milestone \"{bug-slug}\" --json",
+          "gate": "Each bug's own phase inside its worktree stays driven by this invocation; the batch driver names it rather than substituting for it."
+        },
+        {
+          "lane": "bgpdd-quick",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/pipeline_driver.py --root {quick-root} --lane quick --json",
+          "gate": "Exit 1 means the current phase's gate has not passed - run that gate, never the next phase (exit 3 = closed and committed)."
+        }
+      ],
+      "reads": [
+        "{lane-root}/**",
+        "gates.jsonl",
+        "orchestrator-state.json",
+        "run-log.jsonl"
+      ],
       "writes": []
     },
     {
@@ -355,8 +1073,12 @@
       "runner": "orchestrator",
       "agents": [],
       "lanes": [],
-      "reads": ["<the png>"],
-      "writes": ["<the png>.meta.json"]
+      "reads": [
+        "<the png>"
+      ],
+      "writes": [
+        "<the png>.meta.json"
+      ]
     },
     {
       "name": "record_run",
@@ -365,9 +1087,71 @@
       "kind": "writer",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["run-log.jsonl", "<the --from-json completion payload>"],
-      "writes": ["run-log.jsonl"]
+      "lanes": [
+        {
+          "lane": "bgpdd-bugfix",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/record_run.py --log {bugfix-root}/run-log.jsonl --pipeline bgpdd-bugfix --phase \"<phase>\" --event delegation --agent <name> --model <tier> --unit {bug-slug} …",
+          "gate": "`--model` is mandatory on a delegation record - exit 2 without it - and so is a token measurement; Phase 5's `--require-run-log`/`--require-agents` refuse the commit without these records."
+        },
+        {
+          "lane": "bgpdd-build",
+          "phase": "1",
+          "step": "7",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/record_run.py --log .docs/{project-name}/implementation/run-log.jsonl --pipeline bgpdd-build --phase \"Phase 1\" --event delegation --agent <mason|nova> --model <tier> --unit \"<milestone title>\"",
+          "gate": "`--model <tier>` is mandatory on a delegation record - exit 2 without it - and a token measurement is equally mandatory."
+        },
+        {
+          "lane": "bgpdd-discovery",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/record_run.py --log .docs/summary/run-log.jsonl --pipeline bgpdd-discovery --phase \"<phase>\" --event delegation --agent <iris|scout|echo> --model <tier> --unit \"<{feature}, or the {api} for a Scout>\" …",
+          "gate": "`--model` is mandatory on a delegation return - exit 2 without it - and this log is what Phase 5's `/bgpdd-learn` offer reads."
+        },
+        {
+          "lane": "bgpdd-lite",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/record_run.py --log .docs/{project-name}/implementation/run-log.jsonl --pipeline bgpdd-lite --phase \"<phase>\" --event delegation --agent <name> --model <tier> --unit <the artifact the delegation produced, e.g. plan.md> …",
+          "gate": "`--model` is mandatory on a delegation record - exit 2 without it - and a token measurement is equally mandatory."
+        },
+        {
+          "lane": "bgpdd-plan",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/record_run.py --log .docs/{project-name}/implementation/run-log.jsonl --pipeline bgpdd-plan --phase \"<phase>\" --event delegation --agent <name> --model <tier> --unit <the artifact the delegation produced, e.g. requirements.md> …",
+          "gate": "`--model` is mandatory on a delegation record - exit 2 without it - and a token measurement is equally mandatory."
+        },
+        {
+          "lane": "bgpdd-secure",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/record_run.py --log .docs/{project-name}/implementation/run-log.jsonl --pipeline bgpdd-secure --phase \"<phase>\" --event delegation --agent <name> --model <tier> --unit \"<the run title>\" …",
+          "gate": "`--model` is mandatory, as is a token measurement and `--rounds` on a re-delegation."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/record_run.py --log .docs/{project-name}/implementation/run-log.jsonl --pipeline bgpdd-shipping --phase \"<step>\" --event delegation --agent <name> --model <tier> --unit \"<the epic or feature name — the same token Step 3 passes to --milestone; `post-deploy` for the Step 5.5 Dep>\" …",
+          "gate": "`--model` is mandatory on a delegation record - exit 2 without it - and these records are what make Step 6.5's whole-epic roll-up true."
+        },
+        {
+          "lane": "bgpdd-verify",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/record_run.py --log .docs/{project-name}/implementation/run-log.jsonl --pipeline bgpdd-verify --phase \"<phase>\" --event delegation --agent <name> --model <tier> --unit \"<the run title>\" …",
+          "gate": "`--model` is mandatory on a delegation record - exit 2 without it - and a token measurement is equally mandatory."
+        }
+      ],
+      "reads": [
+        "run-log.jsonl",
+        "<the --from-json completion payload>"
+      ],
+      "writes": [
+        "run-log.jsonl"
+      ]
     },
     {
       "name": "review_package",
@@ -376,9 +1160,30 @@
       "kind": "writer",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["<the repo's git history and working tree>"],
-      "writes": ["review-package.md", "review-package.md.meta.json", "gates.jsonl"]
+      "lanes": [
+        {
+          "lane": "bgpdd-bugfix",
+          "phase": "5",
+          "step": "1",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/review_package.py --repo . --base HEAD --head WORKTREE --changed-files <the builder's paths> --out {bugfix-root}/review-package.md --ledger {bugfix-root}/gates.jsonl --milestone \"{bug-slug}\" --max-diff-lines 1500 --waiver {bugfix-root}/rca.md",
+          "gate": "Exit 2 = git failed, the diff is empty, every path was excluded, or the reviewable diff exceeds 1500 lines with no `## Size waiver` recorded - never delegate Luna without the package."
+        },
+        {
+          "lane": "bgpdd-build",
+          "phase": "3",
+          "step": "1",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/review_package.py --repo . --base HEAD --head WORKTREE --changed-files <the accumulated Phase 1 step 6 list> --out .docs/{project-name}/implementation/review/review-package.md --ledger .docs/{project-name}/implementation/gates.jsonl --milestone \"<milestone title>\" --max-diff-lines 1500 --waiver .docs/{project-name}/implementation/review/size-waiver.md",
+          "gate": "Exit 2 = git failed, the diff is empty, every path was excluded, or the reviewable diff exceeds 1500 lines with no `## Size waiver` recorded - never delegate Luna without the package."
+        }
+      ],
+      "reads": [
+        "<the repo's git history and working tree>"
+      ],
+      "writes": [
+        "review-package.md",
+        "review-package.md.meta.json",
+        "gates.jsonl"
+      ]
     },
     {
       "name": "run_quiet",
@@ -386,11 +1191,71 @@
       "description": "Runs a command, writes its full output to disk, prints a short report, and optionally writes a runtime-evidence capture.",
       "kind": "writer",
       "runner": "either",
-      "agents": ["alex", "aria", "cipher", "dep", "echo", "forge", "iris", "luna", "mason", "max", "nova", "quinn", "rex", "scout", "vera", "ward"],
+      "agents": [
+        "alex",
+        "aria",
+        "cipher",
+        "dep",
+        "echo",
+        "forge",
+        "iris",
+        "luna",
+        "mason",
+        "max",
+        "nova",
+        "quinn",
+        "rex",
+        "scout",
+        "vera",
+        "ward"
+      ],
       "reason": "base-persona.md section Command Timeout Discipline (Anti-Hang): EVERY agent wraps the commands it runs in run_quiet.py --log, and agents/cipher.md and agents/vera.md take each check through --capture. An agent running it is doing its own work properly, not adjudicating it; the gate that reads the capture still runs in the main session.",
-      "lanes": [],
-      "reads": ["<the child command's merged stdout and stderr>"],
-      "writes": ["<the log path>", "<the capture path>", "<the capture path>.meta.json", "gates.jsonl"]
+      "lanes": [
+        {
+          "lane": "bgpdd-bugfix",
+          "phase": "1",
+          "step": "2",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture {bugfix-root}/evidence/red/{bug-slug}.md --ledger {bugfix-root}/gates.jsonl -- <the reproduction command>",
+          "gate": "No capture means no `{bug-slug}.md.meta.json` sidecar, which is what Phase 4's gate reads; the reproduction command's own non-zero exit is expected here - it is the RED oracle."
+        },
+        {
+          "lane": "bgpdd-build",
+          "phase": "*",
+          "step": "-",
+          "template": "{PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --log .docs/{project-name}/implementation/logs/<slug>.log -- <command>",
+          "gate": "Exit 124 with a `TIMEOUT:` header is a harness result to escalate, never recorded as a test FAIL."
+        },
+        {
+          "lane": "bgpdd-quick",
+          "phase": "2",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture {quick-root}/evidence/check.md --ledger {quick-root}/gates.jsonl -- <the command>",
+          "gate": "Exit 0 is required; non-zero means fix and re-run, the one round this lane allows, and Phase 3 reads the `check.md.meta.json` sidecar a hand-written capture does not have."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-3",
+          "step": "2",
+          "template": "{PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Every step's evidence is a fresh capture written this way under `evidence/runtime/`; a capture not produced by it carries no sidecar for the gate to read."
+        },
+        {
+          "lane": "bgpdd-verify",
+          "phase": "2",
+          "step": "2",
+          "template": "{PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py",
+          "gate": "Quinn starts the application and executes the suite through it; a capture not taken with `--capture` carries no sidecar for the Phase 3 gate to read."
+        }
+      ],
+      "reads": [
+        "<the child command's merged stdout and stderr>"
+      ],
+      "writes": [
+        "<the log path>",
+        "<the capture path>",
+        "<the capture path>.meta.json",
+        "gates.jsonl"
+      ]
     },
     {
       "name": "summarize_run",
@@ -399,8 +1264,61 @@
       "kind": "writer",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["run-log.jsonl", "gates.jsonl"],
+      "lanes": [
+        {
+          "lane": "bgpdd-bugfix",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/summarize_run.py --run-log {bugfix-root}/run-log.jsonl --ledger {bugfix-root}/gates.jsonl --unit {bug-slug} --markdown",
+          "gate": "Its pasted block is the telemetry Phase 5's game-tape gate requires; without it `--require-game-tape` fails `no-telemetry`."
+        },
+        {
+          "lane": "bgpdd-learn",
+          "phase": "-",
+          "step": "1",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/summarize_run.py --run-log <the lane's run log> --ledger <the lane's gate ledger>",
+          "gate": "Without its fired-versus-rubber-stamped counts the evidence brief cannot satisfy the Incident Test on any gate proposal Forge makes."
+        },
+        {
+          "lane": "bgpdd-lite",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/summarize_run.py --run-log .docs/{project-name}/implementation/run-log.jsonl --ledger .docs/{project-name}/implementation/gates.jsonl --markdown",
+          "gate": "Its block is what Phase 3's game tape pastes; a cost line written from memory is not that block."
+        },
+        {
+          "lane": "bgpdd-plan",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/summarize_run.py --run-log .docs/{project-name}/implementation/run-log.jsonl --ledger .docs/{project-name}/implementation/gates.jsonl --markdown",
+          "gate": "Its block goes into Phase 4's game tape; a cost line written from memory is not that block."
+        },
+        {
+          "lane": "bgpdd-secure",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/summarize_run.py --run-log .docs/{project-name}/implementation/run-log.jsonl --ledger .docs/{project-name}/implementation/gates.jsonl --unit \"<the run title>\" --markdown",
+          "gate": "Its block goes into Phase 4's game tape."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-6.5",
+          "step": "2",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/summarize_run.py --run-log .docs/{project-name}/implementation/run-log.jsonl --ledger .docs/{project-name}/implementation/gates.jsonl --markdown",
+          "gate": "Paste the block verbatim and do not narrate cost in prose alongside it; if the run log is absent, say so in one bullet and move on."
+        },
+        {
+          "lane": "bgpdd-verify",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/summarize_run.py --run-log .docs/{project-name}/implementation/run-log.jsonl --ledger .docs/{project-name}/implementation/gates.jsonl --unit \"<the run title>\" --markdown",
+          "gate": "Its block goes into Phase 4's game tape."
+        }
+      ],
+      "reads": [
+        "run-log.jsonl",
+        "gates.jsonl"
+      ],
       "writes": []
     },
     {
@@ -410,9 +1328,30 @@
       "kind": "detector",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": [".docs/summary/context.md", ".docs/summary/{feature}/**/*.md", "<each stamped repo's git history>"],
-      "writes": ["gates.jsonl"]
+      "lanes": [
+        {
+          "lane": "bgpdd-discovery",
+          "phase": "2",
+          "step": "1",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/tier1_staleness.py --summary-root .docs/summary --feature {feature} --repo <name>=<path> [--repo ...] --markdown",
+          "gate": "Read-only: it changes no exit code and never re-stamps anything, but without its table \"refresh or reuse\" is answered from a guess instead of evidence."
+        },
+        {
+          "lane": "bgpdd-plan",
+          "phase": "pre-flight",
+          "step": "5",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/tier1_staleness.py --summary-root .docs/summary --feature {feature} --repo <name>=<path> [--repo ...] --markdown --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Run it whenever the provenance check reports drift and paste its table in place of the bare drift warning - it names WHICH docs the drift actually touches."
+        }
+      ],
+      "reads": [
+        ".docs/summary/context.md",
+        ".docs/summary/{feature}/**/*.md",
+        "<each stamped repo's git history>"
+      ],
+      "writes": [
+        "gates.jsonl"
+      ]
     },
     {
       "name": "tool_registry",
@@ -422,7 +1361,10 @@
       "runner": "orchestrator",
       "agents": [],
       "lanes": [],
-      "reads": ["skills/pipeline-tools/registry.json", "skills/pipeline-tools/scripts/*.py (their --help output only)"],
+      "reads": [
+        "skills/pipeline-tools/registry.json",
+        "skills/pipeline-tools/scripts/*.py (their --help output only)"
+      ],
       "writes": []
     },
     {
@@ -432,9 +1374,144 @@
       "kind": "writer",
       "runner": "orchestrator",
       "agents": [],
-      "lanes": [],
-      "reads": ["orchestrator-state.json", "game-tape.md", "<the --evidence file>"],
-      "writes": ["orchestrator-state.json", "blockers-resolved.log", "gates.jsonl"]
+      "lanes": [
+        {
+          "lane": "bgpdd-bugfix",
+          "phase": "0",
+          "step": "4",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state {state-file} --init --project-name {bug-slug} --set-pipeline bgpdd-bugfix --set-branch <the fix branch>",
+          "gate": "Without this write the standalone route has no state file, and Phase 5's commit gate reads the `blockers` ledger this call guarantees."
+        },
+        {
+          "lane": "bgpdd-bugfix",
+          "phase": "2",
+          "step": "5",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state {state-file} --set-status escalated --reason \"PLAN route: capability, not a bug\" --milestone \"{bug-slug}\" --ledger {bugfix-root}/gates.jsonl",
+          "gate": "The PLAN HALT must close the lane before routing, or `guard_action.py`'s frozen-test rule denies the receiving lane's own test-file writes."
+        },
+        {
+          "lane": "bgpdd-bugfix",
+          "phase": "5",
+          "step": "4",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state {state-file} --set-status escalated --reason \"blast radius: <one line, cite Luna's finding>\" --milestone \"{bug-slug}\" --ledger {bugfix-root}/gates.jsonl",
+          "gate": "The blast-radius HALT must close the lane before routing - an open lane blocks the receiving lane's test-file edits under `guard_action.py`'s frozen-test rule."
+        },
+        {
+          "lane": "bgpdd-bugfix",
+          "phase": "5",
+          "step": "4b",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state {state-file} --set-pipeline bgpdd-bugfix --milestone \"{bug-slug}\" --require-game-tape {bugfix-root}/game-tape.md",
+          "gate": "Exit 1 blocks the write and the tape gate fires (`game-tape-missing|no-section|bullet-count|no-pasted-output|no-telemetry`); on the feature route this flag cannot bind, so read the tape yourself."
+        },
+        {
+          "lane": "bgpdd-bugfix-batch",
+          "phase": "0",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state {batch-root}/orchestrator-state.json --init --project-name \"{batch-slug}\" --set-pipeline bgpdd-bugfix-batch --set-artifact \"bugs=<bug-slug-1>,<bug-slug-2>,...\"",
+          "gate": "Without this write there is no durable record of the bug list, and it sets exactly the fields `check_batch_close.py` and the batch driver read."
+        },
+        {
+          "lane": "bgpdd-bugfix-batch",
+          "phase": "1",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state {batch-root}/orchestrator-state.json --set-artifact \"bug:{bug-slug}:root=<bugfix-root>\" --set-artifact \"bug:{bug-slug}:worktree=<path>\" --set-artifact \"bug:{bug-slug}:status=OPEN\" --milestone \"{bug-slug}\"",
+          "gate": "An unrecorded root, worktree or status leaves the bug invisible to `check_batch_close.py` and to the batch driver, which read these fields."
+        },
+        {
+          "lane": "bgpdd-build",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --set-pipeline bgpdd-build",
+          "gate": "Without this re-stamp the epic keeps the `bgpdd-shipping` value that shipping's own fix routing left behind, so the re-entry this whitelist widening exists for never completes."
+        },
+        {
+          "lane": "bgpdd-build",
+          "phase": "*",
+          "step": "-",
+          "template": "{PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py",
+          "gate": "State is written only through this script, never by hand-editing JSON; the cursor move carries the Phase 6 gate, and exit 1 blocks the write so nothing is persisted."
+        },
+        {
+          "lane": "bgpdd-build",
+          "phase": "*",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --set-branch <the branch just created/checked out> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "This write backs the Hydration Phase's `branch` rule and is what `bgpdd-shipping` reads; without it shipping diffs and pushes the wrong ref."
+        },
+        {
+          "lane": "bgpdd-lite",
+          "phase": "1",
+          "step": "5",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --init --project-name \"{project-name}\" --set-pipeline bgpdd-lite --set-feature <feature|null> --set-artifact requirements=.docs/{project-name}/requirements.md --set-artifact plan=null --set-artifact design=null --set-artifact acceptance_matrix=null",
+          "gate": "Without this write there is no state file for Phase 3 to update and `/bgpdd-build` has nothing to hydrate."
+        },
+        {
+          "lane": "bgpdd-lite",
+          "phase": "3",
+          "step": "2",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --set-artifact design=<governing-stack-contract-skill-path|null> --set-artifact plan=.docs/{project-name}/implementation/plan.md",
+          "gate": "This updates the artifacts Alex produced without `--init`; a failure leaves `/bgpdd-build` hydrating a state whose `plan` is still null."
+        },
+        {
+          "lane": "bgpdd-plan",
+          "phase": "3.6",
+          "step": "3",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --init --project-name \"{project-name}\" --set-pipeline bgpdd-plan --add-blocker \"<the missing capability>\" --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "A missing capability does not halt planning, but it must be recorded here so the blocker travels to `/bgpdd-build`, where Phase 0 re-checks it."
+        },
+        {
+          "lane": "bgpdd-plan",
+          "phase": "3.6",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --init --project-name \"{project-name}\" --set-pipeline bgpdd-plan --set-artifact environment_manifest=<the resolved path>",
+          "gate": "`--init` and `--set-pipeline bgpdd-plan` are both mandatory: without `--init` the command exits 2 on a fresh run, and `--init` alone writes `pipeline: \"\"`, which build's hydration whitelist rejects."
+        },
+        {
+          "lane": "bgpdd-plan",
+          "phase": "4",
+          "step": "3",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --init --project-name \"{project-name}\" --set-pipeline bgpdd-plan --set-feature <feature|null> --set-artifact requirements=.docs/{project-name}/requirements.md --set-artifact design=.docs/{project-name}/design/detailed-design.md --set-artifact plan=.docs/{project-name}/implementation/plan.md --set-artifact acceptance_matrix=.docs/{project-name}/acceptance-matrix.md",
+          "gate": "If Python is unavailable, HALT and surface the missing interpreter - this JSON is never hand-written."
+        },
+        {
+          "lane": "bgpdd-secure",
+          "phase": "4",
+          "step": "4",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --init --project-name \"{project-name}\" --set-pipeline bgpdd-secure --set-feature {target} --set-artifact attack_matrix=.docs/{project-name}/attack-matrix.md --set-artifact requirements=null --set-artifact design=null --set-artifact plan=null",
+          "gate": "State is never hand-edited here, and the `--add-blocker` writes for authorization/environment blocks and BLOCKED rows carry `--ledger`."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-0",
+          "step": "2b",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --set-pipeline bgpdd-shipping",
+          "gate": "Nothing else writes the value step 2 and build's re-entry rule both read, so without this stamp step 4's resume branch and that re-entry are unreachable."
+        },
+        {
+          "lane": "bgpdd-shipping",
+          "phase": "step-3",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --add-blocker \"<the shipping finding, with the gate that produced it and its evidence path>\" --blocker-source shipping --blocker-milestone \"<the milestone the finding affects>\" --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Record the finding as a blocker before handing the user the `/bgpdd-build` instruction, and scope it with `--blocker-milestone` - an unscoped entry blocks everything."
+        },
+        {
+          "lane": "bgpdd-verify",
+          "phase": "4",
+          "step": "4",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --init --project-name \"{project-name}\" --set-pipeline bgpdd-verify --set-feature {feature} --set-artifact acceptance_matrix=.docs/{project-name}/acceptance-matrix.md --set-artifact requirements=null --set-artifact design=null --set-artifact plan=null",
+          "gate": "State is never hand-edited here, and the `--add-blocker` writes for environment blocks and BLOCKED verifications carry `--ledger`."
+        }
+      ],
+      "reads": [
+        "orchestrator-state.json",
+        "game-tape.md",
+        "<the --evidence file>"
+      ],
+      "writes": [
+        "orchestrator-state.json",
+        "blockers-resolved.log",
+        "gates.jsonl"
+      ]
     }
   ]
 }
