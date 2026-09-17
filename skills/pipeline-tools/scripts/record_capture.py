@@ -144,11 +144,75 @@ def build_record(url, tool, sha256):
     }
 
 
+PURPOSE = (
+    "Records a PNG's provenance sidecar naming the http(s) URL the browser "
+    "had open, so a mockup render stops looking real."
+)
+
+EPILOG = """Reads:
+  <png> -- the screenshot's bytes: its leading bytes must be the PNG magic
+    (bad_magic otherwise), and its sha256 over those bytes is what the
+    sidecar records.
+  <png>.meta.json -- only to refuse when it already exists (sidecar_exists);
+    --force overwrites instead. A capture is recorded once per PNG unless
+    the PNG was re-taken.
+
+Writes:
+  <png>.meta.json -- the sidecar name is the FULL filename plus .meta.json
+    (m2.png -> m2.png.meta.json). Shape, exactly what
+    check_commit_gate.py --require-rendered-evidence reads back:
+      {"schema": 1,
+       "url": "<the URL open at capture time, http(s) only>",
+       "tool": "<capturing tool, e.g. chrome-devtools, playwright>",
+       "captured_at": "<ISO-8601 UTC, Z suffix>",
+       "sha256": "<hex sha256 of the PNG's bytes at record time>"}
+
+Problem codes:
+  missing_argument   <png>, --url or --tool was not given (exit 2)
+  png_not_found      the PNG does not exist or cannot be read (exit 2)
+  write_failed       the sidecar could not be written (exit 2)
+  bad_magic          the file does not start with the PNG magic (exit 1)
+  bad_origin         --url is not http(s) -- file:, about:, data:, empty
+  sidecar_exists     a sidecar is already there and --force was not given
+
+JSON keys:
+  on success recorded (true), png, sidecar, record (the sidecar object);
+  on a refusal recorded (false), problem, error.
+
+Exit codes:
+  0  the sidecar was written
+  1  bad_origin, bad_magic or sidecar_exists
+  2  missing_argument, png_not_found or write_failed
+
+Self-test:
+  python record_capture.py --self-test   (11 cases)
+"""
+
+
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="record_capture.py",
+        description=PURPOSE,
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description=__doc__)
+        epilog=EPILOG)
     parser.add_argument("png", nargs="?",
                         help="path to the screenshot PNG this sidecar "
                              "describes")

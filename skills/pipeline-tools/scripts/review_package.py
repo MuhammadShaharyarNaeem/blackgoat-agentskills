@@ -527,23 +527,99 @@ def write_text(path, text):
 # main
 # ---------------------------------------------------------------------------
 
+PURPOSE = (
+    "Materializes the diff a reviewer is told to review as one markdown file "
+    "plus a provenance sidecar."
+)
+
+EPILOG = """Reads:
+  --repo -- a git repository (default "."). Three commands are run:
+    git log --oneline <base>..<head>, git diff --stat and
+    git diff -U<context>. --head defaults to HEAD; --head WORKTREE compares
+    --base against the UNCOMMITTED working tree, which is the
+    bgpdd-build Phase 3 case.
+  --changed-files -- a git pathspec restricting ## Stat and ## Diff only,
+    never ## Commits.
+  Excludes -- DEFAULT_EXCLUDES is a fixed list of "**/"-prefixed git
+    pathspec globs for files a human should not read line-by-line
+    (lockfiles, **/*.min.*, **/*.map, **/*.snap, generated/designer files,
+    **/node_modules/**, **/vendor/**, **/dist/**, **/build/**, **/bin/**,
+    **/obj/**, **/__pycache__/**). --exclude <pattern> (repeatable) adds
+    patterns AS GIVEN -- a user pattern follows plain git glob rules and
+    needs its own "**/" to reach nested paths. --no-default-excludes drops
+    the built-in list. Effective excludes are appended as
+    ":(exclude,glob)<pattern>" AFTER any --changed-files paths (or alone,
+    still after "--"), in ## Stat and ## Diff only.
+  --waiver -- satisfied only by a non-placeholder "## Size waiver" body.
+    It is deliberately hand-typed, the same labeled exception
+    check_commit_gate.py --waiver makes.
+
+Writes:
+  --out -- one markdown file: a header (repo, base, head with resolved
+    shas, timestamp, generated-by, scope, "- Excluded from diff (N): ..."
+    or "none", and "- Size waiver: <path> (N lines over --max-diff-lines
+    M)" when one is satisfied), then ## Commits, ## Stat and ## Diff. The
+    diff is fenced with a backtick run one longer than any inside it --
+    these packages routinely contain diffs OF markdown.
+  <out>.meta.json -- mirrors run_quiet.py's sidecar shape: argv (the exact
+    git diff argv), cwd, started, finished, exit_code, capture_sha256 (over
+    the finished package FILE's bytes), tool, schema: 1; plus git_argv (all
+    three commands), the resolved base/head shas, and the same JSON keys
+    below.
+  --ledger -- one chained record per run when given (best-effort).
+
+JSON keys:
+  Printed on stdout AND carried in the sidecar.
+  written, out, sidecar, repo, base, head, context, changed_files,
+  commit_count, diff_bytes, excluded_files, exclude_patterns, diff_lines,
+  max_diff_lines, size_waiver ({path, present, section_found,
+  body_nonempty, satisfied}), capture_sha256, result, error.
+
+Exit codes:
+  0  the package was written
+  2  git failed or is absent, a ref is unresolvable, --repo is not a git
+     repo, a required flag (--base, --out) is missing, --out cannot be
+     written, --max-diff-lines given < 1, --waiver given without
+     --max-diff-lines, THE DIFF IS EMPTY, EVERY CHANGED PATH WAS EXCLUDED
+     BY PATTERN (a distinct message naming --no-default-excludes /
+     --exclude as the fix), or THE REVIEWABLE DIFF EXCEEDS
+     --max-diff-lines WITH NO SATISFYING "## Size waiver" (the message
+     names both routes out: split the milestone via /bgpdd-plan, or record
+     the decision under a "## Size waiver" heading)
+  There is deliberately NO exit 1: this renders, it does not judge, and the
+  size ceiling is a structural refusal rather than a verdict.
+
+Self-test:
+  python review_package.py --self-test   (34 cases, in a disposable
+  git init repo)
+"""
+
+
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog=TOOL,
+        description=PURPOSE,
         add_help=True,
-        description="Materializes the diff a reviewer is told to review as ONE "
-                    "markdown file (--out) plus a provenance sidecar: header, "
-                    "## Commits, ## Stat, ## Diff (git diff -U<context>). It "
-                    "renders; it does not judge -- there is no exit 1.",
-        epilog="Exit codes: 0 package written; 2 git failed or is absent, a "
-               "ref is unresolvable, --repo is not a git repo, a required "
-               "flag is missing, --out cannot be written, --max-diff-lines "
-               "given < 1, --waiver given without --max-diff-lines, the diff "
-               "is empty, every changed path was excluded by pattern, or the "
-               "reviewable diff exceeds --max-diff-lines with no satisfying "
-               "## Size waiver. Machine-readable detail is JSON on stdout and "
-               "in the sidecar <out>.meta.json: 'diff_lines', 'excluded_files', "
-               "'size_waiver', 'capture_sha256'.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG,
     )
     parser.add_argument("--repo", default=".")
     parser.add_argument("--base")

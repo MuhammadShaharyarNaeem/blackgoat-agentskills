@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic milestone-completion writer for plan.md.
+r"""Deterministic milestone-completion writer for plan.md.
 
 `next_milestone.py` reads completion from a `[x]` appended to a milestone
 heading — and until this file existed, that `[x]` was a hand edit tied to
@@ -671,22 +671,104 @@ def resolve_require_gates(values):
     return names or list(DEFAULT_REQUIRE_GATES)
 
 
+PURPOSE = (
+    "Appends the [x] completion marker to a plan milestone only when gates, "
+    "commit and game tape back it; also reopens one."
+)
+
+EPILOG = """Reads:
+  --plan -- a plan with "## Milestone <n>..." or "### Milestone <n>..."
+    headings; completion is the literal " [x]" appended to the heading. The
+    title matches case-insensitively and WHOLE-TOKEN, so "Milestone 1" never
+    matches "Milestone 10". utf-8-sig; line endings and BOM survive.
+  --ledger -- the gate ledger (one JSON object per line). Its hash chain is
+    walked FIRST (ledger_chain_broken); then each required gate's LATEST
+    record scoped to this milestone must carry "verdict": "PASS" -- the
+    VERDICT only, deliberately not a re-hash of inputs. Gate backing is ON
+    BY DEFAULT (--require-gates check_commit_gate.py), so a bare
+    --plan --milestone with no --ledger is exit 2, never a silent pass.
+    --require-gates none (also off / no / -) is the explicit opt-out;
+    --require-gates "" still means the default set.
+  --require-commit -- git log --fixed-strings --grep="<title>" in --repo.
+  --require-game-tape -- a game-tape file. With fences blanked it must carry
+    a "## bgpdd-<lane> - <milestone> - <date>" heading matching by whole
+    token (full title or its leading identifier; an epic-summary heading
+    does not count, last matching section wins), 3-6 bullets, at least one
+    fenced block, and either a summarize_run mention or a table row. Any
+    lane name matches; shared byte-for-byte with update_state.py.
+  --reopen -- --evidence (a file that must exist), a non-empty --reason and
+    --ledger are all mandatory.
+
+Writes:
+  --plan -- " [x]" appended to the matched heading, or, under --reopen, that
+    marker REMOVED (never replaced with "[ ]": the grammar has no such
+    token, and it would become part of the title later gates are scoped by).
+  --ledger -- one chained record per run, on every exit path:
+    {"ts", "gate": "mark_milestone.py", "argv", "milestone", "inputs":
+     {"<path>": "<sha256>"}, "verdict": "PASS|FAIL|ERROR", "exit", "prev",
+     "self"}. --reopen adds "action": "reopen", the evidence path, its
+    sha256 and the reason, and leaves the original close record in place.
+    Best-effort: a ledger that cannot be written never changes the verdict.
+
+Problem codes:
+  milestone_not_found   no heading matches --milestone / --reopen
+  ambiguous_milestone   more than one heading matches
+  already_complete      the heading already carries [x]
+  no_commit             --require-commit found no commit naming the title
+  ledger_chain_broken   the ledger's prev/self chain does not verify
+  ledger_missing        a required gate has no record for this milestone
+  ledger_failed         that gate's latest record is not PASS
+  not_complete          --reopen on a milestone carrying no [x]
+  game-tape-missing     --require-game-tape path absent or unreadable
+  no-section            no conforming ## bgpdd-<lane> heading for it
+  bullet-count          the section does not carry 3-6 bullets
+  no-pasted-output      the section carries no fenced block
+  no-telemetry          no summarize_run mention and no table row
+
+JSON keys:
+  plan_file, milestone, matched_heading, require_commit, commit_found,
+  ledger, require_gates, require_game_tape, problems (each {problem,
+  detail}), marked, result, error. A --reopen run prints instead:
+  plan_file, milestone, matched_heading, evidence, evidence_sha256, reason,
+  ledger, problems, reopened, result, error.
+
+Exit codes:
+  0  the marker was appended (or, under --reopen, removed)
+  1  a refusal -- any problem code above
+  2  missing --plan, missing --milestone/--reopen, an unreadable plan, no
+     milestone headings, a gate requirement (default or named) with no
+     --ledger, --reopen without --evidence / --reason / --ledger, --reopen
+     beside --require-commit or --require-game-tape, or a git failure
+
+Self-test:
+  python mark_milestone.py --self-test   (50 cases)
+"""
+
+
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="mark_milestone.py",
-        description="The write side of the [x] completion convention "
-                    "next_milestone.py reads: appends the marker to --plan for "
-                    "--milestone only when the completion is gate-backed "
-                    "(check_commit_gate.py PASS by default), or --reopen removes "
-                    "a wrongly-closed one.",
-        epilog="Exit codes: 0 the marker was appended; 1 a refusal (problem "
-               "codes: milestone_not_found, ambiguous_milestone, "
-               "already_complete, no_commit, ledger_chain_broken, "
-               "ledger_missing, ledger_failed, not_complete, plus five "
-               "game-tape codes); 2 missing --plan/--milestone, an unreadable "
-               "plan, no milestone headings, a gate requirement without "
-               "--ledger, or a git failure. Machine-readable detail: JSON on "
-               "stdout, 'problems' array.",
+        description=PURPOSE,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG,
     )
     parser.add_argument("--plan")
     parser.add_argument("--milestone")
@@ -699,14 +781,11 @@ def build_parser():
                         help="append one JSON record per run to this path")
     parser.add_argument(
         "--require-gates", action="append", default=None,
-        help="comma-separated gate script names whose LATEST ledger entry for "
-             "this milestone must be PASS. ON BY DEFAULT (check_commit_gate.py) "
-             "and requires --ledger; pass `none` to waive it explicitly")
+        help="comma-separated gate names that must be PASS (see Reads); "
+             "on by default, `none` waives it")
     parser.add_argument(
         "--require-game-tape", dest="require_game_tape",
-        help="refuse unless game-tape.md carries a conforming "
-             "'## bgpdd-<lane> - <milestone> - <date>' checkpoint for this "
-             "milestone (the lane's game-tape phase; any lane name matches)")
+        help="game-tape file that must carry this milestone's checkpoint")
     parser.add_argument(
         "--reopen",
         help="REMOVE this milestone's '[x]' so next_milestone.py returns it "

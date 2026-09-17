@@ -255,27 +255,63 @@ def render_table(diff):
     return "\n".join(lines)
 
 
+PURPOSE = (
+    "Classifies a report's findings across a rescan as RESOLVED, PERSISTENT "
+    "or NEW by fingerprint, reading each report's gated section only."
+)
+
+EPILOG = """Reads:
+  OLD_REPORT, NEW_REPORT -- agent reports (the Cipher/Vera shape). Only each
+    file's GATED section is read: the LAST section carrying a
+    "**Verdict:** <token>" line. Cipher appends one section per round and
+    never edits an earlier one, so reading the whole file would report a
+    fixed finding as permanently still there. Fenced regions (three
+    backticks or three tildes) are blanked before parsing; files are read
+    as utf-8-sig.
+  Findings are matched by check_agent_report.py's own finding fingerprint
+    over (file, category, title) -- the line number is excluded, so a
+    finding that only moved or was reworded in whitespace/digits is
+    PERSISTENT, never NEW. See that file's "STABLE FINDING FINGERPRINTS"
+    section for the exact normalization; it is not restated here.
+
+Exit codes:
+  0  default -- a markdown table (RESOLVED / PERSISTENT / NEW sections, each
+     row `<fp>`  <category>  <file>  <title>) plus a one-line count summary
+     is printed on stdout whatever the classification, and on every exit
+  1  --fail-on-new with a NEW fingerprint present, or --fail-on-persistent
+     with a PERSISTENT one; stderr names each such fingerprint and title
+  2  usage error (OLD_REPORT or NEW_REPORT missing), or a report that is
+     missing, empty, or carries no "**Verdict:**"-bearing section
+
+Self-test:
+  python diff_findings.py --self-test   (12 cases)
+"""
+
+
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="diff_findings.py",
-        description="Classifies a security/verification report's findings "
-                    "across a rescan as RESOLVED (fingerprinted in "
-                    "OLD_REPORT's gated section, absent from NEW_REPORT's), "
-                    "PERSISTENT (both) or NEW (NEW_REPORT only), using "
-                    "check_agent_report.py's own finding fingerprint (file, "
-                    "category, title -- line number excluded, so a finding "
-                    "moved by an unrelated edit stays PERSISTENT rather "
-                    "than reading as NEW). See that file's 'STABLE FINDING "
-                    "FINGERPRINTS' section for the exact normalization; not "
-                    "restated here.",
-        epilog="Exit codes: 0 by default, whatever the classification; 1 "
-               "under --fail-on-new with a NEW finding present, or "
-               "--fail-on-persistent with a PERSISTENT one present (either "
-               "message names each such fingerprint and title); 2 usage "
-               "error (OLD_REPORT/NEW_REPORT missing) or a report that is "
-               "missing, empty, or carries no '**Verdict:**'-bearing "
-               "section. The table is printed on stdout regardless of exit "
-               "code.",
+        description=PURPOSE,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG,
     )
     parser.add_argument("old_report", nargs="?", metavar="OLD_REPORT",
                         help="the prior round's agent report (e.g. a saved "

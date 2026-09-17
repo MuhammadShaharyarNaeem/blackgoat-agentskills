@@ -475,24 +475,94 @@ def append_record(log_path, record):
         raise RecordError(f"could not append to run log {log_path}: {exc}")
 
 
+PURPOSE = (
+    "Appends one run-telemetry record per delegation or state persistence to "
+    "the run log, refusing unmeasured, duplicate or inverted delegations."
+)
+
+EPILOG = """Reads:
+  --log -- the existing run-log.jsonl, one JSON object per line, for two
+    checks made BEFORE the write. (1) duplicate_delegation: an
+    --event delegation whose (--pipeline, --unit, --agent, --rounds) tuple
+    is already present is refused and nothing is written -- the first
+    completion is the measurement, and a re-wake is not recorded at all
+    (there is deliberately no --rewake flag). --phase is outside the tuple
+    on purpose. Skipped when --agent is absent and for non-delegation
+    events. (2) verifier_below_producer: for --agent in
+    quinn|luna|vera|cipher, the most recent producer delegation
+    (mason|nova|max|dep) in the same --unit must not outrank this one.
+    Tier order is haiku < sonnet < opus < fable. Nothing to compare against
+    is not a refusal.
+  --from-json <file> -- a runtime completion payload mapped onto the record
+    fields; explicit flags override it, and it is merged BEFORE the
+    --model/token requirements are checked.
+  --model -- resolvable means it contains exactly one of haiku, sonnet,
+    opus, fable, case-insensitively (opus-4.1, claude-fable-5-1 resolve).
+    When it resolves, --tier is optional and must agree; when it does not,
+    --tier is REQUIRED and the record stores --model verbatim with the
+    flag's tier.
+
+Writes:
+  --log -- one appended JSON line. The record, with unknown as null and
+    never 0 (an explicit 0 is preserved; tokens_total is derived only when
+    both halves are known):
+      {"ts", "pipeline", "phase", "unit", "agent", "model", "tier", "event",
+       "duration_s", "tokens_in", "tokens_out", "tokens_total",
+       "tokens_unavailable", "rounds", "status", "note", "runtime"}
+    --allow-tier-inversion adds "tier_inversion_reason". This script carries
+    no --ledger: it is not a gate, and a failed write is exit 2, because the
+    record IS the artifact.
+
+Problem codes:
+  model_inherit           --model inherit names a setting, not a tier
+  model_unknown           --model resolves to no tier and no --tier given
+  tier_mismatch           --tier disagrees with a resolvable --model
+  tokens_missing          a delegation with no token measurement
+  duplicate_delegation    that (pipeline, unit, agent, rounds) tuple exists
+  verifier_below_producer this verifier's tier is below the producer's
+
+JSON keys:
+  Printed on stdout: on success recorded (true), log, record; on a refusal recorded (false),
+  problem, error.
+
+Exit codes:
+  0  the record was appended
+  1  duplicate_delegation or verifier_below_producer -- nothing written
+  2  usage error (a delegation with no --model, model_unknown,
+     tier_mismatch, an invalid --tier value, model_inherit, tokens_missing,
+     or a blank --allow-tier-inversion reason), a bad or unreadable
+     --from-json, or an unwritable --log
+
+Self-test:
+  python record_run.py --self-test   (70 cases)
+"""
+
+
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
 def main(argv):
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="record_run.py",
+        description=PURPOSE,
         add_help=True,
-        description="Appends one run-telemetry record to --log "
-                    "(run-log.jsonl): --event delegation additionally "
-                    "requires --model (or --tier when --model names no Claude "
-                    "tier) and a token measurement, refuses model_inherit and "
-                    "a duplicate (pipeline, unit, agent, rounds) delegation, "
-                    "and refuses a verifier running below the producer it "
-                    "judges.",
-        epilog="Exit codes: 0 appended; 1 duplicate_delegation or "
-               "verifier_below_producer; 2 usage error (a delegation with no "
-               "model, an unresolved --model with no --tier, a --tier that "
-               "disagrees with --model, --model inherit, tokens_missing, or a "
-               "blank --allow-tier-inversion reason), a bad --from-json, or an "
-               "unwritable log. Machine-readable detail is the JSON record "
-               "itself, appended to --log.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG,
     )
     parser.add_argument("--log")
     parser.add_argument("--pipeline")

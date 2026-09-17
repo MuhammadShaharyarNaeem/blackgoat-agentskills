@@ -452,20 +452,79 @@ def build_report(args):
     return report
 
 
+PURPOSE = (
+    "Derives the next milestone to build from plan.md, detects a stale "
+    "cursor, and can emit the runtime gate's arguments."
+)
+
+EPILOG = """Reads:
+  --plan -- headings matching "^#{2,3}\\s*Milestone\\b\\s+\\d", i.e.
+    "## Milestone <n> ..." or "### Milestone <n> ...". A heading carrying
+    "[x]" (case-insensitive) is complete; the next milestone is the first
+    that is not. The title is the heading with its "#" prefix stripped and
+    nothing else. Domain tags "[UI]" / "[API]" are case-sensitive bracket
+    literals; the orthogonal verification-surface tag is "[vs:<surface>]",
+    lowercase, one of api, ui, web+api, rmm, fn, none. Fenced regions are
+    blanked and the file is read as utf-8-sig.
+  --plan, under --emit-gate-args -- the next milestone's "RUNTIME PROBE:"
+    line (case-insensitive, "RUNTIME<ws>PROBE<ws>:"). The parse is
+    deliberately conservative: anything it is unsure of comes back
+    null/empty so the caller supplies it, never a guess.
+  --state -- orchestrator-state.json; "milestone_cursor" is compared with
+    the derived next milestone to populate "cursor". Without --state,
+    "cursor" is null. Invalid JSON or a file with no "milestone_cursor"
+    key is exit 2.
+  --ledger -- the shared gate ledger, ADVISORY ONLY and exit codes are
+    unchanged: it populates "unbacked_complete", every "[x]" milestone with
+    no PASS check_commit_gate.py record. A missing ledger file warns.
+    This script never writes the ledger.
+
+JSON keys:
+  plan_file, result, next_milestone ({title, line, domain, surface}),
+  milestone_text, remaining, completed_count, total_count,
+  cursor ({stored, matches_next, stale}),
+  gate_args ({surface, expect_status, require_keys, forbid_hosts}),
+  unbacked_complete, warnings, error.
+
+Exit codes:
+  0  result NEXT or DONE
+  1  result MIXED -- the family name for "the plan cannot be executed as
+     written": mixed [UI]/[API] tags, UNTAGGED, or a missing/unknown
+     [vs:<surface>] tag. These share a verdict because the action is
+     identical (halt and route back through Alex) and are told apart by
+     "warnings"
+  2  usage error, an unreadable --plan, invalid --state JSON, a state file
+     missing "milestone_cursor", or zero milestone headings in the plan
+
+Self-test:
+  python next_milestone.py --self-test   (39 cases)
+"""
+
+
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
 def main(argv):
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="next_milestone.py",
-        description="Derives the next milestone to build from --plan mechanically "
-                    "(no full plan re-read), detects a stale milestone_cursor with "
-                    "--state, and can emit the runtime gate's args from the plan's "
-                    "RUNTIME PROBE line with --emit-gate-args.",
-        epilog="Exit codes and result values: 0 NEXT or DONE; 1 MIXED (mixed "
-               "[UI]/[API] tags, UNTAGGED, or a missing/unknown [vs:<surface>] tag "
-               "-- a planning defect, told apart from MIXED's other cause via "
-               "'warnings'); 2 usage error, unreadable file, invalid --state JSON, "
-               "a state file missing milestone_cursor, or zero milestone headings. "
-               "Machine-readable detail is JSON on stdout: 'result', 'next_milestone', "
-               "'cursor', 'unbacked_complete', 'warnings', 'error'.",
+        description=PURPOSE,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG,
     )
     parser.add_argument("--plan")
     parser.add_argument("--state")

@@ -1489,25 +1489,86 @@ def read_stdin():
     return data.decode("utf-8-sig", errors="replace").lstrip("﻿")
 
 
+PURPOSE = (
+    "PreToolUse hook that denies a tool call violating one of eight bgPDD "
+    "restraints; fails open on any internal error."
+)
+
+EPILOG = """Reads:
+  stdin -- one PreToolUse hook payload as JSON, read ONLY when neither
+    --explain nor --self-test was given (so --help never consumes it and the
+    hook path is unchanged). Keys used, across host shapes:
+    {"tool_name": "<Bash|Read|Write|Edit|MultiEdit|Task|Agent|...>",
+     "tool_input": {...}, "cwd": "<path>"}.
+  The tree, for lane detection inside a 12h freshness window
+    (--window-hours): a state file with a non-empty "pipeline";
+    .docs/bugfix/*/bug-report.md; .docs/*/implementation/bug-report.md and
+    .docs/*/implementation/bugs/*/bug-report.md; an unclosed quick note.
+    Per lane it also reads gates.jsonl (a check_commit_gate.py /
+    check_quick_close.py PASS carrying --commit for the lane's CURRENT
+    milestone closes it) and orchestrator-state.json ("halt" for rule 6;
+    a "status" of escalated/closed closes a standalone bugfix lane).
+
+Writes:
+  stdout -- nothing on an allow; on a deny, the host's decision payload
+    below. stderr -- a one-line note on any fail-open. No file is ever
+    written, and an explicit "allow" is never emitted: it would
+    short-circuit the user's own permission prompt.
+
+Problem codes:
+  commit_through_the_gate            git history-write / gh pr merge in a lane
+  frozen_tests_during_a_fix          write to an EXISTING test path pre-gate
+  no_delegation_before_intake        Task/Agent before an intake PASS
+  gate_artifacts_are_written_by_tools  write to a gate artifact, always
+  build_and_test_through_the_wrapper   raw build/test runner in a lane
+  delegation_halted_for_the_user     Task/Agent while a halt stands
+  blackgoat_persona_is_hand_edited_only  any write to agents/blackgoat.md
+  pipeline_tools_are_help_not_source   reading a pipeline-tools script source
+
+JSON keys:
+  Printed on stdout on a deny only.
+  --format claude  {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+    "permissionDecision": "deny", "permissionDecisionReason": "<text>"}}
+  --format cursor  {"permission": "deny", "userMessage": "<text>"}
+  The reason names the violated restraint and the command to run instead.
+
+Exit codes:
+  0  always from main() -- an allow, a deny (the Windows launcher swallows a
+     non-zero code, so the decision travels in the stdout JSON, not here),
+     --explain, and every fail-open alike
+  0  --self-test, all cases passed
+  1  --self-test, at least one case failed
+
+Self-test:
+  python guard_action.py --self-test   (119 cases)
+"""
+
+
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(
-        description="Pre-execution guard for the bgPDD lanes: reads a "
-                    "PreToolUse hook payload on stdin and denies a tool call "
-                    "that would violate one of this family's restraints "
-                    "(commit-through-the-gate, frozen tests, delegation before "
-                    "intake, gate-artifact tampering, raw build/test runners, "
-                    "delegation while halted, hand-editing agents/blackgoat.md, "
-                    "and reading pipeline-tools/scripts/*.py source instead of "
-                    "its --help). Fails open on any internal error.",
-        epilog="Exit codes: main() always returns 0 (an allow is silent "
-               "stdout; a deny is JSON hookSpecificOutput.permissionDecision "
-               "on stdout, since the Windows launcher swallows a non-zero "
-               "exit code) -- --self-test returns 0 on all-pass, 1 otherwise. "
-               "Machine-readable detail: the deny JSON's "
-               "permissionDecisionReason names the violated restraint and the "
-               "alternative command. Use --explain to print the rules and "
-               "which lane/restraint is currently armed, instead of reading "
-               "this file's source.")
+    parser = PurposeFirstParser(
+        prog="guard_action.py",
+        description=PURPOSE,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG,
+    )
     parser.add_argument("--format", choices=("claude", "cursor"), default="claude",
                         help="which host's decision payload to emit")
     parser.add_argument("--window-hours", type=float, default=WINDOW_HOURS_DEFAULT,

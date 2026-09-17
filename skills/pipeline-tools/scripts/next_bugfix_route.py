@@ -616,29 +616,112 @@ def build_report(args):
     return report
 
 
+PURPOSE = (
+    "Derives the bgpdd-bugfix FAST, FULL or PLAN route mechanically from "
+    "bug-report.md, rca.md and a ledger-recorded intake PASS."
+)
+
+EPILOG = """Reads:
+  --ledger -- REQUIRED, and an INPUT as well as an append target. The latest
+    check_bugfix_intake.py record scoped to --milestone (falling back only
+    to records carrying no milestone at all, never another bug's) must be a
+    PASS whose recorded input sha256 still matches --report. Matching is on
+    the HASH, not the path string.
+  --report -- bug-report.md, parsed by delegating to check_bugfix_intake.py
+    and reading its JSON; a child re-run disagreeing with the recorded PASS
+    is exit 2.
+  --rca -- rca.md (grammar: bgpdd-bugfix/references/rca-template.md). Lines
+    of the form "- Key: value" are read file-wide, LAST MENTION WINS, with
+    fenced regions blanked so a template block asserts nothing. Keys:
+      - Root cause file: <path>          (the one repeatable key)
+      - Baseline suite: green|<other>
+      - New capability: yes|no
+      - Schema or contract change: yes|no
+      - Estimated changed files: <N>     (missing only warns)
+    A missing Baseline suite, New capability, Schema or contract change, or
+    any Root cause file is INCOMPLETE.
+  --red -- the Phase 1 RED capture; its "<capture>.meta.json" sidecar's
+    "argv" must equal a legitimate tokenization of the report's
+    "- Command:" value (backticks stripped). The comparison is on TOKEN
+    LISTS: shlex.split(posix=True), then the same with backslashes doubled,
+    then a raw whitespace split; any match passes and red_match_strategy
+    names which. The command must be argv-runnable (no pipes, redirects or
+    &&). REQUIRED when the report carries a "- Command:" line; on a
+    steps-only report it is optional and unchecked (passing it warns).
+    This runs BEFORE the RCA is read.
+
+Writes:
+  --ledger -- one chained record per run, on every exit path:
+    {"ts", "gate": "next_bugfix_route.py", "argv", "milestone", "inputs":
+     {"<path>": "<sha256>"}, "verdict": "PASS|FAIL|ERROR", "exit", "prev",
+     "self"}. Best-effort; it never changes this run's verdict. No "route"
+    is recorded in it.
+
+Problem codes:
+  intake_unbacked        no PASSING, hash-matching intake record (exit 2)
+  red_required           the report has a command but no --red (exit 2)
+  red_command_mismatch   the sidecar argv matches no tokenization (exit 1)
+  red_sidecar_missing    capture or sidecar absent, unreadable, argv-less
+
+JSON keys:
+  report, rca, ledger, max_changed_files, intake_backed, surface,
+  runtime_observable, reproduction_mode, reproduction_command, red,
+  red_argv, red_command, red_match_strategy, red_matches_report, problems,
+  problem_codes, root_cause_files, baseline_suite, new_capability,
+  schema_or_contract_change, estimated_changed_files, missing_fields,
+  route, reasons, warnings, result, error.
+
+Exit codes:
+  0  result FAST, FULL or PLAN, where PLAN outranks all (a new capability, a
+     schema/contract change, or "- Estimated changed files:" above
+     --max-changed-files); FAST needs ALL of reproduction_mode command, the
+     RED having run that exact command, exactly one "- Root cause file:",
+     surface api or ui (not both) and "- Baseline suite: green"; FULL
+     otherwise. FAST and FULL differ ONLY in user check-ins -- neither ever
+     skips RED, GREEN, Luna or the commit gate
+  1  result INCOMPLETE (fill the named fields) or BLOCKED
+     (red_command_mismatch / red_sidecar_missing)
+  2  missing --report / --rca / --ledger, red_required, intake_unbacked,
+     --max-changed-files < 1, an unreadable rca.md, or an unavailable or
+     disagreeing check_bugfix_intake.py
+
+Self-test:
+  python next_bugfix_route.py --self-test   (52 cases)
+"""
+
+
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="next_bugfix_route.py",
-        description="Derives the bgpdd-bugfix FAST/FULL/PLAN fork mechanically "
-                    "from --report + --rca (requires a PASSING, hash-matching "
-                    "check_bugfix_intake.py entry in --ledger; --red ties the "
-                    "RED capture to the report's command).",
-        epilog="Exit codes and result values: 0 FAST/FULL/PLAN; 1 INCOMPLETE "
-               "(the RCA cannot be routed as written) or BLOCKED "
-               "(red_command_mismatch / red_sidecar_missing); 2 missing "
-               "--report/--rca/--ledger, red_required, --max-changed-files < 1, "
-               "an unreadable rca.md, intake_unbacked, or a disagreeing intake "
-               "gate. Machine-readable detail is JSON on stdout: 'route', "
-               "'reasons', 'problems', 'problem_codes'.",
+        description=PURPOSE,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG,
     )
     parser.add_argument("--report", help="path to bug-report.md")
     parser.add_argument("--rca", help="path to rca.md")
     parser.add_argument("--red",
-                        help="the Phase 1 RED capture; REQUIRED when the "
-                             "report carries a '- Command:' line, and its "
-                             "sidecar's argv must equal that command exactly")
+                        help="the Phase 1 RED capture (see Reads); REQUIRED "
+                             "when the report carries a '- Command:' line")
     parser.add_argument("--ledger",
-                        help="the gate ledger; REQUIRED — the intake PASS is "
+                        help="the gate ledger; REQUIRED -- the intake PASS is "
                              "read from it and this run is appended to it")
     parser.add_argument("--milestone",
                         help="bug slug, to scope this run's ledger record")
