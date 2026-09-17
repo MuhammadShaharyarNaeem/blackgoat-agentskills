@@ -193,6 +193,7 @@ PERSONA_ELEMENTS = {
     "rex": DEFAULT_REQUIRED,
     "scout": DEFAULT_REQUIRED,
     "vera": DEFAULT_REQUIRED,
+    "ward": DEFAULT_REQUIRED,
 }
 
 # `<consumers>` is standing-but-optional for exactly these two: their override

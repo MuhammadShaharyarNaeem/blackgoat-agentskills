@@ -19,8 +19,8 @@ shingles, and score each pair by Jaccard overlap of their shingle sets.
 
 Neutralized before scoring, so none of it can manufacture or hide overlap:
   * this tree's agent names (rex, aria, alex, iris, scout, echo, mason,
-    nova, max, quinn, luna, cipher, dep, vera, forge, blackgoat) and stack
-    words (dotnet, csharp, vue, vue3, godot, gdscript, powershell,
+    nova, max, quinn, luna, cipher, ward, dep, vera, forge, blackgoat) and
+    stack words (dotnet, csharp, vue, vue3, godot, gdscript, powershell,
     playwright, aws, azure) -- a find-replace re-skin swaps exactly these;
   * the CLAUDE.md convention #10 `## Quick card` disclaimer line and the
     three-bullet inline mapping, which are DELIBERATELY verbatim across 17
@@ -68,7 +68,7 @@ READ_ENCODING = "utf-8-sig"
 # would swap. Extend as new agents or stacks are added (CLAUDE.md #1/#5).
 ENTITY_WORDS = (
     "rex", "aria", "alex", "iris", "scout", "echo", "mason", "nova", "max",
-    "quinn", "luna", "cipher", "dep", "vera", "forge", "blackgoat",
+    "quinn", "luna", "cipher", "ward", "dep", "vera", "forge", "blackgoat",
     "dotnet", "csharp", "vue3", "vue", "godot", "gdscript", "powershell",
     "playwright", "aws", "azure",
 )

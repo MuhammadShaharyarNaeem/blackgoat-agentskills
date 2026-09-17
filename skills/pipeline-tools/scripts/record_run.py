@@ -144,7 +144,7 @@ STATUSES = ("COMPLETE", "PARTIAL", "BLOCKED", "PASS", "FAIL", "ERROR")
 # inversion, and an opus verifier over a fable producer is one. Left out of the
 # map, every fable delegation was `model_unknown` and unrecordable.
 TIER_ORDER = {"haiku": 1, "sonnet": 2, "opus": 3, "fable": 4}
-VERIFIER_AGENTS = ("quinn", "luna", "vera", "cipher")
+VERIFIER_AGENTS = ("quinn", "luna", "vera", "cipher", "ward")
 # `dep` produces the deployment artifacts Vera and Cipher judge at shipping,
 # so a verifier running below Dep is the same inversion as one running below
 # Mason. Its absence from this tuple made that one pairing unmeasurable.
