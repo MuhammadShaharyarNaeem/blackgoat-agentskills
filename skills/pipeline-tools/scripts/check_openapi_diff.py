@@ -817,7 +817,21 @@ def build_report(base_path, head_path, allow_breaking=None):
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(prog="check_openapi_diff.py")
+    parser = argparse.ArgumentParser(
+        prog="check_openapi_diff.py",
+        description="Diffs --base against --head (OpenAPI JSON, or a "
+                    "JSON-compatible YAML subset) and exits non-zero when --head "
+                    "breaks the published contract (additive-only within a "
+                    "major version).",
+        epilog="Exit codes: 0 every difference is additive, or a breaking diff "
+               "carried a non-empty --allow-breaking; 1 a breaking diff; "
+               "2 a missing --base/--head, an unreadable/invalid document, "
+               "unsupported YAML construct, an empty --allow-breaking, or any "
+               "unanalyzable node (oneOf/anyOf/not -- never waivable). "
+               "Machine-readable detail is JSON on stdout: 'result' (PASS/"
+               "ALLOWED/FAIL/ERROR), 'breaking'/'additive' arrays of "
+               "{kind, path, detail}, 'unanalyzable'.",
+    )
     parser.add_argument("--base", help="the contract document as published")
     parser.add_argument("--head", help="the contract document as proposed")
     parser.add_argument("--allow-breaking", dest="allow_breaking",

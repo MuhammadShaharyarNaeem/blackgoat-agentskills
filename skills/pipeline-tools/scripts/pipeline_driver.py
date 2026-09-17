@@ -1242,7 +1242,23 @@ def render_human(report, code):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog="pipeline_driver.py")
+    parser = argparse.ArgumentParser(
+        prog="pipeline_driver.py",
+        description="Emits the ONE next mandatory action for a bgpdd-bugfix, "
+                    "bgpdd-quick or bgpdd-bugfix-batch lane rooted at --root: "
+                    "reads the lane's artifacts and gate ledger, derives the "
+                    "current phase, and prints the next action with its exact "
+                    "flags. It is a READER -- it grants no verdict and never "
+                    "writes the ledger.",
+        epilog="Exit codes: 0 a next action was emitted; 1 BLOCKED (a "
+               "required gate never ran or did not pass -- the exact command "
+               "is still printed); 2 root unreadable, no lane detected, or a "
+               "feature root with no epic state; 3 lane complete (the "
+               "closing gate PASSed with --commit), with the close steps in "
+               "next_action. Machine-readable detail is JSON on stdout with "
+               "--json (else a human block): 'phase', 'next_action', "
+               "'required_gate', 'gate_status', 'blocked_by'.",
+    )
     parser.add_argument("--root", help="the lane root directory")
     parser.add_argument("--lane", choices=("bugfix", "quick", "batch", "auto"),
                         default="auto",

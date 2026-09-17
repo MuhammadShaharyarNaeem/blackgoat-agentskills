@@ -422,7 +422,20 @@ def build_report(args):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog="check_batch_close.py")
+    parser = argparse.ArgumentParser(
+        prog="check_batch_close.py",
+        description="The bgpdd-bugfix-batch Phase 4 close gate: verifies every "
+                    "bug in --state is terminal (MERGED/DROPPED-PLAN), a MERGED "
+                    "bug's own ledger holds a committed check_commit_gate.py "
+                    "PASS, its worktree is gone, and --batch-md's Final table "
+                    "has a matching row. Does not touch git.",
+        epilog="Exit codes: 0 every bug terminal, every worktree gone, the "
+               "chain intact, the table matches -- PASS; 1 any of the above "
+               "failed -- FAIL, with every failing term in problem_codes; "
+               "2 usage error, an unreadable/non-JSON state file, or a state "
+               "file with no artifacts['bugs'] list. Machine-readable detail "
+               "is JSON on stdout: 'bugs' array, 'problem_codes'.",
+    )
     parser.add_argument("--state", help="the batch's orchestrator-state.json")
     parser.add_argument("--batch-md", help="the batch's batch.md")
     parser.add_argument("--repo", default=".",

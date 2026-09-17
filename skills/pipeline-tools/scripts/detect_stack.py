@@ -531,7 +531,20 @@ def render_markdown(result):
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(prog="detect_stack.py")
+    parser = argparse.ArgumentParser(
+        prog="detect_stack.py",
+        description="Walks --repo and reports evidence-backed technology stacks "
+                    "(dotnet, vue3, react, angular, node, python, godot, "
+                    "powershell, docker, aws, azure, github-actions, playwright, "
+                    "db stacks), each with at least one relative evidence path -- "
+                    "never guessed.",
+        epilog="Flags: --repo is required outside --self-test. --json/--markdown "
+               "are mutually exclusive (default JSON). --max-depth defaults to 6. "
+               "Exit codes: 0 on a readable repo (an empty repo returns "
+               "stacks: [] plus a warning); 2 a missing or unreadable --repo. "
+               "Machine-readable detail is JSON on stdout: 'stacks', 'skills', "
+               "'suggested_check_commands', 'warnings', 'error'.",
+    )
     parser.add_argument("--repo")
     output = parser.add_mutually_exclusive_group()
     output.add_argument("--json", action="store_true")

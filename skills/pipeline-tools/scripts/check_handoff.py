@@ -901,7 +901,24 @@ def build_report(text, persona, repo, since=None, fix_round=False,
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(prog="check_handoff.py")
+    parser = argparse.ArgumentParser(
+        prog="check_handoff.py",
+        description="Parses an agent's <handoff> block (--handoff or stdin) "
+                    "and asserts it against --persona's contract: required "
+                    "elements present, every <changed_files>/<artifact>/"
+                    "<changed_skills> path exists (and, with --since, is "
+                    "actually in the diff), <status> valid, and the two "
+                    "honesty rules (a PASS beside NOT VERIFIED; BLOCKED with "
+                    "no reason).",
+        epilog="Exit codes: 0 PASS; 1 at least one finding (codes: "
+               "handoff_missing, element_missing, path_missing, "
+               "changed_files_not_in_diff, status_invalid, consumers_grammar, "
+               "honesty_contradiction, artifact_scaffolding_left, "
+               "blockers_uncategorised); 2 usage, an unreadable handoff, an "
+               "unknown persona, a bad --repo/--docs-root, an unresolvable "
+               "--since ref, or a blank --allow-scaffolding reason. "
+               "Machine-readable detail is JSON on stdout: 'findings' array.",
+    )
     parser.add_argument("--handoff", help="file holding the agent's handoff "
                                           "(default: read stdin)")
     parser.add_argument("--persona", help="squad persona that produced it")

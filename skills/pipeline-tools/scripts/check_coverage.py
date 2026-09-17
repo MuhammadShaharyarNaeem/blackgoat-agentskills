@@ -1525,7 +1525,21 @@ def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code):
 def main(argv):
     parser = argparse.ArgumentParser(
         prog="check_coverage.py",
-        description="Deterministic requirements coverage gate for bgPDD pipelines.",
+        description="Deterministic requirements coverage gate for bgPDD pipelines: "
+                     "verifies every Must-Have FR/NFR in --requirements is covered -- "
+                     "by --plan tasks (plan mode), by evidenced passing tests in "
+                     "--test-report (test mode), or by a supersession annotation in "
+                     "--design (design mode). Exactly one of --plan/--test-report/"
+                     "--design is required.",
+        epilog="Flags: --requirements is requirements.md, required in every mode. "
+               "--plan is plan.md (plan mode); --test-report is test-report.md "
+               "(test mode); --design is detailed-design.md (design mode). "
+               "Exit codes: 0 every Must-Have covered and no lint failed; "
+               "1 a Must-Have gap or any lint failure; 2 usage error, missing/"
+               "unreadable file, or a structural contract failure (no Must-Have "
+               "requirements, no task blocks). Machine-readable detail is JSON on "
+               "stdout: 'uncovered' and 'lint_failures' are the two gating arrays "
+               "(each lint_failures entry is {check, task, detail}).",
     )
     parser.add_argument("--requirements")
     parser.add_argument("--plan")

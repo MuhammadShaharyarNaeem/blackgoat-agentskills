@@ -209,7 +209,21 @@ def build_report(ledger_path, require_chain=False):
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(prog="check_ledger.py")
+    parser = argparse.ArgumentParser(
+        prog="check_ledger.py",
+        description="Verifies a gate ledger's (gates.jsonl) hash chain "
+                    "(prev/self) and reports the first broken link. Read-only: "
+                    "this script never appends to --ledger, unlike every other "
+                    "gate in this family.",
+        epilog="Exit codes: 0 intact (an empty ledger and an all-legacy "
+               "ledger included); 1 chain_broken; 2 missing --ledger or a "
+               "ledger file that does not exist. Machine-readable detail is "
+               "JSON on stdout: 'pass', 'records', 'chained_records', "
+               "'legacy_records', 'problem' ({problem, line, reason, detail} "
+               "or null; reasons: unparseable, legacy-after-chained, "
+               "incomplete-chain-fields, self-mismatch, prev-mismatch, "
+               "unreadable).",
+    )
     parser.add_argument("--ledger",
                         help="the gate ledger whose hash chain to verify "
                              "(read only; this script never writes)")

@@ -298,7 +298,19 @@ def render_markdown(summary):
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(prog="summarize_run.py")
+    parser = argparse.ArgumentParser(
+        prog="summarize_run.py",
+        description="The reader half of record_run.py: aggregates --run-log "
+                    "(and --ledger's gate verdicts) into per-pipeline/unit/agent "
+                    "totals and the fired-vs-rubber-stamped classification. "
+                    "--markdown emits a paste-ready game-tape block.",
+        epilog="Exit codes: 0 on any summary (an empty log and an absent "
+               "ledger included); 2 missing --run-log or a file that cannot "
+               "be opened (a malformed line is counted in 'malformed_lines', "
+               "not fatal). Machine-readable detail is JSON on stdout (or "
+               "--markdown text): 'pipelines', 'units', 'agents', 'gates' "
+               "({per_gate, fired, rubber_stamped, inconclusive}).",
+    )
     parser.add_argument("--run-log", dest="run_log")
     parser.add_argument("--ledger")
     parser.add_argument("--unit", help="scope to one milestone title / bug slug")

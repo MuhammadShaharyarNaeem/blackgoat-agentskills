@@ -453,7 +453,20 @@ def build_report(args):
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(prog="next_milestone.py")
+    parser = argparse.ArgumentParser(
+        prog="next_milestone.py",
+        description="Derives the next milestone to build from --plan mechanically "
+                    "(no full plan re-read), detects a stale milestone_cursor with "
+                    "--state, and can emit the runtime gate's args from the plan's "
+                    "RUNTIME PROBE line with --emit-gate-args.",
+        epilog="Exit codes and result values: 0 NEXT or DONE; 1 MIXED (mixed "
+               "[UI]/[API] tags, UNTAGGED, or a missing/unknown [vs:<surface>] tag "
+               "-- a planning defect, told apart from MIXED's other cause via "
+               "'warnings'); 2 usage error, unreadable file, invalid --state JSON, "
+               "a state file missing milestone_cursor, or zero milestone headings. "
+               "Machine-readable detail is JSON on stdout: 'result', 'next_milestone', "
+               "'cursor', 'unbacked_complete', 'warnings', 'error'.",
+    )
     parser.add_argument("--plan")
     parser.add_argument("--state")
     parser.add_argument(

@@ -611,7 +611,20 @@ def render_markdown(report):
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(prog="tier1_staleness.py")
+    parser = argparse.ArgumentParser(
+        prog="tier1_staleness.py",
+        description="Answers which Tier-1 docs under .docs/summary/{feature}/ are "
+                    "stale relative to their check_tier1_provenance.py stamp: "
+                    "diffs each stamped --repo from its stamped sha to HEAD and "
+                    "matches each doc's cited source paths against what changed.",
+        epilog="Exit codes: 0 always, unless --fail-on-stale is given and "
+               "result is FAIL, in which case 1; 2 bad --summary-root, no "
+               "--repo, missing --feature, a --feature directory that does not "
+               "exist, a --repo path that is not a directory or not a git repo, "
+               "or git unusable. Machine-readable detail is JSON on stdout "
+               "(default) or --markdown text: 'docs' array with 'verdict' "
+               "(fresh/stale/unstamped/unresolvable) per doc, 'summary'.",
+    )
     parser.add_argument("--summary-root", default=".docs/summary",
                         help="Tier-1 knowledge base root (default .docs/summary)")
     parser.add_argument("--feature", help="the feature id under --summary-root")

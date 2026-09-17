@@ -310,7 +310,21 @@ def build_report(recipe_path):
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(prog="check_runtime_recipe.py")
+    parser = argparse.ArgumentParser(
+        prog="check_runtime_recipe.py",
+        description="Gates --recipe (runtime-environment.md): asserts the six "
+                    "manifest blocks (Bring-up sequence, Services, Repointing "
+                    "map, Forbidden hosts, Test identities & fixtures, "
+                    "Capabilities) are present and that at least one start "
+                    "command and one readiness check are filled in (not "
+                    "placeholders). A 'Skipped -- user-approved: <reason>' "
+                    "line exits 0 first.",
+        epilog="Exit codes: 0 PASS; 1 any finding, a missing recipe included "
+               "(codes: recipe_missing, block_missing, start_command_missing, "
+               "readiness_check_missing, skip_unreasoned); 2 --recipe omitted "
+               "or not a readable file. Machine-readable detail is JSON on "
+               "stdout: 'problems', 'problem_codes'.",
+    )
     parser.add_argument("--recipe",
                         help="path to .docs/summary/{feature}/QA/runtime-environment.md")
     parser.add_argument("--milestone", help="recorded in the ledger line")

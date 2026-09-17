@@ -528,7 +528,23 @@ def write_text(path, text):
 # ---------------------------------------------------------------------------
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog=TOOL, add_help=True)
+    parser = argparse.ArgumentParser(
+        prog=TOOL,
+        add_help=True,
+        description="Materializes the diff a reviewer is told to review as ONE "
+                    "markdown file (--out) plus a provenance sidecar: header, "
+                    "## Commits, ## Stat, ## Diff (git diff -U<context>). It "
+                    "renders; it does not judge -- there is no exit 1.",
+        epilog="Exit codes: 0 package written; 2 git failed or is absent, a "
+               "ref is unresolvable, --repo is not a git repo, a required "
+               "flag is missing, --out cannot be written, --max-diff-lines "
+               "given < 1, --waiver given without --max-diff-lines, the diff "
+               "is empty, every changed path was excluded by pattern, or the "
+               "reviewable diff exceeds --max-diff-lines with no satisfying "
+               "## Size waiver. Machine-readable detail is JSON on stdout and "
+               "in the sidecar <out>.meta.json: 'diff_lines', 'excluded_files', "
+               "'size_waiver', 'capture_sha256'.",
+    )
     parser.add_argument("--repo", default=".")
     parser.add_argument("--base")
     parser.add_argument("--head", default="HEAD",

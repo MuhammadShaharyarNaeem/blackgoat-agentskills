@@ -698,7 +698,24 @@ def apply_updates(args):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog="update_state.py")
+    parser = argparse.ArgumentParser(
+        prog="update_state.py",
+        description="The sanctioned read-modify-write path for "
+                    "orchestrator-state.json: validates the existing file, "
+                    "applies the requested action(s) -- --init, --set-cursor/"
+                    "-pipeline/-branch/-feature/-artifact, --add-blocker/"
+                    "--resolve-blocker, --set-halt/--clear-halt, --set-status -- "
+                    "stamps 'updated', and writes atomically. At least one "
+                    "action is required per invocation.",
+        epilog="Exit codes: 0 the action(s) applied and the file was written; "
+               "1 the game-tape gate refused, or --resolve-blocker's --evidence "
+               "did not resolve to an existing non-empty file (nothing written "
+               "in either case); 2 usage/structural failure (missing --state, "
+               "no action, --init without --project-name, --resolve-blocker "
+               "without --evidence, an ambiguous resolve target, a malformed "
+               "--set-halt, --clear-halt without --reason, etc). "
+               "Machine-readable detail is the full state JSON on stdout.",
+    )
     parser.add_argument("--state")
     parser.add_argument("--init", action="store_true")
     parser.add_argument("--project-name")
