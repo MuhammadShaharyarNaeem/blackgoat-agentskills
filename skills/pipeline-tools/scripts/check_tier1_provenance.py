@@ -524,7 +524,21 @@ def build_report(summary_root, repos, feature=None, today=None,
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(prog="check_tier1_provenance.py")
+    parser = argparse.ArgumentParser(
+        prog="check_tier1_provenance.py",
+        description="Enforces the Tier-1 provenance stamp: every root artifact "
+                    "(context.md, {feature}/overview.md) under --summary-root "
+                    "must carry a date and a 40-hex commit sha per --repo, each "
+                    "resolvable. Drift is a warning unless --verify-current.",
+        epilog="Exit codes: 0 PASS (drift included, unless --verify-current); "
+               "1 at least one finding (codes: artifact_missing, stamp_missing, "
+               "date_missing, stamp_date_future, sha_missing, sha_unknown, "
+               "tier1_drift under --verify-current, tier1_repo_dropped under "
+               "--previous); 2 a bad --summary-root, no or malformed --repo, git "
+               "unusable, a --previous path that does not exist, or an "
+               "--allow-drift that is empty or lacks --verify-current. "
+               "Machine-readable detail is JSON on stdout: 'findings', 'drift'.",
+    )
     parser.add_argument("--summary-root", default=".docs/summary",
                         help="Tier-1 knowledge base root (default .docs/summary)")
     parser.add_argument("--feature", help="check only this feature's overview.md")

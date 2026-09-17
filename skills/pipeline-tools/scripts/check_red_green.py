@@ -494,7 +494,22 @@ def build_report(args):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog="check_red_green.py")
+    parser = argparse.ArgumentParser(
+        prog="check_red_green.py",
+        description="The bgpdd-bugfix Phase 4 gate: given one --red capture "
+                    "and one or more --green captures (all written by "
+                    "run_quiet.py --capture), verifies they are actually a "
+                    "before/after of the SAME command -- sidecars agree, "
+                    "identical argv, RED non-zero, every GREEN zero and "
+                    "strictly newer than RED.",
+        epilog="Exit codes: 0 every term holds; 1 any problem code "
+               "(capture_missing, sidecar_hash_mismatch, red_exit_zero, "
+               "green_exit_nonzero, command_mismatch, green_not_newer, "
+               "green_runs_short, green_runs_not_distinct, and more); 2 "
+               "missing --red/--green, or --green-runs < 1. Machine-readable "
+               "detail is JSON on stdout: 'problems', 'problem_codes', "
+               "per-capture 'red_result'/'green_results'.",
+    )
     parser.add_argument("--red", help="the pre-fix (failing) capture")
     parser.add_argument("--green", action="append", default=[],
                         help="a post-fix (passing) capture; repeatable")

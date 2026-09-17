@@ -700,7 +700,18 @@ def build_parser():
     parser = argparse.ArgumentParser(
         prog="run_quiet.py",
         description="Run a command, log the full output, print only "
-                     "errors-with-context + tail.")
+                     "errors-with-context + tail. One of --log/--capture is "
+                     "required, plus a command after --. With --capture it "
+                     "also writes a runtime-evidence capture artifact plus its "
+                     "provenance sidecar (<capture>.meta.json).",
+        epilog="Exit codes: passthrough of the child's own exit code; 124 the "
+               "child was killed for exceeding --timeout; 2 structural/usage "
+               "failure (no --log/--capture, no command after --, an unwritable "
+               "log/capture path, an owned --capture-field, --capture-field/"
+               "--full-body without --capture, or a command that could not be "
+               "launched). Machine-readable detail: the sidecar JSON at "
+               "<capture>.meta.json (argv, exit_code, capture_sha256, "
+               "log_sha256); --ledger appends one chained JSON record per run.")
     parser.add_argument("--log", help="path to write the full merged log to")
     parser.add_argument("--context", type=int, default=DEFAULT_CONTEXT,
                          help=f"context lines around each match (default {DEFAULT_CONTEXT})")

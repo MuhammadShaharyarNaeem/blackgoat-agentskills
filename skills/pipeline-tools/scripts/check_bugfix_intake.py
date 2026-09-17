@@ -441,7 +441,22 @@ def build_report(args):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog="check_bugfix_intake.py")
+    parser = argparse.ArgumentParser(
+        prog="check_bugfix_intake.py",
+        description="The bgpdd-bugfix Phase 0 intake gate: lints --report "
+                    "(bug-report.md) for present, non-placeholder required "
+                    "sections, a re-runnable Reproduction (a command or >=2 "
+                    "numbered steps), and the two enums later phases read "
+                    "(Surface, Regression).",
+        epilog="Exit codes: 0 every check passed; 1 any problem code "
+               "(section_missing, section_empty, section_placeholder, "
+               "reproduction_missing, surface_invalid, "
+               "runtime_observable_invalid, regression_invalid, "
+               "last_known_good_missing); 2 missing --report, an unreadable "
+               "file, or a file with no level-2..6 heading outside a fence. "
+               "Machine-readable detail is JSON on stdout: 'problems', "
+               "'problem_codes'.",
+    )
     parser.add_argument("--report", help="path to bug-report.md")
     parser.add_argument("--milestone",
                         help="bug slug, to scope this run's ledger record")

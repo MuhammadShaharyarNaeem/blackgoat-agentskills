@@ -433,7 +433,19 @@ def build_report(index_path, plugin_root, max_words=DEFAULT_MAX_WORDS,
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(prog="check_always_on.py")
+    parser = argparse.ArgumentParser(
+        prog="check_always_on.py",
+        description="Lints skills/agent-squad/always-on.md, the session-start "
+                    "index: every skills/bg or skills/bgpdd-* folder with a "
+                    "SKILL.md has a table row, every cited path resolves, and "
+                    "'Outside any lane' names four rules each with an existing "
+                    "Owner: file.",
+        epilog="Exit codes: 0 PASS; 1 at least one finding (codes: "
+               "lane_missing_row, lane_row_orphan, cell_too_long, path_missing, "
+               "rule_count, rule_owner_missing, section_missing); 2 the index or "
+               "--plugin-root is unreadable, or the root has no skills/. "
+               "Machine-readable detail is JSON on stdout.",
+    )
     parser.add_argument("--plugin-root", default=str(DEFAULT_PLUGIN_ROOT),
                         help="plugin root (default: derived from this script's path)")
     parser.add_argument("--index",

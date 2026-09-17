@@ -39,6 +39,18 @@
         ]
       },
       {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" guard-action",
+            "shell": "bash",
+            "async": false,
+            "timeout": 10
+          }
+        ]
+      },
+      {
         "matcher": "Task|Agent",
         "hooks": [
           {

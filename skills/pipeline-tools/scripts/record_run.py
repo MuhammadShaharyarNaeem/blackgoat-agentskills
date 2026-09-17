@@ -476,7 +476,24 @@ def append_record(log_path, record):
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(prog="record_run.py", add_help=True)
+    parser = argparse.ArgumentParser(
+        prog="record_run.py",
+        add_help=True,
+        description="Appends one run-telemetry record to --log "
+                    "(run-log.jsonl): --event delegation additionally "
+                    "requires --model (or --tier when --model names no Claude "
+                    "tier) and a token measurement, refuses model_inherit and "
+                    "a duplicate (pipeline, unit, agent, rounds) delegation, "
+                    "and refuses a verifier running below the producer it "
+                    "judges.",
+        epilog="Exit codes: 0 appended; 1 duplicate_delegation or "
+               "verifier_below_producer; 2 usage error (a delegation with no "
+               "model, an unresolved --model with no --tier, a --tier that "
+               "disagrees with --model, --model inherit, tokens_missing, or a "
+               "blank --allow-tier-inversion reason), a bad --from-json, or an "
+               "unwritable log. Machine-readable detail is the JSON record "
+               "itself, appended to --log.",
+    )
     parser.add_argument("--log")
     parser.add_argument("--pipeline")
     parser.add_argument("--phase")

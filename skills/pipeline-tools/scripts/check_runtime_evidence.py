@@ -1517,7 +1517,26 @@ def positive_int(value):
 
 
 def build_parser():
-    p = argparse.ArgumentParser(prog="check_runtime_evidence.py")
+    p = argparse.ArgumentParser(
+        prog="check_runtime_evidence.py",
+        description="Verifies every **Runtime evidence:** citation in --report "
+                    "for --milestone: provenance sidecar, out-of-process "
+                    "transport, allowlisted client, freshness, and any "
+                    "--require-key/--expect-status/--forbid-host terms. An "
+                    "in-process observation can fail a wire claim but never "
+                    "pass one.",
+        epilog="Exit codes: 0 at least --min-captures accepted captures and "
+               "declared_absent empty; 1 any evidence failure (no citation, "
+               "stale, in-process transport, non-allowlisted client, a "
+               "mismatched sidecar, forbidden host, missing key, status/build-"
+               "marker mismatch, unreachable OpenAPI, or an unledgered capture "
+               "under --require-ledgered-captures); 2 structural/usage error "
+               "(missing --report/--milestone, --require-ledgered-captures "
+               "without --ledger, a cited capture with no ## Captured output, "
+               "changed_file_missing, --min-captures 0). Machine-readable "
+               "detail is JSON on stdout: 'captures' array (each carries "
+               "'problems'/'problem_codes'), 'error_code' on an ERROR payload.",
+    )
     p.add_argument("--report")
     p.add_argument("--milestone")
     p.add_argument("--changed-files", nargs="*", default=[])

@@ -1222,7 +1222,24 @@ def build_report(args):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog="check_quick_close.py")
+    parser = argparse.ArgumentParser(
+        prog="check_quick_close.py",
+        description="The bgpdd-quick Phase 3 gate and that lane's ONLY gate: "
+                    "given --note, --capture and --changed-files, verifies the "
+                    "change was declared before it was made, still matches the "
+                    "tree, was checked after the edit by a passing command, "
+                    "edited no --frozen test, and is under --max-changed-files; "
+                    "then, with --commit, commits exactly the declared files.",
+        epilog="Exit codes: 0 every term held (and committed, with --commit); "
+               "1 any problem code (note_missing, note_incomplete, "
+               "capture_command_mismatch, capture_exit_nonzero, capture_stale, "
+               "frozen_path_modified, size_bound_exceeded, and more -- see "
+               "SKILL.md); 2 usage error (a missing required flag, "
+               "--max-changed-files 0, --commit without --message, --message "
+               "without --commit), an unreadable artifact, or a git failure. "
+               "Machine-readable detail is JSON on stdout: 'problems', "
+               "'problem_codes'.",
+    )
     parser.add_argument("--note", help="the quick lane's note.md")
     parser.add_argument("--capture",
                         help="the run_quiet.py --capture of the How-verified "

@@ -764,7 +764,24 @@ def build_report(args):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog="check_agent_report.py")
+    parser = argparse.ArgumentParser(
+        prog="check_agent_report.py",
+        description="Verifies a durable agent report (Cipher's security-report.md, "
+                    "Vera's verification-report.md, Dep's post-deploy-report.md) "
+                    "backs its Pass verdict with evidenced check lines (command + "
+                    "exit code + counts + the run_quiet.py capture that recorded "
+                    "the run) and zero Critical findings.",
+        epilog="Exit codes: 0 verdict exactly Pass, >=1 check line, every line "
+               "PASS/evidenced/captured, zero Critical findings; 1 any other "
+               "verdict, a non-empty failed/blocked/not_run/unevidenced/"
+               "uncaptured(unwaived)/capture_disagrees/capture_command_mismatches"
+               "/unledgered_captures (under --require-ledgered-captures), a "
+               "standing Critical, or zero check lines; 2 usage error "
+               "(--require-ledgered-captures without --ledger), missing/empty/"
+               "unreadable report, or no section with a **Verdict:** line. "
+               "Machine-readable detail is JSON on stdout: 'capture_problems' "
+               "array of {check, problem, detail}.",
+    )
     parser.add_argument("--report")
     parser.add_argument("--milestone",
                         help="scope this run's ledger record to a milestone")

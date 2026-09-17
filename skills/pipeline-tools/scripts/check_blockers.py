@@ -207,7 +207,16 @@ def build_report(state_path, milestone=None, severity_floor=DEFAULT_SEVERITY_FLO
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(prog="check_blockers.py")
+    parser = argparse.ArgumentParser(
+        prog="check_blockers.py",
+        description="Reads --state's orchestrator-state.json, normalizes every "
+                    "blocker entry (legacy freeform string or structured object) "
+                    "to one shape, and exits non-zero when one still blocks at "
+                    "or above --severity-floor.",
+        epilog="Exit codes: 0 'blocking' is empty; 1 non-empty; 2 usage/"
+               "structural failure. Machine-readable detail is JSON on stdout: "
+               "'blockers', 'blocking', 'other_milestone_blockers', 'pipeline'.",
+    )
     parser.add_argument("--state")
     parser.add_argument("--milestone",
                         help="scope: an entry blocks only if its milestone "

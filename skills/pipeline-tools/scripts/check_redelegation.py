@@ -541,7 +541,21 @@ def apply_state_halt(state_path, unit, agent, report):
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(prog="check_redelegation.py")
+    parser = argparse.ArgumentParser(
+        prog="check_redelegation.py",
+        description="Run BEFORE re-delegating an agent that already returned "
+                    "on --unit (round >= 2): checks a standing halt in --state, "
+                    "then whether --handoff's blocked_on: category demands one "
+                    "(environment/credentials/dependency), then the round bound "
+                    "and, with --previous-handoff, blocker-similarity repetition.",
+        epilog="Exit codes: 0 PASS (delegate); 1 a halt finding, fresh or "
+               "standing (codes: halt_environment, halt_dependency, "
+               "halt_repeated_blocker, halt_round_bound); 2 usage, an "
+               "unreadable handoff, or a blank --allow-redelegation reason. "
+               "Machine-readable detail is JSON on stdout: 'findings', "
+               "'standing_halt'; --state additionally gets state['halt'] "
+               "merged in via update_state.py --set-halt on a fresh finding.",
+    )
     parser.add_argument("--run-log", dest="run_log")
     parser.add_argument("--unit")
     parser.add_argument("--agent")

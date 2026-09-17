@@ -1661,7 +1661,29 @@ def build_parser():
     hand-building argparse.Namespace objects -- every hand-built namespace is
     a place a newly-added flag raises AttributeError instead of being tested.
     """
-    parser = argparse.ArgumentParser(prog="check_commit_gate.py")
+    parser = argparse.ArgumentParser(
+        prog="check_commit_gate.py",
+        description="The bgpdd-build milestone commit gate: checks --milestone's "
+                    "latest --review-report verdict, whether that review "
+                    "postdates the diff, and whether the --state blockers ledger "
+                    "is clean, then on a pass performs the commit itself with "
+                    "--commit --message. --changed-files is required; every "
+                    "other flag beginning --require-* turns on one optional "
+                    "assertion (rendered evidence, files-reviewed coverage, size "
+                    "ceiling, runtime evidence, OpenAPI reachability, ledger-gate "
+                    "freshness, run-log delegation records) -- each documented in "
+                    "SKILL.md's '## check_commit_gate.py' section.",
+        epilog="Exit codes: 0 gate passed (and committed, with --commit); "
+               "1 gate failed (verdict not Approve, stale, standing blockers, "
+               "findings_consistent false, any --require-* assertion false, or "
+               "already_committed true); 2 usage error (a --waiver without "
+               "--max-changed-files, --require-agents without --require-run-log "
+               "or vice versa, etc), a --changed-files path missing or outside "
+               "--repo, unreadable artifact, invalid state JSON, or a git/"
+               "delegated-gate failure. Machine-readable detail is JSON on "
+               "stdout, keyed 'result'/'error', with problem arrays such as "
+               "'ledger_gate_problems' and 'run_log_problems'.",
+    )
     parser.add_argument("--review-report")
     parser.add_argument("--state")
     parser.add_argument("--milestone")

@@ -617,7 +617,20 @@ def build_report(args):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog="next_bugfix_route.py")
+    parser = argparse.ArgumentParser(
+        prog="next_bugfix_route.py",
+        description="Derives the bgpdd-bugfix FAST/FULL/PLAN fork mechanically "
+                    "from --report + --rca (requires a PASSING, hash-matching "
+                    "check_bugfix_intake.py entry in --ledger; --red ties the "
+                    "RED capture to the report's command).",
+        epilog="Exit codes and result values: 0 FAST/FULL/PLAN; 1 INCOMPLETE "
+               "(the RCA cannot be routed as written) or BLOCKED "
+               "(red_command_mismatch / red_sidecar_missing); 2 missing "
+               "--report/--rca/--ledger, red_required, --max-changed-files < 1, "
+               "an unreadable rca.md, intake_unbacked, or a disagreeing intake "
+               "gate. Machine-readable detail is JSON on stdout: 'route', "
+               "'reasons', 'problems', 'problem_codes'.",
+    )
     parser.add_argument("--report", help="path to bug-report.md")
     parser.add_argument("--rca", help="path to rca.md")
     parser.add_argument("--red",

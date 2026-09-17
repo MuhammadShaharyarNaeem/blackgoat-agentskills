@@ -1376,7 +1376,24 @@ def render_text(report):
 # ---------------------------------------------------------------------------
 
 def main(argv):
-    parser = argparse.ArgumentParser(prog="check_test_authenticity.py")
+    parser = argparse.ArgumentParser(
+        prog="check_test_authenticity.py",
+        description="Reads test files in --changed-files/--files and exits "
+                    "non-zero when one tests itself rather than the product: "
+                    "checks the file's STRUCTURE (imports, navigation, whether "
+                    "the asserted symbol is defined in the test or the "
+                    "product), since RED/GREEN transitions cannot detect a "
+                    "fake test.",
+        epilog="Exit codes: 0 no problems, or every problem was in a file "
+               "waived by --allow; 1 a problem in a non-waived file (codes: "
+               "test_no_production_import, test_inline_reimplementation, "
+               "test_source_eval, test_synthetic_dom); 2 a missing --repo or "
+               "empty file set, an unreadable input, no discoverable src root "
+               "(pass --src-roots explicitly), or a --allow with a blank/"
+               "unpaired --reason. Machine-readable detail is JSON with --json "
+               "(default is a text report): 'files' array, each problem "
+               "{code, file, line, excerpt, detail}.",
+    )
     parser.add_argument("--repo", help="the repository root")
     parser.add_argument("--files", nargs="+", default=[], dest="files",
                         help="test files to judge")

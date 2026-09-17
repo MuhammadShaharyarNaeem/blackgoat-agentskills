@@ -379,7 +379,19 @@ def run_self_test():
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(prog="check_frontmatter.py")
+    parser = argparse.ArgumentParser(
+        prog="check_frontmatter.py",
+        description="Validates the YAML frontmatter of every agents/*.md and "
+                    "skills/*/SKILL.md under root: a closed --- block, key: "
+                    "value pairs, no unquoted ': ' inside a scalar, required "
+                    "keys present, model: one of opus/sonnet/haiku, and every "
+                    "skills/bgpdd-*/SKILL.md carries a matching trigger:.",
+        epilog="Exit codes: 0 result: PASS (warnings do not gate); 1 at least "
+               "one error; 2 usage error (missing or non-directory root), or a "
+               "root carrying neither agents/ nor skills/. Machine-readable "
+               "detail is JSON on stdout: 'errors'/'warnings', each "
+               "{file, line, problem}.",
+    )
     parser.add_argument("root", nargs="?", help="plugin root dir (contains agents/, skills/)")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)

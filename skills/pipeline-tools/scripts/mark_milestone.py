@@ -672,7 +672,22 @@ def resolve_require_gates(values):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog="mark_milestone.py")
+    parser = argparse.ArgumentParser(
+        prog="mark_milestone.py",
+        description="The write side of the [x] completion convention "
+                    "next_milestone.py reads: appends the marker to --plan for "
+                    "--milestone only when the completion is gate-backed "
+                    "(check_commit_gate.py PASS by default), or --reopen removes "
+                    "a wrongly-closed one.",
+        epilog="Exit codes: 0 the marker was appended; 1 a refusal (problem "
+               "codes: milestone_not_found, ambiguous_milestone, "
+               "already_complete, no_commit, ledger_chain_broken, "
+               "ledger_missing, ledger_failed, not_complete, plus five "
+               "game-tape codes); 2 missing --plan/--milestone, an unreadable "
+               "plan, no milestone headings, a gate requirement without "
+               "--ledger, or a git failure. Machine-readable detail: JSON on "
+               "stdout, 'problems' array.",
+    )
     parser.add_argument("--plan")
     parser.add_argument("--milestone")
     parser.add_argument("--repo", default=".")

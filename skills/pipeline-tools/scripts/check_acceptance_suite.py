@@ -1530,7 +1530,24 @@ def lint_report(report, scenarios, matrix_text, args):
 # ---------------------------------------------------------------------------
 
 def build_parser():
-    p = argparse.ArgumentParser(prog="check_acceptance_suite.py")
+    p = argparse.ArgumentParser(
+        prog="check_acceptance_suite.py",
+        description="Gates the feature-scoped acceptance walkthrough. Execution "
+                    "mode (default) gates --matrix against --results (was the "
+                    "matrix RUN); --lint-only gates that --matrix is well-formed "
+                    "at plan time (before code exists). --results/--changed-files "
+                    "are execution-mode only; --requirements is lint-only.",
+        epilog="Exit codes: 0 gated scenarios >= --min-scenarios, at least one "
+               "gated step had a result, and the blocking arrays are empty; "
+               "1 a missing/failed/blocked/unrun gated step, an unevidenced "
+               "manual step, a dangling inverse, stale_results, too few "
+               "scenarios, or (lint-only) a structural defect or uncited "
+               "Must-Have; 2 mode-separation violations, missing/unreadable "
+               "matrix or results, no parseable line, changed_file_missing, or a "
+               "bad --require-priority token. Machine-readable detail is JSON on "
+               "stdout: 'result', 'failed', 'blocked', 'not_run', 'warnings', "
+               "'error'.",
+    )
     p.add_argument("--matrix")
     p.add_argument("--results")
     p.add_argument("--requirements")

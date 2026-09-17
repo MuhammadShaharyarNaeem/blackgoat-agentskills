@@ -992,7 +992,21 @@ def build_report(path, require_go, require_rehearsal=False,
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(prog="check_ship_decision.py")
+    parser = argparse.ArgumentParser(
+        prog="check_ship_decision.py",
+        description="Makes Dep's --report (ship-decision.md) GO/NO-GO "
+                    "machine-verifiable: an unambiguous GO/NO-GO, a Rollback "
+                    "heading, a post-deploy checklist. --require-rehearsal and "
+                    "--require-baseline additionally prove the rollback was "
+                    "PERFORMED and the threshold table has real evidenced "
+                    "numbers.",
+        epilog="Exit codes: 0 structurally valid (and GO / rehearsed / "
+               "baselined under the flags); 1 a gate failed; 2 usage error "
+               "(--require-ledger-gates or --require-ledgered-captures without "
+               "--ledger), missing/unreadable report, or structural "
+               "non-conformance. Machine-readable detail is JSON on stdout: "
+               "'problems' ({code: [detail]}), 'rehearsal', 'baseline'.",
+    )
     parser.add_argument("--report")
     parser.add_argument(
         "--require-go",
