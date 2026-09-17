@@ -1375,24 +1375,87 @@ def render_text(report):
 # CLI
 # ---------------------------------------------------------------------------
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Reads the test files in a changed set and exits non-zero when one "
+           "of them tests itself rather than the product.")
+
+EPILOG = """\
+Reads:
+  --changed-files / --files  the SAME flag (both repeatable, both accumulate);
+    the pipelines pass --changed-files. Paths may be repo-relative or
+    absolute, with either slash. Each file's source is read for STRUCTURE --
+    what it imports, what it navigates to, and whether the symbol under
+    assertion is defined in the test or under a src root.
+    A non-test file in the set is IGNORED and reported in `ignored`, never a
+    verdict, so a whole changed-file list can be passed unfiltered.
+  --test-globs  REPLACES the defaults entirely. Defaults: **/*.spec.*,
+    **/*.test.*, **/tests/**, **/__tests__/**, **/*Tests.cs, **/*Test.cs,
+    **/test_*.py, **/*_test.py. Matched case-insensitively against the
+    repo-relative POSIX path; a pattern with no "/" also matches the basename.
+  --src-roots  REPLACES the discovered roots entirely. Discovery: (1) src,
+    app, lib, Source under --repo when they exist; (2) for every project
+    manifest (package.json, pyproject.toml, *.csproj) at depth <= 3, that
+    manifest's own src/app/lib/Source subdirectory, else -- for a .csproj only
+    -- the manifest's own directory. Noise directories (node_modules, bin,
+    obj, dist, .venv, ...) are never roots and never walked; a root nested in
+    another is dropped.
+  --allow <file> --reason "<text>"  repeatable and exactly paired; a count
+    mismatch, or a blank reason, is exit 2.
+
+Problem codes:
+  test_no_production_import     touches neither production code nor a surface
+  test_inline_reimplementation  the test asserts against its own transcription
+  test_source_eval              it reads product source and eval/compiles it
+  test_synthetic_dom            it injects DOM instead of navigating
+  Every problem cites file:line and a one-line excerpt, one finding per NAME
+  rather than per occurrence.
+
+JSON keys:
+  With --json; the default is a text report.
+  repo, src_roots, test_globs, src_symbols (the index size), result
+  (PASS | ALLOWED | FAIL | ERROR), files (array of
+  {file, verdict, problems, waived_by}, each problem
+  {code, file, line, excerpt, detail}), ignored (array of {file, reason}),
+  problem_codes, waivers, warnings, error.
+  Ledger extras: problem_codes, judged, ignored on every verdict;
+  failing_files on a FAIL; allow_reasons on an ALLOWED. `inputs` keys are the
+  judged files resolved against --repo.
+
+Exit codes:
+  0  no problems, or every problem was in a file waived by --allow
+  1  a problem in a non-waived file
+  2  a missing --repo or empty file set, an input that is not on disk or
+     cannot be read, no discoverable src root (pass --src-roots instead of
+     passing a tree the gate never read), or a blank or unpaired --reason
+
+Self-test:
+  python check_test_authenticity.py --self-test   (83 cases)
+"""
+
+
 def main(argv):
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="check_test_authenticity.py",
-        description="Reads test files in --changed-files/--files and exits "
-                    "non-zero when one tests itself rather than the product: "
-                    "checks the file's STRUCTURE (imports, navigation, whether "
-                    "the asserted symbol is defined in the test or the "
-                    "product), since RED/GREEN transitions cannot detect a "
-                    "fake test.",
-        epilog="Exit codes: 0 no problems, or every problem was in a file "
-               "waived by --allow; 1 a problem in a non-waived file (codes: "
-               "test_no_production_import, test_inline_reimplementation, "
-               "test_source_eval, test_synthetic_dom); 2 a missing --repo or "
-               "empty file set, an unreadable input, no discoverable src root "
-               "(pass --src-roots explicitly), or a --allow with a blank/"
-               "unpaired --reason. Machine-readable detail is JSON with --json "
-               "(default is a text report): 'files' array, each problem "
-               "{code, file, line, excerpt, detail}.",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--repo", help="the repository root")
     parser.add_argument("--files", nargs="+", default=[], dest="files",

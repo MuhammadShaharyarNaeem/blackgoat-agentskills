@@ -1221,24 +1221,113 @@ def build_report(args):
     return report
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("The bgpdd-quick Phase 3 gate, and that lane's only one: a declared,"
+           " small, checked-after-the-edit change, optionally committed.")
+
+EPILOG = """\
+Reads:
+  --note  the lane's note.md. Three labelled lines, case-insensitive, as list
+    items or bare lines, outside fences:
+      - What:
+      - Where:
+      - How verified:
+    A value of <...>, TODO, TBD, N/A, none, unknown, ??? or ... counts as
+    absent. The Where line's paths (comma- and/or whitespace-separated,
+    backticks stripped) must EQUAL the --changed-files set after
+    repo-relative normalization. How verified is ONE argv-runnable command
+    (backticks optional): no pipes, no redirects, no &&.
+  --capture and <capture>.meta.json  a run_quiet.py --capture pair. The
+    capture must hold "## Captured output"; its header region (above that
+    heading, fences blanked) carries "- Exit code: <N>" and
+    "- Captured: <ts>", agreeing with the sidecar's exit_code and finished.
+    Its capture_sha256 must still match the capture's bytes, and its
+    exit_code must be 0. Its recorded child argv is compared
+    with How verified on TOKEN LISTS, any of three tokenizations matching:
+    shlex.split(posix=True); the same with backslashes doubled; a raw
+    whitespace split. Freshness: the sidecar's finished (whole seconds) must
+    be >= each changed file's mtime floored to the second.
+  --changed-files, --repo  a relative entry resolves against --repo, not the
+    cwd. git status porcelain supplies the undeclared-change and frozen
+    checks; frozen fires only on a status meaning an EXISTING TRACKED file
+    changed (M/D/R/C/U in either column), so adding a test passes and editing
+    one fails.
+  --frozen  a path or directory prefix, or a GLOB when the value carries
+    *, ? or [. Segment semantics: "**/" is zero or more leading segments, a
+    trailing "**" is the rest of the path, * and ? stop at /, [...] and [!...]
+    are character classes; backslashes fold to / and the pattern is normcased.
+  --ledger  read for the required-gate lookups, and appended to. Recorded
+    inputs: the note, the capture, ITS SIDECAR, every declared file.
+
+Problem codes:
+  In evaluation order; every one is reported, none short-circuits.
+  note_missing                    the --note file does not exist
+  note_incomplete                 a required note line is absent or placeholder
+  note_where_mismatch             Where's paths are not the --changed-files set
+  capture_missing                 the --capture file does not exist
+  not_a_capture                   no "## Captured output" section
+  sidecar_missing                 no <capture>.meta.json beside the capture
+  sidecar_hash_mismatch           capture_sha256 no longer matches the bytes
+  sidecar_body_disagrees          the sidecar contradicts the capture's header
+  capture_header_missing          no readable header pair to witness it
+  capture_command_mismatch        the capture is not of the declared command
+  capture_exit_nonzero            the declared check did not pass
+  capture_stale                   a changed file is newer than the check
+  changed_file_missing            a declared file is not on disk
+  undeclared_tree_changes         the tree carries changes the note omits
+  frozen_path_modified            an existing frozen file was edited
+  test_authenticity_gate_missing  no fresh scoped check_test_authenticity PASS
+  required_ledger_gate_missing    a --require-ledger-gates entry has no fresh
+                                  PASS (ledger_missing, ledger_failed,
+                                  ledger_stale, ledger_chain_broken all
+                                  report here)
+  size_bound_exceeded             more declared files than --max-changed-files
+  problems entries read "<code>: <prose>".
+
+JSON keys:
+  note, capture, repo, milestone, note_fields, note_where_paths,
+  changed_files, changed_file_count, max_changed_files, size_ok,
+  capture_sidecar, capture_body_agrees, capture_argv, capture_command_match,
+  capture_exit_code, capture_finished,
+  newest_changed_file, fresh, undeclared_changes, frozen, frozen_modified,
+  test_files, required_ledger_gates, ledger_gate_problems, problems,
+  problem_codes, warnings, committed, result, error
+
+Exit codes:
+  0  every term held (and committed, with --commit)
+  1  any problem code
+  2  a missing required flag, --max-changed-files 0, --commit without
+     --message, --message without --commit, an unreadable artifact, or a git
+     failure
+
+Self-test:
+  python check_quick_close.py --self-test   (63 cases)
+"""
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="check_quick_close.py",
-        description="The bgpdd-quick Phase 3 gate and that lane's ONLY gate: "
-                    "given --note, --capture and --changed-files, verifies the "
-                    "change was declared before it was made, still matches the "
-                    "tree, was checked after the edit by a passing command, "
-                    "edited no --frozen test, and is under --max-changed-files; "
-                    "then, with --commit, commits exactly the declared files.",
-        epilog="Exit codes: 0 every term held (and committed, with --commit); "
-               "1 any problem code (note_missing, note_incomplete, "
-               "capture_command_mismatch, capture_exit_nonzero, capture_stale, "
-               "frozen_path_modified, size_bound_exceeded, and more -- see "
-               "SKILL.md); 2 usage error (a missing required flag, "
-               "--max-changed-files 0, --commit without --message, --message "
-               "without --commit), an unreadable artifact, or a git failure. "
-               "Machine-readable detail is JSON on stdout: 'problems', "
-               "'problem_codes'.",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--note", help="the quick lane's note.md")
     parser.add_argument("--capture",
@@ -1253,25 +1342,17 @@ def build_parser():
                              "exists)".format(DEFAULT_MAX_CHANGED_FILES))
     parser.add_argument("--frozen", action="append", default=[],
                         help="a path, directory or GLOB whose existing files "
-                             "must NOT be edited (tests/, **/*.spec.ts, "
-                             "**/*.Tests/**); repeatable. No default: the "
-                             "caller states what is frozen, the gate never "
-                             "guesses")
+                             "must NOT be edited; repeatable, no default")
     parser.add_argument("--milestone", help="the slug, scoping ledger records")
     parser.add_argument("--ledger",
                         help="append one JSON record per run to this path")
     parser.add_argument(
         "--require-ledger-gates", action="append", default=[],
         help="comma-separated gate script names whose LATEST ledger entry, "
-             "scoped to --milestone (or unscoped), must be PASS over "
-             "unchanged inputs -- same repeatable/comma syntax as "
-             "check_commit_gate.py's flag of the same name. "
-             "check_test_authenticity.py is added to this list "
-             "automatically (exact-scoped to --milestone, with its inputs "
-             "checked for coverage of the changed test files) whenever a "
-             "declared --changed-files path matches --frozen or looks like "
-             "a test file; this flag is only needed to require OTHER gates "
-             "too.")
+             "scoped to --milestone or unscoped, must be PASS over unchanged "
+             "inputs -- check_commit_gate.py's syntax. "
+             "check_test_authenticity.py is required automatically when a "
+             "declared file is a test file; this flag names OTHER gates.")
     parser.add_argument("--commit", action="store_true",
                         help="on a pass, commit exactly the declared files")
     parser.add_argument("--message", help="commit message (requires --commit)")

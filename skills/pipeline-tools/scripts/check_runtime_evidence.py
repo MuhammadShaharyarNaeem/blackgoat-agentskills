@@ -1516,26 +1516,105 @@ def positive_int(value):
     return n
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Verifies the runtime captures a durable report cites: an "
+           "in-process observation can fail a wire claim but never pass one.")
+
+EPILOG = """\
+Reads:
+  --report  test-report.md in build, verification-report.md in shipping, read
+    utf-8-sig with fenced blocks blanked. Every capture path on a line
+      **Runtime evidence:** <path>[, <path>...]
+    is collected file-wide (case-insensitive). A cited path must resolve under
+    an evidence/runtime/ directory; a ".." segment does not count.
+  each cited capture  its body carries a "## Captured output" section and,
+    above it, the fields Milestone, Transport, Probe command, Captured and
+    Exit code. The capture must name --milestone, its transport must be
+    out-of-process, and its probe command's client must be on the allowlist
+    (curl, wget, httpie, newman, k6, hey, ab, wrk, Invoke-WebRequest,
+    Invoke-RestMethod, iwr, irm, playwright, npx launching playwright, psql,
+    sqlcmd, redis-cli, mongosh, grpcurl, websocat, wscat, nc, ncat, openssl,
+    ssh, adb) or carry "[probe-exempt: <reason>]". A build, test-runner or
+    search command proves the code was written, never that it runs.
+  <capture>.meta.json  the run_quiet.py sidecar: capture_sha256 must still
+    match the capture's bytes, exit_code must be 0, and both exit_code and
+    finished must agree with the capture's own "- Exit code:" / "- Captured:"
+    header lines. --allow-missing-sidecar waives ABSENCE only.
+  --require-key, --forbid-host, --expect-status, --require-build-marker come
+    from the CALLER, never from the producer. --ledger is appended to and, with
+    --require-ledgered-captures, is where each capture's CURRENT sha256 must
+    appear as the capture_sha256 of a run_quiet.py record.
+
+Problem codes:
+  sidecar_missing         no <capture>.meta.json beside the capture
+  sidecar_hash_mismatch   capture_sha256 no longer matches the capture bytes
+  sidecar_body_disagrees  the sidecar contradicts the capture's header lines
+  capture_header_missing  the capture carries no readable header pair
+  probe_failed_exit       the probe's recorded exit code is non-zero
+  probe_not_client        the probe command is no allowlisted client
+  in_process_transport    the observation never left the process
+  stale                   the capture predates a changed file
+  changed_file_missing    a --changed-files path is not on disk (exit 2)
+  unledgered_capture      --require-ledgered-captures only: no ledger record
+                          pins it; otherwise the same finding is a warning
+
+JSON keys:
+  Top level:
+  report, milestone, citations, captures, accepted, rejected, missing_keys,
+  stale, in_process_transport, sidecar_missing, sidecar_hash_mismatch,
+  sidecar_body_disagrees, capture_header_missing, probe_failed_exit,
+  probe_not_client, probe_exempt, unledgered_captures,
+  require_ledgered_captures, allow_missing_sidecar, min_captures, warnings,
+  result, error, plus the OpenAPI set openapi_unreachable,
+  require_openapi_reachable, openapi_doc, openapi_route, openapi_method,
+  schema_resolved, schema_unresolvable_reason, declared_properties,
+  declared_absent, observed_undeclared. An ERROR payload adds error_code.
+  Per capture:
+  path, exists, cited_under_evidence_runtime, milestone_match, fresh, surface,
+  transport, probe_command, probe_client, probe_exempt_reason, sidecar,
+  sidecar_present, sidecar_exit_code, sidecar_capture_sha256_ok,
+  sidecar_body_agrees, sidecar_waived, ledgered (null with no --ledger),
+  status, body_parsed, body_keys, missing_keys, build_marker, openapi_url,
+  openapi_status, openapi_reachable, schema_compared, schema_skipped_reason,
+  observed_scope, declared_absent, observed_undeclared, problems,
+  problem_codes. An empty problems list means the capture was accepted.
+
+Exit codes:
+  0  at least --min-captures accepted captures, and declared_absent empty
+  1  any evidence failure
+  2  a missing --report or --milestone, --require-ledgered-captures without
+     --ledger, an unreadable report, a cited capture with no "## Captured
+     output", changed_file_missing, --min-captures 0, or an incomplete or
+     invalid --openapi-* combination
+
+Self-test:
+  python check_runtime_evidence.py --self-test   (110 cases)
+"""
+
+
 def build_parser():
-    p = argparse.ArgumentParser(
+    p = PurposeFirstParser(
         prog="check_runtime_evidence.py",
-        description="Verifies every **Runtime evidence:** citation in --report "
-                    "for --milestone: provenance sidecar, out-of-process "
-                    "transport, allowlisted client, freshness, and any "
-                    "--require-key/--expect-status/--forbid-host terms. An "
-                    "in-process observation can fail a wire claim but never "
-                    "pass one.",
-        epilog="Exit codes: 0 at least --min-captures accepted captures and "
-               "declared_absent empty; 1 any evidence failure (no citation, "
-               "stale, in-process transport, non-allowlisted client, a "
-               "mismatched sidecar, forbidden host, missing key, status/build-"
-               "marker mismatch, unreachable OpenAPI, or an unledgered capture "
-               "under --require-ledgered-captures); 2 structural/usage error "
-               "(missing --report/--milestone, --require-ledgered-captures "
-               "without --ledger, a cited capture with no ## Captured output, "
-               "changed_file_missing, --min-captures 0). Machine-readable "
-               "detail is JSON on stdout: 'captures' array (each carries "
-               "'problems'/'problem_codes'), 'error_code' on an ERROR payload.",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--report")
     p.add_argument("--milestone")
@@ -1561,7 +1640,7 @@ def build_parser():
         help="fail (problem code `unledgered_capture`) when a cited capture's "
              "sha256 is pinned by no `run_quiet.py --capture --ledger` record "
              "in --ledger. WITHOUT this flag such a capture is a WARNING and "
-             "the exit code is unchanged — captures taken before this release "
+             "the exit code is unchanged: captures taken before this release "
              "carry no record, so the default is one release of grace. "
              "Requires --ledger.")
     p.add_argument("--openapi-doc")

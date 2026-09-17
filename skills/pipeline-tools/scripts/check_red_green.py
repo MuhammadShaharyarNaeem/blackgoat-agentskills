@@ -616,23 +616,91 @@ def build_report(args):
     return report
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Verifies one RED and one or more GREEN captures are a real "
+           "before/after of the same command, not two unrelated runs.")
+
+EPILOG = """\
+Reads:
+  --red, --green  captures written by run_quiet.py --capture. Each must hold a
+    "## Captured output" section, and its header region -- everything BEFORE
+    that heading, with fences blanked -- must carry the pair
+      - Exit code: <N>
+      - Captured: <ISO-8601 timestamp>
+  <capture>.meta.json  the sidecar beside each capture: a JSON object whose
+    capture_sha256 still matches the capture FILE's bytes, and whose
+    exit_code, finished, started, pid and argv this gate reads. The body
+    witnesses the sidecar: exit_code must equal "- Exit code:" and finished
+    must equal "- Captured:" (a one-sided 0-2 second window, never earlier).
+    RED's exit_code is non-zero, every GREEN's is zero, and every GREEN's
+    finished is STRICTLY later than RED's (whole seconds, so equal stamps do
+    not order two runs). Distinctness under --green-runs > 1 keys on the
+    sidecar's (started, pid) pair, the process identity.
+  --no-flaky-pass scans each GREEN's own runner transcript -- from
+    "## Summary" onward when that heading exists, else from "## Captured
+    output" onward, never the header lines -- for a line-anchored
+    "<N> flaky", "(retry #N)" or "RERUN <nodeid>". Jest and Vitest are a
+    documented gap, not a guess. RED is never scanned.
+
+Problem codes:
+  capture_missing          a cited capture is not on disk
+  not_a_capture            no "## Captured output" section
+  sidecar_missing          no <capture>.meta.json beside the capture
+  sidecar_hash_mismatch    capture_sha256 no longer matches the capture bytes
+  sidecar_body_disagrees   sidecar exit_code or finished contradicts the body
+  capture_header_missing   the capture carries no readable header pair
+  sidecar_no_exit_code     the sidecar's exit_code is missing or not an int
+  sidecar_no_argv          the sidecar records no child argv
+  red_exit_zero            the RED capture exited 0, so nothing was proved red
+  green_exit_nonzero       a GREEN capture exited non-zero
+  command_mismatch         RED and a GREEN record different child argv
+  green_not_newer          a GREEN is not strictly later than RED
+  timestamp_unparseable    a started/finished stamp could not be read
+  green_runs_short         fewer --green captures than --green-runs
+  green_runs_not_distinct  the greens are not N distinct (started, pid) runs
+  green_flaky_pass_marker  --no-flaky-pass only: a pass-on-retry marker
+
+JSON keys:
+  red, green, green_runs, red_result, green_results, command,
+  green_distinct_runs, green_distinct_bodies, problems, problem_codes,
+  warnings, result, error. Per capture: path, role, exists, is_capture,
+  sidecar, sidecar_present, sidecar_capture_sha256_ok, sidecar_body_agrees,
+  exit_code, argv, finished, started, pid, capture_sha256, problems,
+  problem_codes. --ledger records each capture AND its sidecar as inputs.
+
+Exit codes:
+  0  every term holds
+  1  any problem code
+  2  a missing --red or --green, or --green-runs < 1
+
+Self-test:
+  python check_red_green.py --self-test   (44 cases)
+"""
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="check_red_green.py",
-        description="The bgpdd-bugfix Phase 4 gate: given one --red capture "
-                    "and one or more --green captures (all written by "
-                    "run_quiet.py --capture), verifies they are actually a "
-                    "before/after of the SAME command -- sidecars agree, "
-                    "identical argv, RED non-zero, every GREEN zero and "
-                    "strictly newer than RED.",
-        epilog="Exit codes: 0 every term holds; 1 any problem code "
-               "(capture_missing, sidecar_hash_mismatch, red_exit_zero, "
-               "green_exit_nonzero, command_mismatch, green_not_newer, "
-               "green_runs_short, green_runs_not_distinct, "
-               "green_flaky_pass_marker, and more); 2 missing --red/--green, "
-               "or --green-runs < 1. Machine-readable detail is JSON on "
-               "stdout: 'problems', 'problem_codes', per-capture "
-               "'red_result'/'green_results'.",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--red", help="the pre-fix (failing) capture")
     parser.add_argument("--green", action="append", default=[],

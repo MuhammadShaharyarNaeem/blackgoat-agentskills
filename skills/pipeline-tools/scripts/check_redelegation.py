@@ -540,21 +540,73 @@ def apply_state_halt(state_path, unit, agent, report):
     return {"action": "set-halt", "ok": ok}
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Decides whether re-delegating an agent that already returned on a "
+           "unit should halt for the user instead.")
+
+EPILOG = """\
+Reads:
+  --handoff, --previous-handoff  an agent's <handoff> block. Its <status> is
+    COMPLETE / PARTIAL / BLOCKED, and on PARTIAL or BLOCKED its <blockers>
+    carries at least one line in check_handoff.py's grammar
+      blocked_on: <category> - <reason>
+    with <category> one of environment, credentials, dependency, spec, defect
+    (em dash, en dash or hyphen). Similarity compares the two handoffs'
+    <blockers> as normalised token sets (Jaccard >= 0.8).
+  --run-log  the JSONL run log. Prior rounds are the records with
+    "event": "delegation" whose "unit" equals --unit exactly and whose "agent"
+    matches --agent case-insensitively; a "status" of PARTIAL or BLOCKED
+    counts toward the round bound. A missing file means a fresh unit.
+  --state  orchestrator-state.json. state["halt"] = {unit, agent, code,
+    reason, ts}; a standing halt naming --unit short-circuits this run with
+    that halt's own code (rule 0), and a FRESH halt is merged in via
+    update_state.py --set-halt. This gate NEVER clears a halt: that is
+    update_state.py --clear-halt <unit> --reason "<what changed>".
+
+Problem codes:
+  halt_environment       a blocked_on: environment or credentials category
+  halt_dependency        a blocked_on: dependency category, unless waived
+  halt_round_bound       3 or more prior PARTIAL/BLOCKED rounds, unconditional
+  halt_repeated_blocker  2+ priors and blocker similarity >= 0.8
+
+JSON keys:
+  result, unit, agent, handoff, previous_handoff, status, round,
+  prior_statuses, similarity, allow_redelegation, standing_halt, findings,
+  warnings, state, error
+
+Exit codes:
+  0  PASS: delegate
+  1  a halt finding, fresh or standing
+  2  usage, an unreadable handoff, or a blank --allow-redelegation reason
+
+Self-test:
+  python check_redelegation.py --self-test   (39 cases)
+"""
+
+
 def main(argv):
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="check_redelegation.py",
-        description="Run BEFORE re-delegating an agent that already returned "
-                    "on --unit (round >= 2): checks a standing halt in --state, "
-                    "then whether --handoff's blocked_on: category demands one "
-                    "(environment/credentials/dependency), then the round bound "
-                    "and, with --previous-handoff, blocker-similarity repetition.",
-        epilog="Exit codes: 0 PASS (delegate); 1 a halt finding, fresh or "
-               "standing (codes: halt_environment, halt_dependency, "
-               "halt_repeated_blocker, halt_round_bound); 2 usage, an "
-               "unreadable handoff, or a blank --allow-redelegation reason. "
-               "Machine-readable detail is JSON on stdout: 'findings', "
-               "'standing_halt'; --state additionally gets state['halt'] "
-               "merged in via update_state.py --set-halt on a fresh finding.",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--run-log", dest="run_log")
     parser.add_argument("--unit")

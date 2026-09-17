@@ -816,21 +816,84 @@ def build_report(base_path, head_path, allow_breaking=None):
     }
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Diffs two OpenAPI documents and exits non-zero when the head one "
+           "breaks the published contract.")
+
+EPILOG = """\
+Reads:
+  --base, --head  OpenAPI DOCUMENTS (that one is actually served is
+    check_runtime_evidence.py --require-openapi-reachable, not this gate).
+    JSON always. YAML only as the JSON-compatible block subset a minimal
+    stdlib loader can read: nested mappings, "- " sequences including the
+    compact "- key: value" item, plain and quoted scalars, [] and {},
+    comments, one leading "---". Anchors, aliases, tags, merge keys, block
+    scalars, other flow collections and multi-document streams are exit 2
+    with the construct named -- no YAML library is vendored.
+    $ref is resolved ONE level over a local "#/..." pointer; a resolved
+    schema's own $refs are left alone, and a pointer that does not resolve is
+    a warnings entry. allOf members are merged; properties and items are
+    descended; oneOf, anyOf and not are refused (unanalyzable_schema).
+
+Problem codes:
+  Breaking (exit 1):
+    path_removed                  a path item disappeared
+    operation_removed             an operation disappeared from a path
+    response_status_removed       a documented response status disappeared
+    response_field_removed        a response property disappeared
+    type_changed                  a schema type or format was narrowed
+    required_request_field_added  a new or newly required request input
+    enum_narrowed                 a value lost, or an enum newly imposed
+    nullable_removed              nullable true -> false on a response schema
+  Additive (recorded, never gating):
+    path_added, operation_added, response_status_added, response_field_added,
+    optional_request_field_added, parameter_added, enum_widened,
+    nullable_widened
+  Structural (exit 2, no waiver clears it):
+    unanalyzable_schema           a oneOf / anyOf / not node was not compared
+
+JSON keys:
+  base, head, result (PASS | ALLOWED | FAIL | ERROR), breaking, additive (both
+  arrays of {kind, path, detail}), unanalyzable (array of
+  {where, path, keyword}), warnings, allowed_by, error.
+  breaking stays fully populated under a waiver; result "ALLOWED" is what says
+  it was waived. Ledger extras: allow_breaking_reason, breaking_kinds.
+
+Exit codes:
+  0  every difference is additive, or a breaking diff carried --allow-breaking
+  1  a breaking diff
+  2  a missing --base/--head, a missing, unreadable or non-mapping document,
+     YAML outside the supported subset, an empty --allow-breaking reason, or
+     any unanalyzable node
+
+Self-test:
+  python check_openapi_diff.py --self-test   (53 cases)
+"""
+
+
 def main(argv):
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="check_openapi_diff.py",
-        description="Diffs --base against --head (OpenAPI JSON, or a "
-                    "JSON-compatible YAML subset) and exits non-zero when --head "
-                    "breaks the published contract (additive-only within a "
-                    "major version).",
-        epilog="Exit codes: 0 every difference is additive, or a breaking diff "
-               "carried a non-empty --allow-breaking; 1 a breaking diff; "
-               "2 a missing --base/--head, an unreadable/invalid document, "
-               "unsupported YAML construct, an empty --allow-breaking, or any "
-               "unanalyzable node (oneOf/anyOf/not -- never waivable). "
-               "Machine-readable detail is JSON on stdout: 'result' (PASS/"
-               "ALLOWED/FAIL/ERROR), 'breaking'/'additive' arrays of "
-               "{kind, path, detail}, 'unanalyzable'.",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--base", help="the contract document as published")
     parser.add_argument("--head", help="the contract document as proposed")

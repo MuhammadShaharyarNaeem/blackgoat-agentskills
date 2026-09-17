@@ -901,24 +901,99 @@ def build_report(text, persona, repo, since=None, fix_round=False,
     return report
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Parses the <handoff> block an agent returned and asserts it "
+           "against that persona's contract.")
+
+EPILOG = """\
+Reads:
+  --handoff  the agent's returned text (stdin when the flag is omitted). One
+    well-formed <handoff>...</handoff> block OUTSIDE fenced code: fences are
+    blanked first, so an illustration never satisfies the gate.
+    Required elements per persona (base-persona.md plus the persona's own
+    "Base Persona Override"): mason, max -> <changed_files>; dep, quinn, nova
+    -> <changed_files> + <artifact>; forge -> <changed_skills>; all others ->
+    <artifact>. <status> and <blockers> are always required;
+    <fix_verification> is required under --fix-round, and <consumers>
+    (mason, nova) under --require consumers. agents/blackgoat.md is not a
+    persona here: a usage error.
+      <status>    COMPLETE | PARTIAL | BLOCKED -- the DELIVERY state, not a
+                  verification verdict, which belongs in the body.
+      <blockers>  on PARTIAL or BLOCKED, at least one line
+                    blocked_on: <category> - <reason>
+                  with <category> one of environment, credentials,
+                  dependency, spec, defect. COMPLETE is exempt; an entirely
+                  absent <blockers> is element_missing instead, never both.
+      <consumers> lines in path::symbol grammar.
+    Honesty rules: an upper-case PASS/GREEN token beside a NOT VERIFIED or
+    BLOCKED marker in the SAME element, and BLOCKED beside
+    <blockers>None</blockers>.
+  Cited files  every <changed_files>/<artifact>/<changed_skills> path must
+    exist under a --repo and not escape it. <artifact> and <changed_skills>
+    (never <changed_files>) also resolve under a --docs-root, its parent, and
+    the cwd. With --since, <changed_files> must be a subset of
+    git diff --name-only <ref> plus untracked.
+  Scaffolding sweep  on COMPLETE, every existing TEXT file in
+    <artifact>/<changed_skills> is read for base-persona's placeholder marker
+    (an underscore joined to TODO), a TODO-colon-pending phrase, an HTML
+    comment opening TODO or skeleton, and any line EXPLAINING the markers. A
+    marker in an inline code span is not a hit; one inside a fence IS.
+    PARTIAL/BLOCKED are exempt; <changed_files> is not swept.
+
+Problem codes:
+  handoff_missing            no well-formed unfenced <handoff> block
+  element_missing            a required element is absent or empty
+  path_missing               a cited path does not exist, or escapes the repo
+  changed_files_not_in_diff  --since only: a file the agent never touched
+  status_invalid             <status> is not COMPLETE / PARTIAL / BLOCKED
+  consumers_grammar          a <consumers> line is not path::symbol
+  honesty_contradiction      a PASS/GREEN token beside NOT VERIFIED/BLOCKED
+  artifact_scaffolding_left  a COMPLETE artifact still carries a marker
+  blockers_uncategorised     PARTIAL/BLOCKED with no blocked_on: line
+
+JSON keys:
+  result, persona, since, fix_round, advisory, advisory_waived_elements,
+  required_elements, present_elements, status, changed_files, artifacts,
+  changed_skills, scaffolding_scanned, allow_scaffolding, scaffolding_waived,
+  findings ({code, detail, ...}; a scaffolding finding adds path, line,
+  marker, text), warnings, error. Ledger extras: advisory: true;
+  allow_scaffolding_reason plus the waived {path, line, marker} entries.
+
+Exit codes:
+  0  PASS
+  1  at least one finding
+  2  usage, an unreadable handoff, an unknown persona, a --repo/--docs-root
+     that is not a directory, a --since ref git cannot resolve in the repo a
+     changed file resolved to, or a blank --allow-scaffolding reason
+
+Self-test:
+  python check_handoff.py --self-test   (67 cases)
+"""
+
+
 def main(argv):
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="check_handoff.py",
-        description="Parses an agent's <handoff> block (--handoff or stdin) "
-                    "and asserts it against --persona's contract: required "
-                    "elements present, every <changed_files>/<artifact>/"
-                    "<changed_skills> path exists (and, with --since, is "
-                    "actually in the diff), <status> valid, and the two "
-                    "honesty rules (a PASS beside NOT VERIFIED; BLOCKED with "
-                    "no reason).",
-        epilog="Exit codes: 0 PASS; 1 at least one finding (codes: "
-               "handoff_missing, element_missing, path_missing, "
-               "changed_files_not_in_diff, status_invalid, consumers_grammar, "
-               "honesty_contradiction, artifact_scaffolding_left, "
-               "blockers_uncategorised); 2 usage, an unreadable handoff, an "
-               "unknown persona, a bad --repo/--docs-root, an unresolvable "
-               "--since ref, or a blank --allow-scaffolding reason. "
-               "Machine-readable detail is JSON on stdout: 'findings' array.",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--handoff", help="file holding the agent's handoff "
                                           "(default: read stdin)")
@@ -940,7 +1015,7 @@ def main(argv):
     parser.add_argument("--since", help="git ref: <changed_files> must be a "
                                         "subset of what git reports changed "
                                         "since it. Optional here, REQUIRED by "
-                                        "every pipeline handoff step — it is "
+                                        "every pipeline handoff step: it is "
                                         "the only term git can contradict")
     parser.add_argument("--advisory", action="store_true",
                         help="the brief asked for a recommendation, not a "

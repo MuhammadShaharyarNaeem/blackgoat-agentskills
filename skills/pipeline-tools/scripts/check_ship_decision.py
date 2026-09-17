@@ -991,21 +991,99 @@ def build_report(path, require_go, require_rehearsal=False,
     }
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Makes a ship-decision.md GO/NO-GO machine-verifiable, optionally "
+           "with a performed rollback rehearsal and an evidenced baseline.")
+
+EPILOG = """\
+Reads:
+  --report  ship-decision.md, with fenced blocks stripped ONCE before any
+    scan, so an example never supplies a verdict.
+    Verdict    a line beginning (leading #, >, - or * tolerated) with Ship
+               Decision, Verdict or Recommendation and carrying GO or NO-GO.
+               Last verdict-bearing SECTION wins; GO and NO-GO in that one
+               section is the ambiguity this gate exists to reject.
+    Rollback   any heading whose text carries "rollback".
+    Checklist  any heading whose text carries "checklist", or three or more
+               "- [ ]" / "- [x]" checkbox items.
+    Rehearsal  ONE line, the last match file-wide:
+                 Time to Rollback: <N><unit> - rehearsed <YYYY-MM-DD> on
+                 <env> - evidence: <path>
+               Both separators accept an em dash, en dash or hyphen; <unit> is
+               s|sec|secs|second|seconds|m|min|mins|minute|minutes, normalized
+               to time_s; <path> is one whitespace-free token.
+    Baseline   a "## Baseline" or "### Baseline" section holding at least
+               three "- <metric>: <value>" lines, each citing a path.
+  Cited captures  a rehearsal path must resolve under evidence/rollback/ and a
+    baseline reading under evidence/baseline/, relative to --repo. Each must
+    be non-empty, hold "## Captured output", and carry a run_quiet.py
+    <capture>.meta.json sidecar whose capture_sha256 still matches the
+    capture's bytes, whose exit_code is 0, and which agrees with the capture's
+    own "- Exit code:" / "- Captured:" header lines. --max-rehearsal-age-days
+    (default 30) bounds the rehearsal date.
+  --ledger  appended to, and read by --require-ledger-gates (chain verified
+    first) and --require-ledgered-captures (the artifact's CURRENT sha256 must
+    appear as the capture_sha256 of a run_quiet.py record).
+
+Problem codes:
+  rehearsal_missing       no grammar-conforming Time to Rollback: line
+  rehearsal_unevidenced   its cited capture is absent, unsidecared or mismatched
+  rehearsal_stale         the rehearsal is older than --max-rehearsal-age-days
+  rehearsal_failed_exit   the rehearsal capture's exit_code is non-zero
+  sidecar_body_disagrees  a sidecar contradicts its capture's header lines
+  capture_header_missing  a capture carries no readable header pair
+  baseline_missing        no Baseline section, or fewer than three metrics
+  baseline_unevidenced    a metric cites no path, or an unsidecared one
+  unledgered_capture      --require-ledgered-captures only: no ledger record
+  ledger_chain_broken     the ledger's own prev/self chain is broken
+  ledger_missing          a named gate has no ledger entry at all
+  ledger_failed           a named gate's latest entry is not PASS
+  ledger_stale            a named gate's recorded inputs no longer hash
+
+JSON keys:
+  report_file, milestone, ledger, require_ledger_gates, ledger_gate_problems,
+  ledger_gates_ok, pass, verdict, require_go, has_rollback, has_checklist,
+  checkbox_count, require_rehearsal, rehearsal ({present, time_s,
+  rehearsed_on, env, evidence, sidecar_ok, body_agrees, ledgered, age_days}),
+  require_baseline, baseline ({present, metrics[{name, value, evidence,
+  resolved, sidecar_ok, ledgered}], evidenced_count}),
+  max_rehearsal_age_days, require_ledgered_captures, problems
+  ({code: [detail]}), failures, warnings, error
+
+Exit codes:
+  0  structurally valid, and GO / rehearsed / baselined under those flags
+  1  a gate failed
+  2  --require-ledger-gates or --require-ledgered-captures without --ledger, a
+     missing or unreadable report, or structural non-conformance
+
+Self-test:
+  python check_ship_decision.py --self-test   (71 cases)
+"""
+
+
 def main(argv):
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="check_ship_decision.py",
-        description="Makes Dep's --report (ship-decision.md) GO/NO-GO "
-                    "machine-verifiable: an unambiguous GO/NO-GO, a Rollback "
-                    "heading, a post-deploy checklist. --require-rehearsal and "
-                    "--require-baseline additionally prove the rollback was "
-                    "PERFORMED and the threshold table has real evidenced "
-                    "numbers.",
-        epilog="Exit codes: 0 structurally valid (and GO / rehearsed / "
-               "baselined under the flags); 1 a gate failed; 2 usage error "
-               "(--require-ledger-gates or --require-ledgered-captures without "
-               "--ledger), missing/unreadable report, or structural "
-               "non-conformance. Machine-readable detail is JSON on stdout: "
-               "'problems' ({code: [detail]}), 'rehearsal', 'baseline'.",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--report")
     parser.add_argument(
@@ -1045,7 +1123,7 @@ def main(argv):
         help="fail (problem code `unledgered_capture`) when a cited rehearsal "
              "capture or baseline reading is pinned by no `run_quiet.py "
              "--capture --ledger` record in --ledger. WITHOUT this flag such "
-             "an artifact is a WARNING and the exit code is unchanged — "
+             "an artifact is a WARNING and the exit code is unchanged: "
              "captures taken before this release carry no record, so the "
              "default is one release of grace. Requires --ledger.")
     parser.add_argument(

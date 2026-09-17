@@ -530,26 +530,83 @@ def render_markdown(result):
 # ---------------------------------------------------------------------------
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Walks a repo tree and reports evidence-backed technology stacks, "
+           "their check commands, test globs and methodology skills.")
+
+EPILOG = """\
+Reads:
+  --repo  a repository tree, walked to --max-depth (default 6). These
+    directories are never walked and never roots: node_modules, bin, obj,
+    .git, dist, .venv, __pycache__.
+    Detected stacks: dotnet, vue3 (vue2 is excluded even when other weak
+    evidence is present), react, angular, node, python, godot, powershell,
+    docker, aws, azure, github-actions, playwright, and the db stacks
+    postgres / sqlserver / mysql / sqlite. A stack is reported only with at
+    least one relative evidence path (capped at 5) -- it never guesses.
+    Nothing here is ever executed: the commands are PROPOSALS.
+
+JSON keys:
+  result, repo, stacks (each {name, confidence: "high"|"medium", evidence,
+  suggested_check_commands, test_path_globs, quiet_wrapper}), skills
+  (dotnet->dotnet-backend-patterns, vue3->vue3-spa-patterns,
+  godot->godot-gdscript-patterns, powershell->powershell-script-patterns,
+  aws|azure->cloud-deploy-patterns, playwright->playwright-skill,
+  any db->database-migration-patterns), suggested_check_commands,
+  test_path_globs, warnings, error.
+  The two top-level lists are the per-stack lists deduped in name-sorted stack
+  order, which is what makes "the first suggested command" deterministic.
+  quiet_wrapper is the exact `run_quiet.py --log <log> -- <command>` form for
+  a stack's FIRST suggested command; stacks with no knowable runner (docker,
+  aws, azure, github-actions, the db stacks) carry empty lists and an empty
+  quiet_wrapper.
+  --markdown prints a "## Stacks (detected)" block for
+  .docs/summary/context.md instead, with a trailing "### Defaults" block
+  carrying the rollup and a ready-to-paste --frozen flag string.
+
+Exit codes:
+  0  a readable repo (an empty repo returns stacks: [] plus a warning)
+  2  a missing, unreadable or non-directory --repo
+
+Self-test:
+  python detect_stack.py --self-test   (34 cases)
+"""
+
+
 def main(argv):
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="detect_stack.py",
-        description="Walks --repo and reports evidence-backed technology stacks "
-                    "(dotnet, vue3, react, angular, node, python, godot, "
-                    "powershell, docker, aws, azure, github-actions, playwright, "
-                    "db stacks), each with at least one relative evidence path -- "
-                    "never guessed.",
-        epilog="Flags: --repo is required outside --self-test. --json/--markdown "
-               "are mutually exclusive (default JSON). --max-depth defaults to 6. "
-               "Exit codes: 0 on a readable repo (an empty repo returns "
-               "stacks: [] plus a warning); 2 a missing or unreadable --repo. "
-               "Machine-readable detail is JSON on stdout: 'stacks', 'skills', "
-               "'suggested_check_commands', 'warnings', 'error'.",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--repo")
+    parser.add_argument("--repo",
+                        help="repository root to walk; required outside "
+                             "--self-test")
     output = parser.add_mutually_exclusive_group()
-    output.add_argument("--json", action="store_true")
-    output.add_argument("--markdown", action="store_true")
-    parser.add_argument("--max-depth", type=int, default=6)
+    output.add_argument("--json", action="store_true",
+                        help="JSON report on stdout (the default)")
+    output.add_argument("--markdown", action="store_true",
+                        help="a '## Stacks (detected)' block instead of JSON")
+    parser.add_argument("--max-depth", type=int, default=6,
+                        help="how deep to walk the tree (default 6)")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
 

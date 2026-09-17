@@ -523,21 +523,81 @@ def build_report(summary_root, repos, feature=None, today=None,
     }
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Enforces the Tier-1 provenance stamp: a date and a resolvable "
+           "commit sha per in-scope repo on every root artifact.")
+
+EPILOG = """\
+Reads:
+  --summary-root  the Tier-1 knowledge base. context.md is always checked;
+    {feature}/overview.md is checked for --feature, or for every feature
+    directory under the root when --feature is omitted.
+  Stamp grammar  the HEADER is everything above the artifact's first "## "
+    heading. It must hold
+      a date  YYYY-MM-DD (20xx only). Only the LATEST date in the header is
+              judged, against today plus one day of slack.
+      a sha   a line carrying a 40-hex commit sha per in-scope repo. With two
+              or more repos in scope that line must also carry the repo's
+              name; with exactly one, a bare sha line suffices.
+    Each sha must resolve in that repo (git cat-file): a sha that resolves to
+    nothing is a fabricated stamp, not an old one.
+  --repo  [<name>=]<path>. A name=path form keys the sha by that name; a bare
+    path keys it on the directory name.
+  --previous  the prior copy of the artifact: a FILE compares against
+    context.md, a DIRECTORY mirrors --summary-root (a missing counterpart is a
+    warning). A repo counts as still stamped when its KEY or its SHA reappears.
+
+Problem codes:
+  artifact_missing    a required Tier-1 artifact is not on disk
+  stamp_missing       the header carries no provenance stamp at all
+  date_missing        the header carries no YYYY-MM-DD date
+  stamp_date_future   the latest stamped date has not happened yet
+  sha_missing         no 40-hex sha for an in-scope repo
+  sha_unknown         a stamped sha resolves in no in-scope repo
+  tier1_drift         --verify-current only: a stamped sha is not HEAD
+  tier1_repo_dropped  --previous only: a previously stamped repo vanished
+
+JSON keys:
+  result, summary_root, feature, features_checked, artifacts_checked,
+  previous, repos, verify_current, allow_drift, drift_waived, findings, drift,
+  warnings, error. A tier1_repo_dropped finding also carries artifact,
+  previous, repo and stamped.
+
+Exit codes:
+  0  PASS, drift included unless --verify-current
+  1  at least one finding
+  2  a bad --summary-root, no or malformed --repo, git unusable, a --previous
+     path that does not exist, or an --allow-drift that is empty or was
+     given without --verify-current
+
+Self-test:
+  python check_tier1_provenance.py --self-test   (39 cases)
+"""
+
+
 def main(argv):
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="check_tier1_provenance.py",
-        description="Enforces the Tier-1 provenance stamp: every root artifact "
-                    "(context.md, {feature}/overview.md) under --summary-root "
-                    "must carry a date and a 40-hex commit sha per --repo, each "
-                    "resolvable. Drift is a warning unless --verify-current.",
-        epilog="Exit codes: 0 PASS (drift included, unless --verify-current); "
-               "1 at least one finding (codes: artifact_missing, stamp_missing, "
-               "date_missing, stamp_date_future, sha_missing, sha_unknown, "
-               "tier1_drift under --verify-current, tier1_repo_dropped under "
-               "--previous); 2 a bad --summary-root, no or malformed --repo, git "
-               "unusable, a --previous path that does not exist, or an "
-               "--allow-drift that is empty or lacks --verify-current. "
-               "Machine-readable detail is JSON on stdout: 'findings', 'drift'.",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--summary-root", default=".docs/summary",
                         help="Tier-1 knowledge base root (default .docs/summary)")
@@ -547,11 +607,11 @@ def main(argv):
                              "once per repo on a multi-repo Target Scope")
     parser.add_argument("--warn-on-drift", action="store_true",
                         help="also print drift warnings to stderr; drift NEVER "
-                             "changes the exit code (bgpdd-discovery §1)")
+                             "changes the exit code (bgpdd-discovery section 1)")
     parser.add_argument("--verify-current", action="store_true",
                         help="CONSUMER mode: a stamped sha that is not the "
                              "repo's current HEAD is tier1_drift, exit 1. "
-                             "Opt-in — the default run keeps drift a warning.")
+                             "Opt-in: the default run keeps drift a warning.")
     parser.add_argument("--allow-drift", dest="allow_drift",
                         help="--verify-current only: accept the drift with a "
                              "written reason, recorded in the ledger. An "
