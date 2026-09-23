@@ -1242,8 +1242,102 @@ def render_human(report, code):
     return "\n".join(lines)
 
 
+PURPOSE = ("Emits the one next mandatory action for a bugfix, quick or batch "
+           "lane, with its exact flags.")
+
+EPILOG = """Reads:
+  --root -- the lane's artifacts. bugfix: bug-report.md, rca.md,
+    evidence/red/* captures and their .meta.json sidecars, run-log.jsonl
+    (an "event": "delegation" record for mason or nova), review-package.md,
+    review-report.md (a "## Review:" section whose title holds the slug as a
+    whole token, with a "**Verdict:**" line). quick: note.md (three real
+    "- What:" / "- Where:" / "- How verified:" lines) and
+    evidence/check.md plus its sidecar. batch: batch.md and
+    orchestrator-state.json's "artifacts.bugs" plus each
+    "bug:<slug>:status" / "bug:<slug>:root".
+  --ledger -- default <root>/gates.jsonl, READ ONLY. Gate verdicts are read,
+    never re-derived; a PASS whose recorded input hashes no longer match
+    disk is reported as FAIL, with blocked_by naming the edited file.
+    Staleness is deliberately NOT applied to the closing gate.
+  orchestrator-state.json -- located by route, detected from FOLDER SHAPE,
+    not file presence: a root at .../implementation/bugs/{bug-slug}/ is the
+    feature route and the state is the epic's, three levels up; a root whose
+    basename is "implementation" is the pre-2.6.1 feature shape with the
+    state one level up; anything else is standalone, state inside the root.
+  detect_stack.py -- shelled out to (never imported) for the repo the lane
+    root sits in, to propose Phase 0's check command and Phase 3's
+    --frozen globs. Best-effort and cached per repo; a failure drops the
+    clause rather than blocking the lane.
+
+Problem codes:
+  Reported in the JSON key blocked_by.
+  gate_not_run <gate>      that gate has no record in the ledger
+  gate_not_passed <gate>   its latest record is not PASS
+  capture_missing          the expected capture file is absent
+  not_a_capture            the file is not a run_quiet.py capture
+  sidecar_missing          no <capture>.meta.json beside it
+  sidecar_hash_mismatch    capture_sha256 does not match the file
+  sidecar_no_exit_code     the sidecar records no exit_code
+  capture_header_missing   the capture carries no readable header pair
+  sidecar_body_disagrees   sidecar and body exit code or stamp differ
+  red_exit_zero            the RED capture recorded a passing run
+  capture_exit_nonzero     the GREEN capture recorded a failing run
+
+JSON keys:
+  Printed under --json; without it a compact human block is printed.
+  root, lane, route, state_file, milestone, milestone_source, ledger, phase,
+  phase_name, next_action, required_gate, required_gates, gate_status,
+  blocked_by, artifacts_present, artifacts_missing, warnings, error, exit.
+  required_gate is set ONLY when running that gate IS the next action; when
+  the next action is to author an artifact or delegate an agent it is null.
+  gate_status is PASS|FAIL|MISSING|null.
+  NOT derived: whether a gate WOULD pass (verdicts are read, gates are never
+  re-run), --changed-files (no artifact records them, so the emitted
+  commands carry "<the builder's paths>" verbatim; every other flag is
+  exact), the commit message, and FAST-vs-FULL (next_bugfix_route.py records
+  no route).
+
+Exit codes:
+  0  a next action was emitted
+  1  BLOCKED -- the invariant is exit 1 iff blocked_by is non-empty (a
+     required gate that has never run counts); the exact command is still
+     printed
+  2  --root unreadable, no lane detected, or a feature root with no epic
+     state
+  3  lane complete (bugfix and quick: the closing gate PASSed with --commit
+     in its recorded argv; batch: check_batch_close.py PASSed), with the
+     close steps in next_action
+
+Self-test:
+  python pipeline_driver.py --self-test   (73 cases)
+"""
+
+
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(prog="pipeline_driver.py")
+    parser = PurposeFirstParser(
+        prog="pipeline_driver.py",
+        description=PURPOSE,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG,
+    )
     parser.add_argument("--root", help="the lane root directory")
     parser.add_argument("--lane", choices=("bugfix", "quick", "batch", "auto"),
                         default="auto",

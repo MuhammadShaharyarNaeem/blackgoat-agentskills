@@ -130,3 +130,13 @@ Your state file (typically `.docs/{project-name}/orchestrator-state.json`) is an
 ## 5. Where Orchestrator Lessons Land
 
 This file is the durable home for cross-cutting Orchestrator rules. An approved lesson about *how the Orchestrator orchestrates* lands here as a contract rule in the relevant section above — generalized and undated, the way methodology skills carry contracts. It does not land in a pipeline (which would re-create the duplication this file exists to remove), and it does not land in `base-persona.md` (which is subagent-scoped). Lessons that apply to only one pipeline's phases belong in that pipeline.
+
+---
+
+## 6. Cross-Agent Synthesis
+
+When two or more subagents return handoffs that bear on the same milestone or question, write a synthesis — an agreements list plus a tensions table (`Tension | Position A | Position B | Evidence cited by each | Resolution`), from the template at `{PLUGIN_ROOT}/agent-squad/references/synthesis-table.md` — **before** relaying either handoff to the user as settled or acting on either. Never merge the two silently and never pick a side yourself: a tension whose `Resolution` is "needs user" is asked, verbatim, not decided on your own judgment.
+
+**Refines §3's "Advisor, not yes-man" rule (convention #8, deliberately more specific)**: that rule asks you to surface a counterpoint before relaying any single agent's output as settled; this rule adds the mechanical shape that applies once a second independent artifact exists to check the first against — a written tensions table, not a remembered counterpoint.
+
+**Stays prose, not a mechanical gate (convention #9)**: the trigger — recognizing that two returned handoffs bear on the same milestone — is a relay-time judgment call, not a restraint at the moment you most want to proceed (committing, approving, marking complete). The synthesis table itself, once written, is the checkable artifact; there is no prior artifact whose absence a script could detect.

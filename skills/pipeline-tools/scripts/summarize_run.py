@@ -297,8 +297,71 @@ def render_markdown(summary):
     return "\n".join(out)
 
 
+PURPOSE = ("Summarizes a run log and gate ledger into cost, rounds and "
+           "fired-versus-rubber-stamped gate counts, optionally as a "
+           "game-tape block.")
+
+EPILOG = """Reads:
+  --run-log -- record_run.py's run-log.jsonl, one JSON object per line, with
+    the fields that script writes ("pipeline", "unit", "agent", "event",
+    "duration_s", "tokens_*", "rounds", ...). A line that will not parse is
+    counted in "malformed_lines" and is not fatal.
+  --ledger -- the gate ledger, for the "gates" section: each record's
+    "gate", "verdict" (PASS|FAIL|ERROR) and "milestone". Omitted or
+    unreadable gives "gates": null plus a warning, with the exit code
+    unchanged. This script READS the ledger and never writes it.
+  --unit -- scopes both run-log records and ledger entries to one milestone
+    title or bug slug. Null-milestone ledger entries fall out of a unit view
+    by design.
+
+JSON keys:
+  Printed on stdout; --markdown prints a paste-ready game-tape
+  block instead.
+  run_log, ledger, unit_filter, records, malformed_lines, pipelines, units,
+  agents, gates, warnings, error. Each pipelines/units/agents bucket carries
+  records, delegations, duration_s_total, duration_known_count,
+  duration_unknown_count, tokens_total, tokens_unknown_count, rounds_max,
+  rounds_recorded -- plus duration_mean_s for agents.
+  gates = {per_gate: {<name>: {runs, pass, fail, error, units}}, fired,
+  rubber_stamped, inconclusive}, where fired = recorded a FAIL at least
+  once, rubber_stamped = every verdict PASS, inconclusive = an ERROR but no
+  FAIL. rubber_stamped is a DESCRIPTION, not a verdict -- input to the
+  Incident Test, not its answer.
+
+Exit codes:
+  0  any summary was produced, an empty log and an absent ledger included
+  2  missing --run-log, or a --run-log that cannot be opened
+
+Self-test:
+  python summarize_run.py --self-test   (14 cases)
+"""
+
+
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
 def main(argv):
-    parser = argparse.ArgumentParser(prog="summarize_run.py")
+    parser = PurposeFirstParser(
+        prog="summarize_run.py",
+        description=PURPOSE,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG,
+    )
     parser.add_argument("--run-log", dest="run_log")
     parser.add_argument("--ledger")
     parser.add_argument("--unit", help="scope to one milestone title / bug slug")

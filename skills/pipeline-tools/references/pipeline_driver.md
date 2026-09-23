@@ -238,3 +238,25 @@ commit gate `--commit` `PASS` → **exit 3** with the close steps.
 The skip was taken one step further on a copy of the root: a builder delegation
 was recorded while the route gate had still never run, and the driver stayed at
 Phase 2 at exit 1 rather than reading past it to Phase 4.
+
+## From the retired spine
+
+### `--lane batch` is choreography, not a third phase table
+
+The batch lane's driver derives the *wave's* position, never a bug's. It reads
+the batch state's bugs list and each bug's recorded status and root, and emits
+one of four things: author the batch list; run the next open bug's own lane;
+run the close gate; or report the wave complete.
+
+When the next action is a per-bug lane, what it emits is **the exact
+`--lane bugfix` invocation for that bug's own root**. It never re-derives that
+bug's phase itself. There is already one authority on where a bugfix lane
+stands, and a second derivation here would be a second phase table to keep in
+step with the first — the same reason this script shells out to `detect_stack.py`
+rather than carrying a copy of its stack table.
+
+The per-bug status it reads is written only through `update_state.py
+--set-artifact`, so the wave's position comes off recorded state rather than off
+the shape of the directory tree, and one bug is named at a time: a batch that
+emitted every open bug at once would be a list, not a next action.
+

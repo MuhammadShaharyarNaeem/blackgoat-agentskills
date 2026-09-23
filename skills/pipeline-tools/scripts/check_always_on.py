@@ -432,8 +432,79 @@ def build_report(index_path, plugin_root, max_words=DEFAULT_MAX_WORDS,
     return report
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Lints the session-start always-on index for missing lane rows, "
+           "over-long cells, dangling paths and broken rule owners.")
+
+EPILOG = """\
+Reads:
+  --index <path>        the index (default <plugin-root>/skills/agent-squad/
+                        always-on.md)
+  --plugin-root <dir>   the tree the index makes claims about; both default
+                        from this script's own location, so a bare
+                        `python check_always_on.py` is the CI invocation.
+
+  Checked:
+  - every skills/bg or skills/bgpdd-* folder carrying a SKILL.md has a
+    table row, and every row names a lane that exists, exactly once;
+  - every table cell is <= --max-words words (default 20);
+  - every cited path resolves: a token containing '/', or a bare *.py
+    resolved under skills/pipeline-tools/scripts/. Lane commands and
+    {placeholder} paths are not path claims;
+  - "## Outside any lane" carries four numbered rules, each naming an
+    `Owner:` file that exists.
+
+Problem codes:
+  lane_missing_row      a lane on disk has no row in the table
+  lane_row_orphan       a row names a lane that is not on disk
+  cell_too_long         a table cell exceeds --max-words words
+  path_missing          a cited path does not resolve
+  rule_count            "Outside any lane" does not carry four rules
+  rule_owner_missing    a rule's Owner: file does not exist
+  section_missing       a required section is absent from the index
+  row_text_disagrees    a row is not a trim of that lane's description:
+                        frontmatter -- a WARNING unless
+                        --require-row-agreement promotes it to a finding
+
+JSON keys:
+  Always printed on stdout (there is no --json flag):
+  result, index, plugin_root, max_words, require_row_agreement,
+  lanes_on_disk, lanes_in_table, rule_count, findings, warnings, error
+
+Exit codes:
+  0  PASS.
+  1  at least one finding.
+  2  the index or --plugin-root is unreadable, or the root has no skills/.
+
+Self-test:
+  python check_always_on.py --self-test   (23 cases)
+"""
+
+
 def main(argv):
-    parser = argparse.ArgumentParser(prog="check_always_on.py")
+    parser = PurposeFirstParser(
+        prog="check_always_on.py",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--plugin-root", default=str(DEFAULT_PLUGIN_ROOT),
                         help="plugin root (default: derived from this script's path)")
     parser.add_argument("--index",

@@ -50,7 +50,7 @@ the only path for an IDE-driven run.
    `.gitignore` already lists `eval-runs/` and `evals/antigravity/runs/`, so an in-place run
    from the plugin checkout itself needs nothing).
 2. **Run it by hand.** Open `<dir>` in Antigravity, with the plugin installed and
-   `AGENTS.md`'s runtime contract in force, and paste `cases/<case>/prompt.md` verbatim as
+   the user's global Antigravity rules carrying the runtime contract, and paste `cases/<case>/prompt.md` verbatim as
    your first message. Let it finish -- there is no way for this harness to drive
    Antigravity itself; a human has to be the one pasting the prompt and watching it
    converge, same as the reason `evals/README.md`'s own suite is `-Confirm`-gated rather

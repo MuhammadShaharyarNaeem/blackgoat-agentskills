@@ -1,6 +1,6 @@
 ---
 name: runtime-evidence
-description: Squad-internal execution contract for proving a claim against the actually-running application rather than an in-process test host — the tier ladder, the verification-surface registry, the out-of-process probe, and the capture artifact that gates on it. Loaded by agents via their Methodology Dependencies table whenever a requirement asserts behavior a client, device, or human can observe. Owns the `**Runtime evidence:**` citation grammar; user-facing triggers belong to the /bgpdd-build, /bgpdd-verify, and /bgpdd-shipping pipelines.
+description: Squad-internal execution contract for proving a claim against the actually-running application rather than an in-process test host — the tier ladder, the verification-surface registry, the out-of-process probe, and the capture artifact that gates on it. Loaded by agents via their Methodology Dependencies table whenever a requirement asserts behavior a client, device, or human can observe. Owns the `**Runtime evidence:**` citation grammar; user-facing triggers belong to the /bgpdd-build, /bgpdd-verify, /bgpdd-secure, and /bgpdd-shipping pipelines.
 ---
 
 # Runtime Evidence
@@ -83,6 +83,8 @@ Required when the surface is `api` or `web+api`: `OpenAPI` — the contract-docu
 Required wherever the running artifact can echo any identity, and **the identity must be commit-bearing**: `Build marker` — the commit the running service reports (`ProductVersion`/informational version, a `git log -1` hash for a from-source run, a build-info endpoint). An assembly or file version is **not** a build marker: two builds of the same version are routinely identical in length and report an identical `FileVersion`, so a version-only marker cannot discriminate the build you meant from the one before it. **And the build must postdate the commit containing the change** — the marker tracks HEAD, so building before committing stamps the *previous* commit onto a binary carrying the new behavior: fresh, well-formed, and lying, which is worse than a missing marker. Without a commit-bearing marker, a service started before your change and never restarted produces a capture that is fresh, non-empty and wrong.
 
 Captures are **gating** and belong to whoever verifies. A builder's own self-check capture goes to `evidence/build/` instead and does not satisfy a gate — the same producer split `evidence/review/` already uses for rendered evidence.
+
+A rendered capture (screenshot) is evidence only when `{PLUGIN_ROOT}/pipeline-tools/scripts/record_capture.py` has recorded its provenance sidecar — invoked before the path is cited, never bypassed. A `file://` origin is a mockup, not evidence. When the running application cannot be reached, the state is **BLOCKED** (see *When You Cannot Probe* below) — never a substitute render of a document that was never running.
 
 ### Citation
 

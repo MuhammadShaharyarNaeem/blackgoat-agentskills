@@ -71,10 +71,72 @@ THIS GATE READS FILES ONLY. It runs nothing and opens no socket.
 Pure standard library. Every file is read as utf-8-sig, so a BOM cannot
 break parsing.
 
+`--no-flaky-pass`: RETRIES ARE INSTRUMENTATION, NOT TREATMENT
+---------------------------------------------------------------
+Per `test-driven-development/SKILL.md`'s Worker Execution Contract: a pass
+that needed a retry is a flake signal, not a GREEN (source concept:
+agency-agents' Test Automation Engineer, "Retries are instrumentation, not
+treatment"). With this opt-in flag, every `--green` capture's runner
+output is scanned for a pass-on-retry marker -- from `## Summary` onward
+when that heading exists (a run_quiet.py capture: its own normalised
+`Summary: <line>` restatement of a recognised per-runner status line, see
+SUMMARY_LINE_PATTERNS in run_quiet.py), else from `## Captured output`
+onward (older captures, or a hand-built fixture with no Summary section).
+Never the capture's OWN header lines above either heading, so a probe's
+`- Exit code:` cannot false-positive. Any match is exit 1
+(`green_flaky_pass_marker`), listing the marker, the line number and the
+matched text.
+
+The marker list is deliberately short: each entry is a string this docstring
+can CITE, not a guess at a runner's format. A line-anchored marker also
+tolerates run_quiet.py's own `Summary: ` prefix and numbered-TAIL `N: `
+prefix (its `build_capture`/`format_tail`, NOT a runner format) ahead of
+the cited text.
+
+  * Playwright -- two markers, both from https://playwright.dev/docs/test-retries:
+    - `playwright_flaky_summary`: the end-of-run summary reports a test that
+      failed then passed on retry as e.g. "1 flaky    example.spec.ts:5:2 ›
+      second flaky" -- matched as `<N> flaky` at the start of a line. This
+      exact line is ALSO one of run_quiet.py's own SUMMARY_LINE_PATTERNS
+      (its Playwright pattern matches "one-or-more-digits, whitespace, then
+      passed/failed/flaky"), so a default (excerpt) capture still carries
+      it verbatim under `## Summary` even when the raw output itself falls
+      outside the excerpt/tail window.
+    - `playwright_retry_attempt`: the list/line reporter suffixes a retried
+      attempt's own line with `(retry #1)` (documented example: "✓ 2
+      tests/retry-probe.spec.ts:3:1 › retry probe passes on retry (retry
+      #1) (6ms)") -- matched case-insensitively as `(retry #N)`. NOT one of
+      run_quiet.py's recognised summary lines, so this marker is reliable
+      only when the retried line survives into the excerpt/tail or the
+      capture was taken with `--full-body`.
+  * pytest-rerunfailures -- `pytest_rerun`, from its own quickstart output
+    (https://pytest-rerunfailures.readthedocs.io/): every retried attempt is
+    printed as a `RERUN <nodeid>` line inside the "rerun test summary info"
+    section -- matched as `RERUN` at the start of a line. run_quiet.py's
+    SUMMARY_LINE_PATTERNS does NOT currently recognise a `RERUN` line (it
+    only recognises pytest's final `passed|failed|error|skipped` summary),
+    so -- like `playwright_retry_attempt` above -- this marker is reliable
+    only when the RERUN line survives into the excerpt/tail or the capture
+    was taken with `--full-body`. Teaching run_quiet.py to recognise RERUN
+    as a summary line would close this gap; out of scope here.
+  * Jest / Vitest -- NOT matched, and this is a documented gap, not an
+    oversight. Jest's `jest.retryTimes()` (jest-circus only) retries
+    SILENTLY -- no console marker exists to cite (confirmed via
+    jestjs/jest#11646 and jestjs/jest#16134: "retries happen silently
+    without console output by default"). Vitest's built-in `retry` config
+    exposes a per-task `retryCount` to CUSTOM reporters
+    (https://vitest.dev/config/retry, https://vitest.dev/guide/reporters)
+    but its own default/verbose/basic reporters print no literal retry
+    string. Per this script family's convention ("do not guess a runner
+    format you cannot cite"), a project on Jest or Vitest that needs this
+    check must have its own reporter print an explicit, greppable marker
+    (e.g. annotate the summary line with a literal "RETRY" token) -- this
+    flag does not fabricate one.
+
 Usage:
     python check_red_green.py --red <capture> --green <capture> \
-        [--green <capture>]... [--green-runs N] [--milestone "<slug>"] \
-        [--ledger <path>]
+        [--green <capture>]... [--green-runs N] [--no-flaky-pass] \
+        [--milestone "<slug>"] [--ledger <path>]
     python check_red_green.py --self-test
 """
 import argparse
@@ -89,6 +151,12 @@ READ_ENCODING = "utf-8-sig"
 SIDECAR_SUFFIX = ".meta.json"
 CAPTURED_HEADING_RE = re.compile(
     r"(?im)^##[^\S\n]+Captured[^\S\n]+output[^\S\n]*$")
+# run_quiet.py (this family's own capture writer) emits a `## Summary`
+# section ABOVE `## Captured output`, carrying its own normalised
+# `Summary: <matched line>` restatement of each recognised per-runner
+# status line -- see --no-flaky-pass below.
+SUMMARY_HEADING_RE = re.compile(
+    r"(?im)^##[^\S\n]+Summary[^\S\n]*$")
 TIMESTAMP_FMT = "%Y-%m-%dT%H:%M:%SZ"
 
 
@@ -300,10 +368,56 @@ def sidecar_body_disagreement(text, meta):
     return None, None
 
 
-def evaluate_capture(path, role):
+# ---------------------------------------------------------------------------
+# Flaky-pass marker scan (--no-flaky-pass). See docstring for citations.
+# ---------------------------------------------------------------------------
+
+# A line-anchored marker must also match run_quiet.py's own two rewrites of
+# the runner's original line: `Summary: <line>` in `## Summary` (the
+# reliable case -- see SUMMARY_LINE_PATTERNS in run_quiet.py, which already
+# recognises Playwright's "<N> flaky" line and copies it there verbatim),
+# and a `<N>: <line>` numbered TAIL entry in `## Captured output` (the
+# fallback case, when the marker did not make it into `## Summary`). Neither
+# prefix is optional-guessed: both are this family's OWN, self-tested output
+# shapes (run_quiet.py `build_capture`/`format_tail`), not a runner format.
+LINE_PREFIX = r"(?:Summary:[^\S\n]*|\d+:[^\S\n]*)?"
+
+FLAKY_PASS_MARKERS = [
+    ("playwright_flaky_summary",
+     re.compile(r"(?im)^[^\S\n]*" + LINE_PREFIX + r"\d+[^\S\n]+flaky\b"),
+     "Playwright flaky summary (\"N flaky\")"),
+    ("playwright_retry_attempt",
+     re.compile(r"(?i)\(retry[^\S\n]*#[^\S\n]*\d+\)"),
+     "Playwright retry attempt (\"(retry #N)\")"),
+    ("pytest_rerun",
+     re.compile(r"(?im)^[^\S\n]*" + LINE_PREFIX + r"RERUN\b"),
+     "pytest-rerunfailures RERUN"),
+]
+
+
+def find_flaky_pass_markers(text):
+    """[(code, line_no, matched_text, label), ...] found in the runner's own
+    output -- `## Summary` onward when that heading exists (a run_quiet.py
+    capture), else `## Captured output` onward (older captures, or a
+    hand-built fixture with no Summary section). Never the capture's own
+    header lines above either heading: a probe's `- Exit code:` line must
+    not false-positive against these markers.
+    """
+    m = SUMMARY_HEADING_RE.search(text) or CAPTURED_HEADING_RE.search(text)
+    body_start = m.end() if m else 0
+    hits = []
+    for code, regex, label in FLAKY_PASS_MARKERS:
+        for match in regex.finditer(text, body_start):
+            line_no = text.count("\n", 0, match.start()) + 1
+            hits.append((code, line_no, match.group(0).strip(), label))
+    return hits
+
+
+def evaluate_capture(path, role, no_flaky_pass=False):
     """Per-capture result dict. Empty `problems` => structurally usable.
 
     `role` is "red" or "green" and selects the exit-code expectation only.
+    `no_flaky_pass` only applies to `role == "green"` (see --no-flaky-pass).
     """
     res = {
         "path": str(path), "role": role, "exists": False,
@@ -331,6 +445,14 @@ def evaluate_capture(path, role):
         fail("not_a_capture",
              "no '## Captured output' section — structurally not a "
              "run_quiet.py capture artifact")
+
+    if role == "green" and no_flaky_pass:
+        for code, line_no, matched, label in find_flaky_pass_markers(text):
+            fail("green_flaky_pass_marker",
+                 f"GREEN passed only on retry ({label} at line {line_no}: "
+                 f"{matched!r}) — a pass that needed retries is a flake "
+                 "signal, not a GREEN. Fix the nondeterminism, or quarantine "
+                 "the test per the TDD contract and re-run without retries.")
 
     side = sidecar_path_for(p)
     res["sidecar"] = str(side)
@@ -423,7 +545,8 @@ def build_report(args):
         report["problem_codes"].append(code)
 
     red = evaluate_capture(args.red, "red")
-    greens = [evaluate_capture(g, "green") for g in args.green]
+    greens = [evaluate_capture(g, "green", no_flaky_pass=args.no_flaky_pass)
+              for g in args.green]
 
     if len(args.green) < args.green_runs:
         fail("green_runs_short",
@@ -493,8 +616,92 @@ def build_report(args):
     return report
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Decides whether a RED capture and its GREEN captures constitute a "
+           "real before/after proof of one bugfix.")
+
+EPILOG = """\
+Reads:
+  --red, --green  captures written by run_quiet.py --capture. Each must hold a
+    "## Captured output" section, and its header region -- everything BEFORE
+    that heading, with fences blanked -- must carry the pair
+      - Exit code: <N>
+      - Captured: <ISO-8601 timestamp>
+  <capture>.meta.json  the sidecar beside each capture: a JSON object whose
+    capture_sha256 still matches the capture FILE's bytes, and whose
+    exit_code, finished, started, pid and argv this gate reads. The body
+    witnesses the sidecar: exit_code must equal "- Exit code:" and finished
+    must equal "- Captured:" (a one-sided 0-2 second window, never earlier).
+    RED's exit_code is non-zero, every GREEN's is zero, and every GREEN's
+    finished is STRICTLY later than RED's (whole seconds, so equal stamps do
+    not order two runs). Distinctness under --green-runs > 1 keys on the
+    sidecar's (started, pid) pair, the process identity.
+  --no-flaky-pass scans each GREEN's own runner transcript -- from
+    "## Summary" onward when that heading exists, else from "## Captured
+    output" onward, never the header lines -- for a line-anchored
+    "<N> flaky", "(retry #N)" or "RERUN <nodeid>". Jest and Vitest are a
+    documented gap, not a guess. RED is never scanned.
+
+Problem codes:
+  capture_missing          a cited capture is not on disk
+  not_a_capture            no "## Captured output" section
+  sidecar_missing          no <capture>.meta.json beside the capture
+  sidecar_hash_mismatch    capture_sha256 no longer matches the capture bytes
+  sidecar_body_disagrees   sidecar exit_code or finished contradicts the body
+  capture_header_missing   the capture carries no readable header pair
+  sidecar_no_exit_code     the sidecar's exit_code is missing or not an int
+  sidecar_no_argv          the sidecar records no child argv
+  red_exit_zero            the RED capture exited 0, so nothing was proved red
+  green_exit_nonzero       a GREEN capture exited non-zero
+  command_mismatch         RED and a GREEN record different child argv
+  green_not_newer          a GREEN is not strictly later than RED
+  timestamp_unparseable    a started/finished stamp could not be read
+  green_runs_short         fewer --green captures than --green-runs
+  green_runs_not_distinct  the greens are not N distinct (started, pid) runs
+  green_flaky_pass_marker  --no-flaky-pass only: a pass-on-retry marker
+
+JSON keys:
+  red, green, green_runs, red_result, green_results, command,
+  green_distinct_runs, green_distinct_bodies, problems, problem_codes,
+  warnings, result, error. Per capture: path, role, exists, is_capture,
+  sidecar, sidecar_present, sidecar_capture_sha256_ok, sidecar_body_agrees,
+  exit_code, argv, finished, started, pid, capture_sha256, problems,
+  problem_codes. --ledger records each capture AND its sidecar as inputs.
+
+Exit codes:
+  0  every term holds
+  1  any problem code
+  2  a missing --red or --green, or --green-runs < 1
+
+Self-test:
+  python check_red_green.py --self-test   (44 cases)
+"""
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(prog="check_red_green.py")
+    parser = PurposeFirstParser(
+        prog="check_red_green.py",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--red", help="the pre-fix (failing) capture")
     parser.add_argument("--green", action="append", default=[],
                         help="a post-fix (passing) capture; repeatable")
@@ -505,6 +712,13 @@ def build_parser():
                              "started+pid (process identity): one green "
                              "cited N times, or N copies of it, is one run; "
                              "identical bodies from distinct runs are fine")
+    parser.add_argument("--no-flaky-pass", action="store_true",
+                        help="fail (green_flaky_pass_marker) when a --green "
+                             "capture's runner transcript carries a "
+                             "pass-on-retry marker (Playwright's \"N flaky\" "
+                             "summary or \"(retry #N)\" attempt line, "
+                             "pytest-rerunfailures' RERUN) -- a pass that "
+                             "needed retries is a flake signal, not a GREEN")
     parser.add_argument("--milestone",
                         help="bug slug, to scope this run's ledger record")
     parser.add_argument("--ledger",
@@ -962,6 +1176,64 @@ def run_self_test():
             side = sidecar_path_for(Path(green))
             side.write_bytes(b"\xef\xbb\xbf" + side.read_bytes())
             r = self._run(red, [green])
+            self.assertEqual(r["result"], "PASS", r["problems"])
+
+        # ---- --no-flaky-pass: retries are instrumentation, not treatment ----
+
+        def test_playwright_retry_attempt_with_flag_fails(self):
+            red = self._write("red.md", 1, "2026-09-03T10:00:00Z")
+            green = self._write(
+                "green.md", 0, "2026-09-03T11:00:00Z",
+                body="✓ 2 tests/retry-probe.spec.ts:3:1 › retry probe passes "
+                     "on retry (retry #1) (6ms)\n1 passed (2s)")
+            r = self._run(red, [green], ["--no-flaky-pass"])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("green_flaky_pass_marker", r["problem_codes"])
+            self.assertIn("Playwright retry attempt",
+                          " ".join(r["green_results"][0]["problems"]))
+
+        def test_playwright_flaky_summary_with_flag_fails(self):
+            red = self._write("red.md", 1, "2026-09-03T10:00:00Z")
+            green = self._write(
+                "green.md", 0, "2026-09-03T11:00:00Z",
+                body="1 flaky    example.spec.ts:5:2 › second flaky\n"
+                     "2 passed (4s)")
+            r = self._run(red, [green], ["--no-flaky-pass"])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("green_flaky_pass_marker", r["problem_codes"])
+
+        def test_pytest_rerun_with_flag_fails(self):
+            red = self._write("red.md", 1, "2026-09-03T10:00:00Z")
+            green = self._write(
+                "green.md", 0, "2026-09-03T11:00:00Z",
+                body="RERUN test_report.py::test_fail\n1 passed, 1 rerun")
+            r = self._run(red, [green], ["--no-flaky-pass"])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("green_flaky_pass_marker", r["problem_codes"])
+
+        def test_flaky_marker_without_flag_is_unaffected(self):
+            """The flag is opt-in: default invocation never scans at all."""
+            red = self._write("red.md", 1, "2026-09-03T10:00:00Z")
+            green = self._write(
+                "green.md", 0, "2026-09-03T11:00:00Z",
+                body="1 flaky    example.spec.ts:5:2 › second flaky\n"
+                     "2 passed (4s)")
+            r = self._run(red, [green])
+            self.assertEqual(r["result"], "PASS", r["problems"])
+            self.assertNotIn("green_flaky_pass_marker", r["problem_codes"])
+
+        def test_clean_green_with_flag_passes(self):
+            red, green = self._pair()
+            r = self._run(red, [green], ["--no-flaky-pass"])
+            self.assertEqual(r["result"], "PASS", r["problems"])
+
+        def test_flaky_marker_in_red_is_not_scanned(self):
+            """Only --green captures are scanned; a RED is meant to fail."""
+            red = self._write(
+                "red.md", 1, "2026-09-03T10:00:00Z",
+                body="RERUN test_report.py::test_fail\n1 failed, 1 rerun")
+            green = self._write("green.md", 0, "2026-09-03T11:00:00Z")
+            r = self._run(red, [green], ["--no-flaky-pass"])
             self.assertEqual(r["result"], "PASS", r["problems"])
 
         # ---- usage + ledger ----

@@ -206,8 +206,80 @@ def build_report(state_path, milestone=None, severity_floor=DEFAULT_SEVERITY_FLO
     }
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Decides whether any blocker in the orchestrator state still "
+           "stands for this milestone at or above a severity floor.")
+
+EPILOG = """\
+Reads:
+  --state <path>  the pipeline's orchestrator-state.json. Its blockers list
+  may hold either shape; both normalize to one schema before scoping:
+      {"id", "text", "milestone", "capability", "severity", "source",
+       "added", "evidence"}
+  A legacy freeform STRING normalizes to:
+      {"id": null, "text": <the string>, "milestone": null,
+       "capability": null, "severity": "Critical", "source": null,
+       "added": null, "evidence": null}
+  -- unscoped and Critical, the fail-safe reading. Normalization never
+  mutates the stored entry.
+
+  Scoping with --milestone: an entry blocks iff its milestone equals the
+  title exactly (case- and whitespace-insensitive) OR is null (an unscoped
+  entry still blocks). Entries scoped to another milestone land in
+  other_milestone_blockers and never block. Without --milestone, legacy
+  behaviour (gate on all) is unchanged.
+
+Problem codes:
+  This gate prints no `problem` field: its failure vocabulary is the report
+  arrays and the `error` string.
+  blocking                  a counted entry scoped here, or unscoped
+  other_milestone_blockers  a counted entry scoped elsewhere -- never blocks
+  error                     prose naming a usage or structural failure
+  The `error` cases: missing --state; a state file that is missing,
+  unreadable, not JSON or not an object; no `blockers` field; `blockers`
+  present but not an array. Below --severity-floor is not a code: such an
+  entry is reported in `blockers` and counted nowhere else.
+
+JSON keys:
+  Always printed on stdout (there is no --json flag):
+  state_file, milestone, severity_floor, pass, blocker_count, blockers,
+  blocking, other_milestone_blockers, pipeline, error
+
+Exit codes:
+  0  'blocking' is empty.
+  1  'blocking' is non-empty.
+  2  usage error (missing --state) or a structural failure (unreadable or
+     non-JSON state file).
+
+Self-test:
+  python check_blockers.py --self-test   (16 cases)
+"""
+
+
 def main(argv):
-    parser = argparse.ArgumentParser(prog="check_blockers.py")
+    parser = PurposeFirstParser(
+        prog="check_blockers.py",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--state")
     parser.add_argument("--milestone",
                         help="scope: an entry blocks only if its milestone "

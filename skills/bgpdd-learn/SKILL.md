@@ -26,7 +26,7 @@ This skill runs in the main session, never inside a delegated subagent.
 
 Scan the live conversation for user corrections, agent failures and retries, circuit-breaker trips, and the skills/agents in play. Then read the durable evidence **in this order — mechanical first, narrative second**:
 
-1. **The run-log summary and the gate ledger.** `python {PLUGIN_ROOT}/pipeline-tools/scripts/summarize_run.py --run-log <the lane's run log> --ledger <the lane's gate ledger>` — what the run cost, per agent and per unit, and which gates fired versus only ever passed. These files were written by tools at the moment each thing happened; everything below was written by someone recalling it.
+1. **The run-log summary and the gate ledger.** Run `python {PLUGIN_ROOT}/pipeline-tools/scripts/tool_registry.py for --lane bgpdd-learn --phase '-'` and execute the `summarize_run` line it prints — what the run cost, per agent and per unit, and which gates fired versus only ever passed. These files were written by tools at the moment each thing happened; everything below was written by someone recalling it.
    - **Resolve the roots first — the session may hold more than one, and the epic path is only one of five.** Read every root that exists, in this order, and say which you read:
      | Root | Run log | Gate ledger |
      |---|---|---|

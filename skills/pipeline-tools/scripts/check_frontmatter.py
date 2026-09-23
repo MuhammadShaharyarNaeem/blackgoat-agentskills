@@ -398,8 +398,73 @@ def run_self_test():
 # ---------------------------------------------------------------------------
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Decides whether every agent and skill frontmatter block parses "
+           "and carries its required keys, so nothing silently fails to "
+           "register.")
+
+EPILOG = """\
+Reads:
+  <root>/agents/*.md and <root>/skills/*/SKILL.md -- the leading frontmatter
+  block only:
+      ---
+      key: value
+      ---
+  Checked: (a) the --- block exists and closes; (b) every non-blank,
+  non-comment line inside is a `key: value` pair; (c) a plain (unquoted)
+  scalar value never contains ': ' (a real YAML parser rejects the whole
+  block, so the runtime sees no persona and no skill trigger); (d) a value
+  opening with a quote closes with a matching one; (e) required keys are
+  present -- agents: name, description, model, role, phase, squad,
+  reports-to; skills: name, description; (f) model: is one of
+  opus/sonnet/haiku; (g) description: is <= 1024 chars (WARNING only);
+  (h) every skills/bgpdd-*/SKILL.md carries `trigger: /bgpdd-<name>`
+  matching its folder. agents/blackgoat.md is exempt from (b)-(h) and
+  checked only for existence (CLAUDE.md convention #7).
+
+JSON keys:
+  Always printed on stdout (there is no --json flag):
+  result            PASS | FAIL | ERROR
+  files_checked     count of frontmatter blocks read
+  errors            [{file, line, problem}] -- these gate
+  warnings          [{file, line, problem}] -- these do not gate
+  error             the message, on result ERROR only
+
+Exit codes:
+  0  result PASS (warnings do not gate).
+  1  at least one error.
+  2  usage error (missing or non-directory root), or a root carrying
+     neither agents/ nor skills/.
+
+Self-test:
+  python check_frontmatter.py --self-test   (9 cases)
+"""
+
+
 def main(argv):
-    parser = argparse.ArgumentParser(prog="check_frontmatter.py")
+    parser = PurposeFirstParser(
+        prog="check_frontmatter.py",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("root", nargs="?", help="plugin root dir (contains agents/, skills/)")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)

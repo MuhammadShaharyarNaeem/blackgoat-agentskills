@@ -12,6 +12,10 @@ psychological profile, exempt by design):
       existing file, with {PLUGIN_ROOT} resolved to the skills/ dir passed
       on the command line. A path is matched whether or not it is wrapped
       in backticks.
+  (d) every table row carrying such a path has a non-empty last ("When")
+      cell. An empty cell is ambiguous between "Always" and "never
+      loaded" -- a reader resolves it either way, and a split that moves
+      the file leaves a silently unloaded skill behind.
 
 Fails closed: a missing or empty agents/ directory is a usage error (exit
 2), not a vacuous PASS, and an agent with no dependency section at all is a
@@ -45,6 +49,8 @@ NEXT_HEADING_RE = re.compile(r"^##\s+\S", re.MULTILINE)
 # comma, or a closing paren/bracket (all observed as the next character
 # after a path in a dependency table cell or parenthetical aside).
 PLUGIN_ROOT_PATH_RE = re.compile(r"\{PLUGIN_ROOT\}(/[^\s`|,)\]]+)")
+EMPTY_WHEN_FIX = ("write `Always`, or the condition under which this file is "
+                  "read")
 
 
 class GateError(Exception):
@@ -52,18 +58,56 @@ class GateError(Exception):
 
 
 def find_section(text):
-    """Return the "## Methodology Dependencies" section body, or None.
+    """Return (body, first_line_no) for "## Methodology Dependencies".
 
-    The body runs from just after the heading to the next "## " heading
-    (or end of file).
+    Returns (None, None) when the section is absent. The body runs from
+    just after the heading to the next "## " heading (or end of file);
+    first_line_no is the 1-based file line the body's first character
+    sits on (the heading's own line), so row line numbers can be reported.
     """
     match = SECTION_HEADING_RE.search(text)
     if match is None:
-        return None
+        return None, None
     start = match.end()
     next_heading = NEXT_HEADING_RE.search(text, start)
     end = next_heading.start() if next_heading else len(text)
-    return text[start:end]
+    return text[start:end], text.count("\n", 0, start) + 1
+
+
+def check_when_cells(path, section, first_line_no):
+    """Return violations for dependency rows with an empty "When" cell.
+
+    Only markdown table rows are considered -- a line starting with "|"
+    that carries a {PLUGIN_ROOT} path. Prose in the section that mentions
+    a path is not a row and is not checked. The "When" cell is the row's
+    last cell; a row with no cell after the path has no "When" cell at
+    all, which is the same violation.
+    """
+    violations = []
+    for offset, line in enumerate(section.split("\n")):
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        match = PLUGIN_ROOT_PATH_RE.search(stripped)
+        if match is None:
+            continue
+        # A row is delimited by a leading and (usually) a trailing pipe.
+        # Drop only those two, never a run of them -- `strip("|")` would
+        # eat the trailing empty cell this check exists to catch.
+        parts = stripped.split("|")[1:]
+        if stripped.endswith("|"):
+            parts = parts[:-1]
+        cells = [cell.strip() for cell in parts]
+        when = cells[-1] if len(cells) >= 2 else ""
+        if when:
+            continue
+        violations.append(
+            f"{path.name}:{first_line_no + offset}: "
+            f"{{PLUGIN_ROOT}}{match.group(1)} has an empty \"When\" cell -- "
+            f"ambiguous between \"Always\" and \"never loaded\"; "
+            f"fix: {EMPTY_WHEN_FIX}"
+        )
+    return violations
 
 
 def check_agent_file(path, skills_dir):
@@ -71,7 +115,7 @@ def check_agent_file(path, skills_dir):
     violations = []
     text = path.read_text(encoding="utf-8-sig", errors="replace")
 
-    section = find_section(text)
+    section, first_line_no = find_section(text)
     if section is None:
         violations.append(
             f"{path.name}: no \"## Methodology Dependencies\" section found"
@@ -92,6 +136,8 @@ def check_agent_file(path, skills_dir):
                 f"{path.name}: {{PLUGIN_ROOT}}{rel_path} does not resolve to "
                 f"an existing file ({resolved})"
             )
+
+    violations.extend(check_when_cells(path, section, first_line_no))
 
     return violations
 
@@ -119,6 +165,52 @@ def check_all(skills_dir):
     return violations
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Decides whether every agent's Methodology Dependencies table "
+           "resolves to real files, carries the guard wording, and fills each "
+           "When cell.")
+
+EPILOG = """\
+Reads:
+  <skills_dir>/../agents/*.md -- each persona's "## Methodology Dependencies"
+    section, which must contain the guard wording "NOT Skill-tool invocables".
+    Inside it, every `{PLUGIN_ROOT}<rel/path>` token (backticks optional) must
+    resolve to a file under <skills_dir>. On a markdown table row, the LAST
+    cell is the "When" cell and must be non-empty:
+      | `{PLUGIN_ROOT}/<skill>/SKILL.md` | <what> | <When> |
+    Prose mentions of a path carry no When cell and are path-checked only.
+    agents/blackgoat.md is excluded (CLAUDE.md convention #7).
+
+Exit codes:
+  0  every dependency table valid.
+  1  at least one violation, reported one per line on stdout: a dangling
+     {PLUGIN_ROOT} path, a missing guard sentence, an empty "When" cell, or
+     an agent with no Methodology Dependencies section at all.
+  2  usage error, or a missing/empty agents/ directory (fails closed rather
+     than reporting a vacuous pass).
+
+Self-test:
+  python check_dependency_tables.py --self-test   (20 cases)
+"""
+
+
 def build_parser():
     """Real argparse, so `-h`/`--help` works like every sibling script.
 
@@ -127,11 +219,11 @@ def build_parser():
     "error: --help is not a directory". Behaviour and exit codes are
     unchanged -- only the parsing and the help text are new.
     """
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="check_dependency_tables.py",
-        description="Validate the Methodology Dependencies tables in agents/*.md.",
-        epilog="Exit 0 PASS, 1 violations found, 2 usage error or unreadable "
-               "agents/ directory.")
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "skills_dir", nargs="?",
         help="the plugin's skills/ directory (i.e. {PLUGIN_ROOT}); agents/ is "
@@ -272,6 +364,62 @@ def run_self_test():
             violations = check_all(self.skills_dir)
             self.assertEqual(len(violations), 1)
             self.assertIn(CANONICAL_WORDING, violations[0])
+
+        def _agent_with_when(self, when):
+            """Write rex.md with one dependency row whose When cell is `when`."""
+            body = (
+                "# Rex\n\n## Methodology Dependencies\n\n"
+                "READ these as file paths under {PLUGIN_ROOT} "
+                "(NOT Skill-tool invocables).\n\n"
+                "| Skill | Path | When |\n"
+                "|---|---|---|\n"
+                "| base-persona | `{PLUGIN_ROOT}/agent-squad/base-persona.md` "
+                f"|{when}|\n"
+            )
+            self._write_agent("rex.md", body)
+
+        def test_empty_when_cell_is_a_violation(self):
+            self._agent_with_when("")
+            violations = check_all(self.skills_dir)
+            self.assertEqual(len(violations), 1)
+            # Names the agent file, the row's line, the path, and the fix.
+            self.assertIn("rex.md:9:", violations[0])
+            self.assertIn("{PLUGIN_ROOT}/agent-squad/base-persona.md", violations[0])
+            self.assertIn(EMPTY_WHEN_FIX, violations[0])
+
+        def test_empty_when_cell_exits_1(self):
+            import contextlib
+            import io
+            self._agent_with_when("")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(main([str(self.skills_dir)]), 1)
+            self.assertIn("empty \"When\" cell", out.getvalue())
+
+        def test_whitespace_only_when_cell_is_a_violation(self):
+            self._agent_with_when("   ")
+            violations = check_all(self.skills_dir)
+            self.assertEqual(len(violations), 1)
+            self.assertIn("empty \"When\" cell", violations[0])
+
+        def test_always_when_cell_passes(self):
+            self._agent_with_when(" Always ")
+            self.assertEqual(check_all(self.skills_dir), [])
+
+        def test_condition_when_cell_passes(self):
+            self._agent_with_when(" When the diff contains a migration ")
+            self.assertEqual(check_all(self.skills_dir), [])
+
+        def test_prose_path_in_section_is_not_a_row(self):
+            """A non-table line carrying a path has no When cell to check."""
+            body = (
+                "# Rex\n\n## Methodology Dependencies\n\n"
+                "READ these as file paths under {PLUGIN_ROOT} "
+                "(NOT Skill-tool invocables).\n\n"
+                "Always read {PLUGIN_ROOT}/agent-squad/base-persona.md first.\n"
+            )
+            self._write_agent("rex.md", body)
+            self.assertEqual(check_all(self.skills_dir), [])
 
         def test_happy_path(self):
             self._write_agent(

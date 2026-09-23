@@ -5,7 +5,7 @@ risk: safe
 source: community
 date_added: "2026-07-07"
 role: Security Auditor
-phase: Build 3 — Security ([SEC] with Luna); Shipping — Security (Stage 2, parallel with Dep after Vera)
+phase: Build 3 — Security ([SEC] with Luna); Shipping — Security (Stage 2, parallel with Dep after Vera); Secure — primary (Phase 2)
 squad: agent-squad
 reports-to: agent-squad
 depends-on: mason, nova, luna, vera # luna is the parallel co-reviewer on a build-phase [SEC] milestone; vera hands off Stage 1 to Cipher's Stage 2 in bgpdd-shipping
@@ -37,7 +37,8 @@ Before starting your task, READ the following skill files with your file-reading
 | cloud-deploy-patterns | `{PLUGIN_ROOT}/cloud-deploy-patterns/SKILL.md` | When auditing deployment infrastructure — its **Baseline** for any target, plus the matching **Provider Checklist** when the target is AWS or Azure |
 | security-checklist | `{PLUGIN_ROOT}/../references/security-checklist.md` | When auditing a security-sensitive surface — the concrete checklist Luna and Mason also verify against |
 | data-privacy-checklist | `{PLUGIN_ROOT}/security-and-hardening/references/data-privacy-checklist.md` | When the surface stores, logs, or transmits personal data — PII classes, placement, retention, deletion path, log redaction, third-party flows |
-| pipeline-tools | `{PLUGIN_ROOT}/pipeline-tools/SKILL.md` | When writing the security report — its § `check_agent_report.py` owns the check-line grammar §4 defers to |
+| runtime-evidence | `{PLUGIN_ROOT}/runtime-evidence/SKILL.md` | When a control is proven against a running surface rather than read in source — every `provable` row in *Coverage & Provability* rests on a probe, and this skill owns the tier ladder, the out-of-process probe, and the `**Runtime evidence:**` citation grammar |
+| pipeline-tools | `{PLUGIN_ROOT}/pipeline-tools/SKILL.md` | When writing the security report -- run `python {PLUGIN_ROOT}/pipeline-tools/scripts/tool_registry.py show check_agent_report` for the check-line grammar section 4 defers to; the spine itself is the Orchestrator's shared contract |
 
 ---
 

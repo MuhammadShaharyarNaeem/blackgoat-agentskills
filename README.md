@@ -4,12 +4,12 @@
 
 A Claude Code plugin that packages an **agent squad** and a **Prompt-Driven Development (PDD)** workflow into reusable skills and personas. An Orchestrator delegates self-contained tasks to specialized subagents, each of which runs in isolation and returns a structured `<handoff>`. Instead of one agent trying to hold an entire project in context, work is split across a squad of narrow specialists coordinated through slash-command SOPs — with requirement traceability enforced from the first honing question to the final pre-launch gate.
 
-- **Plugin:** `blackgoat-agentskills` v2.8.1 — see [CHANGELOG.md](CHANGELOG.md)
+- **Plugin:** `blackgoat-agentskills` v2.9.0 — see [CHANGELOG.md](CHANGELOG.md)
 - **Author:** shaharyar.naeem (shaharyar.naeem@gorelo.io)
 
-> Note: this repo's `AGENTS.md` is the Google Antigravity runtime contract, not the generic cross-tool "AGENTS.md" coding-agent convention — see [docs/cursor-setup.md](docs/cursor-setup.md).
+> Note: this plugin ships no `AGENTS.md`. Under Google Antigravity the runtime contract — how "delegate to \<Agent\>" maps to the registered squad agents, blocking delegation, and `{PLUGIN_ROOT}` resolution — lives in the user's global `~/.gemini/config/AGENTS.md`, outside the plugin. Cursor uses `rules/cursor-runtime.mdc` instead — see [docs/cursor-setup.md](docs/cursor-setup.md).
 
-![blackgoat-agentskills: claude plugin validate passing, the plugin manifest, and the 16-agent squad inventory](assets/preview.svg)
+![blackgoat-agentskills: claude plugin validate passing, the plugin manifest, and the 17-agent squad inventory](assets/preview.svg)
 
 ---
 
@@ -40,6 +40,7 @@ The plugin is designed with a deliberate adoption gradient. Each step gives you 
 | Fix a bug | `/bgpdd-bugfix` | Main session (intake, RCA, route) + spawns agents (Quinn RED, Mason/Nova fix, Quinn GREEN, Luna) |
 | Fix two to five independent bugs in one session | `/bgpdd-bugfix-batch` | Main session (intake, merges) + the bugfix squad per bug, in waves, one git worktree each |
 | Verify an already-discovered feature still works | `/bgpdd-verify {feature}` | Main session (matrix) + spawns Quinn |
+| Security-audit an existing application | `/bgpdd-secure {target}` | Main session (matrix) + spawns Cipher, Ward for privacy rows, optionally Quinn |
 | Capture lessons from a session | `/bgpdd-learn` | Main session + spawns Forge |
 | Audit the plugin itself | `agent-audit` skill | Main session |
 | Ad-hoc delegation to one specialist | `agent-squad` (e.g. "have Luna review this diff") | Spawns the named agent |
@@ -162,10 +163,11 @@ Every agent lives in `agents/<name>.md` with frontmatter declaring its `role`, `
 | **Max** | Optimizer / Refactorer | sonnet | Ad hoc, on request — not a bgpdd-build pipeline stage |
 | **Vera** | Launch Verifier — pre-launch checklist verification | opus | Shipping — Verification (parallel with Cipher) |
 | **Cipher** | Security Auditor | opus | Shipping — Security (parallel with Vera); Build [SEC]-milestone reviews |
+| **Ward** | Privacy & Compliance Engineer | opus | Deployment — Privacy & Compliance (after the build cycle); Secure — the data-handling rows of the attack matrix (parallel with Cipher) |
 | **Dep** | DevOps Engineer | sonnet | Build 5 — Deployment Prep + epic gate; Shipping rollout |
 | **Forge** | Meta-Engineer / System Coach | opus | End of epic (bgpdd-shipping Step 7); `/bgpdd-learn` on demand — always human-approved |
 
-Blurbs, in one line each: Iris scans repos and records the tech stack and Target Scope. Scout maps one feature's fragments inside one API and writes exactly one file. Echo reverse-engineers how an existing feature behaves today, from the Scouts' maps, before any requirements exist. Rex turns a honing transcript into an ID'd, testable spec. Aria designs the data model, contracts, and file structure (design only — a learned squad rule forbids delegating coding to the Architect). Alex converts the blueprint into a dependency-ordered task plan where every task cites the requirements it covers. Mason writes the code for `[API]` milestones, TDD-first, inside a strict blast radius. Nova builds `[UI]` milestones, translating Aria's contracts and the committed design direction into interfaces verified against the rendered result. Quinn proves the build-phase implementation works against the requirements. Luna reviews for correctness, readability, architecture, security, and performance without rewriting anything. Max refactors for clarity with tests staying green, on ad-hoc request outside the build pipeline. Vera runs the pre-launch verification checklist against the finished codebase. Cipher hardens boundaries. Dep owns containers, CI/CD, rollback plans, and the GO/NO-GO verdict. Forge coaches the squad itself.
+Blurbs, in one line each: Iris scans repos and records the tech stack and Target Scope. Scout maps one feature's fragments inside one API and writes exactly one file. Echo reverse-engineers how an existing feature behaves today, from the Scouts' maps, before any requirements exist. Rex turns a honing transcript into an ID'd, testable spec. Aria designs the data model, contracts, and file structure (design only — a learned squad rule forbids delegating coding to the Architect). Alex converts the blueprint into a dependency-ordered task plan where every task cites the requirements it covers. Mason writes the code for `[API]` milestones, TDD-first, inside a strict blast radius. Nova builds `[UI]` milestones, translating Aria's contracts and the committed design direction into interfaces verified against the rendered result. Quinn proves the build-phase implementation works against the requirements. Luna reviews for correctness, readability, architecture, security, and performance without rewriting anything. Max refactors for clarity with tests staying green, on ad-hoc request outside the build pipeline. Vera runs the pre-launch verification checklist against the finished codebase. Cipher hardens boundaries. Ward audits the data itself — where personal data actually lives, on what basis it was collected, whether consent is enforced at the write path, whether a deletion provably reached every store, and whether every control claimed carries evidence (identity, SSO and secrets stay Cipher's). Dep owns containers, CI/CD, rollback plans, and the GO/NO-GO verdict. Forge coaches the squad itself.
 
 ---
 
@@ -201,9 +203,14 @@ flowchart TD
         V1["Fit check: entry ticket is Echo's QA baseline"] --> V2["Derive + lint acceptance-matrix.md"] --> V3["Quinn: automate as permanent Playwright specs, execute against running app"]
         V3 --> V4["Mechanical gates + verdict"] -.-> V5["Product defects → fresh /bgpdd-bugfix session"]
     end
+    subgraph SS["Standalone: /bgpdd-secure (any time, no discovery dependency)"]
+        Z1["Authorization gate: target, non-production, scope exclusions"] --> Z2["Derive + lint attack-matrix.md"] --> Z3["Cipher (+ Ward for privacy rows, Quinn for browser-rendered rows): safe read-only probes against running app"]
+        Z3 --> Z4["Mechanical gates + verdict"] -.-> Z5["Confirmed findings → fresh /bgpdd-bugfix session"]
+    end
     S1 -- "Tier 1 knowledge base" --> S2
     S1 -. "Tier 1 knowledge base (optional)" .-> S2L
     S1 -. "Tier 1 knowledge base" .-> SV
+    S1 -. "Tier 1 surface map (optional)" .-> SS
     S2 -- "state file + plan" --> S3
     S2L -- "state file + plan" --> S3
     S3 -- "state file + green epic" --> S4
@@ -217,6 +224,7 @@ Phase by phase:
 - **`/bgpdd-build` (Phase 2)** — the milestone loop, detailed below.
 - **`/bgpdd-shipping` (Phase 3)** — the Launch Squad, gates, PR, and the epic's single Forge run, detailed below.
 - **`/bgpdd-verify` (standalone, not part of the four-phase chain)** — usable any time after `/bgpdd-discovery` has documented a feature. Derives a lint-gated `acceptance-matrix.md` from Echo's QA baseline, has Quinn automate it as permanent Playwright specs and execute them against the running application, and gates the results through the same mechanical checks the build pipeline uses — without running plan or build. It never fixes what it measures: product defects it finds route to a fresh `/bgpdd-bugfix` session, and its re-verify shortcut makes repeat regression runs cheap.
+- **`/bgpdd-secure` (standalone, not part of the four-phase chain)** — usable any time an application exists, with no discovery dependency. Derives a lint-gated `attack-matrix.md` from `security-and-hardening`'s Coverage & Provability table plus the web and API OWASP Top 10, has Cipher (and Ward, for the privacy and compliance rows; Quinn, for browser-rendered rows) run safe read-only probes against the running application, and gates the results through the same mechanical checks the other lanes use. Audit-only: no destructive payloads, no exfiltration, staging/local only. It never fixes what it measures: confirmed vulnerabilities route to a fresh `/bgpdd-bugfix` session, one per finding.
 
 ### The state file
 
@@ -380,6 +388,7 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **bgpdd-bugfix** — evidence-gated bugfix lane: lint-gated intake → Quinn's RED capture → RCA and mechanical FAST/FULL/PLAN route (main session) → fix (Mason and/or Nova) → same-command GREEN + red/green gate → fresh Luna → bounded commit gate → Tier-1 prevent write-back
 - **bgpdd-bugfix-batch** — thin choreography over the lane above for two to five independent bugs in one session: a git worktree and a `fix/{bug-slug}` branch per bug, the bugfix contract run per bug in waves (parallel REDs, per-route builders, per-bug GREEN and a fresh Luna), each bug closing through its own commit gate, then one merge at a time ordered by surface overlap and gated on that bug's ledger chain. It restates no bugfix rule; a `PLAN` route drops that bug to `/bgpdd-plan`
 - **bgpdd-verify** — standalone regression-verification lane for an already-discovered feature: derives a lint-gated acceptance matrix from Echo's QA baseline, Quinn automates and executes it as permanent Playwright specs against the running application, gated on runtime evidence; product defects it finds route to `/bgpdd-bugfix`
+- **bgpdd-secure** — standalone security-assessment lane for an existing application, no discovery dependency: derives a lint-gated attack matrix from security-and-hardening's Coverage & Provability table plus the web and API OWASP Top 10, Cipher (and Ward for the privacy and compliance rows, Quinn for browser-rendered rows) run safe read-only probes against the running application, gated on runtime evidence; audit-only, staging/local only; confirmed findings route to `/bgpdd-bugfix`
 
 ### Methodology skills (execution contracts loaded by agents via their dependency tables)
 - **blackgoat-idea-honing** — interactive requirements refinement (Rex / main session)
@@ -392,6 +401,8 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **code-simplification** — behavior-preserving cleanup (Luna, Max)
 - **performance-optimization** — profiling and bottleneck fixes (Luna, Max)
 - **security-and-hardening** — vulnerability hardening (Cipher)
+- **privacy-engineering-patterns** — personal-data discovery sweep and classification tiers, consent enforced at the write path, deletion fan-out across every store, retention as an automated clock (Ward)
+- **compliance-evidence-patterns** — the control → evidence → source → collection method → frequency matrix, and the rule that evidence must show a control *operated*, not that it exists (Ward)
 - **dependency-upgrade-patterns** — dependency bumps done safely: upgrade brief from the changelog, audit captured before and after, one package per commit; framework majors route to lite (Mason, Nova, Max, Dep; conditional)
 - **feature-flag-patterns** — flag lifecycle: owner, expiry and removal task at creation, default-off, kill switch, both branches tested (Alex, Mason, Nova, Dep, Vera; conditional)
 - **jobs-and-messaging-patterns** — idempotent handlers, bounded retries, dead-lettering, the outbox pattern, run records; verified by an out-of-process replay capture (Aria, Mason, Quinn; conditional)

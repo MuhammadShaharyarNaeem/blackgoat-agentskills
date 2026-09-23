@@ -309,8 +309,72 @@ def build_report(recipe_path):
     return report
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Decides whether the runtime-environment recipe names a real "
+           "service start command and readiness check, or a reasoned skip.")
+
+EPILOG = """\
+Reads:
+  --recipe  .docs/summary/{feature}/QA/runtime-environment.md, read utf-8-sig.
+    Six blocks, each matched as a heading or a "Label:" line: Bring-up
+    sequence, Services, Repointing map, Forbidden hosts, Test identities &
+    fixtures, Capabilities.
+    A start command is a filled "Start command" column cell of a
+    Services-shaped table, or a "Start command: <value>" line; a readiness
+    check is the same shape under "Readiness check". Placeholder values count
+    as absent (case-insensitive): empty, -, --, an em dash, n/a, na, none,
+    tbd, todo, ?, _todo: pending_, todo: pending, pending, unknown, ...
+    The sanctioned skip, exiting 0 before any other check, is one line
+      Skipped - user-approved: <reason>
+    with an em dash, en dash or hyphen; a leading > or * is tolerated. A bare
+    "Skipped." with no reason is skip_unreasoned.
+
+Problem codes:
+  recipe_missing          the --recipe file does not exist
+  block_missing           one of the six manifest blocks is absent
+  start_command_missing   no non-placeholder service start command
+  readiness_check_missing no non-placeholder readiness check
+  skip_unreasoned         a Skipped line carrying no reason
+
+JSON keys:
+  result, recipe, skipped, skip_reason, blocks_present, blocks_missing,
+  start_commands, readiness_checks, findings ({code, detail, ...}), warnings,
+  error
+
+Exit codes:
+  0  PASS, or a reasoned user-approved skip
+  1  any finding, a missing recipe included (the file was just to be written)
+  2  --recipe omitted, not a file, or unreadable
+
+Self-test:
+  python check_runtime_recipe.py --self-test   (16 cases)
+"""
+
+
 def main(argv):
-    parser = argparse.ArgumentParser(prog="check_runtime_recipe.py")
+    parser = PurposeFirstParser(
+        prog="check_runtime_recipe.py",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--recipe",
                         help="path to .docs/summary/{feature}/QA/runtime-environment.md")
     parser.add_argument("--milestone", help="recorded in the ledger line")

@@ -128,6 +128,6 @@ Root `plugin.json` (`{"name":"blackgoat-agentskills"}`) is the Agent Plugins / h
 
 ## Out of scope notes
 
-- Do not replace `AGENTS.md` (Antigravity). Cursor uses `rules/cursor-runtime.mdc` instead.
+- The plugin ships no `AGENTS.md`; Antigravity's runtime contract is the user's global `~/.gemini/config/AGENTS.md`. Cursor uses `rules/cursor-runtime.mdc` instead.
 - Do not symlink the **plugin root** to a path outside `~/.cursor/plugins/local`.
 - User-level `~/.cursor/agents/` is a separate surface (works without plugins); prefer the plugin install once local loading succeeds.

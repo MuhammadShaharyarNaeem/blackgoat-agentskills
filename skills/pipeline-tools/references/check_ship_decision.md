@@ -50,3 +50,18 @@ Two fixture trees: `ship-decision-rehearsed/` (exit 0 bare and under both flags 
 Everything else is the same three checks in the same order: intact chain first (`ledger_chain_broken`), then the LATEST matching entry must be `PASS` (`ledger_missing` / `ledger_failed`), then every input it hashed must still hash (`ledger_stale`). The last one is what stops a coverage PASS taken before the final three commits from vouching for them.
 
 **The lite exemption is read, not inferred.** A lite-originated epic has `artifacts.acceptance_matrix: null` and no acceptance suite to have run; `bgpdd-shipping` Step 3 then names `check_coverage.py` alone. That decision comes off the state field, never off the absence of a file — an absent matrix and a matrix nobody ran look identical on disk.
+
+## From the retired spine
+
+### Why the baseline readings needed the same sidecar the rehearsal does
+
+`--require-baseline` originally asked only that each metric cite an **existing path**. Creating an empty file at that path satisfied it, and every row of the threshold table then graded against a number nobody had read. The flag now demands the same provenance sidecar, with a matching hash, that a rehearsal capture carries — a deliberate tightening of this flag's own rule (CLAUDE.md convention #8), to the contract the rest of this family already applies to anything called evidence.
+
+The failure code is unchanged: an unevidenced baseline is one code whether the citation was absent or present-but-empty, because the consequence is the same — there is no reading behind the threshold.
+
+**Migration**: a decision whose baseline files predate the sidecar contract fails, and the fix is to re-take each reading through the capture wrapper rather than to waive it. There is no waiver here for the same reason there is none for a disagreeing sidecar anywhere else: a present-but-unevidenced baseline is the exact case the flag exists for, and re-taking a reading is cheap.
+
+### Where `--require-ledgered-captures` applies
+
+It covers the rehearsal capture **and every baseline reading** — each must have its current hash pinned by a capture record in the ledger, per the spine's *`--require-ledgered-captures`* section. The one-release grace is the family's: without the flag an unpinned artifact is a warning and the exit code is unchanged, and without a ledger the lookup does not happen at all, so an invocation that predates the contract behaves exactly as it did.
+

@@ -76,3 +76,42 @@ applying; a line with no backticked command; a backticked path not standing in
 for one; a quoted-argument command matching its argv; reordered, trimmed and
 case-folded commands still failing; a sidecar with no `argv`; `NOT RUN` lines
 still exempt; and the cross-gate drift guard.
+
+## From the retired spine
+
+### `--emit-fingerprints` — why a finding gets a derived identity
+
+It is a separate read-only mode, independent of the grading path: over the same
+gated section `--report` grades, it prints one fingerprint per finding line.
+`diff_findings.py` then takes two such reports and classifies each finding as
+resolved, persistent or new.
+
+The design constraints are all about what *counts as the same finding* across a
+rescan, and each one closes a specific misreading:
+
+- **The location's line suffix is excluded from the key.** A fix landing above a
+  finding shifts it down the file. Keyed on the line, that finding would be
+  reported resolved and immediately re-reported as new — a fix nobody made.
+- **Digit runs are collapsed and whitespace normalised**, so a reworded count or
+  a re-wrapped line is still the same finding.
+- **The category is the nearest preceding check-line name**, because the finding
+  grammar carries no category field of its own; a finding's position under a
+  check is what says which check found it. A finding with no check before it is
+  recorded as uncategorised rather than guessed at.
+
+Fingerprints are **derived, never hand-authored** — the same reasoning that
+makes the capture sidecar machine-owned. A hand-typed identity is a claim about
+sameness rather than a measurement of it, and the whole value of the rescan
+diff is that nobody chose which findings matched.
+
+### `--allow-uncaptured`, and the split it preserves
+
+The waiver waives the **citation only**: a line that cites no capture. A cited
+capture that disagrees — wrong hash, disagreeing sidecar, a command that does
+not match the line — is never waived, which is the same split
+`check_runtime_evidence.py --allow-missing-sidecar` makes between an absent
+sidecar and a present one that contradicts its capture. It exists for one named
+case, grading a report authored before the capture contract, and it announces
+itself on stderr and in the report so that a waived run cannot be mistaken for a
+clean one.
+

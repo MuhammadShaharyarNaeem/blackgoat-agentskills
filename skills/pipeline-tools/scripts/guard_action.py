@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Pre-execution guard: converts seven restraint rules from "should not" to "cannot".
+"""Pre-execution guard: converts eight restraint rules from "should not" to "cannot".
 
 Every other script in this family verifies AFTER the fact, and the decision to
 run it is the model's. This one runs BEFORE the tool call, decided by the
 runtime rather than by the model, and returns a deny that the model cannot
 route around. It is the mechanical form of CLAUDE.md convention #9 applied to
-the seven restraints that bite at the exact moment the model most wants to
+the eight restraints that bite at the exact moment the model most wants to
 proceed: committing, editing the RED, delegating before intake, delegating
 into a lane a human has to clear, hand-writing the artifacts the gates read,
-running a build or test raw instead of through the log wrapper, and hand-
-editing the one persona file in this tree no agent may touch.
+running a build or test raw instead of through the log wrapper, hand-
+editing the one persona file in this tree no agent may touch, and opening a
+pipeline-tools script's SOURCE instead of running its --help.
 
 This file is the DECISION LOGIC and it is runtime-neutral (convention #5).
 The per-runtime packaging -- which hook event fires it, and which JSON shape
@@ -99,6 +100,21 @@ THE SEVEN RULES
    means deny here, not "trust the env var". The sanctioned append is
    therefore always made through the Edit or Write tool, which also matches
    this project's own working rule for editing files.
+8. `pipeline_tools_are_help_not_source` -- tool `Read`, or a `Bash` command
+   that dumps a file (`cat`/`type`/`Get-Content`/`sed -n`/`head`/`tail`/
+   `less`), targeting a `skills/pipeline-tools/scripts/*.py` file, while ANY
+   lane is active -> DENY, naming the `--help` invocation to run instead.
+   base-persona.md: a pipeline-tools script is invoked, never read -- its
+   `--help` is the complete contract at a fraction of the token cost of
+   opening several hundred lines of source to learn how to call it, which is
+   exactly the cost the script exists to remove. Carve-out: when the cwd's
+   own repository root IS this plugin repository (`skills/pipeline-tools/
+   scripts/guard_action.py` exists under it) the call is always allowed,
+   lane or no lane -- editing the tools requires reading them, and that is
+   authoring, not the execution this rule restrains. Unlike rules 1-3/5/6,
+   `Read` carries no `tool_input.command` and cannot write, so this rule
+   reads `paths_of()` for `Read` and a dedicated read-verb scan for `Bash`,
+   never `bash_write_targets()`.
 
 RUNNER MATCHING (rule 5)
 -------------------------
@@ -238,14 +254,16 @@ the WHOLE epic's status to one bug among possibly several open on that
 route; no per-bug-scoped status exists there to read. Unresolved -- tracked,
 not silently worked around.
 
-VERIFY LANES DO NOT ARM RULE 1
-------------------------------
-A state file whose `pipeline` is `bgpdd-verify` is detected as a lane (so
-`--explain` shows it) but does not arm rule 1. `bgpdd-verify` has no commit
-gate: its only durable output is Quinn's Playwright specs, which are committed
-by hand outside the lane, so arming rule 1 there names a gate that does not
-exist and leaves the lane with no commit path at all. Rules 2, 3 and 4 are
-unaffected -- rule 4 in particular still guards the verify lane's ledger.
+VERIFY AND SECURE LANES DO NOT ARM RULE 1
+-----------------------------------------
+A state file whose `pipeline` is `bgpdd-verify` or `bgpdd-secure` is detected
+as a lane (so `--explain` shows it) but does not arm rule 1. Neither lane has
+a commit gate. `bgpdd-verify`'s only durable output is Quinn's Playwright
+specs, which are committed by hand outside the lane; `bgpdd-secure` lands
+nothing in the product repo at all -- it produces findings and routes them
+out. Arming rule 1 for either names a gate that does not exist and leaves the
+lane with no commit path at all. Rules 2, 3 and 4 are unaffected -- rule 4 in
+particular still guards both lanes' ledgers.
 
 Known failure modes, each deliberate rather than overlooked:
 
@@ -387,7 +405,19 @@ BLACKGOAT_PART_VIII_HEADING = "## Part VIII: Problem & Solution Ledger"
 BLACKGOAT_APPEND_ENV_VAR = "BLACKGOAT_ALLOW_PART_VIII_APPEND"
 
 # A pipeline whose lane has no commit gate: it arms every rule EXCEPT rule 1.
-NO_COMMIT_GATE_PIPELINES = ("bgpdd-verify",)
+NO_COMMIT_GATE_PIPELINES = ("bgpdd-verify", "bgpdd-secure")
+
+# Rule 8: a pipeline-tools script's SOURCE, never its calling contract. The
+# last two segments before the filename must be pipeline-tools/scripts, and
+# the filename itself must be a .py file -- segment-based and separator-
+# agnostic like `is_blackgoat_persona_path`.
+PIPELINE_TOOLS_SCRIPTS_SEGMENTS = ("pipeline-tools", "scripts")
+# Plain file-dump verbs; matched the same way BASH_WRITE_VERBS is (basename,
+# lower-cased, exe/cmd suffix stripped). `sed` is handled separately below --
+# only `sed -n` (print mode) counts as a read here; `sed -i` is a WRITE and is
+# already `bash_write_targets()`'s job.
+BASH_READ_VERBS = ("cat", "type", "get-content", "head", "tail", "less")
+SED_PRINT_FLAG_RE = re.compile(r"^-[A-Za-z]*n")
 
 # `git`, any number of global options, then a history-writing subcommand.
 # `stash` captures its `pop`/`apply` tail so the deny message can name it.
@@ -925,6 +955,31 @@ def is_blackgoat_persona_path(path):
             and tuple(s.lower() for s in parts[-2:]) == BLACKGOAT_PERSONA_SEGMENTS)
 
 
+def is_pipeline_tool_script_path(path):
+    """True when `path`'s filename is a `.py` file directly inside a
+    `pipeline-tools/scripts` directory. Rule 8's target: the source a script
+    is invoked from, not read -- see that rule in the module docstring.
+    """
+    parts = _segments(path)
+    if len(parts) < 3 or not parts[-1].lower().endswith(".py"):
+        return False
+    return tuple(s.lower() for s in parts[-3:-1]) == PIPELINE_TOOLS_SCRIPTS_SEGMENTS
+
+
+def cwd_is_plugin_repo(cwd):
+    """Rule 8's carve-out: the hook's own cwd IS this plugin's repository
+    root (checked the way the task that added this rule pinned: the
+    presence of `skills/pipeline-tools/scripts/guard_action.py` under it).
+    Editing the tools requires reading them -- authoring, not the execution
+    this rule restrains.
+    """
+    try:
+        return (Path(cwd) / "skills" / "pipeline-tools" / "scripts"
+                / "guard_action.py").is_file()
+    except OSError:
+        return False
+
+
 def _part_viii_append_only(current_text, old_text, new_text):
     """True when `old_text` -> `new_text` only ADDS text after the Part VIII
     heading. A cheap containment check, not a diff -- see rule 7 in the module
@@ -1043,6 +1098,45 @@ def bash_write_targets(command):
         for match in PY_OPEN_WRITE_RE.finditer(command):
             if set("wa+") & set(match.group("m").lower()):
                 emit("python -c", match.group("p"))
+    return targets
+
+
+def bash_read_targets(command):
+    """[(verb, path)] for every path a plain file-dump command plausibly
+    READS -- rule 8's Bash predicate: `cat`/`type`/`Get-Content`/`head`/
+    `tail`/`less`, and `sed` only when `-n` (print mode) is among its flags.
+    Over-collects candidates the same way `bash_write_targets` does (a
+    numeric `-n` operand or a flag argument may be emitted alongside the
+    real path); the narrow `is_pipeline_tool_script_path` predicate decides.
+    """
+    targets = []
+
+    def emit(verb, raw):
+        path = (raw or "").strip().strip("\"'").strip()
+        if not path or path == "-":
+            return
+        pair = (verb, path)
+        if pair not in targets:
+            targets.append(pair)
+
+    command = command or ""
+    for segment in COMMAND_SEPARATORS.split(command):
+        if not segment.strip():
+            continue
+        tokens = bash_tokens(segment)
+        for index, token in enumerate(tokens):
+            verb = command_basename(token)
+            operands = tokens[index + 1:]
+            if verb == "sed":
+                if not any(SED_PRINT_FLAG_RE.match(t) for t in operands):
+                    break   # sed without -n is not this rule's read shape
+            elif verb not in BASH_READ_VERBS:
+                continue
+            for operand in operands:
+                if operand.startswith("-"):
+                    continue
+                emit(verb, operand)
+            break           # the first read verb in a segment owns its operands
     return targets
 
 
@@ -1319,6 +1413,34 @@ def decide(tool_name, tool_input, cwd, now=None, window_hours=WINDOW_HOURS_DEFAU
                         state_path, halt["unit"], lane.ledger)
             )
 
+    # Rule 8 -- pipeline-tools scripts are invoked, never read. Only while a
+    # lane is active, and never inside the plugin repo itself, where reading
+    # the source is authoring it, not calling it.
+    if lanes and not cwd_is_plugin_repo(cwd):
+        script_path, via = None, None
+        if tool_name == "Read":
+            for path in paths_of(tool_input):
+                if is_pipeline_tool_script_path(path):
+                    script_path, via = path, "the Read tool"
+                    break
+        elif tool_name in BASH_TOOLS:
+            command = command_of(tool_input)
+            for _verb, path in bash_read_targets(command):
+                if is_pipeline_tool_script_path(path):
+                    script_path = path
+                    via = "`{0}`".format(command.strip())
+                    break
+        if script_path:
+            return "deny", "pipeline_tools_are_help_not_source", (
+                "Blocked: reading `{0}` via {1} while a lane is active. "
+                "base-persona.md: a pipeline-tools script is invoked, never "
+                "read -- its --help is the complete contract (purpose, "
+                "every flag, every exit code, and where a problem code "
+                "surfaces) at a fraction of the source's token cost. Run "
+                "instead:\n  {2} --help"
+                .format(script_path, via, _gate_command(Path(script_path).name))
+            )
+
     return "allow", None, ""
 
 
@@ -1384,9 +1506,84 @@ def read_stdin():
     return data.decode("utf-8-sig", errors="replace").lstrip("﻿")
 
 
+PURPOSE = ("PreToolUse hook that denies a tool call violating one of eight "
+           "pipeline restraints; the model never invokes it directly.")
+
+EPILOG = """Reads:
+  stdin -- one PreToolUse hook payload as JSON, read ONLY when neither
+    --explain nor --self-test was given (so --help never consumes it and the
+    hook path is unchanged). Keys used, across host shapes:
+    {"tool_name": "<Bash|Read|Write|Edit|MultiEdit|Task|Agent|...>",
+     "tool_input": {...}, "cwd": "<path>"}.
+  The tree, for lane detection inside a 12h freshness window
+    (--window-hours): a state file with a non-empty "pipeline";
+    .docs/bugfix/*/bug-report.md; .docs/*/implementation/bug-report.md and
+    .docs/*/implementation/bugs/*/bug-report.md; an unclosed quick note.
+    Per lane it also reads gates.jsonl (a check_commit_gate.py /
+    check_quick_close.py PASS carrying --commit for the lane's CURRENT
+    milestone closes it) and orchestrator-state.json ("halt" for rule 6;
+    a "status" of escalated/closed closes a standalone bugfix lane).
+
+Writes:
+  stdout -- nothing on an allow; on a deny, the host's decision payload
+    below. stderr -- a one-line note on any fail-open. No file is ever
+    written, and an explicit "allow" is never emitted: it would
+    short-circuit the user's own permission prompt.
+
+Problem codes:
+  commit_through_the_gate            git history-write / gh pr merge in a lane
+  frozen_tests_during_a_fix          write to an EXISTING test path pre-gate
+  no_delegation_before_intake        Task/Agent before an intake PASS
+  gate_artifacts_are_written_by_tools  write to a gate artifact, always
+  build_and_test_through_the_wrapper   raw build/test runner in a lane
+  delegation_halted_for_the_user     Task/Agent while a halt stands
+  blackgoat_persona_is_hand_edited_only  any write to agents/blackgoat.md
+  pipeline_tools_are_help_not_source   reading a pipeline-tools script source
+
+JSON keys:
+  Printed on stdout on a deny only.
+  --format claude  {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+    "permissionDecision": "deny", "permissionDecisionReason": "<text>"}}
+  --format cursor  {"permission": "deny", "userMessage": "<text>"}
+  The reason names the violated restraint and the command to run instead.
+
+Exit codes:
+  0  always from main() -- an allow, a deny (the Windows launcher swallows a
+     non-zero code, so the decision travels in the stdout JSON, not here),
+     --explain, and every fail-open alike
+  0  --self-test, all cases passed
+  1  --self-test, at least one case failed
+
+Self-test:
+  python guard_action.py --self-test   (119 cases)
+"""
+
+
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(
-        description="Pre-execution guard for the bgPDD lanes.")
+    parser = PurposeFirstParser(
+        prog="guard_action.py",
+        description=PURPOSE,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG,
+    )
     parser.add_argument("--format", choices=("claude", "cursor"), default="claude",
                         help="which host's decision payload to emit")
     parser.add_argument("--window-hours", type=float, default=WINDOW_HOURS_DEFAULT,
@@ -1432,6 +1629,11 @@ def run_explain(args):
                "Bash mutation) to agents/blackgoat.md, always; carve-out is "
                "BLACKGOAT_ALLOW_PART_VIII_APPEND=1 plus a checked pure "
                "append after the Part VIII heading, Edit/Write only")
+    out.append("  8 pipeline_tools_are_help_not_source  Read, or Bash cat/"
+               "type/Get-Content/sed -n/head/tail/less, of a pipeline-tools/"
+               "scripts/*.py file, any active lane; carve-out is the cwd's "
+               "own repo root being this plugin repo (editing the tools is "
+               "authoring, not execution)")
     out.append("")
     out.append("cwd            : {0}".format(cwd))
     out.append("window (hours) : {0:g}".format(args.window_hours))
@@ -1482,6 +1684,10 @@ def run_explain(args):
         ", ".join(l.root for l in halted) if halted else "nothing"))
     out.append("Rule 7 is always armed, for write tools AND for Bash, "
                "against agents/blackgoat.md. No lane needed.")
+    out.append("Rule 8 armed for: {0}{1}".format(
+        ", ".join(l.root for l in lanes) if lanes else "nothing",
+        " (carve-out: allowed anyway, cwd is this plugin repo)"
+        if lanes and cwd_is_plugin_repo(cwd) else ""))
     print("\n".join(out))
     return 0
 
@@ -2521,6 +2727,85 @@ def run_self_test():
                 "Write", {"file_path": path, "content": "# tampered\n"})
             self.assertEqual((d, rule),
                              ("deny", "blackgoat_persona_is_hand_edited_only"))
+
+        # -- secure lanes have no commit gate either (mirrors test_80) --
+
+        def test_109_a_secure_lane_does_not_arm_rule_1(self):
+            self.make_feature(pipeline="bgpdd-secure")
+            for command in ("git commit -m x", "git merge main"):
+                self.assertEqual(self.decide("Bash", {"command": command})[0],
+                                 "allow", command)
+
+        # -- rule 8: pipeline-tools scripts are help, not source ---------
+
+        SCRIPT_PATH = "skills/pipeline-tools/scripts/check_coverage.py"
+
+        def test_109_read_of_a_script_denied_during_an_active_lane(self):
+            self.make_feature()
+            d, rule, reason = self.decide("Read", {"file_path": self.SCRIPT_PATH})
+            self.assertEqual((d, rule),
+                             ("deny", "pipeline_tools_are_help_not_source"))
+            self.assertIn("check_coverage.py --help", reason)
+
+        def test_110_cat_of_a_script_denied_during_an_active_lane(self):
+            self.make_bugfix()
+            d, rule, reason = self.decide(
+                "Bash", {"command": "cat " + self.SCRIPT_PATH})
+            self.assertEqual((d, rule),
+                             ("deny", "pipeline_tools_are_help_not_source"))
+            self.assertIn("--help", reason)
+
+        def test_111_read_of_a_script_allowed_with_no_active_lane(self):
+            self.assertEqual(detect_lanes(self.root), [])
+            self.assertEqual(
+                self.decide("Read", {"file_path": self.SCRIPT_PATH})[0], "allow")
+
+        def test_112_read_of_a_script_allowed_inside_the_plugin_repo(self):
+            # A self-contained "plugin repo" fixture -- a copy of the real one
+            # would risk this test's outcome depending on this worktree's own
+            # .docs/ state, so it fabricates both halves of the carve-out
+            # (an active lane, AND the guard_action.py marker file) itself.
+            fake_repo = Path(self.root) / "fake-plugin-repo"
+            marker = fake_repo / "skills" / "pipeline-tools" / "scripts" / "guard_action.py"
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text("# stand-in\n", encoding="utf-8")
+            state_dir = fake_repo / ".docs" / "demo"
+            touch(state_dir / "orchestrator-state.json",
+                 json.dumps({"pipeline": "bgpdd-build", "milestone_cursor": None}),
+                 0.0)
+            touch(state_dir / "implementation" / "gates.jsonl", "", 0.0)
+
+            self.assertTrue(cwd_is_plugin_repo(str(fake_repo)))
+            self.assertTrue(detect_lanes(str(fake_repo)))  # the lane IS active
+            d, _, _ = decide(
+                "Read", {"file_path": self.SCRIPT_PATH}, str(fake_repo))
+            self.assertEqual(d, "allow")
+
+        def test_113_other_read_verbs_and_sed_dash_n_also_deny(self):
+            self.make_feature()
+            for command in (
+                "type " + self.SCRIPT_PATH,
+                "Get-Content " + self.SCRIPT_PATH,
+                "head -n 40 " + self.SCRIPT_PATH,
+                "tail " + self.SCRIPT_PATH,
+                "less " + self.SCRIPT_PATH,
+                "sed -n '1,40p' " + self.SCRIPT_PATH,
+            ):
+                d, rule, _ = self.decide("Bash", {"command": command})
+                self.assertEqual((d, rule),
+                                 ("deny", "pipeline_tools_are_help_not_source"),
+                                 command)
+
+        def test_114_sed_without_dash_n_and_a_non_script_read_are_allowed(self):
+            self.make_feature()
+            # sed -i is a WRITE (rules 2/4's territory), not rule 8's read shape.
+            _d, rule, _reason = self.decide(
+                "Bash", {"command": "sed -i s/x/y/ " + self.SCRIPT_PATH})
+            self.assertNotEqual(rule, "pipeline_tools_are_help_not_source")
+            self.assertEqual(self.decide(
+                "Read", {"file_path": "README.md"})[0], "allow")
+            self.assertEqual(self.decide(
+                "Bash", {"command": "cat README.md"})[0], "allow")
 
     suite = unittest.TestLoader().loadTestsFromTestCase(GuardTest)
     result = unittest.TextTestRunner(verbosity=2).run(suite)

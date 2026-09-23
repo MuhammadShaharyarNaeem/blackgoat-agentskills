@@ -208,8 +208,72 @@ def build_report(ledger_path, require_chain=False):
     return report
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Decides whether a gate ledger's hash chain is intact, naming the "
+           "first broken link, before any verdict is read out of it.")
+
+EPILOG = """\
+Reads:
+  --ledger  a gates.jsonl this family's gates append to: one JSON object per
+    line. A chained record carries both of
+      "prev": sha256 of the previous line's bytes, stripped of its terminator
+              and surrounding whitespace, or "genesis" for the first record
+      "self": sha256 of json.dumps(record without "self", sort_keys=True,
+              separators=(",", ":")) encoded UTF-8
+    A legacy record carries neither, and is tolerated only BEFORE the first
+    chained record. Nothing is ever written back to this file.
+
+Problem codes:
+  chain_broken              the chain's first broken link (line, reason, detail)
+  legacy_unchained_records  --require-chain only: unchained records are present
+  ledger_missing            no --ledger was given; carried in the error payload
+  Reasons a chain_broken problem carries:
+    unparseable              the line is not a JSON object
+    legacy-after-chained     an unchained record follows a chained one
+    incomplete-chain-fields  only one of prev / self is present
+    self-mismatch            the record was edited after it was written
+    prev-mismatch            a record was inserted, removed or edited earlier
+    unreadable               the ledger's bytes could not be read
+
+JSON keys:
+  ledger, pass, records, chained_records, legacy_records,
+  legacy_unchained_records, problem ({problem, line, reason, detail} or null),
+  problem_codes, error
+
+Exit codes:
+  0  chain intact (an empty ledger and an all-legacy ledger included)
+  1  chain_broken, or legacy_unchained_records under --require-chain
+  2  --ledger missing, or a ledger file that does not exist or is unreadable
+
+Self-test:
+  python check_ledger.py --self-test   (27 cases)
+"""
+
+
 def main(argv):
-    parser = argparse.ArgumentParser(prog="check_ledger.py")
+    parser = PurposeFirstParser(
+        prog="check_ledger.py",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--ledger",
                         help="the gate ledger whose hash chain to verify "
                              "(read only; this script never writes)")
@@ -515,6 +579,7 @@ def run_self_test():
             "check_acceptance_suite.py",
             "check_agent_report.py",
             "check_always_on.py",
+            "check_attack_matrix.py",
             "check_batch_close.py",
             "check_blockers.py",
             "check_bugfix_intake.py",

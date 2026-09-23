@@ -697,86 +697,146 @@ def apply_updates(args):
     return state, warnings
 
 
+PURPOSE = ("The sanctioned read-modify-write path for "
+           "orchestrator-state.json: cursor, artifacts, blockers, halts and "
+           "status, gated by evidence.")
+
+EPILOG = """Reads:
+  --state -- orchestrator-state.json; must be a JSON OBJECT. --init writes
+    the skeleton
+    {"schema": "1", "project_name": <--project-name>, "feature": null,
+     "pipeline": "", "branch": null, "milestone_cursor": null,
+     "artifacts": {}, "blockers": []}; on an existing file it is a no-op
+    warning while the call's other actions still apply.
+  --resolve-blocker <target> -- matched against "blockers" in this order:
+    exact id, exact text (removing every entry sharing it), unique
+    substring (ambiguous prints "candidates"). Matching nothing only warns.
+  --evidence <path> -- resolved against the STATE FILE's directory first,
+    then the CWD (an absolute path once, as given); must exist, non-empty.
+  --require-game-tape <path> -- shared byte-for-byte with mark_milestone.py.
+    Fences blanked, it demands a "## bgpdd-<lane> - <milestone> - <date>"
+    heading (ANY lane name) matching --milestone by whole token (full title
+    or its leading identifier; the epic-summary heading never counts, last
+    section wins), 3-6 bullets, one or more fenced blocks, and either a
+    summarize_run mention or a table row. ACTIVE ONLY on a --set-cursor /
+    --set-pipeline write with --milestone; any other action warns.
+
+Writes:
+  --state -- ATOMICALLY, "updated" stamped on every successful call.
+    --set-cursor / -pipeline / -branch / -feature set those fields
+    verbatim and --set-artifact <name>=<path> (repeatable) merges into
+    "artifacts"; in all of these the LITERAL STRING "null" stores JSON
+    null. --add-blocker (repeatable) appends an entry with auto id "B-<n>",
+    one past the highest present (a resolved top id can be reused); legacy
+    entries are never rewritten, and the --blocker-* companions apply to
+    EVERY --add-blocker in the invocation. --set-status merges "status"
+    plus a "status_updated" stamp. --set-halt takes a JSON object with
+    non-empty string "unit"/"agent"/"code"/"reason", stamps "added", and
+    REPLACES any standing halt (one entry, never a list); --clear-halt
+    <unit> removes it only for that exact unit, and a mismatch or absence
+    is a no-op warning.
+  blockers-resolved.log, beside the state file -- one appended line per
+    removal: "<ts>\\t<id>\\t<full entry>\\t<evidence>".
+  --ledger -- one chained record per run. --resolve-blocker adds
+    "action": "resolve-blocker", "evidence" (raw), "resolved_ids",
+    "resolved_entries" and, once it resolves, "evidence_resolved"
+    (state-dir-relative) and "evidence_sha256"; --clear-halt adds
+    "action": "clear-halt", the unit, the halt's "code" and the reason;
+    --set-status records "previous_status" and any --reason. --milestone
+    is this run's ledger milestone, overriding the --set-cursor fallback.
+
+Problem codes:
+  evidence_not_found     --evidence resolves to no such file
+  evidence_empty         --evidence resolves to a zero-byte file
+  evidence_is_directory  --evidence resolves to a directory
+  game-tape-missing      --require-game-tape path absent or unreadable
+  no-section             no conforming ## bgpdd-<lane> heading for it
+  bullet-count           the section does not carry 3-6 bullets
+  no-pasted-output       the section carries no fenced block
+  no-telemetry           no summarize_run mention and no table row
+
+JSON keys:
+  the full resulting state object.
+
+Exit codes:
+  0  the action(s) applied and the file was written
+  1  the game-tape gate refused, or --resolve-blocker's --evidence did not
+     resolve to an existing, non-empty file -- nothing is written
+  2  usage/structural failure: missing --state, no action, --init without
+     --project-name, --resolve-blocker without a non-empty --evidence, an
+     ambiguous resolve target, a --blocker-* companion without
+     --add-blocker, a bad --set-artifact spec, a --state that is not a
+     JSON object, a missing --state without --init, --require-game-tape
+     without --milestone, a malformed / non-object / missing-key
+     --set-halt, or --clear-halt without a non-empty --reason
+
+Self-test:
+  python update_state.py --self-test   (69 cases)
+"""
+
+
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(prog="update_state.py")
+    parser = PurposeFirstParser(
+        prog="update_state.py",
+        description=PURPOSE,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG,
+    )
     parser.add_argument("--state")
     parser.add_argument("--init", action="store_true")
     parser.add_argument("--project-name")
     parser.add_argument("--set-cursor")
     parser.add_argument("--set-pipeline")
     parser.add_argument("--set-branch")
-    parser.add_argument(
-        "--set-feature",
-        help='Tier-1 durable feature id, or the literal "null" for greenfield',
-    )
+    parser.add_argument("--set-feature")
     parser.add_argument("--set-artifact", action="append", default=[])
     parser.add_argument("--add-blocker", action="append", default=[])
-    parser.add_argument("--blocker-milestone",
-                        help="applies to every --add-blocker in this invocation")
+    parser.add_argument("--blocker-milestone")
     parser.add_argument("--blocker-capability",
-                        help='e.g. "browser", "docker", "device"; applies to '
-                             "every --add-blocker in this invocation")
+                        help='e.g. "browser", "docker"')
     parser.add_argument("--blocker-severity", choices=list(SEVERITIES),
-                        help="default Critical; applies to every --add-blocker "
-                             "in this invocation")
+                        help="default Critical")
     parser.add_argument("--blocker-source",
-                        help="agent or gate that raised it; applies to every "
-                             "--add-blocker in this invocation")
-    parser.add_argument("--blocker-evidence",
-                        help="applies to every --add-blocker in this invocation "
-                             "(distinct from --evidence, which is --resolve-blocker's)")
+                        help="agent or gate that raised it")
+    parser.add_argument("--blocker-evidence")
     parser.add_argument("--resolve-blocker",
-                        help="an id (\"B-3\"), exact text, or a substring that "
-                             "must match exactly one entry's text")
-    parser.add_argument(
-        "--evidence",
-        help="--resolve-blocker only: path to the evidence file proving the "
-             "fix (resolved relative to the state file's directory, then "
-             "the CWD). Must exist and be non-empty, or the call exits 1 "
-             "and nothing is written.")
-    parser.add_argument(
-        "--set-halt", dest="set_halt",
-        help='JSON object {"unit":str,"agent":str,"code":str,"reason":str} '
-             "merged into state[\"halt\"] (other keys untouched); a \"ts\" "
-             "stamp is added here. Written by check_redelegation.py so a "
-             "future guard_action.py hook can deny delegation while it "
-             "stands (CLAUDE.md convention #9).")
-    parser.add_argument(
-        "--clear-halt", dest="clear_halt",
-        help="remove state[\"halt\"] when it exists and its \"unit\" field "
-             "equals this value; a halt for a different unit, or no halt at "
-             "all, is left untouched (warning, not an error). Requires "
-             "--reason -- check_redelegation.py never clears a halt itself, "
-             "so this is a human act, recorded")
-    parser.add_argument(
-        "--reason",
-        help="required with --clear-halt: what changed in the world that "
-             "makes the blocker no longer true. Recorded in the ledger line "
-             "alongside the cleared halt's unit and code. Blank is refused "
-             "the same way --resolve-blocker's --evidence is. Optional with "
-             "--set-status, where it is recorded on the ledger line but not "
-             "required.")
-    parser.add_argument(
-        "--set-status", dest="set_status", choices=list(STATUSES),
-        help='merge state["status"] = STATUS plus a "status_updated" '
-             "timestamp. Optional --reason is recorded on the ledger line "
-             "alongside the status this call overwrote. Written by "
-             "bgpdd-bugfix Phase 2 step 5 / Phase 5 step 4 (standalone "
-             "route) so guard_action.py's lane_is_closed()/"
-             "unfixed_bugfix_lanes() can treat an escalated or closed lane "
-             "as closed without waiting on the freshness window.")
+                        help="an id, exact text, or a substring")
+    parser.add_argument("--evidence",
+                        help="--resolve-blocker only (see Reads)")
+    parser.add_argument("--set-halt", dest="set_halt",
+                        help="JSON object for the standing halt")
+    parser.add_argument("--clear-halt", dest="clear_halt",
+                        help="clear this unit's halt; needs --reason")
+    parser.add_argument("--reason",
+                        help="required with --clear-halt")
+    parser.add_argument("--set-status", dest="set_status",
+                        choices=list(STATUSES))
     parser.add_argument("--ledger",
                         help="append one JSON record per run to this path")
-    parser.add_argument(
-        "--milestone",
-        help="the milestone this write is about; required by "
-             "--require-game-tape and recorded in the ledger line")
+    parser.add_argument("--milestone",
+                        help="required by --require-game-tape; scopes the "
+                             "ledger record")
     parser.add_argument(
         "--require-game-tape", dest="require_game_tape",
-        help="refuse a cursor/pipeline write unless game-tape.md carries a "
-             "conforming '## bgpdd-<lane> - <milestone> - <date>' checkpoint "
-             "for --milestone (the lane's game-tape phase; any lane name "
-             "matches, so bugfix's tape satisfies it as build's does)")
+        help="game-tape file that must carry this milestone's checkpoint")
     parser.add_argument("--self-test", action="store_true")
     return parser
 

@@ -421,8 +421,97 @@ def build_report(args):
     return out, (0 if out["result"] == "PASS" else 1)
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Decides whether every bug in a bugfix batch is terminal, "
+           "committed, worktree-removed and recorded in the batch's Final "
+           "table.")
+
+EPILOG = """\
+Reads:
+  --state <path>     {batch-root}/orchestrator-state.json. The bugs list and
+    each bug's record are artifacts written only through
+    `update_state.py --set-artifact`:
+      artifacts["bugs"]                 comma-separated slugs
+      artifacts["bug:<slug>:status"]    MERGED | DROPPED-PLAN | OPEN | ...
+      artifacts["bug:<slug>:worktree"]  the worktree path
+      artifacts["bug:<slug>:root"]      that bug's {bugfix-root}
+  --batch-md <path>  the batch's batch.md. Its `## Final` section must carry
+    a markdown table with one row per bug; the commit cell of a MERGED bug's
+    row must be a real sha, not a placeholder:
+      ## Final
+
+      | # | Slug | Commit | Gate record |
+      |---|---|---|---|
+      | 1 | null-coupon-500 | 9f2c1ab | check_commit_gate.py PASS |
+  Each MERGED bug's OWN ledger, {bugfix-root}/gates.jsonl: its latest
+    check_commit_gate.py verdict for that milestone must be PASS with
+    --commit in its argv.
+  --repo <dir>       required; used ONLY to guess a MERGED bug's
+    {bugfix-root} when its state carries no bug:<slug>:root artifact.
+  --milestone        the batch slug, recorded on the ledger line.
+  --ledger <path>    the append target AND, unlike every other reader here,
+    the file whose own hash chain is verified before anything in it is
+    trusted. This gate is the sole writer of {batch-root}/gates.jsonl.
+
+  A bug's worktree is checked only when its status is terminal: an OPEN
+  bug's worktree is expected to still exist. This gate never touches git,
+  commits anything, or removes a worktree.
+
+Problem codes:
+  batch_ledger_chain_broken   the batch's own ledger chain is broken
+  batch_md_missing            no batch.md at --batch-md
+  final_table_missing         no `## Final` section in batch.md
+  bug_open                    a bug is not MERGED or DROPPED-PLAN
+  worktree_unknown            no recorded worktree path for the bug
+  worktree_not_removed        the recorded worktree still exists on disk
+  bug_not_committed           no scoped check_commit_gate.py PASS --commit
+  final_table_row_missing     no Final-table row for the bug
+  final_table_commit_missing  a MERGED bug's row names no commit sha
+
+JSON keys:
+  Always printed on stdout (there is no --json flag):
+  state, batch_md, repo, milestone, ledger,
+  bugs ([{slug, status, worktree, root, problems}]),
+  ledger_chain_ok, final_table_present, problems, problem_codes,
+  result, error
+
+Exit codes:
+  0  every bug terminal, every worktree gone, the batch's own ledger chain
+     intact, and the Final table matches -- PASS.
+  1  any of the above failed -- FAIL, every failing term in problem_codes.
+  2  usage error (--state, --batch-md and --repo are all required), an
+     unreadable or non-JSON state file, or a state file carrying no
+     artifacts["bugs"] list to check.
+
+Self-test:
+  python check_batch_close.py --self-test   (18 cases)
+"""
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(prog="check_batch_close.py")
+    parser = PurposeFirstParser(
+        prog="check_batch_close.py",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--state", help="the batch's orchestrator-state.json")
     parser.add_argument("--batch-md", help="the batch's batch.md")
     parser.add_argument("--repo", default=".",

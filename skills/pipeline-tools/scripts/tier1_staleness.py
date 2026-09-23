@@ -610,8 +610,105 @@ def render_markdown(report):
     return "\n".join(lines)
 
 
+PURPOSE = ("Reports which Tier-1 discovery docs are stale against their "
+           "stamped shas, so a refresh re-runs only the affected ones.")
+
+EPILOG = """Reads:
+  Scope -- every .md under <summary-root>/<feature>/ (recursively), plus
+    <summary-root>/context.md.
+  The provenance stamp -- read with check_tier1_provenance.py's own
+    header_of / stamped_repos (imported, never re-derived), so the grammar
+    is that file's and is not restated here. INHERITED STAMPS: the
+    discovery contract stamps only context.md and {feature}/overview.md, so
+    a doc under {feature}/ with no stamp of its own inherits
+    overview.md's (stamp_source "inherited:overview.md"; its own stamp is
+    "own"). context.md never inherits.
+  --repo [<name>=]<path>, repeatable -- the name is matched against the
+    stamp's key case- and separator-insensitively, so "gorelo_backend"
+    matches a key mangled to "gorelobackend" by markdown-decoration
+    stripping. Each path must exist and be a git repo; a valid repo no
+    stamp mentions is harmless scope, not an error. Each stamped repo is
+    diffed from its stamped sha to HEAD.
+  Citations, two classes:
+    path-shaped -- multi-segment path tokens, slash or backslash, ending in
+      .cs .ts .tsx .vue .js .py .ps1 .sql .json .yaml .yml .csproj .razor
+      .cshtml. Matched against the changed-file list by trailing path
+      segments in EITHER direction. Hits land in changed /
+      deleted_or_renamed.
+    bare filename -- a single-segment token with a source extension and no
+      separator (AlertHelper.cs). Matched by BASENAME ONLY against the
+      ADDED/MODIFIED list (not renames or deletes), across every repo the
+      stamp scopes, combined: exactly one match is changed_by_basename and
+      counts toward stale; two or more is an unresolvable collision listed
+      in ambiguous_basenames and does NOT count. A bare name a path-shaped
+      citation in the same doc already covers is skipped.
+
+Writes:
+  Nothing -- no doc, no re-stamp. Only --ledger, which appends one chained
+  JSON record per run (best-effort).
+
+Problem codes:
+  stamp_unresolvable   the stamped sha cannot be resolved in that repo
+  repo_not_provided    a stamped repo no --repo argument matched
+
+JSON keys:
+  A doc's verdict is one of: fresh (stamped, own or inherited, resolvable,
+  nothing cited changed), stale (something in changed, deleted_or_renamed or
+  changed_by_basename), unstamped (no own stamp and nothing to inherit --
+  overview.md has none), unresolvable (stamp_unresolvable or
+  repo_not_provided for that doc).
+  Printed by default; --markdown prints a compact table instead, and
+  the two flags are mutually exclusive (exit 2 together).
+  result, summary_root, feature, repos, docs (each: path, stamp_source
+  ["own" / "inherited:overview.md" / null], stamped, commits_behind,
+  cited_paths, cited_basenames, changed, deleted_or_renamed,
+  changed_by_basename, ambiguous_basenames [{name, count}], verdict,
+  findings), summary (counts per verdict, stale_docs sorted by
+  len(changed) + len(deleted_or_renamed) + len(changed_by_basename)),
+  warnings, error.
+
+Exit codes:
+  0  always -- without --fail-on-stale the report is advisory, matching
+     check_tier1_provenance.py's own "drift is a warning" stance
+  1  --fail-on-stale given and result is FAIL
+  2  a bad --summary-root, no --repo, a missing --feature, a --feature
+     directory that does not exist under --summary-root, a --repo path that
+     is not a directory or not a git repository (each named in "error"),
+     --json and --markdown together, or git unusable. Every one of these
+     means the check could not be performed at all, and is deliberately not
+     folded into an exit-0 report that would read as "fresh".
+
+Self-test:
+  python tier1_staleness.py --self-test   (19 cases; skipped when git is
+  absent)
+"""
+
+
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
 def main(argv):
-    parser = argparse.ArgumentParser(prog="tier1_staleness.py")
+    parser = PurposeFirstParser(
+        prog="tier1_staleness.py",
+        description=PURPOSE,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG,
+    )
     parser.add_argument("--summary-root", default=".docs/summary",
                         help="Tier-1 knowledge base root (default .docs/summary)")
     parser.add_argument("--feature", help="the feature id under --summary-root")

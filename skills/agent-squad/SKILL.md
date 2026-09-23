@@ -48,6 +48,7 @@ Log: "⚠️ Context integrity check failed — rebuilt from semantic memory."
 | Max | Optimizer | Refactoring | On explicit optimization request (retired from bgpdd-build) |
 | Vera | Launch Verifier | Shipping | bgpdd-shipping Stage 1, or "run the pre-launch checklist" |
 | Cipher | Security Auditor | Deployment | After the build cycle completes, [SEC]-tagged build milestones, or "audit security / check for vulnerabilities" |
+| Ward | Privacy & Compliance Engineer | Deployment | Data-handling rows of a `bgpdd-secure` attack matrix, or "privacy audit / DSAR / retention / consent" language |
 | Dep | DevOps | Deployment | After/with Cipher (parallel in shipping Stage 2), or "deploy / containerize / CI setup" |
 | Forge | System Coach | Agent Improvement | After Dep, or "optimize squad / analyze logs" |
 
@@ -148,6 +149,7 @@ Artifacts:
   MAX_REFACTOR: [date] — COMPLETE
   QUINN_REPORT: [date] — COMPLETE
   CIPHER_AUDIT: — NOT STARTED
+  WARD_PRIVACY: — NOT STARTED
   DEP_PACKAGE: — NOT STARTED
 
 Current phase: Implementation (M2)

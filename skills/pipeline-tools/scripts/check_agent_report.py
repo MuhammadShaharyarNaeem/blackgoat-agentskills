@@ -43,6 +43,41 @@ and nothing fuzzier does: no case-folding, no reordering, no dropped tokens.
 The command is read from the part of the line BEFORE the `capture:` citation,
 so a backticked capture path cannot stand in for it.
 
+STABLE FINDING FINGERPRINTS (`--emit-fingerprints`)
+----------------------------------------------------
+A finding line (`cipher.md`: `- **<Severity>** — <finding> — <file:line>`)
+is fingerprinted so a re-scan can tell RESOLVED / PERSISTENT / NEW apart
+(`diff_findings.py`, same directory). The fingerprint is DERIVED here,
+never hand-authored by the agent writing the report -- the same reasoning
+that keeps `*.meta.json` sidecars machine-written rather than typed (a
+hand-authored fingerprint is exactly the drift a fingerprint exists to
+catch). It is a short (12 hex char) sha256 digest of the normalized key
+`(file, category, title)`, joined by a literal 0x1F separator:
+
+  * `file` -- the location's path, WITHOUT its `:<line>` suffix. Line
+    numbers are deliberately excluded: a fix landing a few lines above the
+    finding shifts it, and that must never turn an unfixed finding into a
+    "new" one. Backslashes become forward slashes, so the same finding
+    fingerprints identically on Windows and POSIX.
+  * `category` -- the name of the nearest PRECEDING check line in the same
+    gated section (the same name `parse_checks()` reads, stripped of `*`
+    and outer space), or `uncategorized` when no check line precedes the
+    finding. The finding grammar carries no separate category/rule field of
+    its own; a finding is written directly under the matrix-row check line
+    it elaborates (`bgpdd-secure` Phase 2 step 2), so that row's name is
+    the closest existing thing to a category id.
+  * `title` -- the finding text with every digit run collapsed to `#` and
+    all whitespace collapsed to one space. A count that shifts between
+    runs ("3 matches" -> "4 matches") or a line re-wrapped by an editor
+    must not mint a fresh fingerprint for the same underlying finding.
+
+`--emit-fingerprints REPORT` prints one `<fp>  <category>  <file>  <title>`
+line per finding in REPORT's gated section (the same last verdict-bearing
+section `--report` grades) and exits 0 (2 on the same structural failures
+`--report` raises for), independent of `--report` and every other flag --
+it is a read, not a grade. `diff_findings.py` takes two such reports and
+classifies findings as RESOLVED / PERSISTENT / NEW.
+
 MIGRATION: a report authored under 2.3.0 or earlier fails with
 `check_uncaptured`. The fix is to re-run each check through
 `run_quiet.py --capture` and cite the artifact; `--allow-uncaptured` waives
@@ -73,6 +108,7 @@ Usage:
     python check_agent_report.py --report <path> [--milestone "<title>"] \
         [--repo <dir>] [--allow-uncaptured] [--ledger <path>] \
         [--require-ledgered-captures]
+    python check_agent_report.py --emit-fingerprints <path>
     python check_agent_report.py --self-test
 
 Pure standard library. See ../SKILL.md for the full contract (JSON shape,
@@ -95,6 +131,17 @@ CHECK_LINE_RE = re.compile(
     r"^\s*-\s*(?P<name>[^:]+?):\s*(?P<status>PASS|FAIL|BLOCKED|NOT RUN)\b(?P<rest>.*)$")
 CRITICAL_FINDING_RE = re.compile(r"^\s*-\s*\*\*Critical\*\*")
 EXIT_CODE_RE = re.compile(r"\bexit(?:\s+code)?\s+(-?\d+)\b", re.IGNORECASE)
+
+# --- fingerprinted findings (--emit-fingerprints) ---------------------------
+# See "STABLE FINDING FINGERPRINTS" above for the exact normalization.
+# Grammar is cipher.md's `- **<Severity>** — <finding> — <file:line>`
+# (security-and-hardening/SKILL.md's Critical/Important/Suggestion/Nit/FYI
+# review taxonomy).
+FINDING_LINE_RE = re.compile(
+    r"^\s*-\s*\*\*(?P<severity>Critical|Important|Suggestion|Nit|FYI)\*\*"
+    r"\s+—\s+(?P<title>.+?)\s+—\s+(?P<location>\S+)\s*$")
+FINDING_LOCATION_RE = re.compile(r"^(?P<file>.+):(?P<line>\d+)$")
+FINGERPRINT_LENGTH = 12
 
 # --- the check line's capture citation --------------------------------------
 # `capture: <path>` appended to an executed check line. The path is bare (no
@@ -591,6 +638,104 @@ def parse_checks(body):
     return [checks[k] for k in order]
 
 
+def normalize_finding_key(file_part, category, title):
+    """(file, category, title) normalized into the fingerprint's key parts.
+
+    See "STABLE FINDING FINGERPRINTS" in the module docstring: the file's
+    line number is deliberately excluded (a fix above the finding must not
+    turn it into a "new" finding), backslashes become forward slashes so the
+    same finding fingerprints the same on Windows and POSIX, and the title
+    has every digit run collapsed to '#' and its whitespace collapsed to one
+    space, so a finding whose count or spacing shifts between runs (moved
+    line, "3 matches" -> "4 matches") still normalizes to the same key.
+
+    Duplicated byte-identical in diff_findings.py (family convention: one
+    file each, no shared module) -- guarded against drift by
+    test_the_fingerprint_matches_diff_findings below.
+    """
+    norm_file = (file_part or "").strip().replace("\\", "/")
+    norm_category = re.sub(r"\s+", " ", (category or "").strip())
+    norm_title = re.sub(r"\d+", "#", title or "")
+    norm_title = re.sub(r"\s+", " ", norm_title).strip()
+    return norm_file, norm_category, norm_title
+
+
+def finding_fingerprint(file_part, category, title):
+    """Short hex digest of the normalized (file, category, title) key.
+
+    DERIVED, never hand-authored (see the module docstring): an agent typing
+    its own fingerprint is exactly the drift this term exists to avoid.
+    Duplicated byte-identical in diff_findings.py (family convention).
+    """
+    norm_file, norm_category, norm_title = normalize_finding_key(
+        file_part, category, title)
+    key = "\x1f".join((norm_file, norm_category, norm_title))
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:FINGERPRINT_LENGTH]
+
+
+def iter_findings(body):
+    """Yield (fingerprint, category, file, title) for every finding line in
+    a gated section's body lines.
+
+    `category` is the nearest PRECEDING check-line name in the same section
+    (the same normalization `parse_checks()` applies: stripped of '*' and
+    outer space), or 'uncategorized' when no check line precedes the
+    finding yet. A finding is raised against the matrix row Cipher was
+    auditing when he wrote it (bgpdd-secure Phase 2 step 2: one check line
+    per matrix row, findings elaborate on the row above them), so the
+    last-seen check-line name is the closest thing this report grammar has
+    to a category/rule id -- there is no separate 'category:' field on the
+    finding line itself.
+
+    `file` has no line number (see normalize_finding_key); `title` is
+    returned RAW (not digit/whitespace-collapsed) so a caller can print it
+    for a human -- only the fingerprint is computed over the normalized
+    form. Duplicated byte-identical in diff_findings.py (family
+    convention), guarded against drift by
+    test_the_fingerprint_matches_diff_findings below.
+    """
+    category = "uncategorized"
+    for line in body:
+        check_m = CHECK_LINE_RE.match(line)
+        if check_m:
+            category = check_m.group("name").strip().strip("*").strip()
+            continue
+        find_m = FINDING_LINE_RE.match(line)
+        if not find_m:
+            continue
+        title = find_m.group("title").strip()
+        location = find_m.group("location").strip().strip("`")
+        loc_m = FINDING_LOCATION_RE.match(location)
+        file_part = loc_m.group("file") if loc_m else location
+        fp = finding_fingerprint(file_part, category, title)
+        yield fp, category, file_part.replace("\\", "/"), title
+
+
+def emit_fingerprints(report_path):
+    """Every finding line in `report_path`'s gated section, fingerprinted.
+
+    Returns a list of `"<fp>  <category>  <file>  <title>"` strings, one per
+    finding, in document order. Reads the SAME gated section
+    `build_report()` grades (the last '## ' section carrying a
+    '**Verdict:**' line) so a fingerprint always reflects the CURRENT
+    round's findings, never a stale or superseded one. Raises GateError on
+    the same structural failures `build_report()` raises for (missing/empty
+    file, no verdict-bearing section) -- this is a read, not a grade, so it
+    never touches `build_report()`'s PASS/FAIL machinery.
+    """
+    raw = read_text(report_path)
+    if not raw.strip():
+        raise GateError(f"report file is empty: {report_path}")
+    text = strip_fenced_blocks(raw)
+    gated = find_gated_section(text)
+    if gated is None:
+        raise GateError("no '## ' section containing a '**Verdict:**' line "
+                        "found — not a conforming agent report")
+    _, body = gated
+    return [f"{fp}  {category}  {file_part}  {title}"
+            for fp, category, file_part, title in iter_findings(body)]
+
+
 def build_report(args):
     report = {
         "report": args.report,
@@ -763,9 +908,112 @@ def build_report(args):
     return report
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Decides whether a durable agent report backs its Pass verdict "
+           "with captured, evidenced check lines and zero Critical findings.")
+
+EPILOG = """\
+Reads:
+  --report <path>  Cipher's security-report.md, Vera's
+    verification-report.md or Dep's post-deploy-report.md. Only the LAST
+    `## ` section carrying a `**Verdict:**` line is graded.
+
+  Check-line grammar (one per check, in that section):
+    - <name>: PASS|FAIL|BLOCKED|NOT RUN -- `<command>` -- exit <N> -- <terse counts> -- capture: evidence/<dir>/<file>.md
+  An EXECUTED line (PASS/FAIL) carries both an exit code and the `capture:`
+  citation; BLOCKED / NOT RUN carry their reason and cite nothing. The
+  citation path may be backticked, must contain an `evidence/` segment and
+  no '..', and resolves against the report's directory, then --repo, then
+  the cwd. The cited capture must exist, carry its <capture>.meta.json
+  sidecar, still hash to it, and record an exit_code EQUAL to the line's.
+  Each executed line's backticked command -- read from the text BEFORE the
+  `capture:` citation; a backticked path cannot stand in for it -- must
+  token-match the sidecar's argv. Never waived.
+
+  Finding-line grammar (same section), read by --emit-fingerprints:
+    - **<Severity>** -- <finding> -- <file:line>
+
+  --ledger <path>  the append target, and the ledger a cited capture's
+    sha256 is looked up in. Ledger inputs are the report PLUS every cited
+    capture and its sidecar, so a later re-hash catches one edited after
+    this gate passed.
+
+  --emit-fingerprints REPORT is a separate read-only mode, independent of
+  --report and every other flag: it prints `<fp>  <category>  <file>
+  <title>` per finding line and exits 0 (2 on the same structural
+  failures). The fingerprint is a 12-hex-char sha256 of the normalized
+  (file, category, title) key; the ':<line>' suffix is EXCLUDED, category
+  is the nearest PRECEDING check-line name ('uncategorized' if none), and
+  title has every digit run collapsed to '#'. Feed it to diff_findings.py.
+
+Problem codes:
+  In capture_problems[].problem:
+  check_uncaptured          an executed line cites no capture
+  check_capture_disagrees   the capture's exit_code differs from the line
+  capture_command_mismatch  the line's command is not the capture's argv
+  unledgered_capture        no run_quiet.py ledger record pins its sha256;
+                            the only one here that does not gate unless
+                            --require-ledgered-captures is passed
+
+JSON keys:
+  Always printed on stdout (there is no --json flag):
+  report, section, verdict, checks, passed, failed, blocked, not_run,
+  unevidenced, uncaptured, capture_disagrees, capture_command_mismatches,
+  unledgered_captures, capture_problems ([{check, problem, detail}]),
+  capture_inputs, allow_uncaptured, require_ledgered_captures,
+  critical_findings, warnings, result, error
+
+Exit codes:
+  0  verdict exactly Pass, at least one check line, every line PASS,
+     evidenced and captured, zero Critical findings.
+  1  any other verdict (an unparseable latest verdict fail-safes to
+     no-verdict), a non-empty failed / blocked / not_run / unevidenced /
+     uncaptured (unwaived) / capture_disagrees /
+     capture_command_mismatches / unledgered_captures (only under
+     --require-ledgered-captures), a standing Critical, or zero check lines.
+  2  usage error (--require-ledgered-captures without --ledger), a
+     missing / empty / unreadable report, or no `## ` section carrying a
+     `**Verdict:**` line.
+
+Self-test:
+  python check_agent_report.py --self-test   (62 cases)
+"""
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(prog="check_agent_report.py")
+    parser = PurposeFirstParser(
+        prog="check_agent_report.py",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--report")
+    parser.add_argument(
+        "--emit-fingerprints", metavar="REPORT",
+        help="print `<fp>  <category>  <file>  <title>` for every finding "
+             "line in REPORT's gated section (one per line) and exit -- 0 "
+             "on success, 2 on the same structural failures --report would "
+             "raise for (missing/empty file, no verdict-bearing section). "
+             "Independent of --report and every other flag: it reads, it "
+             "does not grade. Feed the output to diff_findings.py to "
+             "classify a rescan's findings as resolved/persistent/new.")
     parser.add_argument("--milestone",
                         help="scope this run's ledger record to a milestone")
     parser.add_argument("--repo", default=".",
@@ -785,7 +1033,7 @@ def build_parser():
         help="fail (problem code `unledgered_capture`) when a cited capture's "
              "sha256 is pinned by no `run_quiet.py --capture --ledger` record "
              "in --ledger. WITHOUT this flag such a capture is a WARNING and "
-             "the exit code is unchanged — captures taken before this release "
+             "the exit code is unchanged -- captures taken before this release "
              "carry no record, so the default is one release of grace. "
              "Requires --ledger.")
     parser.add_argument("--self-test", action="store_true")
@@ -797,6 +1045,15 @@ def main(argv):
 
     if args.self_test:
         return run_self_test()
+
+    if args.emit_fingerprints:
+        try:
+            for line in emit_fingerprints(args.emit_fingerprints):
+                print(line)
+        except GateError as exc:
+            print(f"check_agent_report: {exc}", file=sys.stderr)
+            return 2
+        return 0
 
     if args.allow_uncaptured:
         print("check_agent_report: WARNING — --allow-uncaptured is set. "
@@ -843,6 +1100,8 @@ def main(argv):
 # ---------------------------------------------------------------------------
 
 def run_self_test():
+    import contextlib
+    import io
     import shutil
     import subprocess
     import tempfile
@@ -859,6 +1118,15 @@ def run_self_test():
     FAIL_VERDICT_T = (
         "## Security Audit: Shipping\n\n"
         "- Dependency audit: FAIL — `npm audit` — exit 1 — 2 high, 5 moderate — capture: {ca1}\n\n"
+        "**Verdict:** Fail\n")
+    # Two check lines, each followed by a finding -- exercises category
+    # association (--emit-fingerprints picks up the NEAREST preceding one).
+    FINDINGS_T = (
+        "## Security Audit: Shipping — 2026-09-17\n\n"
+        "- Secrets scan: PASS — `git grep -n secret` — exit 1 — 0 matches — capture: {c1}\n"
+        "- **Critical** — hardcoded JWT secret — src/auth/token.js:14\n\n"
+        "- Rate limiting: FAIL — `curl -i /api/x` — exit 0 — capture: {c0}\n"
+        "- **Important** — 3 endpoints missing rate limiting — src/api/routes.js:88\n\n"
         "**Verdict:** Fail\n")
 
     def capture_text(cmd, exit_code, body, captured):
@@ -1137,6 +1405,119 @@ def run_self_test():
                 "- Rate limiting: NOT RUN — no staging environment reachable\n\n"
                 "**Verdict:** Fail\n")
             self.assertEqual(r["capture_command_mismatches"], [])
+
+        # -- --emit-fingerprints -----------------------------------------
+
+        def test_emit_fingerprints_associates_nearest_preceding_check_line(self):
+            self.path.write_text(FINDINGS_T.format(c1=self.c1, c0=self.c0),
+                                 encoding="utf-8")
+            lines = emit_fingerprints(str(self.path))
+            self.assertEqual(len(lines), 2)
+            fp0, cat0, file0, title0 = lines[0].split("  ", 3)
+            fp1, cat1, file1, title1 = lines[1].split("  ", 3)
+            self.assertEqual(cat0, "Secrets scan")
+            self.assertEqual(file0, "src/auth/token.js")
+            self.assertEqual(title0, "hardcoded JWT secret")
+            self.assertEqual(cat1, "Rate limiting")
+            self.assertEqual(file1, "src/api/routes.js")
+            self.assertEqual(title1, "3 endpoints missing rate limiting")
+            self.assertEqual(len(fp0), FINGERPRINT_LENGTH)
+            self.assertNotEqual(fp0, fp1)
+
+        def test_emit_fingerprints_uncategorized_with_no_preceding_check_line(self):
+            self.path.write_text(
+                "## Security Audit: Shipping\n\n"
+                "- **Critical** — hardcoded JWT secret — src/auth/token.js:14\n\n"
+                "**Verdict:** Fail\n", encoding="utf-8")
+            lines = emit_fingerprints(str(self.path))
+            self.assertEqual(lines[0].split("  ")[1], "uncategorized")
+
+        def test_emit_fingerprints_ignores_line_number_movement(self):
+            """A fix landing above the finding must not mint a NEW one."""
+            a = FINDINGS_T.format(c1=self.c1, c0=self.c0)
+            b = a.replace("src/auth/token.js:14", "src/auth/token.js:55")
+            self.path.write_text(a, encoding="utf-8")
+            fp_a = emit_fingerprints(str(self.path))[0].split("  ")[0]
+            self.path.write_text(b, encoding="utf-8")
+            fp_b = emit_fingerprints(str(self.path))[0].split("  ")[0]
+            self.assertEqual(fp_a, fp_b)
+
+        def test_emit_fingerprints_ignores_digit_and_whitespace_drift(self):
+            a = FINDINGS_T.format(c1=self.c1, c0=self.c0)
+            b = a.replace("3 endpoints missing rate limiting",
+                          "7  endpoints   missing rate limiting")
+            self.path.write_text(a, encoding="utf-8")
+            fp_a = emit_fingerprints(str(self.path))[1].split("  ")[0]
+            self.path.write_text(b, encoding="utf-8")
+            fp_b = emit_fingerprints(str(self.path))[1].split("  ")[0]
+            self.assertEqual(fp_a, fp_b)
+
+        def test_emit_fingerprints_different_title_is_a_different_fingerprint(self):
+            a = FINDINGS_T.format(c1=self.c1, c0=self.c0)
+            b = a.replace("hardcoded JWT secret", "hardcoded API key")
+            self.path.write_text(a, encoding="utf-8")
+            fp_a = emit_fingerprints(str(self.path))[0].split("  ")[0]
+            self.path.write_text(b, encoding="utf-8")
+            fp_b = emit_fingerprints(str(self.path))[0].split("  ")[0]
+            self.assertNotEqual(fp_a, fp_b)
+
+        def test_emit_fingerprints_cli_prints_lines_and_exits_0(self):
+            self.path.write_text(FINDINGS_T.format(c1=self.c1, c0=self.c0),
+                                 encoding="utf-8")
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = main(["--emit-fingerprints", str(self.path)])
+            self.assertEqual(rc, 0)
+            self.assertEqual(len(buf.getvalue().strip().splitlines()), 2)
+
+        def test_emit_fingerprints_cli_missing_file_exits_2(self):
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = main(["--emit-fingerprints", str(self.dir / "absent.md")])
+            self.assertEqual(rc, 2)
+
+        def test_emit_fingerprints_cli_no_gated_section_exits_2(self):
+            self.path.write_text("# Report\n\n## Notes\n\nprose only\n",
+                                 encoding="utf-8")
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = main(["--emit-fingerprints", str(self.path)])
+            self.assertEqual(rc, 2)
+
+        def test_the_fingerprint_matches_diff_findings(self):
+            """Drift guard: two scripts must derive the SAME fingerprint for
+            the same finding, or a rescan silently reclassifies everything
+            as new. Mirrors test_the_matcher_agrees_with_next_bugfix_route
+            below, applied to the fingerprint functions instead."""
+            import ast
+            sibling = Path(__file__).resolve().parent / "diff_findings.py"
+            if not sibling.is_file():
+                self.skipTest("diff_findings.py not found")
+
+            def shapes(path):
+                tree = ast.parse(Path(path).read_text(encoding="utf-8",
+                                                      errors="replace"))
+                out = {}
+                for node in tree.body:
+                    if not isinstance(node, ast.FunctionDef):
+                        continue
+                    if node.name not in ("normalize_finding_key",
+                                         "finding_fingerprint",
+                                         "iter_findings"):
+                        continue
+                    body = list(node.body)
+                    if (body and isinstance(body[0], ast.Expr)
+                            and isinstance(body[0].value, ast.Constant)
+                            and isinstance(body[0].value.value, str)):
+                        body = body[1:]
+                    out[node.name] = "\n".join(ast.dump(n) for n in body)
+                return out
+
+            mine, theirs = shapes(__file__), shapes(sibling)
+            self.assertEqual(len(mine), 3)
+            self.assertEqual(mine, theirs,
+                             "the fingerprint derivation has drifted from "
+                             "diff_findings.py's")
 
         def test_the_matcher_agrees_with_next_bugfix_route(self):
             """Drift guard: three gates must mean one thing by "same command"."""

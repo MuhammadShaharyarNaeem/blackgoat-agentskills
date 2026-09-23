@@ -71,3 +71,18 @@ Merges `state["status"] = STATUS` plus a `status_updated` timestamp, the same sh
 Written by `bgpdd-bugfix` Phase 2 step 5 and Phase 5 step 4 (standalone route) when a lane HALTs and escalates to another pipeline, so `guard_action.py`'s `lane_is_closed()`/`unfixed_bugfix_lanes()` can treat the lane as closed without waiting on the 12h freshness window to age it out — see `guard_action.md`.
 
 Self-test count: 60 → 69.
+
+## From the retired spine
+
+### The blocker id, and its documented limitation
+
+A new blocker's id is derived as one past the highest currently present. That is a **documented limitation, not an accident**: once the top-numbered blocker is resolved and removed, its id becomes available again and a later blocker will reuse it. Two entries in one project's history can therefore share an id.
+
+It is left as it is because the alternative — a persisted high-water mark — adds a field to the state schema whose only job is to be correct, and nothing in this family keys on a blocker id across time; the resolution log beside the state file is the durable record, and it carries the full entry, not just its id. Anyone matching blockers across the whole life of a project should match on that log, not on ids. Legacy freeform entries are never rewritten when this runs.
+
+### Why `--resolve-blocker` needs a file rather than a sentence
+
+The evidence value must resolve to an existing, non-empty file — tried against the state file's own directory first, then the working directory. Omitting it is a usage error caught before anything is attempted; supplying a value that does not resolve is a **failed gate**, and nothing is written.
+
+The distinction matters because the two failures mean different things. No flag at all is a caller who does not know the flag exists. A value that does not resolve is a caller who answered, and the answer turned out to name nothing — which is exactly what a prose reassurance like "trust me" is: a syntactically valid path that happens not to exist, refused the same way any other typo is. The point of the flag is that a blocker leaves the ledger only with something a later reader can open, and the record keeps the resolved path and its hash so that later reader can check it still says what it said.
+

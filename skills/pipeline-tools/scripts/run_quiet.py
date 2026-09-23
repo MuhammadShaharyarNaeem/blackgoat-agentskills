@@ -696,11 +696,98 @@ def execute(log_path, context, tail_n, timeout, cmd,
     return "\n".join(report), (124 if timed_out else exit_code)
 
 
+PURPOSE = ("Runs a command, writes its full output to disk, prints a short "
+           "report, and optionally writes a runtime-evidence capture.")
+
+EPILOG = """Reads:
+  the child command's merged stdout+stderr. Everything after "--" is passed
+    to the child VERBATIM, with no shell. Windows caveat: Python cannot exec
+    a .cmd/.bat shim, so invoke npx.cmd / npm.cmd, or bypass the shim
+    (node node_modules/@playwright/test/cli.js).
+  Recognised summary lines, lifted into ## Summary and printed first:
+    dotnet test (Passed!/Failed!, "Total tests:"), MSBuild ("N Warning(s)",
+    "N Error(s)", "Build succeeded."/"Build FAILED."), vitest/jest
+    ("Tests:", "Test Files", "Test Suites:"), pytest
+    ("=== N passed, M failed ... ==="), Playwright (N passed/failed/flaky).
+    Nothing matching prints "Summary: none recognised (exit <code>)".
+
+Writes:
+  --log -- the FULL merged output, always on disk. Under --capture without
+    --log it still lands, at "<capture path>.log".
+  --capture -- the capture artifact. Its head, before "## Captured output",
+    carries the descriptive fields from --capture-field, then, tool-owned:
+      - Probe command: `<argv joined>`
+      - Captured: <the sidecar's `finished`, EXACTLY>
+      - Exit code: <the sidecar's `exit_code`>
+      - Duration: <N.NN>s
+      - Log: <log path>
+      - Log sha256: <hex>
+    then "## Summary" and "## Captured output" (a fenced block). The body is
+    an EXCERPT by default -- the same error-profile lines with context plus
+    a tail, capped at ~200 lines; --full-body embeds the full output
+    instead. assert_capture_agrees() re-checks the header/sidecar pair
+    before the sidecar is written, so this tool can never emit a
+    disagreeing pair; a disagreement is exit 2 with an "internal:" message
+    and no capture on disk.
+  --capture-field Name=value -- descriptive header fields ONLY: Title,
+    Milestone, Requirement IDs, Surface, Transport, Base URL, Environment,
+    Config repointed, Build marker, OpenAPI. A tool-owned name (Probe
+    command, Captured, Exit code, Duration, Log, Log sha256) is REJECTED,
+    not overwritten: exit 2, no capture written.
+  <capture>.meta.json -- the sidecar check_runtime_evidence.py requires:
+    {"argv", "cwd", "host", "pid", "started", "finished" (ISO-8601 UTC),
+     "exit_code" (124 on timeout), "body_sha256" (over the captured text as
+     embedded), "capture_sha256" (over the finished capture FILE's bytes),
+     "log_sha256", "log_path", "full_body" (bool), "tool": "run_quiet.py",
+     "schema": 2}. Its path is printed on the stdout "sidecar:" line.
+  --ledger -- with --capture only, ONE chained record per capture:
+    gate "run_quiet.py", verdict "CAPTURED" (never PASS/FAIL/ERROR), exit =
+    the CHILD's exit code, inputs = the capture and its sidecar, plus
+    "command_argv" and "capture_sha256". That last field is what
+    check_agent_report.py, check_runtime_evidence.py and
+    check_ship_decision.py look a capture up in under
+    --require-ledgered-captures. Best-effort; it never changes this tool's
+    exit code, and without --ledger behaviour is unchanged.
+
+Exit codes:
+  *    passthrough of the child's own exit code
+  124  the child was killed for exceeding --timeout (best-effort process-
+       tree kill); recorded in the sidecar's exit_code too
+  2    structural/usage failure: neither --log nor --capture, no command
+       after "--", a log or capture path that cannot be created or written,
+       a tool-owned --capture-field, --capture-field / --full-body /
+       --ledger / --milestone given without --capture, or a command that
+       could not be launched
+
+Self-test:
+  python run_quiet.py --self-test   (48 cases)
+"""
+
+
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(
+    parser = PurposeFirstParser(
         prog="run_quiet.py",
-        description="Run a command, log the full output, print only "
-                     "errors-with-context + tail.")
+        description=PURPOSE,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG)
     parser.add_argument("--log", help="path to write the full merged log to")
     parser.add_argument("--context", type=int, default=DEFAULT_CONTEXT,
                          help=f"context lines around each match (default {DEFAULT_CONTEXT})")

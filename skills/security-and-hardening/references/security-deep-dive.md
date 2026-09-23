@@ -158,6 +158,36 @@ The `range() !== 'unicast'` check covers loopback, link-local `169.254.169.254` 
 
 **Caveat — this still has a TOCTOU gap.** `fetch` resolves DNS again after the check, so an attacker using a short-TTL record can rebind to an internal IP between validation and connection. For high-risk surfaces, resolve once and connect to the pinned IP, or put a filtering agent in front (`request-filtering-agent` / `ssrf-req-filter`).
 
+## OWASP API Security Top 10 (2023)
+
+The web Top 10 above covers browser-facing apps; the API Top 10 below covers this application's HTTP API surface specifically. One-line prevention rule per category.
+
+- **API1 Broken Object Level Authorization (BOLA):** check resource ownership on every object-ID endpoint — the same control as Broken Access Control above, applied per object id rather than per route.
+- **API2 Broken Authentication:** same controls as Broken Authentication above, plus: never accept credentials or tokens via the query string, and lock/rate-limit by identity, not just by IP.
+- **API3 Broken Object Property Level Authorization:** allowlist which fields a client may set or read per role — binding the full request body to a model lets a caller write fields never meant to be writable (mass assignment).
+- **API4 Unrestricted Resource Consumption:** cap payload size, query depth, pagination limits, and per-identity request/compute budgets, not just request rate.
+- **API5 Broken Function Level Authorization (BFLA):** check role/permission explicitly on every admin or privileged endpoint — the same control as Broken Access Control above; an unlinked route is not a protected one.
+- **API6 Unrestricted Access to Sensitive Business Flows:** add friction (rate limits, review, verification) to flows an already-authorized client could still abuse at scale — bulk purchasing, mass invites.
+- **API7 Server Side Request Forgery:** same allowlist-and-validate control as SSRF above, applied to any URL, webhook target, or callback address an API accepts as a parameter.
+- **API8 Security Misconfiguration:** same headers/CSP/CORS baseline as above, plus: no verbose error detail in API responses, and every environment enforces it, not just prod.
+- **API9 Improper Inventory Management:** keep one source of truth for deployed API versions; retire old or undocumented ones instead of leaving them reachable with weaker controls.
+- **API10 Unsafe Consumption of APIs:** validate and sanitize responses from third-party/upstream APIs exactly as client input — a compromised or misbehaving upstream is still an untrusted source.
+
+```typescript
+// BAD: binding the full request body lets the client set any field, including ones it shouldn't touch
+await db.user.update({ where: { id }, data: req.body });
+
+// GOOD: allowlist writable fields per role — reuse the schema-validation pattern below
+const UpdateProfileSchema = z.object({
+  displayName: z.string().min(1).max(100),
+  bio: z.string().max(500).optional(),
+}); // role/isAdmin/balance are never accepted here, regardless of what the client sends
+
+const result = UpdateProfileSchema.safeParse(req.body);
+if (!result.success) return res.status(422).json({ error: { code: 'VALIDATION_ERROR' } });
+await db.user.update({ where: { id }, data: result.data });
+```
+
 ## Input Validation Patterns
 
 ### Schema Validation at Boundaries
@@ -327,6 +357,7 @@ container.textContent = await llm.reply(userMessage);
 | "It's just a prototype" | Prototypes become production. Security habits from day one. |
 | "Threat modeling is overkill here" | Five minutes of "how would I attack this?" prevents the design flaws no control can patch later. |
 | "It's just LLM output, it's only text" | That "text" can be a SQL statement, a script tag, or a shell command. Treat it like any untrusted input. |
+| "The scan came back clean" | A truncated, budget-capped, interrupted, or partially-run check found nothing because it never reached that area — record the unreached area as BLOCKED/untested, not PASS. Clean and incomplete are different findings. |
 
 ## Red Flags
 

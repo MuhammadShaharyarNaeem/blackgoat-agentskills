@@ -236,10 +236,13 @@ is what stops it becoming a blanket disarm; an unreadable milestone (a null
 cursor, or the unscoped feature-route folder named `implementation`) is
 treated as NOT closed, and `--explain` prints which lanes are armed and why.
 
-**Verify lanes never armed rule 1 to begin with.** `bgpdd-verify` has no
-commit gate -- Quinn's specs are committed by hand outside the lane -- so
-arming rule 1 named a gate that does not exist and left the lane with no
-commit path. The lane is still detected and rules 2-4 still apply.
+**Verify and secure lanes never armed rule 1 to begin with.** `bgpdd-verify`
+has no commit gate -- Quinn's specs are committed by hand outside the lane --
+and `bgpdd-secure` has no commit step at all -- its only durable outputs are
+the attack matrix, security report, and evidence captures under `.docs/` --
+so arming rule 1 for either named a gate that does not exist and left the
+lane with no commit path. Both lanes are still detected and rules 2-4 still
+apply.
 
 Plus `GIT_WRITE_RE` widened to `am|rebase|stash [pop|apply]|notes|tag` beside
 the original four, and a separate match for `gh pr merge`. `git push` and
@@ -330,3 +333,17 @@ Self-test count: 88 → 100 — rule 5's eleven raw-runner denials plus its wrap
 **The status-aware lane close** extends rule 1's existing CLOSED LANES carve-out and rule 2's own predicate: a lane is also closed — for rule 1 (`Lane.closed`) and independently for rule 2 (`unfixed_bugfix_lanes()`) — when its own `orchestrator-state.json` carries a terminal `status` of `escalated` or `closed`, written by `update_state.py --set-status` (see `update_state.md`). No milestone scoping is needed here: the escalation is the lane's own terminal act, not one more commit to scope. This is **standalone bugfix only** — the state file sits at `lane.root` there. The feature route's bugfix sub-lane has no state file of its own at `lane.root` (its `{state-file}` is the epic's, one level up, and `bgpdd-bugfix` forbids that lane writing anything but a scoped blocker to it), so an escalated feature-route bug still arms rule 2 for the freshness window — a documented gap, not silently worked around: reading the epic's own `status` would misattribute the whole epic's status to one bug among possibly several open on that route.
 
 Self-test count: 100 → 112.
+
+## Rule 8 (`pipeline_tools_are_help_not_source`) (Unreleased)
+
+Agents were observed opening a `pipeline-tools` script's full source (some 700+ lines) to learn how to call it, before running it — costing more tokens than the prose rule it replaced ever did. **Rule 8** denies a `Read` tool call, or a `Bash` command that dumps a file (`cat`/`type`/`Get-Content`/`sed -n`/`head`/`tail`/`less`), whose target resolves to a `skills/pipeline-tools/scripts/*.py` file, while any lane is active. The refusal names the alternative: `python <that script> --help`, which `base-persona.md` § Command Timeout Discipline now states is the complete contract — purpose, every flag, every exit code, and where a problem code surfaces — at a fraction of the source's token cost.
+
+**Detection mirrors the rest of the family.** `is_pipeline_tool_script_path()` is a segment check like `is_blackgoat_persona_path()`: the two segments immediately before the filename must be `pipeline-tools`/`scripts` and the filename must end `.py` — separator- and case-agnostic, no filesystem resolve needed. The `Bash` half is a **new, dedicated read-verb scanner**, `bash_read_targets()`, deliberately not `bash_write_targets()`: the six plain-dump verbs are matched the same way `BASH_WRITE_VERBS` is (basename, lower-cased, exe/cmd stripped), and `sed` counts only when `-n` is among its flags — `sed -i` is a WRITE and stays rule 2/4's job, never this one's. Like the write extractor, it deliberately OVER-collects candidates (a `-n` count argument, a flag's own value) and lets the narrow path predicate decide.
+
+**`Read` needed its own wiring.** Unlike every other rule, this one's tool half is not in `WRITE_TOOLS`, `BASH_TOOLS` or `DELEGATION_TOOLS` — `Read` had no `PreToolUse` matcher in `hooks/hooks.json` at all before this rule, so a `"matcher": "Read"` entry was added, pointing at the same `guard-action` hook. This does not widen any OTHER rule to `Read`: rules 1–7 all gate on `tool_name in WRITE_TOOLS`/`BASH_TOOLS`/`DELEGATION_TOOLS`, none of which include `Read`, so a `Read` call only ever reaches rule 8's check.
+
+**Only while a lane is active — a divergence from rules 4 and 7's "always" (convention #8), deliberately narrower.** Reading a script's source outside any lane (browsing the plugin, writing documentation about it) is not the mid-task token-cost problem this rule exists to remove; gating it unconditionally would make `--explain`, code review, and onboarding reads all deny for no reason. `lanes` is the SAME `detect_lanes()` result every other lane-scoped rule reads for the call, not a separate pass.
+
+**Carve-out: the cwd's own repository root IS this plugin repository.** Checked by `cwd_is_plugin_repo()` — the presence of `skills/pipeline-tools/scripts/guard_action.py` directly under `cwd` — exactly the detection the task that added this rule specified. When true, the call is allowed **lane or no lane**: editing the tools (this file included) requires reading them, and that is authoring, not the execution this rule restrains. This is the one rule in the family whose carve-out is keyed on WHERE the call runs rather than on an artifact the lane itself wrote — a deliberate divergence (convention #8), because "am I inside the plugin's own source tree" is a property of `cwd`, not of a `.docs/` lane.
+
+Self-test count: 112 → 118 — rule 8's `Read` and `Bash` (`cat`/`type`/`Get-Content`/`head`/`tail`/`less`/`sed -n`) denials during an active lane, its allow with no active lane, its allow under the plugin-repo carve-out (with a fabricated active lane there, so the carve-out is shown overriding an armed rule rather than merely coinciding with an unarmed one), and `sed -i`/a non-script read staying outside the rule.

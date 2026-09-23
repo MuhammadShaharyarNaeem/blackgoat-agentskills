@@ -440,8 +440,94 @@ def build_report(args):
     return report
 
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Decides whether a bug report is complete, non-placeholder and "
+           "re-runnable before any delegation in the bugfix lane happens.")
+
+EPILOG = """\
+Reads:
+  --report <path>   {bugfix-root}/bug-report.md.
+
+  Required sections (headings matched case-insensitively, level 2-6,
+  'behavior' spelling accepted): Observed behaviour, Expected behaviour,
+  Exact error text or log excerpt, Reproduction, Environment, Regression,
+  Affected surface.
+
+  Field grammar:
+    - Command: `<a runnable command>`
+    1. <step one>
+    2. <step two>
+    - Surface: api | ui | both
+    - Runtime observable: yes | no
+    - Regression: yes | no
+    - Last known good: <ref>          (required when Regression is yes)
+
+  Reproduction needs EITHER a usable `- Command:` line OR >= 2 numbered
+  steps whose text is not a placeholder. A usable Command value is
+  backtick-wrapped, non-placeholder and command-shaped: >= 2 whitespace-
+  separated tokens, or 1 token carrying '/', '\\', '.' or ':'. An unusable
+  Command line beside >= 2 usable steps is a warning and the mode falls
+  back to 'steps'. A value that is <...>, TODO, TBD, N/A, none, unknown,
+  ??? or ... counts as absent.
+
+  Fenced blocks: content lines are masked to a sentinel, NOT blanked, so a
+  pasted log excerpt still counts as section content while a heading or
+  `- Key: value` line inside a fence satisfies nothing.
+
+Problem codes:
+  section_missing             a required heading is absent
+  section_empty               a required section has no content
+  section_placeholder         a required section holds only a placeholder
+  reproduction_missing        no usable Command and fewer than two steps
+  surface_invalid             - Surface: is not api / ui / both
+  runtime_observable_invalid  - Runtime observable: is not yes / no
+  regression_invalid          - Regression: is not yes / no
+  last_known_good_missing     Regression: yes with no real Last known good
+  problems entries are formatted "<code>: <prose>".
+
+JSON keys:
+  Always printed on stdout (there is no --json flag):
+  report, sections_found, sections_missing, placeholder_sections,
+  reproduction_mode (command | steps | null), reproduction_command
+  (backticks stripped, or null), surface, runtime_observable (boolean),
+  regression (boolean), last_known_good, problems, problem_codes,
+  warnings, result, error
+
+Exit codes:
+  0  every check passed.
+  1  any problem code fired.
+  2  missing --report, an unreadable file, or a file with no level-2..6
+     heading outside a fence (structurally not a bug report).
+
+Self-test:
+  python check_bugfix_intake.py --self-test   (33 cases)
+"""
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(prog="check_bugfix_intake.py")
+    parser = PurposeFirstParser(
+        prog="check_bugfix_intake.py",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--report", help="path to bug-report.md")
     parser.add_argument("--milestone",
                         help="bug slug, to scope this run's ledger record")

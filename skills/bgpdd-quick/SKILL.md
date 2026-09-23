@@ -31,7 +31,7 @@ The bullets below carry ONLY this skill's refinements.
 - **Methodology on demand, inline.** Follow one `{PLUGIN_ROOT}/<skill>/SKILL.md` yourself — its **`## Quick card`** where it has one, else its Worker Execution Contract. The three usual: `test-driven-development` (new behaviour with a test), `debugging-and-error-recovery` (something broken), `code-simplification` (a refactor). **Any skill carrying a `## Quick card` is admissible — a deliberate widening of this rule's own prior three-skill list (convention #8)**: the card *is* that skill's contract at this lane's size, written by its owner for exactly this use, so refusing a skill that advertises one makes the cards unreachable. Still one skill, never two; no card and no fit → wrong lane.
 - **Workspace**: `{quick-root}` = `.docs/quick/{YYYY-MM-DD}-{slug}/` — refining `base-persona.md`'s `.docs/{project-name}/` model (convention #8): no epic to live under. Holds `note.md`, `evidence/check.md` (+ sidecar), `gates.jsonl`.
 - **No `orchestrator-state.json`, no `run-log.jsonl` — deliberate divergence from Contract §4 (convention #8).** State is an inter-pipeline handoff and this lane closes in one session; the run log records *delegations*, and this lane never delegates. `gates.jsonl` plus the commit is the record.
-- **Phase transitions are emitted, not recalled (convention #9):** before starting any phase run `python {PLUGIN_ROOT}/pipeline-tools/scripts/pipeline_driver.py --root {quick-root} --lane quick --json`; do the `next_action` it prints; exit 1 means the current phase's gate has not passed — run that gate, never the next phase. (Exit 3 = closed and committed.) Contract in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
+- **Phase transitions are emitted, not recalled (convention #9):** before starting any phase, run `python {PLUGIN_ROOT}/pipeline-tools/scripts/tool_registry.py for --lane bgpdd-quick --phase '*'` and execute the `pipeline_driver` line it prints; do the `next_action` it prints; exit 1 means the current phase's gate has not passed — run that gate, never the next phase. (Exit 3 = closed and committed.) Contract in `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
 - **Autonomous, by Contract §1's own exception.** Phase 0's note is the single user checkpoint; Phases 1–3 need no confirmation; escalations and blocked gates return to the user.
 - **Game tape — deliberate divergence from the skeleton's game-tape rule (convention #8)**: **one bullet** under `## Result` in `{quick-root}/note.md`, not a `game-tape.md`: what the gate said, plus what surprised you.
 - **Round bound: 1 (convention #8, deliberately tighter than `bgpdd-bugfix`'s 2).** One blocked close is a fix-and-re-run; a second means the change was never quick — escalate.
@@ -55,10 +55,8 @@ Four phases; do not skip or reorder.
 
    **A test that goes red *while* you make this change stays here** — your own edit misbehaving, which is what the `debugging-and-error-recovery` card is for; a defect that existed **before you started**, with a reproduction, is `/bgpdd-bugfix`. **Escalating mid-change leaves a dirty tree**: name every edit already made and either stash it or hand it over as declared changes — `/bgpdd-bugfix` closes on `--verify-tree`, which blocks undeclared ones (its Phase 0 step 1). Escalation stays one-way and upward (the router's ratchet), and **seeds** the next intake: the note's `What` drafts the bug report's observed behaviour, its `How verified` the reproduction command — drafts only; `check_bugfix_intake.py` still lints them.
 
-3. **Run the stack detector; propose, never adopt, its defaults:**
-   ```bash
-   python {PLUGIN_ROOT}/pipeline-tools/scripts/detect_stack.py --repo . --json
-   ```
+3. **Run the stack detector; propose, never adopt, its defaults:** run `python {PLUGIN_ROOT}/pipeline-tools/scripts/tool_registry.py for --lane bgpdd-quick --phase 0` and execute the `detect_stack` line it prints.
+
    Offer its first `suggested_check_commands` entry — already quiet at the source — as the `How verified` default, or its `quiet_wrapper` verbatim if the Phase 2 capture wrapper is being written out now instead of composed by hand. The user confirms or replaces it, never you silently. `test_path_globs` goes to Phase 3's `--frozen`. A detected stack with a `skills` entry contributes **only** its `## Quick card` (§1); without a card it contributes nothing here (e.g. `{PLUGIN_ROOT}/vue3-spa-patterns/SKILL.md § Quick card`). Note: Phase 2 already runs the `How verified` command through `run_quiet.py --capture`, which satisfies `guard_action.py` rule 5 on its own — `quiet_wrapper`'s `--log` form only matters if a raw run is needed outside that capture.
 4. **Write `{quick-root}/note.md`** — three labelled lines, no placeholders:
    - `- What:` the one sentence.
@@ -74,26 +72,18 @@ Four phases; do not skip or reorder.
 
 ### Phase 2: Prove (main session)
 **Driver:** the driver still reports `phase: 1` — it fuses Change and Prove, because an edit leaves no artifact and this capture is the only observable either phase has.
-Run the `How verified` command **through the capture wrapper**, never bare:
-
-```bash
-python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture {quick-root}/evidence/check.md --ledger {quick-root}/gates.jsonl -- <the command>
-```
+Run the `How verified` command **through the capture wrapper**, never bare: run `python {PLUGIN_ROOT}/pipeline-tools/scripts/tool_registry.py for --lane bgpdd-quick --phase 2` and execute the `run_quiet` line it prints.
 
 Exit 0 required; non-zero → fix and re-run (one round, §1). Phase 3 reads the `check.md.meta.json` sidecar — a hand-written `check.md` has none, and fails closed.
 
 ### Phase 3: Close (the gate)
 **Driver:** the driver must report `phase: 3`; after the gate it reports `phase: 4` at exit 3.
 
-**When the change adds or edits a test file**, run this before `check_quick_close.py`:
-```bash
-python {PLUGIN_ROOT}/pipeline-tools/scripts/check_test_authenticity.py --repo . --changed-files <paths> --milestone "{slug}" --ledger {quick-root}/gates.jsonl
-```
+**When the change adds or edits a test file**, run this before the close gate: run `python {PLUGIN_ROOT}/pipeline-tools/scripts/tool_registry.py for --lane bgpdd-quick --phase 3` and execute the `check_test_authenticity` line it prints.
+
 Principle: `test-driven-development/SKILL.md` § Rules — not restated here. Exit 0 = proceed; cite the ledger entry in the `## Result` bullet (§1). Exit 1 = the one round §1 allows — fix and re-run. Exit 2 = artifact defect. **Mechanical, not a reminder (convention #9):** `check_quick_close.py` refuses to close (`test_authenticity_gate_missing`) whenever a declared file matches `--frozen` or looks like a test file, unless the ledger holds a PASSING `check_test_authenticity.py` record exact-scoped to `{slug}` whose inputs cover it at its current hash — so skipping this step does not silently ship. `pipeline_driver.py` emits this command as the Phase 3 `next_action` whenever the note's `Where` line already names a test file, and folds a conditional reminder into the close command's message otherwise (it reads only the note's text, not the real diff) — either way, the close gate above is the actual enforcer.
 
-```bash
-python {PLUGIN_ROOT}/pipeline-tools/scripts/check_quick_close.py --note {quick-root}/note.md --capture {quick-root}/evidence/check.md --changed-files <paths> --repo . --max-changed-files 3 --frozen '<glob>' [--frozen '<glob>']... --milestone "{slug}" --ledger {quick-root}/gates.jsonl --commit --message "<msg>"
-```
+Then execute the `check_quick_close` line from that same phase-3 registry listing.
 
 **Pass Phase 0's `test_path_globs`, one `--frozen` per glob** (`tests/**`, `**/*.spec.ts`; a value with no `*`/`?`/`[` is a directory prefix). **The gate holds no default and must not**: a guessed freeze that misses is indistinguishable from a change with no test to protect. Adding a test passes.
 

@@ -1529,8 +1529,116 @@ def lint_report(report, scenarios, matrix_text, args):
 # CLI
 # ---------------------------------------------------------------------------
 
+class PurposeFirstParser(argparse.ArgumentParser):
+    """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
+
+    argparse prints usage before the description; the registry's
+    `description` must equal help line 1 verbatim, so the description is
+    lifted out and re-emitted ahead of the standard body.
+    """
+
+    def format_help(self):
+        purpose = (self.description or "").strip()
+        saved, self.description = self.description, None
+        try:
+            body = super().format_help()
+        finally:
+            self.description = saved
+        return purpose + "\n\n" + body if purpose else body
+
+
+PURPOSE = ("Decides whether a feature's acceptance matrix is well-formed, or "
+           "was actually run to green, for the build, verify and shipping "
+           "gates.")
+
+EPILOG = """\
+Reads:
+  --matrix <path>  Alex's acceptance-matrix.md. A scenario is a level-2
+    heading with an id, a priority and its requirement ids, then a table:
+      ## AS-2 Client mapping lifecycle -- P0 -- (FR-3, FR-4)
+      Surface: web+api | Preconditions: integration connected (AS-1)
+
+      | # | GO | DO | ASSERT | Stores | Mode |
+      |---|----|----|--------|--------|------|
+      | 1 | Clients list | map client A | 200 + row | api, db | auto |
+      | 3 | Clients list | unmap A [inverse of 1] | row gone | api | auto |
+      | 4 | Asset policies | distribute [no inverse: <why>] | ... | manual |
+    Every step must cite an EXISTING `evidence/runtime/` file with a
+    `## Captured output` section. `Mode: manual` (and an unrecognized Mode,
+    which fails closed to manual) needs only that; auto, blank, or no Mode
+    column ALSO needs a .meta.json sidecar whose capture_sha256 matches.
+    Capture honesty is check_runtime_evidence.py's job.
+  --results <path>  (execution mode only) Quinn's acceptance-results.md.
+    One result per line, keyed `<ScenarioId>.<StepNumber>` -- a DOT only:
+      - AS-2.3: PASS -- exit 0 -- capture: evidence/runtime/unmap.md
+    Status is PASS | FAIL | BLOCKED | NOT RUN.
+  --requirements <path>  (--lint-only only) see lint_failures below.
+  --changed-files <p>...  (execution mode only) see stale_results below.
+  --repo <dir>  default '.'.  --min-scenarios <N>  default 1.
+  --require-priority P0[,P1]  is "at or above": P1 gates {P0, P1}.
+    Omitted, every scenario is gated.
+  --emit-gate-args  ADVISORY in BOTH modes, never changing an exit code.
+    `- Key: value` lines under the matrix's level-2..4 `## Environment`
+    heading (to the next heading of that level or higher, fences blanked)
+    become gate_args. Keys: Surface; Expect(ed) status; Response keys
+    (Require key(s) / Response envelope keys / Envelope keys); Forbidden
+    hosts (Forbidden host patterns / Forbid host(s)). Values split on
+    commas and whitespace, backticks stripped; none / n/a / TBD / - /
+    unknown are absent. A REPEATED Surface or Expect status emits nothing
+    for that field and warns.
+
+Problem codes:
+  Each names a report array; non-empty fails the gate. Execution mode:
+  failed / blocked / not_run  gated steps with that status
+  missing_results     a gated step with no result
+  stale_results       results older than a --changed-files entry
+  unevidenced_manual  a manual step with no usable capture
+  unevidenced_auto    an auto step with no sidecar or hash match
+  dangling_inverse    an [inverse of N] naming no step
+  missing_step_table  a gated scenario's unparsed table
+  --lint-only (plus the last two above):
+  missing_priority    a scenario heading naming no priority
+  missing_columns     a step table short a column
+  unrecognized_mode   a Mode cell neither auto nor manual
+  missing_stores      a step table with no Stores column
+  duplicate_keys      two steps sharing one key
+  malformed_steps     an unparsed step row
+  invalid_exemption   an unparsed exemption marker
+  undeclared_inverse  a state-changing step with no inverse
+  lint_failures       a Must-Have cited by no scenario
+
+JSON keys:
+  Always on stdout, every key in BOTH modes. Every problem code above is a
+  report array of that name, plus matrix, results,
+  requirements, lint_only, require_priority, min_scenarios, changed_files,
+  scenarios, gated_scenarios, linted_scenarios, steps, steps_gated,
+  passed, exempt_steps, extra_results, must_have, should_have,
+  uncovered_should, warnings, result, error, and gate_args {surface,
+  expect_status, require_keys, forbid_hosts, argv, source} -- non-null
+  only with --emit-gate-args.
+
+Exit codes:
+  0  gated scenarios >= --min-scenarios, at least one gated step had a
+     result, and every problem array above is empty.
+  1  any problem array for this mode is non-empty, too few scenarios, or
+     zero gated steps.
+  2  mode separation (--results or --changed-files with --lint-only,
+     --requirements without it), a missing or unreadable matrix or results
+     file, no parseable scenario or result line, a missing --changed-files
+     entry, zero Must-Haves, or a bad --require-priority token.
+
+Self-test:
+  python check_acceptance_suite.py --self-test   (107 cases)
+"""
+
+
 def build_parser():
-    p = argparse.ArgumentParser(prog="check_acceptance_suite.py")
+    p = PurposeFirstParser(
+        prog="check_acceptance_suite.py",
+        description=PURPOSE,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     p.add_argument("--matrix")
     p.add_argument("--results")
     p.add_argument("--requirements")
@@ -1540,12 +1648,10 @@ def build_parser():
     p.add_argument("--lint-only", action="store_true")
     p.add_argument("--emit-gate-args", action="store_true",
                    help="derive check_runtime_evidence.py's --surface / "
-                        "--require-key / --expect-status / --forbid-host from "
-                        "the matrix's '## Environment' preamble into "
-                        "gate_args (advisory; never changes an exit code)")
+                        "--require-key / --expect-status / --forbid-host "
+                        "into gate_args (advisory)")
     p.add_argument("--changed-files", nargs="+", default=[],
-                   help="the milestone's declared changes; the results file "
-                        "must be at least as new as the newest of them")
+                   help="the milestone's declared changes; see stale_results")
     p.add_argument("--ledger",
                    help="append one JSON record per run to this path")
     p.add_argument("--self-test", action="store_true")
