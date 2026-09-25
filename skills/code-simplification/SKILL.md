@@ -89,6 +89,7 @@ Scan for these patterns — each one is a concrete signal, not a vague smell:
 - One simplification at a time; run the test suite after each. Pass → continue/commit. Fail → revert and reconsider.
 - One *kind* of change per pass and per report — never mix performance work, abstraction extraction, and cleanup in a single pass.
 - Refactoring changes ship separately from feature or bug-fix changes — never combine in one PR.
+- Removing dead code never edits a caller. If deleting a function, class or DI registration means changing a file that uses it, it is not dead — stop and leave it in place.
 - **The Rule of 500:** a refactor touching more than 500 lines uses automation (codemods, sed scripts, AST transforms), never hand-editing.
 
 ### Verification Checklist

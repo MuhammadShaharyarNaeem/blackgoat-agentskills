@@ -68,6 +68,10 @@ For every consumer, state in the plan task **which of these is true**: order doe
 
 Where order matters, prefer a design that tolerates disorder: sequence numbers on the message, last-write-wins on a monotonic field, or a state machine that ignores a transition it has already passed.
 
+### Topic and Queue Names Are Wire Contracts
+
+A topic name, queue name, subscription name or routing key is shared by every service that publishes or consumes it — a misspelling included. Never rename one inside a single service, not even to fix a typo: the other side keeps using the old name and messages stop arriving without an error. A rename is additive and phased: publish to both names, move every consumer, then retire the old name. A name that cannot be migrated that way stays as it is.
+
 ### A Job's Observable Effect
 
 A job task's acceptance criterion names the **observable effect** the job produces — the row, the queue message, the file, the state transition a later reader can see. Those criteria rules are owned by `{PLUGIN_ROOT}/planning-and-task-breakdown/SKILL.md` (*Plans model effects, not artifacts*); do not restate them. This skill adds only the sink: name it.
@@ -100,6 +104,7 @@ Before marking jobs or messaging work complete:
 - [ ] The dead-letter destination exists and preserves the failing payload, reason, attempt count and correlation id
 - [ ] No publish-with-write path exists outside the outbox
 - [ ] Every consumer's ordering assumption is stated in its plan task
+- [ ] No topic, queue, subscription or routing-key name was changed in one service alone
 - [ ] Every scheduled job writes a run record a later run can read
 - [ ] An out-of-process replay (same message twice → one effect) is captured and cited
 
