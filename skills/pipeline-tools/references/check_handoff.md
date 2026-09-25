@@ -16,8 +16,9 @@ The table is a constant in the script. A gate that re-derived it by parsing `age
 
 | Persona | Required beyond `<status>` / `<blockers>` | Source |
 |---|---|---|
-| mason, max | `<changed_files>` | Builder override |
-| dep, quinn, nova | `<changed_files>` **and** `<artifact>` | Hybrid write boundary |
+| mason, max | `<changed_files>` **and** `<changed_symbols>` | Builder override |
+| nova | `<changed_files>`, `<changed_symbols>` **and** `<artifact>` | Hybrid write boundary |
+| dep, quinn | `<changed_files>` **and** `<artifact>` | Hybrid write boundary |
 | forge | `<changed_skills>` | Meta override |
 | alex, aria, cipher, echo, iris, luna, rex, scout, vera | `<artifact>` | base-persona, unchanged |
 
@@ -233,3 +234,21 @@ On a `PARTIAL`/`BLOCKED` `<status>`, `<blockers>` must now carry at least one li
 This is the grammar `check_redelegation.py` reads to decide whether re-delegating the same agent on the same unit would just re-discover the same wall: `environment`/`credentials` halt outright, `dependency` halts unless explicitly waived, and `spec`/`defect` never halt on their own since those are squarely the agent's to keep working on.
 
 Self-test count: 57 → 67 — ten `blocked_on:` grammar cases: every known category, an unknown one, a missing line, the `COMPLETE` exemption, a bulleted/backtick-wrapped line, and the absent-`<blockers>`-is-only-`element_missing` non-duplication case.
+
+## `<changed_symbols>` (Unreleased)
+
+`<changed_files>` says which files a builder touched; it says nothing about what inside them changed, so a builder could name a function it never wrote and nothing mechanical would disagree. `<changed_symbols>` turns that claim into one checked against a deterministic fact: under `--since`, each `path::Name` entry must appear as a whole word on an added, removed or context line inside a hunk of `git -c core.attributesFile=<temp> diff --no-color --no-ext-diff -M -W <ref> -- <path>`, never on the `---`/`+++` file headers. This deliberately widens the plan's first rule, "+/- lines and `@@` headers only" (convention #8): that rule rejected true claims about a change inside a multi-line constant whose name line was unchanged. A name the diff's function context never shows is an invented or untouched claim, so the rule catches invention, not precise attribution. Whole word, not substring, so `Get` cannot ride on `GetUser`. `Name` is the bare identifier as source spells it: a `.` qualifier (`Store.load`) is `changed_symbols_grammar`, because source rarely contains the dotted form and every such honest claim would be refused. A hyphen stays legal, for PowerShell's `Verb-Noun`.
+
+Review cycle 1 refined the widened rule twice, both deliberately (convention #8, refining this section's own rule):
+- **No `@@` header text.** Under `-W`, a hunk starts at the enclosing declaration, so git's header names the declaration *before* it, an untouched neighbour. The enclosing declaration is already a body line.
+- **Built-in language drivers.** Git's default funcname heuristic matches only unindented lines, so `-W` widened an indented member (a C# method inside a class) to the whole file. A temporary `core.attributesFile` maps common extensions to drivers git ships (`csharp`, `python`, `java`, `golang`, `rust`, `ruby`, `php`, `kotlin`, `cpp`, `bash`, `perl`, `css`, `html`, `markdown`). The repository's own `.gitattributes` still wins. Git ships no JavaScript/TypeScript driver, so those files keep the default heuristic, and their residual is the enclosing unindented block.
+
+`--no-color --no-ext-diff --no-textconv` keep the caller's git config (`color.diff=always`, `diff.external`) and a repository's `diff.<driver>.textconv` from reshaping the output. An untracked file that cannot be read is exit 2, never a finding, and so is a failure to write the temporary attributes file. A failure to delete that file is ignored: a leaked temp file is harmless, but a cleanup error must never mask the verdict.
+
+Review cycle 2 closed two more gaps:
+- **One file per entry.** Git reads a path as a pathspec, so a directory (`src`), a glob (`src/*.py`) or pathspec magic (`:/`) would widen the diff to every matching file. Such a path is `changed_symbols_grammar`, and every git call that takes an entry's path runs with `--literal-pathspecs`.
+- **The innermost symbol.** With method-scoped drivers, a class declaration line that did not change sits outside the hunk. The personas therefore say to name the innermost symbol edited, the method rather than its enclosing class unless the class line itself changed. A self-test pins the class claim as refused. Mason, Max and Nova must carry the element (`element_missing` otherwise); every other persona may carry it without a warning. The only non-entry form is exactly one `none: <reason>` line with a non-empty reason, recorded in the ledger as `changed_symbols_none_reason` and never diff-checked. A bad line, an empty reason or `none:` mixed with entries is `changed_symbols_grammar`; a name the diff does not show is `symbol_not_in_diff`, detail the entry as written.
+
+**The untracked-file rule.** Builders never commit, so a symbol in a file they created is untracked and `git diff` shows nothing for it. An untracked file at `path` therefore counts as all-added lines, the same "diff plus untracked" rule `<changed_files>` already uses. A deleted file is still diffed (its removed lines count), and a renamed file is cited by its new path.
+
+Self-test count: 67 → 91.

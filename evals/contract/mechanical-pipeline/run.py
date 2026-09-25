@@ -866,7 +866,8 @@ def run_lifecycle(repo):
     run_git(["commit", "-qm", "handoff-step baseline"], repo)
     head = run_git(["rev-parse", "HEAD"], repo).stdout.strip()
     touched = repo / "src" / "contacts.py"
-    touched.write_text("# added after HEAD\n", encoding="utf-8")
+    touched.write_text("# added after HEAD\ndef add_contact():\n    return None\n",
+                       encoding="utf-8")
 
     handoff_dir = impl_dir / "handoffs"
     handoff_dir.mkdir(parents=True, exist_ok=True)
@@ -875,6 +876,7 @@ def run_lifecycle(repo):
     honest_handoff.write_text(
         "<handoff><status>COMPLETE</status>"
         "<changed_files>src/contacts.py</changed_files>"
+        "<changed_symbols>src/contacts.py::add_contact</changed_symbols>"
         "<blockers>None</blockers></handoff>\n", encoding="utf-8")
     proc = run_py(CHECK_HANDOFF, ["--handoff", honest_handoff, "--persona", "mason",
                                   "--repo", repo, "--since", head])
@@ -894,7 +896,9 @@ def run_lifecycle(repo):
     inflated.write_text(
         "<handoff><status>COMPLETE</status>"
         "<changed_files>src/contacts.py, src/pristine.py"
-        "</changed_files><blockers>None</blockers></handoff>\n", encoding="utf-8")
+        "</changed_files>"
+        "<changed_symbols>src/contacts.py::add_contact</changed_symbols>"
+        "<blockers>None</blockers></handoff>\n", encoding="utf-8")
     proc = run_py(CHECK_HANDOFF, ["--handoff", inflated, "--persona", "mason",
                                   "--repo", repo, "--since", head])
     data = parse_json(proc, "13b. check_handoff: a changed_files entry git never saw -> exit 1")
@@ -1059,7 +1063,7 @@ def run_lifecycle(repo):
     if data is not None:
         elements = [f.get("element") for f in (data.get("findings") or [])]
         ok = (proc.returncode == 1 and data.get("result") == "FAIL"
-              and elements == ["changed_files"])
+              and elements == ["changed_files", "changed_symbols"])
         record("17c. check_handoff --advisory does not waive <changed_files> -> exit 1",
                ok, "" if ok else json.dumps(data))
 

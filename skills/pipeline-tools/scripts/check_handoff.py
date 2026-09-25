@@ -153,6 +153,7 @@ import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
+from unittest import mock
 from pathlib import Path
 
 # --------------------------------------------------------------------------
@@ -174,13 +175,16 @@ DEFAULT_REQUIRED = ("status", "artifact", "blockers")
 PERSONA_ELEMENTS = {
     # Builders (agents/mason.md, agents/max.md): <changed_files> INSTEAD of
     # <artifact>.
-    "mason": ("status", "changed_files", "blockers"),
-    "max": ("status", "changed_files", "blockers"),
+    # Both also report <changed_symbols> (claim-gates FR-1).
+    "mason": ("status", "changed_files", "changed_symbols", "blockers"),
+    "max": ("status", "changed_files", "changed_symbols", "blockers"),
     # Hybrid write boundaries (agents/dep.md, agents/quinn.md,
-    # agents/nova.md): both elements, a dual handoff.
+    # agents/nova.md): both elements, a dual handoff. Nova, a builder, also
+    # reports <changed_symbols>.
     "dep": ("status", "changed_files", "artifact", "blockers"),
     "quinn": ("status", "changed_files", "artifact", "blockers"),
-    "nova": ("status", "changed_files", "artifact", "blockers"),
+    "nova": ("status", "changed_files", "changed_symbols", "artifact",
+             "blockers"),
     # Meta (agents/forge.md): <changed_skills>.
     "forge": ("status", "changed_skills", "blockers"),
     # Everyone else reports <artifact> per base-persona unchanged.
@@ -254,7 +258,8 @@ STATUSES = ("COMPLETE", "PARTIAL", "BLOCKED")
 ADVISORY_OPTIONAL_ELEMENTS = ("artifact", "changed_skills")
 
 KNOWN_ELEMENTS = ("status", "artifact", "changed_files", "changed_skills",
-                  "blockers", "consumers", "fix_verification")
+                  "blockers", "consumers", "fix_verification",
+                  "changed_symbols")
 
 HANDOFF_RE = re.compile(r"<handoff\s*>(.*?)</handoff\s*>", re.S | re.I)
 FENCE_RE = re.compile(r"^[ \t]*(```|~~~).*?^[ \t]*\1[ \t]*$",
@@ -263,6 +268,21 @@ TAG_RE = re.compile(r"</?([A-Za-z_][\w-]*)\s*>")
 # `path::symbol`, split on the LAST `::` so a Windows drive letter or a
 # namespace-qualified path cannot be mistaken for the separator.
 CONSUMERS_LINE_RE = re.compile(r"^(?P<path>\S.*?)::(?P<symbol>[^\s:/\\]+)$")
+# `<changed_symbols>`'s only non-entry form: `none: <reason>`.
+CHANGED_SYMBOLS_NONE_RE = re.compile(r"(?i)^none:(?P<reason>.*)$")
+# Characters git would read as a glob in a `<changed_symbols>` path.
+PATHSPEC_GLOB_CHARS = re.compile(r"[*?\[]")
+# Extension -> diff driver, for the `<changed_symbols>` diff's temporary
+# core.attributesFile. Every driver named here is one git ships built in
+# (gitattributes(5), "Defining a custom hunk-header"); git has no JavaScript
+# or TypeScript driver, so those files keep the default funcname heuristic.
+BUILTIN_DIFF_DRIVERS = (
+    ("*.cs", "csharp"), ("*.py", "python"), ("*.java", "java"),
+    ("*.go", "golang"), ("*.rs", "rust"), ("*.rb", "ruby"), ("*.php", "php"),
+    ("*.kt", "kotlin"), ("*.c", "cpp"), ("*.h", "cpp"), ("*.cc", "cpp"),
+    ("*.cpp", "cpp"), ("*.hpp", "cpp"), ("*.sh", "bash"), ("*.pl", "perl"),
+    ("*.css", "css"), ("*.html", "html"), ("*.md", "markdown"),
+)
 # Uppercase-only, standalone. "1 passed, 0 failed" is lowercase and is the
 # sanctioned way to report a partial result beside a NOT VERIFIED label; an
 # unqualified uppercase verdict token is not.
@@ -522,20 +542,37 @@ def git_changed_since(repo, ref):
     changed = set()
     for args in (["diff", "--name-only", ref],
                  ["ls-files", "--others", "--exclude-standard"]):
-        try:
-            proc = subprocess.run(["git", "-C", str(repo)] + args,
-                                  capture_output=True, text=True, timeout=120)
-        except FileNotFoundError:
-            raise GateError("git executable not found; --since cannot be checked")
-        except subprocess.TimeoutExpired:
-            raise GateError(f"git {args[0]} timed out after 120s")
-        if proc.returncode != 0:
-            raise GateError(
-                f"git {' '.join(args)} in {repo} failed: "
-                f"{proc.stderr.strip() or proc.stdout.strip()}")
-        changed.update(normalize_path(line) for line in proc.stdout.splitlines()
-                       if line.strip())
+        changed.update(normalize_path(line) for line in
+                       run_git_checked(repo, args).splitlines() if line.strip())
     return changed
+
+
+def run_git_checked(repo, args, config=(), literal_pathspecs=False):
+    """stdout of `git [-c <config>...] -C <repo> <args>`, or GateError.
+
+    `literal_pathspecs` adds git's global `--literal-pathspecs`, so a path
+    taken from a handoff is one file, never a glob or pathspec magic.
+
+    A missing git, a timeout (120 s, NFR-3) or a non-zero exit is an ERROR
+    (exit 2), never a finding: the gate could not look, so it says nothing
+    about the handoff.
+    """
+    command = ["git"] + (["--literal-pathspecs"] if literal_pathspecs else [])
+    for setting in config:
+        command += ["-c", setting]
+    try:
+        proc = subprocess.run(command + ["-C", str(repo)] + args,
+                              capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=120)
+    except FileNotFoundError:
+        raise GateError("git executable not found; --since cannot be checked")
+    except subprocess.TimeoutExpired:
+        raise GateError(f"git {args[0]} timed out after 120s")
+    if proc.returncode != 0:
+        raise GateError(
+            f"git {' '.join(args)} in {repo} failed: "
+            f"{proc.stderr.strip() or proc.stdout.strip()}")
+    return proc.stdout
 
 
 def default_docs_root(handoff_path):
@@ -606,6 +643,149 @@ def check_consumers(values):
             if not CONSUMERS_LINE_RE.match(item):
                 bad.append(item)
     return bad
+
+
+def parse_changed_symbols(values):
+    """(entries, none_reason, bad) for a <changed_symbols> element.
+
+    Line rules are `check_consumers`'s: one entry per non-blank line, list
+    marker and backticks stripped (marker first, as `parse_blocked_on_lines`
+    does, so "- `a::B`" parses), `path::Name` split on the last `::`. The
+    only other form is a single `none: <reason>` line with a non-empty reason.
+    `bad` holds (line, why) pairs; `none_reason` is set only when the none
+    form passed grammar.
+    """
+    lines = []
+    for value in values:
+        for line in value.splitlines():
+            item = re.sub(r"^[-*+]\s+", "", line.strip()).strip()
+            item = item.strip("`").strip()
+            if item:
+                lines.append(item)
+    none_lines = [l for l in lines if CHANGED_SYMBOLS_NONE_RE.match(l)]
+    if none_lines:
+        if len(lines) > 1:
+            return [], None, [(l, "none: must be the element's only line")
+                              for l in none_lines]
+        reason = CHANGED_SYMBOLS_NONE_RE.match(none_lines[0]).group("reason")
+        if not reason.strip():
+            return [], None, [(none_lines[0], "none: carries no reason")]
+        return [], reason.strip(), []
+    entries, bad = [], []
+    for item in lines:
+        match = CONSUMERS_LINE_RE.match(item)
+        if not match:
+            bad.append((item, "not `path::Name`"))
+        elif "." in match.group("symbol"):
+            # Source rarely spells `Class.Method`, so a qualified Name is an
+            # honest claim `--since` would refuse (review F4). A hyphen stays
+            # legal: PowerShell's `Verb-Noun`.
+            bad.append((item, "Name must be a bare identifier, no qualifier"))
+        elif (PATHSPEC_GLOB_CHARS.search(match.group("path"))
+              or match.group("path").startswith(":")):
+            # Review F10: a glob or pathspec magic would widen the diff to
+            # every matching file; the path must name exactly one file.
+            bad.append((item, "path must name exactly one file: no glob "
+                              "(*, ?, [) and no leading : pathspec magic"))
+        else:
+            entries.append({"path": normalize_path(match.group("path")),
+                            "name": match.group("symbol")})
+    return entries, None, bad
+
+
+def symbol_roots(roots, rel):
+    """The --repo roots a <changed_symbols> path is diffed in.
+
+    The root it exists under, as `<changed_files>` resolves it; for a path
+    that exists nowhere (a deleted file, EC-2), every root it lies under.
+    """
+    state, _, matched_root, _ = path_status(roots, rel)
+    if state == "ok":
+        return [matched_root]
+    candidate = Path(rel)
+    containing = []
+    for root in roots:
+        resolved = candidate if candidate.is_absolute() else Path(root) / rel
+        try:
+            resolved.resolve().relative_to(Path(root).resolve())
+        except (OSError, ValueError):
+            continue
+        containing.append(root)
+    return containing
+
+
+def git_symbol_lines(repo, ref, rel):
+    """Lines of `git diff -M -W <ref> -- <rel>` a symbol may be named on.
+
+    The added, removed and context lines inside a hunk; never the `+++`/`---`
+    file headers. `-W` widens each hunk to its whole enclosing function. This
+    deliberately widens claim-gates Task 2's "+/- lines and @@ headers only"
+    (convention #8, Orchestrator ruling): a name the diff's function context
+    never shows is an invented or untouched claim; the rule catches
+    invention, not precise attribution.
+
+    Two refinements of that widened rule, also deliberate (convention #8,
+    remediation cycle 1): the `@@` header text does NOT count, because under
+    `-W` it names the declaration BEFORE the changed one (an untouched
+    neighbour; the enclosing declaration is already a body line); and git's
+    built-in language drivers scope `-W` through a temporary
+    core.attributesFile, because the default funcname heuristic matches only
+    unindented lines and would widen an indented member (a C# method) to the
+    whole file. A repository's own .gitattributes still wins. `--no-color
+    --no-ext-diff` keep the caller's git config from reshaping the output.
+
+    An untracked file at `rel` contributes every line, as all-added
+    (claim-gates OQ-1); one that cannot be read is a GateError.
+    """
+    root_abs = Path(repo).resolve()
+    target = Path(rel) if Path(rel).is_absolute() else root_abs / rel
+    repo_rel = normalize_path(str(target.resolve().relative_to(root_abs)))
+    try:
+        handle, attributes = tempfile.mkstemp(suffix=".gitattributes")
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            stream.write("".join(f"{glob} diff={driver}\n"
+                                 for glob, driver in BUILTIN_DIFF_DRIVERS))
+    except OSError as exc:
+        raise GateError(f"cannot write the diff-driver attributes file: {exc}")
+    try:
+        diff = run_git_checked(
+            repo, ["diff", "--no-color", "--no-ext-diff", "--no-textconv",
+                   "-M", "-W", ref, "--", repo_rel],
+            config=[f"core.attributesFile={Path(attributes).as_posix()}"],
+            literal_pathspecs=True)
+    finally:
+        try:
+            os.unlink(attributes)
+        except OSError:
+            # Review F12: a leaked temp file is harmless; a cleanup failure
+            # masking the verdict (or an in-flight GateError) is not.
+            pass
+    searchable = []
+    in_hunk = False
+    for line in diff.splitlines():
+        if line.startswith("diff --git"):
+            in_hunk = False
+        elif line.startswith("@@"):
+            in_hunk = True
+        elif in_hunk and line[:1] in ("+", "-", " "):
+            searchable.append(line[1:])
+    untracked = run_git_checked(
+        repo, ["ls-files", "--others", "--exclude-standard", "--", repo_rel],
+        literal_pathspecs=True)
+    if untracked.strip() and target.is_file():
+        try:
+            searchable.extend(target.read_text(encoding="utf-8",
+                                               errors="replace").splitlines())
+        except OSError as exc:
+            raise GateError(f"cannot read untracked {repo_rel}: {exc}")
+    return searchable
+
+
+def symbol_in_lines(name, lines):
+    """True when `name` appears as a WHOLE WORD on any line (EC-1)."""
+    pattern = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(name)
+                         + r"(?![A-Za-z0-9_])")
+    return any(pattern.search(line) for line in lines)
 
 
 def check_honesty(elements):
@@ -692,6 +872,8 @@ def build_report(text, persona, repo, since=None, fix_round=False,
         "warnings": [],
         "status": None,
         "changed_files": [],
+        "changed_symbols": [],
+        "changed_symbols_none_reason": None,
         "artifacts": [],
         "scaffolding_scanned": [],
         "allow_scaffolding": None,
@@ -860,6 +1042,45 @@ def build_report(text, persona, repo, since=None, fix_round=False,
             finding("consumers_grammar",
                     f"<consumers> line is not `path::symbol`: {bad}", line=bad)
 
+    if "changed_symbols" in elements:
+        entries, none_reason, bad_symbols = parse_changed_symbols(
+            elements["changed_symbols"])
+        report["changed_symbols"] = entries
+        report["changed_symbols_none_reason"] = none_reason
+        for line, why in bad_symbols:
+            finding("changed_symbols_grammar",
+                    f"<changed_symbols> line {why}: {line} -- one `path::Name` "
+                    "per line, or exactly one `none: <reason>`", line=line)
+        file_entries = []
+        for entry in entries:
+            state, _, _, resolved = path_status(repos, entry["path"])
+            if state == "ok" and resolved.is_dir():
+                # Review F10: a directory pathspec diffs every file under it.
+                cited = f"{entry['path']}::{entry['name']}"
+                finding("changed_symbols_grammar",
+                        f"<changed_symbols> path must name exactly one file, "
+                        f"not a directory: {cited}", line=cited)
+            else:
+                file_entries.append(entry)
+        if since:
+            # Each entry is diffed in the repo its path resolves to; the
+            # none: form has no entries and is never diff-checked.
+            lines_cache = {}
+            for entry in file_entries:
+                cited = f"{entry['path']}::{entry['name']}"
+                found = False
+                for root in symbol_roots(repos, entry["path"]):
+                    key = (str(Path(root).resolve()), entry["path"])
+                    if key not in lines_cache:
+                        lines_cache[key] = git_symbol_lines(root, since,
+                                                            entry["path"])
+                    if symbol_in_lines(entry["name"], lines_cache[key]):
+                        found = True
+                        break
+                if not found:
+                    finding("symbol_not_in_diff", cited, entry=cited,
+                            since=since)
+
     for problem in check_honesty(elements):
         finding("honesty_contradiction",
                 f"{problem['rule']} in <{problem['element']}>: {problem['detail']}",
@@ -925,67 +1146,74 @@ PURPOSE = ("Decides whether an agent's handoff block satisfies that persona's "
 
 EPILOG = """\
 Reads:
-  --handoff  the agent's returned text (stdin when omitted). One
-    well-formed <handoff>...</handoff> block OUTSIDE fenced code: fences are
-    blanked first, so an illustration never satisfies it.
-    Required elements per persona (base-persona.md plus the persona's own
-    "Base Persona Override"): mason, max -> <changed_files>; dep, quinn, nova
-    -> <changed_files> + <artifact>; forge -> <changed_skills>; all others ->
-    <artifact>. <status> and <blockers> are always required;
-    <fix_verification> is required under --fix-round, and <consumers>
-    (mason, nova) under --require consumers. agents/blackgoat.md is not a
-    persona here: usage error.
-      <status>    COMPLETE | PARTIAL | BLOCKED -- the DELIVERY state, not a
-                  verification verdict, which belongs in the body.
+  --handoff  the agent's returned text (stdin when omitted): one
+    <handoff>...</handoff> block OUTSIDE fenced code.
+    Required: mason, max -> <changed_files> + <changed_symbols>; nova -> those +
+    <artifact>; dep, quinn -> <changed_files> + <artifact>; forge ->
+    <changed_skills>; others -> <artifact>. Always <status>, <blockers>;
+    <fix_verification> under --fix-round; <consumers> (mason, nova) under
+    --require consumers. agents/blackgoat.md is a usage error.
+      <status>    COMPLETE | PARTIAL | BLOCKED -- DELIVERY state, not a
+                  verdict.
       <blockers>  on PARTIAL or BLOCKED, at least one line
                     blocked_on: <category> - <reason>
-                  with <category> one of environment, credentials,
-                  dependency, spec, defect. COMPLETE is exempt; an absent
-                  <blockers> is element_missing instead, never both.
+                  <category>: environment, credentials, dependency, spec,
+                  defect. COMPLETE is exempt; absent is element_missing only.
       <consumers> lines in path::symbol grammar.
-    Honesty rules: an upper-case PASS/GREEN token beside a NOT VERIFIED or
-    BLOCKED marker in the SAME element, and BLOCKED beside
-    <blockers>None</blockers>.
+      <changed_symbols>  one path::Name per line, or one line none:
+                  <non-empty reason>. path: one file (no glob, magic,
+                  directory). Name: the innermost edited symbol, bare and
+                  unqualified (a method, not its unchanged class).
+    Honesty: an upper-case PASS/GREEN beside NOT VERIFIED/BLOCKED in the
+    SAME element; BLOCKED beside <blockers>None</blockers>.
   Cited files  every <changed_files>/<artifact>/<changed_skills> path must
-    exist under a --repo and not escape it. <artifact> and <changed_skills>
-    (never <changed_files>) also resolve under a --docs-root, its parent, and
-    the cwd. With --since, <changed_files> must be a subset of
-    git diff --name-only <ref> plus untracked.
-  Scaffolding sweep  on COMPLETE, every existing TEXT file in
+    exist inside a --repo; <artifact>/<changed_skills>
+    also resolve under a --docs-root, its parent, and the cwd.
+  --since  <changed_files> must be a subset of git diff --name-only <ref>
+    plus untracked. Each <changed_symbols> Name must appear as a whole word
+    on a +, - or context line (never @@ text) of git diff -M -W <ref> --
+    <path> under git's built-in drivers (untracked = all-added;
+    none: unchecked; convention #8): names outside that function context
+    are invented.
+  Scaffolding sweep  on COMPLETE, each TEXT file in
     <artifact>/<changed_skills> is read for base-persona's placeholder marker
     (an underscore joined to TODO), a TODO-colon-pending phrase, an HTML
-    comment opening TODO or skeleton, and any line EXPLAINING the markers. A
-    marker in an inline code span is not a hit; one in a fence IS.
-    PARTIAL/BLOCKED are exempt; <changed_files> is not swept.
+    comment opening TODO or skeleton, and any line EXPLAINING the markers.
+    Inline code is not a hit; a fence IS. PARTIAL/BLOCKED and
+    <changed_files> are exempt.
 
 Problem codes:
-  handoff_missing            no well-formed unfenced <handoff> block
-  element_missing            a required element is absent or empty
-  path_missing               a cited path does not exist, or escapes the repo
-  changed_files_not_in_diff  --since only: a file the agent never touched
-  status_invalid             <status> is not COMPLETE / PARTIAL / BLOCKED
-  consumers_grammar          a <consumers> line is not path::symbol
-  honesty_contradiction      a PASS/GREEN token beside NOT VERIFIED/BLOCKED
-  artifact_scaffolding_left  a COMPLETE artifact still carries a marker
+  handoff_missing            no unfenced <handoff> block
+  element_missing            required element absent or empty
+  path_missing               cited path absent or outside every root
+  changed_files_not_in_diff  --since: a file the diff lacks
+  status_invalid             <status> outside the enum
+  consumers_grammar          <consumers> line not path::symbol
+  changed_symbols_grammar    bad path::Name, empty or mixed none:
+  symbol_not_in_diff         --since: detail is the path::Name
+  honesty_contradiction      see Honesty above
+  artifact_scaffolding_left  COMPLETE artifact keeps a marker
   blockers_uncategorised     PARTIAL/BLOCKED with no blocked_on: line
 
 JSON keys:
   result, persona, since, fix_round, advisory, advisory_waived_elements,
-  required_elements, present_elements, status, changed_files, artifacts,
+  required_elements, present_elements, status, changed_files,
+  changed_symbols ([{path, name}]), changed_symbols_none_reason, artifacts,
   changed_skills, scaffolding_scanned, allow_scaffolding, scaffolding_waived,
-  findings ({code, detail, ...}; a scaffolding finding adds path, line,
-  marker, text), warnings, error. Ledger extras: advisory: true;
-  allow_scaffolding_reason plus the waived {path, line, marker} entries.
+  findings ({code, detail, ...}; scaffolding adds path, line, marker,
+  text), warnings, error. Ledger extras: advisory;
+  changed_symbols_none_reason; allow_scaffolding_reason plus waived
+  {path, line, marker}.
 
 Exit codes:
   0  PASS
   1  at least one finding
-  2  usage, an unreadable handoff, an unknown persona, a --repo/--docs-root
-     that is not a directory, a --since ref git cannot resolve in the repo a
-     changed file resolved to, or a blank --allow-scaffolding reason
+  2  usage, an unreadable handoff or untracked file, an unknown persona, a
+     --repo/--docs-root not a directory, a failing --since git call (an
+     unresolvable ref) or temp file, or a blank --allow-scaffolding reason
 
 Self-test:
-  python check_handoff.py --self-test   (67 cases)
+  python check_handoff.py --self-test   (91 cases)
 """
 
 
@@ -1106,6 +1334,8 @@ def main(argv):
         print(json.dumps({"result": "ERROR", "error": str(exc)}))
         return finish(2, "ERROR")
 
+    if report.get("changed_symbols_none_reason"):
+        extra["changed_symbols_none_reason"] = report["changed_symbols_none_reason"]
     if report.get("allow_scaffolding"):
         extra["allow_scaffolding_reason"] = report["allow_scaffolding"]
         extra["scaffolding_waived"] = [
@@ -1121,6 +1351,7 @@ def run_self_test():
 
     GOOD_MASON = ("<handoff><status>COMPLETE</status>"
                   "<changed_files>src/a.py, src/b.py</changed_files>"
+                  "<changed_symbols>src/a.py::a</changed_symbols>"
                   "<blockers>None</blockers></handoff>")
 
     class HandoffTests(unittest.TestCase):
@@ -1223,6 +1454,7 @@ def run_self_test():
         def test_advisory_does_not_waive_changed_files(self):
             """A builder that wrote code has an artifact regardless."""
             text = ("<handoff><status>COMPLETE</status>"
+                    "<changed_symbols>none: fixture</changed_symbols>"
                     "<blockers>None</blockers></handoff>")
             r = build_report(text, "mason", self.dir, advisory=True)
             self.assertEqual(r["result"], "FAIL")
@@ -1248,6 +1480,7 @@ def run_self_test():
         def test_the_status_invalid_message_names_where_a_verdict_belongs(self):
             text = ("<handoff><status>PASS</status>"
                     "<changed_files>src/a.py</changed_files>"
+                    "<changed_symbols>none: fixture</changed_symbols>"
                     "<blockers>None</blockers></handoff>")
             r = build_report(text, "mason", self.dir)
             detail = r["findings"][0]["detail"]
@@ -1457,6 +1690,7 @@ def run_self_test():
             text = ("```\n" + GOOD_MASON + "\n```\n\n"
                     "<handoff><status>BLOCKED</status>"
                     "<changed_files>src/a.py</changed_files>"
+                    "<changed_symbols>none: fixture</changed_symbols>"
                     "<blockers>blocked_on: environment — no test DB in this "
                     "environment</blockers></handoff>")
             r = build_report(text, "mason", self.dir)
@@ -1466,6 +1700,7 @@ def run_self_test():
         def test_path_that_does_not_exist_fails(self):
             text = ("<handoff><status>COMPLETE</status>"
                     "<changed_files>src/a.py, src/ghost.py</changed_files>"
+                    "<changed_symbols>none: fixture</changed_symbols>"
                     "<blockers>None</blockers></handoff>")
             r = build_report(text, "mason", self.dir)
             self.assertEqual(self.codes(r), ["path_missing"])
@@ -1474,6 +1709,7 @@ def run_self_test():
         def test_path_escaping_the_repo_fails(self):
             text = ("<handoff><status>COMPLETE</status>"
                     "<changed_files>../outside.py</changed_files>"
+                    "<changed_symbols>none: fixture</changed_symbols>"
                     "<blockers>None</blockers></handoff>")
             self.assertEqual(self.codes(build_report(text, "mason", self.dir)),
                              ["path_missing"])
@@ -1481,6 +1717,7 @@ def run_self_test():
         def test_empty_element_is_missing_not_present(self):
             text = ("<handoff><status>COMPLETE</status>"
                     "<changed_files>   </changed_files>"
+                    "<changed_symbols>none: fixture</changed_symbols>"
                     "<blockers>None</blockers></handoff>")
             r = build_report(text, "mason", self.dir)
             self.assertEqual(self.codes(r), ["element_missing"])
@@ -1496,6 +1733,7 @@ def run_self_test():
             (self.dir / "src" / "a.py").write_text("edited", encoding="utf-8")
             text = ("<handoff><status>COMPLETE</status>"
                     "<changed_files>src/a.py, src/b.py</changed_files>"
+                    "<changed_symbols>none: fixture</changed_symbols>"
                     "<blockers>None</blockers></handoff>")
             r = build_report(text, "mason", self.dir, since=ref)
             self.assertEqual(self.codes(r), ["changed_files_not_in_diff"])
@@ -1507,6 +1745,7 @@ def run_self_test():
             (self.dir / "src" / "new.py").write_text("new", encoding="utf-8")
             text = ("<handoff><status>COMPLETE</status>"
                     "<changed_files>src/a.py\nsrc/new.py</changed_files>"
+                    "<changed_symbols>none: fixture</changed_symbols>"
                     "<blockers>None</blockers></handoff>")
             r = build_report(text, "mason", self.dir, since=ref)
             self.assertEqual(r["result"], "PASS", r["findings"])
@@ -1562,6 +1801,7 @@ def run_self_test():
             docs, repo1, repo2, ref1, ref2 = self.make_multi_repo()
             text = ("<handoff><status>COMPLETE</status>"
                     "<changed_files>src/one.py, src/two.py</changed_files>"
+                    "<changed_symbols>none: fixture</changed_symbols>"
                     "<blockers>None</blockers></handoff>")
             r = build_report(text, "mason", [repo1, repo2])
             self.assertEqual(r["result"], "PASS", r["findings"])
@@ -1578,6 +1818,7 @@ def run_self_test():
             (docs / "report.md").write_text("done", encoding="utf-8")
             text = ("<handoff><status>COMPLETE</status>"
                     f"<changed_files>{docs / 'report.md'}</changed_files>"
+                    "<changed_symbols>none: fixture</changed_symbols>"
                     "<blockers>None</blockers></handoff>")
             r = build_report(text, "mason", [repo1, repo2], docs_root=[docs])
             self.assertEqual(self.codes(r), ["path_missing"])
@@ -1598,6 +1839,7 @@ def run_self_test():
 
             text = ("<handoff><status>COMPLETE</status>"
                     "<changed_files>src/one.py, src/two.py</changed_files>"
+                    "<changed_symbols>none: fixture</changed_symbols>"
                     "<blockers>None</blockers></handoff>")
             r = build_report(text, "mason", [repo1, repo2], since="start")
             self.assertEqual(r["result"], "PASS", r["findings"])
@@ -1664,6 +1906,7 @@ def run_self_test():
             (docs / "note.md").write_text("x", encoding="utf-8")
             text = ("<handoff><status>COMPLETE</status>"
                     "<changed_files>.docs/note.md</changed_files>"
+                    "<changed_symbols>none: fixture</changed_symbols>"
                     "<blockers>None</blockers></handoff>")
             old_cwd = os.getcwd()
             try:
@@ -1744,6 +1987,7 @@ def run_self_test():
         def _blocked(self, status, blockers):
             return (f"<handoff><status>{status}</status>"
                     f"<changed_files>src/a.py</changed_files>"
+                    f"<changed_symbols>none: fixture</changed_symbols>"
                     f"<blockers>{blockers}</blockers></handoff>")
 
         def test_blocked_on_valid_category_passes_on_partial(self):
@@ -1804,7 +2048,8 @@ def run_self_test():
             """An absent <blockers> is element_missing; the grammar check does
             not pile a second finding onto the same gap."""
             text = ("<handoff><status>PARTIAL</status>"
-                    "<changed_files>src/a.py</changed_files></handoff>")
+                    "<changed_files>src/a.py</changed_files>"
+                    "<changed_symbols>none: fixture</changed_symbols></handoff>")
             r = build_report(text, "mason", self.dir)
             self.assertEqual(self.codes(r), ["element_missing"])
 
@@ -1841,6 +2086,280 @@ def run_self_test():
         def test_missing_repo_directory_is_an_error(self):
             with self.assertRaises(GateError):
                 build_report(GOOD_MASON, "mason", str(self.dir / "nope"))
+
+        # --- <changed_symbols> (claim-gates FR-1/FR-2/FR-3) --------------
+        def _symbols(self, persona, symbols=None):
+            artifact = "<artifact>docs.md</artifact>" if persona == "nova" else ""
+            element = ("" if symbols is None else
+                       f"<changed_symbols>{symbols}</changed_symbols>")
+            return ("<handoff><status>COMPLETE</status>"
+                    "<changed_files>src/a.py</changed_files>"
+                    f"{artifact}{element}<blockers>None</blockers></handoff>")
+
+        def test_builders_require_changed_symbols(self):
+            for persona in ("mason", "max", "nova"):
+                r = build_report(self._symbols(persona), persona, self.dir)
+                self.assertEqual(self.codes(r), ["element_missing"], persona)
+                self.assertEqual(r["findings"][0]["element"], "changed_symbols",
+                                 persona)
+                self.assertIn("changed_symbols", r["findings"][0]["detail"])
+
+        def test_changed_symbols_is_not_required_of_other_personas(self):
+            text = self.artifact_handoff()
+            self.write_docs("# Report\n\ndone\n")
+            r = build_report(text, "luna", self.dir)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertNotIn("changed_symbols", r["required_elements"])
+
+        def test_changed_symbols_is_a_known_element_for_every_persona(self):
+            self.write_docs("# Report\n\ndone\n")
+            text = self.artifact_handoff().replace(
+                "<blockers>", "<changed_symbols>none: n/a</changed_symbols><blockers>")
+            r = build_report(text, "luna", self.dir)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertFalse(any("changed_symbols" in w for w in r["warnings"]))
+
+        def test_changed_symbols_none_form_passes_and_is_ledgered(self):
+            ledger = self.dir / "gates.jsonl"
+            handoff = self.dir / "h.md"
+            handoff.write_text(self._symbols("mason", "none: docs-only change"),
+                               encoding="utf-8")
+            self.assertEqual(main(["--handoff", str(handoff), "--persona", "mason",
+                                   "--repo", str(self.dir),
+                                   "--ledger", str(ledger)]), 0)
+            record = json.loads(ledger.read_text(encoding="utf-8").splitlines()[-1])
+            self.assertEqual(record["changed_symbols_none_reason"],
+                             "docs-only change")
+            r = build_report(self._symbols("mason", "none: docs-only change"),
+                             "mason", self.dir)
+            self.assertEqual(r["changed_symbols"], [])
+            self.assertEqual(r["changed_symbols_none_reason"], "docs-only change")
+
+        def test_a_named_symbols_run_records_no_none_reason(self):
+            ledger = self.dir / "gates.jsonl"
+            handoff = self.dir / "h.md"
+            handoff.write_text(self._symbols("mason", "src/a.py::a"),
+                               encoding="utf-8")
+            main(["--handoff", str(handoff), "--persona", "mason",
+                  "--repo", str(self.dir), "--ledger", str(ledger)])
+            record = json.loads(ledger.read_text(encoding="utf-8").splitlines()[-1])
+            self.assertNotIn("changed_symbols_none_reason", record)
+
+        def test_changed_symbols_none_with_a_blank_reason_fails(self):
+            ledger = self.dir / "gates.jsonl"
+            handoff = self.dir / "h.md"
+            handoff.write_text(self._symbols("mason", "none:   "), encoding="utf-8")
+            self.assertEqual(main(["--handoff", str(handoff), "--persona", "mason",
+                                   "--repo", str(self.dir),
+                                   "--ledger", str(ledger)]), 1)
+            r = build_report(self._symbols("mason", "none:   "), "mason", self.dir)
+            self.assertEqual(self.codes(r), ["changed_symbols_grammar"])
+            record = json.loads(ledger.read_text(encoding="utf-8").splitlines()[-1])
+            self.assertNotIn("changed_symbols_none_reason", record)
+
+        def test_changed_symbols_none_mixed_with_entries_fails(self):
+            r = build_report(self._symbols("mason", "src/a.py::a\nnone: nothing"),
+                             "mason", self.dir)
+            self.assertEqual(self.codes(r), ["changed_symbols_grammar"])
+            self.assertIsNone(r["changed_symbols_none_reason"])
+
+        def test_changed_symbols_line_without_separator_fails(self):
+            for line in ("src/a.py a", "src/a.py::", "src/a.py::two words"):
+                r = build_report(self._symbols("mason", line), "mason", self.dir)
+                self.assertEqual(self.codes(r), ["changed_symbols_grammar"], line)
+
+        def test_a_qualified_name_is_a_grammar_error(self):
+            """Source rarely spells `Class.Method`; the bare name is the claim."""
+            r = build_report(self._symbols("mason", "src/a.py::Store.load"),
+                             "mason", self.dir)
+            self.assertEqual(self.codes(r), ["changed_symbols_grammar"])
+            self.assertIn("bare identifier, no qualifier",
+                          r["findings"][0]["detail"])
+
+        def test_changed_symbols_are_parsed_not_diffed_without_since(self):
+            text = self._symbols("max", "- `./src\\a.py::NoSuchSymbol`\n\n"
+                                        "src/b.ps1::Get-Thing")
+            r = build_report(text, "max", self.dir)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertEqual(r["changed_symbols"],
+                             [{"path": "src/a.py", "name": "NoSuchSymbol"},
+                              {"path": "src/b.ps1", "name": "Get-Thing"}])
+            self.assertIsNone(r["changed_symbols_none_reason"])
+
+        def symbol_codes(self, symbols, ref):
+            r = build_report(self._symbols("mason", symbols), "mason", self.dir,
+                             since=ref)
+            return r, [f for f in r["findings"]
+                       if f["code"] == "symbol_not_in_diff"]
+
+        def test_symbol_added_since_ref_passes_whole_word_only(self):
+            """EC-1: `Get` must not ride on `GetUser`."""
+            ref = self.make_repo()
+            (self.dir / "src" / "a.py").write_text("a\ndef GetUser():\n    pass\n",
+                                                   encoding="utf-8")
+            r, bad = self.symbol_codes("src/a.py::GetUser", ref)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            r, bad = self.symbol_codes("src/a.py::Get", ref)
+            self.assertEqual(self.codes(r), ["symbol_not_in_diff"])
+            self.assertEqual(bad[0]["detail"], "src/a.py::Get")
+
+        def test_symbol_only_on_removed_lines_of_a_deleted_file_passes(self):
+            """EC-2."""
+            (self.dir / "src" / "old.py").write_text("def OldThing():\n    pass\n",
+                                                     encoding="utf-8")
+            ref = self.make_repo()
+            (self.dir / "src" / "old.py").unlink()
+            (self.dir / "src" / "a.py").write_text("edited", encoding="utf-8")
+            r, bad = self.symbol_codes("src/old.py::OldThing", ref)
+            self.assertEqual(bad, [], r["findings"])
+            self.assertEqual(r["result"], "PASS", r["findings"])
+
+        def test_symbol_in_a_renamed_file_cited_by_its_new_path_passes(self):
+            """EC-3."""
+            (self.dir / "src" / "before.py").write_text(
+                "def Moved():\n    pass\n", encoding="utf-8")
+            ref = self.make_repo()
+            self.run_git("mv", "src/before.py", "src/after.py")
+            (self.dir / "src" / "a.py").write_text("edited", encoding="utf-8")
+            r, bad = self.symbol_codes("src/after.py::Moved", ref)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+
+        def test_symbol_in_a_new_untracked_file_passes(self):
+            """OQ-1: an untracked file counts as all-added lines."""
+            ref = self.make_repo()
+            (self.dir / "src" / "a.py").write_text("edited", encoding="utf-8")
+            (self.dir / "src" / "fresh.py").write_text("class FreshThing:\n    pass\n",
+                                                       encoding="utf-8")
+            r, bad = self.symbol_codes("src/fresh.py::FreshThing", ref)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            r, bad = self.symbol_codes("src/fresh.py::Fresh", ref)
+            self.assertEqual(self.codes(r), ["symbol_not_in_diff"])
+
+        def test_a_preceding_neighbour_on_the_hunk_header_fails(self):
+            """Under -W the @@ text names the declaration BEFORE the changed
+            one -- an untouched neighbour -- so header text never counts."""
+            body = "".join(f"def {n}():\n    v = 1\n    w = 2\n    x = 3\n\n"
+                           for n in ("first", "second", "third"))
+            (self.dir / "src" / "a.py").write_text(body, encoding="utf-8")
+            ref = self.make_repo()
+            (self.dir / "src" / "a.py").write_text(
+                body[:body.rindex("x = 3")] + "x = 30\n\n", encoding="utf-8")
+            diff = self.run_git("diff", "-W", ref, "--", "src/a.py").stdout
+            self.assertIn("@@ def second", diff)
+            r, bad = self.symbol_codes("src/a.py::third", ref)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            r, bad = self.symbol_codes("src/a.py::second", ref)
+            self.assertEqual(self.codes(r), ["symbol_not_in_diff"])
+
+        def _invoice_repo(self):
+            """A C# class of three methods; only Gamma's body changes since
+            the returned ref (Alpha returns 0, Beta 1, Gamma 2)."""
+            methods = "".join(
+                f"        public int {n}()\n        {{\n            return {i};\n"
+                f"        }}\n\n" for i, n in enumerate(("Alpha", "Beta", "Gamma")))
+            body = ("namespace Billing\n{\n    public class InvoiceService\n"
+                    "    {\n" + methods + "    }\n}\n")
+            (self.dir / "src" / "Invoice.cs").write_text(body, encoding="utf-8")
+            ref = self.make_repo()
+            (self.dir / "src" / "Invoice.cs").write_text(
+                body.replace("return 2;", "return 200;"), encoding="utf-8")
+            (self.dir / "src" / "a.py").write_text("edited", encoding="utf-8")
+            return ref
+
+        def test_csharp_methods_are_scoped_by_the_builtin_driver(self):
+            """Indented members: git's default funcname would widen -W to the
+            whole file; the csharp driver scopes it to the changed method."""
+            ref = self._invoice_repo()
+            r, bad = self.symbol_codes("src/Invoice.cs::Gamma", ref)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            r, bad = self.symbol_codes("src/Invoice.cs::Alpha", ref)
+            self.assertEqual(self.codes(r), ["symbol_not_in_diff"])
+
+        def test_an_enclosing_class_is_not_the_innermost_symbol(self):
+            """Review F11: the contract says name the innermost symbol; the
+            class whose declaration line did not change is refused."""
+            ref = self._invoice_repo()
+            r, bad = self.symbol_codes("src/Invoice.cs::InvoiceService", ref)
+            self.assertEqual(self.codes(r), ["symbol_not_in_diff"])
+            r, bad = self.symbol_codes("src/Invoice.cs::Gamma", ref)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+
+        def test_temp_attributes_file_errors_never_become_a_finding(self):
+            """Review F12: create failure is exit 2; delete failure is ignored."""
+            ref = self.make_repo()
+            (self.dir / "src" / "a.py").write_text("def alpha():\n    pass\n",
+                                                   encoding="utf-8")
+            with mock.patch.object(tempfile, "mkstemp",
+                                   side_effect=OSError(28, "No space left")):
+                with self.assertRaises(GateError):
+                    self.symbol_codes("src/a.py::alpha", ref)
+            with mock.patch.object(os, "unlink",
+                                   side_effect=PermissionError(13, "in use")):
+                r, bad = self.symbol_codes("src/a.py::alpha", ref)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+
+        def test_a_path_must_name_exactly_one_file(self):
+            """Review F10: a directory, a glob or pathspec magic would widen
+            the diff to every matching file."""
+            ref = self.make_repo()
+            (self.dir / "src" / "a.py").write_text("def alpha():\n    pass\n",
+                                                   encoding="utf-8")
+            for path in ("src", "src/*.py", ":/"):
+                r, bad = self.symbol_codes(f"{path}::alpha", ref)
+                self.assertEqual(self.codes(r), ["changed_symbols_grammar"], path)
+            r, bad = self.symbol_codes("src/a.py::alpha", ref)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+
+        def test_a_colour_forcing_git_config_does_not_hide_the_diff(self):
+            ref = self.make_repo()
+            self.run_git("config", "color.diff", "always")
+            (self.dir / "src" / "a.py").write_text("def Coloured():\n    pass\n",
+                                                   encoding="utf-8")
+            r, bad = self.symbol_codes("src/a.py::Coloured", ref)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+
+        def test_an_unreadable_untracked_file_is_an_error_not_a_finding(self):
+            ref = self.make_repo()
+            (self.dir / "src" / "a.py").write_text("edited", encoding="utf-8")
+            (self.dir / "src" / "locked.py").write_text("def Locked(): pass\n",
+                                                        encoding="utf-8")
+            real_read = Path.read_text
+
+            def denied(path, *args, **kwargs):
+                if path.name == "locked.py":
+                    raise PermissionError(13, "Permission denied", str(path))
+                return real_read(path, *args, **kwargs)
+            with mock.patch.object(Path, "read_text", denied):
+                with self.assertRaises(GateError):
+                    self.symbol_codes("src/locked.py::Locked", ref)
+
+        def test_symbol_whose_path_has_no_diff_fails_naming_the_entry(self):
+            ref = self.make_repo()
+            (self.dir / "src" / "a.py").write_text("edited a", encoding="utf-8")
+            r, bad = self.symbol_codes("src/a.py::a\nsrc/b.py::b", ref)
+            self.assertEqual(self.codes(r), ["symbol_not_in_diff"])
+            self.assertEqual([f["detail"] for f in bad], ["src/b.py::b"])
+
+        def test_a_change_inside_a_multi_line_constant_cites_its_name(self):
+            """The constant's name line is unchanged, indented (so git's
+            default funcname never puts it on the @@ header), and more than
+            three lines above the change: only -W's function context shows
+            it."""
+            body = ("class Config:\n    TABLE = {\n"
+                    + "".join(f'        "k{i}": {i},\n' for i in range(6))
+                    + "    }\n")
+            (self.dir / "src" / "a.py").write_text(body, encoding="utf-8")
+            ref = self.make_repo()
+            (self.dir / "src" / "a.py").write_text(
+                body.replace('"k5": 5', '"k5": 50'), encoding="utf-8")
+            r, bad = self.symbol_codes("src/a.py::TABLE", ref)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+
+        def test_the_none_form_is_never_diff_checked(self):
+            ref = self.make_repo()
+            (self.dir / "src" / "a.py").write_text("edited", encoding="utf-8")
+            r, bad = self.symbol_codes("none: config only", ref)
+            self.assertEqual(r["result"], "PASS", r["findings"])
 
         def test_every_persona_file_has_a_table_row(self):
             """The table above and agents/ must not drift apart."""
