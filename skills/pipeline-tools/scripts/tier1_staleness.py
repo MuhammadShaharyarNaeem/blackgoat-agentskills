@@ -356,6 +356,19 @@ def classify_change(repo_path, sha):
     return "cosmetic"
 
 
+def cached_classify_change(repo_path, sha, class_cache):
+    """`classify_change`, run once per (repo, sha) per `class_cache`.
+
+    Docs inheriting overview.md's stamp share one pair; without this each
+    re-runs the same two diffs. `build_report` owns the dict, so nothing
+    outlives one run.
+    """
+    key = (str(repo_path), sha)
+    if key not in class_cache:
+        class_cache[key] = classify_change(repo_path, sha)
+    return class_cache[key]
+
+
 def classify_citation(cited, adds_mods, renames, deletes):
     """"changed" | "deleted_or_renamed" | None for one cited path."""
     for p in adds_mods:
@@ -413,7 +426,8 @@ def _loose_key(s):
     return re.sub(r"[\s_\-]+", "", s.casefold())
 
 
-def process_doc(doc_path, repos, inherited_stamp=None, classify=False):
+def process_doc(doc_path, repos, inherited_stamp=None, classify=False,
+                class_cache=None):
     """One doc's staleness report.
 
     `repos` is [(name, Path), ...] from --repo. `inherited_stamp` is the
@@ -421,7 +435,11 @@ def process_doc(doc_path, repos, inherited_stamp=None, classify=False):
     `build_report` for every doc except `context.md` and `overview.md`
     itself -- used only when this doc carries no stamp of its own.
     `classify` adds the `change_class` map; it never touches the verdict.
+    `class_cache` is the run's (repo, sha) -> class dict (a fresh one when
+    omitted).
     """
+    if class_cache is None:
+        class_cache = {}
     text = doc_path.read_text(encoding="utf-8-sig", errors="replace")
     header = header_of(text)
     own_stamped = stamped_repos(header)
@@ -521,7 +539,8 @@ def process_doc(doc_path, repos, inherited_stamp=None, classify=False):
             continue
         result["commits_behind"][name] = commits_behind(path, sha)
         if classify:
-            result["change_class"][name] = classify_change(path, sha)
+            result["change_class"][name] = cached_classify_change(
+                path, sha, class_cache)
         adds_mods, renames, deletes = git_diff(path, sha)
         combined_adds_mods.extend(adds_mods)
         for c in cited:
@@ -616,12 +635,15 @@ def build_report(summary_root, feature, repos, classify=False):
         overview_stamped = stamped_repos(header_of(overview_text))
 
     doc_reports = []
+    class_cache = {}
     for doc in docs:
         if doc in (context_path, overview_path):
-            doc_reports.append(process_doc(doc, repos, classify=classify))
+            doc_reports.append(process_doc(doc, repos, classify=classify,
+                                           class_cache=class_cache))
         else:
             doc_reports.append(process_doc(doc, repos, overview_stamped,
-                                           classify=classify))
+                                           classify=classify,
+                                           class_cache=class_cache))
 
     if not overview_stamped:
         cascaded = [d["path"] for d in doc_reports
@@ -659,8 +681,9 @@ def build_report(summary_root, feature, repos, classify=False):
     }
 
 
-def render_markdown(report):
-    classified = any("change_class" in d for d in report["docs"])
+def render_markdown(report, classified=False):
+    """The compact table; `classified` (the run's --classify) adds the
+    change-class column even when there are no docs to fill it."""
     lines = [f"### Tier-1 staleness -- feature `{report['feature']}`", ""]
     lines.append("| doc | stamp | verdict | commits behind | changed | "
                  "by basename | ambiguous | deleted/renamed |"
@@ -772,7 +795,7 @@ Exit codes:
      folded into an exit-0 report that would read as "fresh".
 
 Self-test:
-  python tier1_staleness.py --self-test   (41 cases; skipped when git is
+  python tier1_staleness.py --self-test   (43 cases; skipped when git is
   absent)
 """
 
@@ -846,7 +869,7 @@ def main(argv):
         return finish(2, "ERROR")
 
     if args.markdown:
-        print(render_markdown(report))
+        print(render_markdown(report, classified=args.classify))
     else:
         print(json.dumps(report, indent=2))
 
@@ -1365,6 +1388,35 @@ def run_self_test():
             self.assertTrue(header.endswith("| change class |"), header)
             row = next(l for l in out.splitlines() if "api-a.md" in l)
             self.assertTrue(row.endswith("| app=cosmetic, web=none |"), row)
+
+        def test_classify_markdown_column_follows_flag_not_docs(self):
+            """A --classify run over a feature with no docs still carries
+            the column; the same run without the flag does not."""
+            code, out = self.cli("--classify", "--markdown")
+            self.assertEqual(code, 0)
+            self.assertTrue(out.splitlines()[2].endswith("| change class |"))
+            self.assertTrue(out.splitlines()[3].endswith("|---|---|"))
+            _, plain = self.cli("--markdown")
+            self.assertTrue(plain.splitlines()[2].endswith(
+                "| deleted/renamed |"))
+
+        def test_classify_diffs_each_repo_and_stamp_once_per_run(self):
+            """Six docs sharing one app stamp run classify's two git diffs
+            once, not once per doc."""
+            from unittest import mock
+            sha = self.whitespace_fixture()
+            self.write("context.md", f"# Context\n\n"
+                       f"{self.stamp(app_sha=sha)}\n## Stacks\n\nnone\n")
+            for n in range(3):
+                self.write(f"f1/extra-{n}.md", f"# Extra {n}\n\nNo stamp.\n")
+            with mock.patch.object(sys.modules[__name__], "_classify_git",
+                                   wraps=_classify_git) as spy:
+                r = self.classify_report(repos=[("app", self.app)])
+            self.assertEqual(len(r["docs"]), 6)
+            self.assertTrue(all(d["change_class"] ==
+                                {"app": "cosmetic", "web": None}
+                                for d in r["docs"]))
+            self.assertEqual(spy.call_count, 2)
 
         def test_without_classify_output_is_unchanged(self):
             """No change_class key and no column without the flag; with it,
