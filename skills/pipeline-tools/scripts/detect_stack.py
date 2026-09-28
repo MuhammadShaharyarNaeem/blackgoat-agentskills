@@ -30,18 +30,27 @@ Usage:
     python detect_stack.py --self-test
 
 --max-depth (default 6) bounds directory recursion depth from --repo.
-node_modules, bin, obj, .git, dist, .venv, __pycache__ are always skipped.
+node_modules, bin, obj, .git, dist, .venv, __pycache__, fixture, fixtures
+are always skipped.
 """
 import argparse
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
-SKIP_DIRS = {"node_modules", "bin", "obj", ".git", "dist", ".venv", "__pycache__"}
+SKIP_DIRS = {"node_modules", "bin", "obj", ".git", "dist", ".venv", "__pycache__",
+             "fixture", "fixtures"}
+GIT_TIMEOUT_SECONDS = 60  # well under pipeline_driver's 120 s bound on this script
+REPO_ROOT_PATHSPEC = "."
+GIT_EXIT_NONE_IGNORED = 1
+GITIGNORE_WARNING = ".gitignore filter not applied"
 MAX_EVIDENCE = 5
 
 # Maps a detected stack name to the plugin skill that should be loaded for
@@ -151,6 +160,74 @@ def iter_files(repo, max_depth):
             dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
         for name in filenames:
             yield Path(dirpath) / name
+
+
+def git_ignored_paths(repo, rel_paths):
+    """Return (ignored rel paths, warning) from ONE `git check-ignore` call.
+
+    Outside a git work tree, when git is missing or fails, or when the repo
+    root itself is ignored by an enclosing repository (a scratch copy under
+    an ignored directory), the set is empty and the warning names why -- the
+    caller keeps every path.
+    """
+    queries = [REPO_ROOT_PATHSPEC] + rel_paths
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "check-ignore", "--stdin", "-z"],
+            input="\0".join(queries) + "\0", capture_output=True,
+            encoding="utf-8", errors="replace", timeout=GIT_TIMEOUT_SECONDS)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return set(), f"{GITIGNORE_WARNING}: {exc}"
+    if proc.returncode == GIT_EXIT_NONE_IGNORED:
+        return set(), None
+    if proc.returncode != 0:
+        reason = (proc.stderr.strip().splitlines() or ["git failed"])[0]
+        return set(), f"{GITIGNORE_WARNING}: {reason}"
+    ignored = {p for p in proc.stdout.split("\0") if p}
+    if REPO_ROOT_PATHSPEC in ignored:
+        return set(), (f"{GITIGNORE_WARNING}: --repo is itself ignored by "
+                       "an enclosing repository")
+    return ignored, None
+
+
+def nested_repo_root(path, repo):
+    """The outermost directory below repo and above path holding its own .git.
+
+    That is a submodule or a nested checkout, or None when there is none.
+    """
+    below_repo = []
+    for parent in path.parents:
+        if parent == repo:
+            break
+        below_repo.append(parent)
+    for parent in reversed(below_repo):
+        if (parent / ".git").exists():
+            return parent
+    return None
+
+
+def ignore_query_for(path, repo):
+    """The pathspec whose ignore status decides whether path is dropped.
+
+    Git refuses a file inside a submodule but accepts the submodule's root,
+    and an untracked nested checkout's root answers like any directory, so
+    a marker below a nested .git is decided by that checkout's root.
+    """
+    root = nested_repo_root(path, repo)
+    return to_rel(root if root is not None else path, repo)
+
+
+def drop_gitignored(buckets, repo):
+    """Remove .gitignored paths from every bucket; return a warning or None."""
+    queries = {p: ignore_query_for(p, repo)
+               for paths in buckets.values() for p in paths}
+    if not queries:
+        return None
+    ignored, warning = git_ignored_paths(
+        repo, list(dict.fromkeys(queries.values())))
+    for name, paths in buckets.items():
+        buckets[name] = [p for p in paths if queries[p] not in ignored]
+    return warning
 
 
 def read_text(path):
@@ -414,6 +491,7 @@ def quiet_wrapper_for(commands):
 def build_report(repo, max_depth):
     repo = Path(repo)
     buckets = scan_repo(repo, max_depth)
+    gitignore_warning = drop_gitignored(buckets, repo)
     stacks = []
 
     def add(name, confidence, paths):
@@ -466,7 +544,7 @@ def build_report(repo, max_depth):
 
     stacks.sort(key=lambda s: s["name"])
 
-    warnings = []
+    warnings = [gitignore_warning] if gitignore_warning else []
     if not stacks:
         warnings.append(
             "no evidence-backed stacks detected under this repo; "
@@ -556,7 +634,12 @@ EPILOG = """\
 Reads:
   --repo  a repository tree, walked to --max-depth (default 6). These
     directories are never walked and never roots: node_modules, bin, obj,
-    .git, dist, .venv, __pycache__.
+    .git, dist, .venv, __pycache__, fixture, fixtures. Inside a git work
+    tree, marker files git reports as ignored (one `git check-ignore` call)
+    are dropped; a marker inside a submodule or nested checkout is decided by
+    that checkout's root. Outside git, when git fails, or when --repo itself
+    is ignored, nothing is dropped and a warning says the .gitignore filter
+    was not applied.
     Detected stacks: dotnet, vue3 (vue2 is excluded even when other weak
     evidence is present), react, angular, node, python, godot, powershell,
     docker, aws, azure, github-actions, playwright, and the db stacks
@@ -587,7 +670,7 @@ Exit codes:
   2  a missing, unreadable or non-directory --repo
 
 Self-test:
-  python detect_stack.py --self-test   (34 cases)
+  python detect_stack.py --self-test   (40 cases)
 """
 
 
@@ -638,7 +721,6 @@ def main(argv):
 
 
 def run_self_test():
-    import shutil
 
     class DetectStackTests(unittest.TestCase):
         def setUp(self):
@@ -712,6 +794,72 @@ def run_self_test():
             self._write("node_modules/fakepkg/deploy.ps1", "Write-Host 'hi'")
             result = build_report(self.repo, 6)
             self.assertEqual(result["stacks"], [])
+
+        def test_fixture_dirs_are_skipped(self):
+            self._write("evals/case/fixture/App.csproj", "<Project></Project>")
+            self._write("tests/fixtures/deploy.ps1", "Write-Host 'hi'")
+            result = build_report(self.repo, 6)
+            self.assertEqual(result["stacks"], [])
+
+        @unittest.skipUnless(shutil.which("git"), "git not on PATH")
+        def test_gitignored_marker_is_not_reported(self):
+            subprocess.run(["git", "init", "-q", str(self.repo)], check=True,
+                           capture_output=True, timeout=GIT_TIMEOUT_SECONDS)
+            self._write(".gitignore", "ignored/\n")
+            self._write("ignored/App.csproj", "<Project></Project>")
+            self._write("tracked/deploy.ps1", "Write-Host 'hi'")
+            subprocess.run(["git", "-C", str(self.repo), "add",
+                            "tracked/deploy.ps1"], check=True,
+                           capture_output=True, timeout=GIT_TIMEOUT_SECONDS)
+            result = build_report(self.repo, 6)
+            self.assertEqual(self._names(result), {"powershell"})
+            self.assertEqual(result["warnings"], [])
+
+        def _git(self, *args):
+            subprocess.run(["git", "-C", str(self.repo), *args], check=True,
+                           capture_output=True, timeout=GIT_TIMEOUT_SECONDS)
+
+        @unittest.skipUnless(shutil.which("git"), "git not on PATH")
+        def test_repo_inside_ignored_dir_still_detects(self):
+            self._git("init", "-q")
+            self._write(".gitignore", "eval-runs/\n")
+            self._write("eval-runs/case1/App/App.csproj", "<Project></Project>")
+            result = build_report(self.repo / "eval-runs" / "case1", 6)
+            self.assertEqual(self._names(result), {"dotnet"})
+
+        @unittest.skipUnless(shutil.which("git"), "git not on PATH")
+        def test_submodule_marker_keeps_filter_for_rest_of_repo(self):
+            self._git("init", "-q")
+            self._write(".gitignore", "ignored/\n")
+            self._write("ignored/App.csproj", "<Project></Project>")
+            self._write("lib/S.csproj", "<Project></Project>")
+            self._git("-C", "lib", "init", "-q")
+            self._git("update-index", "--add", "--cacheinfo",
+                      "160000," + "1" * 40 + ",lib")
+            result = build_report(self.repo, 6)
+            dotnet = next(s for s in result["stacks"] if s["name"] == "dotnet")
+            self.assertEqual(dotnet["evidence"], ["lib/S.csproj"])
+            self.assertEqual(result["warnings"], [])
+
+        @unittest.skipUnless(shutil.which("git"), "git not on PATH")
+        def test_ignored_nested_checkout_is_not_reported(self):
+            self._git("init", "-q")
+            self._write(".gitignore", "wt/\n")
+            self._write("wt/other/package.json", '{"name": "x"}')
+            self._git("-C", "wt/other", "init", "-q")
+            self._write("tracked/deploy.ps1", "Write-Host 'hi'")
+            result = build_report(self.repo, 6)
+            self.assertEqual(self._names(result), {"powershell"})
+            self.assertEqual(result["warnings"], [])
+
+        def test_non_git_dir_still_detects_and_warns(self):
+            self._write("App/App.csproj", "<Project></Project>")
+            no_git = {"GIT_DIR": str(self.repo / "no-such-git-dir")}
+            with mock.patch.dict(os.environ, no_git):
+                result = build_report(self.repo, 6)
+            self.assertIn("dotnet", self._names(result))
+            self.assertTrue(any(GITIGNORE_WARNING in w
+                                for w in result["warnings"]))
 
         def test_db_via_csproj_ef_provider(self):
             self._write(
