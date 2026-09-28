@@ -270,8 +270,6 @@ TAG_RE = re.compile(r"</?([A-Za-z_][\w-]*)\s*>")
 CONSUMERS_LINE_RE = re.compile(r"^(?P<path>\S.*?)::(?P<symbol>[^\s:/\\]+)$")
 # `<changed_symbols>`'s only non-entry form: `none: <reason>`.
 CHANGED_SYMBOLS_NONE_RE = re.compile(r"(?i)^none:(?P<reason>.*)$")
-# Characters git would read as a glob in a `<changed_symbols>` path.
-PATHSPEC_GLOB_CHARS = re.compile(r"[*?\[]")
 # Extension -> diff driver, for the `<changed_symbols>` diff's temporary
 # core.attributesFile. Every driver named here is one git ships built in
 # (gitattributes(5), "Defining a custom hunk-header"); git has no JavaScript
@@ -283,6 +281,11 @@ BUILTIN_DIFF_DRIVERS = (
     ("*.cpp", "cpp"), ("*.hpp", "cpp"), ("*.sh", "bash"), ("*.pl", "perl"),
     ("*.css", "css"), ("*.html", "html"), ("*.md", "markdown"),
 )
+# A unified-diff hunk header: preimage start line, then git's funcname text.
+HUNK_HEADER_RE = re.compile(
+    r"^@@ -(?P<start>\d+)(?:,\d+)? \+\d+(?:,\d+)? @@ ?(?P<text>.*)$")
+# `index <old>..<new>` under --full-index: the preimage blob a header is from.
+INDEX_LINE_RE = re.compile(r"^index (?P<old>[0-9a-f]+)\.\.[0-9a-f]+")
 # Uppercase-only, standalone. "1 passed, 0 failed" is lowercase and is the
 # sanctioned way to report a partial result beside a NOT VERIFIED label; an
 # unqualified uppercase verdict token is not.
@@ -556,23 +559,38 @@ def run_git_checked(repo, args, config=(), literal_pathspecs=False):
     A missing git, a timeout (120 s, NFR-3) or a non-zero exit is an ERROR
     (exit 2), never a finding: the gate could not look, so it says nothing
     about the handoff.
+
+    Output is decoded from bytes with no newline translation (review F22):
+    text mode would turn a lone \\r into a line break git never made.
     """
     command = ["git"] + (["--literal-pathspecs"] if literal_pathspecs else [])
     for setting in config:
         command += ["-c", setting]
     try:
         proc = subprocess.run(command + ["-C", str(repo)] + args,
-                              capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=120)
+                              capture_output=True, timeout=120)
     except FileNotFoundError:
         raise GateError("git executable not found; --since cannot be checked")
     except subprocess.TimeoutExpired:
         raise GateError(f"git {args[0]} timed out after 120s")
+    stdout = proc.stdout.decode("utf-8", "replace")
     if proc.returncode != 0:
+        stderr = proc.stderr.decode("utf-8", "replace")
         raise GateError(
             f"git {' '.join(args)} in {repo} failed: "
-            f"{proc.stderr.strip() or proc.stdout.strip()}")
-    return proc.stdout
+            f"{stderr.strip() or stdout.strip()}")
+    return stdout
+
+
+def git_lines(text):
+    """`text` split the way git numbers lines: on \\n only (review F22).
+
+    `str.splitlines()` also breaks on \\f, \\v, \\x1c-\\x1e, NEL, U+2028 and
+    U+2029, which shifts every later line number. One trailing \\r per line
+    is dropped, so CRLF content reads like LF.
+    """
+    return [line[:-1] if line.endswith("\r") else line
+            for line in text.split("\n")]
 
 
 def default_docs_root(handoff_path):
@@ -681,13 +699,10 @@ def parse_changed_symbols(values):
             # honest claim `--since` would refuse (review F4). A hyphen stays
             # legal: PowerShell's `Verb-Noun`.
             bad.append((item, "Name must be a bare identifier, no qualifier"))
-        elif (PATHSPEC_GLOB_CHARS.search(match.group("path"))
-              or match.group("path").startswith(":")):
-            # Review F10: a glob or pathspec magic would widen the diff to
-            # every matching file; the path must name exactly one file.
-            bad.append((item, "path must name exactly one file: no glob "
-                              "(*, ?, [) and no leading : pathspec magic"))
         else:
+            # No character ban (review F16): `pages/users/[id].vue` is a real
+            # file. Every git call on the path runs with --literal-pathspecs,
+            # so a glob or `:` magic names only a literal file of that name.
             entries.append({"path": normalize_path(match.group("path")),
                             "name": match.group("symbol")})
     return entries, None, bad
@@ -714,6 +729,72 @@ def symbol_roots(roots, rel):
     return containing
 
 
+def repo_relative(repo, rel):
+    """(absolute target, git-spelled path relative to `repo`) for `rel`."""
+    root_abs = Path(repo).resolve()
+    target = Path(rel) if Path(rel).is_absolute() else root_abs / rel
+    return target, normalize_path(str(target.resolve().relative_to(root_abs)))
+
+
+def git_diff_names_other_than(repo, ref, rel):
+    """Files `git diff -M <ref> -- <rel>` covers that are not `rel` itself.
+
+    Non-empty only when `rel` is, or was, a directory: a literal pathspec
+    still prefix-matches every file under it, so a deleted directory would
+    otherwise widen the symbol diff to all its files (review F17).
+    """
+    _, repo_rel = repo_relative(repo, rel)
+    names = run_git_checked(
+        repo, ["diff", "--no-ext-diff", "--name-only", "-z", "-M", ref, "--",
+               repo_rel], literal_pathspecs=True)
+    return [name for name in names.split("\0") if name and name != repo_rel]
+
+
+def indent_prefix(text):
+    """`text`'s leading run of spaces and tabs, verbatim."""
+    return text[:len(text) - len(text.lstrip(" \t"))]
+
+
+def indented_under(line, prefix):
+    """True when `line` is blank or indented strictly deeper than `prefix`.
+
+    Deeper means its own indent starts with `prefix` verbatim and is longer.
+    A tab/space mix that differs from `prefix` is never deeper: the
+    conservative reading, with no tab width to guess.
+    """
+    own = indent_prefix(line)
+    return not line.strip() or (own.startswith(prefix) and len(own) > len(prefix))
+
+
+def header_encloses(repo, blob, preimages, header, old_start, context,
+                    first_change):
+    """True when a hunk's `@@` header names a scope still OPEN at its change.
+
+    Convention #8 refinement of the header rule (Orchestrator ruling, review
+    F19): under `-W` a hunk inside a nested def starts at the nested def, so
+    the outer function appears only in the header. The header counts only
+    while its scope is open: every non-blank line from the header's own line
+    down to the hunk's first changed line (the `context` preimage lines
+    after `old_start`, then `first_change`) is indented deeper than the
+    header line (`indented_under`). A sibling closes the scope with its own
+    declaration line, so it never counts, even when -W's three leading
+    context lines start the hunk in its tail. Git prints the header without
+    its indentation, so the line is found in the preimage blob (git takes
+    the header from the preimage): the nearest line above `old_start` whose
+    text starts with the header. Not found -> False.
+    """
+    if blob not in preimages:
+        preimages[blob] = git_lines(run_git_checked(
+            repo, ["cat-file", "blob", blob]))
+    lines = preimages[blob]
+    for index in range(min(old_start - 1, len(lines)) - 1, -1, -1):
+        if lines[index].strip().startswith(header):
+            prefix = indent_prefix(lines[index])
+            scope = lines[index + 1:old_start - 1 + context] + [first_change]
+            return all(indented_under(line, prefix) for line in scope)
+    return False
+
+
 def git_symbol_lines(repo, ref, rel):
     """Lines of `git diff -M -W <ref> -- <rel>` a symbol may be named on.
 
@@ -727,7 +808,9 @@ def git_symbol_lines(repo, ref, rel):
     Two refinements of that widened rule, also deliberate (convention #8,
     remediation cycle 1): the `@@` header text does NOT count, because under
     `-W` it names the declaration BEFORE the changed one (an untouched
-    neighbour; the enclosing declaration is already a body line); and git's
+    neighbour; the enclosing declaration is already a body line) -- unless
+    `header_encloses` shows it is an outer scope (a further convention #8
+    refinement of this header rule, Orchestrator ruling); and git's
     built-in language drivers scope `-W` through a temporary
     core.attributesFile, because the default funcname heuristic matches only
     unindented lines and would widen an indented member (a C# method) to the
@@ -737,9 +820,7 @@ def git_symbol_lines(repo, ref, rel):
     An untracked file at `rel` contributes every line, as all-added
     (claim-gates OQ-1); one that cannot be read is a GateError.
     """
-    root_abs = Path(repo).resolve()
-    target = Path(rel) if Path(rel).is_absolute() else root_abs / rel
-    repo_rel = normalize_path(str(target.resolve().relative_to(root_abs)))
+    target, repo_rel = repo_relative(repo, rel)
     try:
         handle, attributes = tempfile.mkstemp(suffix=".gitattributes")
         with os.fdopen(handle, "w", encoding="utf-8") as stream:
@@ -750,7 +831,7 @@ def git_symbol_lines(repo, ref, rel):
     try:
         diff = run_git_checked(
             repo, ["diff", "--no-color", "--no-ext-diff", "--no-textconv",
-                   "-M", "-W", ref, "--", repo_rel],
+                   "--full-index", "-M", "-W", ref, "--", repo_rel],
             config=[f"core.attributesFile={Path(attributes).as_posix()}"],
             literal_pathspecs=True)
     finally:
@@ -762,13 +843,31 @@ def git_symbol_lines(repo, ref, rel):
             pass
     searchable = []
     in_hunk = False
-    for line in diff.splitlines():
+    old_blob = pending = None
+    preimages = {}
+    for line in git_lines(diff):
+        header = HUNK_HEADER_RE.match(line)
         if line.startswith("diff --git"):
             in_hunk = False
-        elif line.startswith("@@"):
+            old_blob = pending = None
+        elif not in_hunk and INDEX_LINE_RE.match(line):
+            sha = INDEX_LINE_RE.match(line).group("old")
+            # An all-zero preimage is a new file: no header to enclose.
+            old_blob = sha if sha.strip("0") else None
+        elif header:
             in_hunk = True
+            text = header.group("text").strip()
+            # [header text, preimage start, context lines before 1st change]
+            pending = [text, int(header.group("start")), 0] if text else None
         elif in_hunk and line[:1] in ("+", "-", " "):
             searchable.append(line[1:])
+            if pending and line[:1] == " ":
+                pending[2] += 1
+            elif pending:
+                if old_blob and header_encloses(repo, old_blob, preimages,
+                                                *pending, line[1:]):
+                    searchable.append(pending[0])
+                pending = None
     untracked = run_git_checked(
         repo, ["ls-files", "--others", "--exclude-standard", "--", repo_rel],
         literal_pathspecs=True)
@@ -1068,16 +1167,28 @@ def build_report(text, persona, repo, since=None, fix_round=False,
             lines_cache = {}
             for entry in file_entries:
                 cited = f"{entry['path']}::{entry['name']}"
-                found = False
+                found = directory = False
                 for root in symbol_roots(repos, entry["path"]):
                     key = (str(Path(root).resolve()), entry["path"])
                     if key not in lines_cache:
-                        lines_cache[key] = git_symbol_lines(root, since,
-                                                            entry["path"])
+                        # None marks a path whose diff covers other files: a
+                        # directory that no longer exists (review F17).
+                        lines_cache[key] = (
+                            None if git_diff_names_other_than(
+                                root, since, entry["path"])
+                            else git_symbol_lines(root, since, entry["path"]))
+                    if lines_cache[key] is None:
+                        directory = True
+                        break
                     if symbol_in_lines(entry["name"], lines_cache[key]):
                         found = True
                         break
-                if not found:
+                if directory:
+                    finding("changed_symbols_grammar",
+                            f"<changed_symbols> path must name exactly one "
+                            f"file, but its diff covers others: {cited}",
+                            line=cited)
+                elif not found:
                     finding("symbol_not_in_diff", cited, entry=cited,
                             since=since)
 
@@ -1161,20 +1272,19 @@ Reads:
                   defect. COMPLETE is exempt; absent is element_missing only.
       <consumers> lines in path::symbol grammar.
       <changed_symbols>  one path::Name per line, or one line none:
-                  <non-empty reason>. path: one file (no glob, magic,
-                  directory). Name: the innermost edited symbol, bare and
+                  <non-empty reason>. path: one file, read literally, never
+                  a directory. Name: the innermost edited symbol, bare and
                   unqualified (a method, not its unchanged class).
-    Honesty: an upper-case PASS/GREEN beside NOT VERIFIED/BLOCKED in the
+    Honesty: upper-case PASS/GREEN beside NOT VERIFIED/BLOCKED in the
     SAME element; BLOCKED beside <blockers>None</blockers>.
   Cited files  every <changed_files>/<artifact>/<changed_skills> path must
     exist inside a --repo; <artifact>/<changed_skills>
     also resolve under a --docs-root, its parent, and the cwd.
   --since  <changed_files> must be a subset of git diff --name-only <ref>
     plus untracked. Each <changed_symbols> Name must appear as a whole word
-    on a +, - or context line (never @@ text) of git diff -M -W <ref> --
-    <path> under git's built-in drivers (untracked = all-added;
-    none: unchecked; convention #8): names outside that function context
-    are invented.
+    on a +, - or context line (@@ text only for open scopes) of git diff -M -W
+    <ref> -- <path> under git's built-in drivers (untracked = all-added;
+    none: unchecked; convention #8); other names are invented.
   Scaffolding sweep  on COMPLETE, each TEXT file in
     <artifact>/<changed_skills> is read for base-persona's placeholder marker
     (an underscore joined to TODO), a TODO-colon-pending phrase, an HTML
@@ -1213,7 +1323,7 @@ Exit codes:
      unresolvable ref) or temp file, or a blank --allow-scaffolding reason
 
 Self-test:
-  python check_handoff.py --self-test   (91 cases)
+  python check_handoff.py --self-test   (96 cases)
 """
 
 
@@ -2251,6 +2361,78 @@ def run_self_test():
             r, bad = self.symbol_codes("src/a.py::second", ref)
             self.assertEqual(self.codes(r), ["symbol_not_in_diff"])
 
+        def test_an_enclosing_function_on_the_hunk_header_passes(self):
+            """A change after a nested def: -W starts the hunk at the nested
+            def, so the outer function is named only by the @@ header, which
+            counts because its scope is still open: every non-blank line from
+            the header's line down to the change is indented deeper."""
+            body = ("def main(argv):\n    x = 1\n    y = 2\n    z = 3\n\n"
+                    "    def finish(code):\n        return code\n\n"
+                    "    return finish(0)\n")
+            (self.dir / "src" / "a.py").write_text(body, encoding="utf-8")
+            ref = self.make_repo()
+            (self.dir / "src" / "a.py").write_text(
+                body.replace("finish(0)", "finish(1)"), encoding="utf-8")
+            r, bad = self.symbol_codes("src/a.py::main", ref)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+
+        def test_a_sibling_header_near_a_function_start_is_refused(self):
+            """Review F19: an edit in a function's first lines starts the -W
+            hunk in the preceding sibling's tail, so the header names that
+            sibling; its scope closed at the edited function's own line."""
+            cases = (
+                ("a.py", "def second():\n    x = 2\n\ndef third():\n"
+                         "    y = 3\n    z = 4\n    w = 5\n    v = 6\n",
+                 ("y = 3", "y = 30"), "third", "second"),
+                ("a.py", "class Foo:\n    def a(self):\n        return 1\n\n"
+                         "    def b(self):\n        q = 1\n        r = 2\n"
+                         "        s = 3\n        t = 4\n",
+                 ("q = 1", "q = 10"), "b", "a"),
+                ("a.rb", "class K\n\tdef a\n\t\t1\n\tend\n\n    def b\n"
+                         "        q = 1\n        r = 2\n        s = 3\n"
+                         "        t = 4\n    end\nend\n",
+                 ("t = 4", "t = 40"), "b", "a"))
+            self.addCleanup(shutil.rmtree, self.dir, True)
+            for name, body, (old, new), edited, sibling in cases:
+                with self.subTest(sibling=sibling, file=name):
+                    self.dir = Path(tempfile.mkdtemp())
+                    self.addCleanup(shutil.rmtree, self.dir, True)
+                    (self.dir / "src").mkdir()
+                    (self.dir / "src" / "a.py").write_text("a", encoding="utf-8")
+                    target = self.dir / "src" / name
+                    target.write_text(body, encoding="utf-8")
+                    ref = self.make_repo()
+                    target.write_text(body.replace(old, new), encoding="utf-8")
+                    if name != "a.py":
+                        (self.dir / "src" / "a.py").write_text(
+                            "edited", encoding="utf-8")
+                    r, bad = self.symbol_codes(f"src/{name}::{edited}", ref)
+                    self.assertEqual(r["result"], "PASS", r["findings"])
+                    r, bad = self.symbol_codes(f"src/{name}::{sibling}", ref)
+                    self.assertEqual(self.codes(r), ["symbol_not_in_diff"])
+
+        def test_a_non_newline_line_break_above_a_sibling_is_refused(self):
+            """Review F22: git splits lines on \\n only. A form feed or NEL
+            above the sibling must not shift the scope window, or the edited
+            function's own def line drops out and the sibling passes."""
+            body = ("def second():\n    a = 1\n    b = 2\n    c = 3\n"
+                    "    d = 4\n\ndef third():\n    y = 3\n    z = 4\n")
+            self.addCleanup(shutil.rmtree, self.dir, True)
+            for above in ("import os\n\x0c\n", "# a\x85b\n"):
+                with self.subTest(above=repr(above)):
+                    self.dir = Path(tempfile.mkdtemp())
+                    self.addCleanup(shutil.rmtree, self.dir, True)
+                    (self.dir / "src").mkdir()
+                    target = self.dir / "src" / "a.py"
+                    target.write_bytes((above + body).encode("utf-8"))
+                    ref = self.make_repo()
+                    target.write_bytes((above + body).replace(
+                        "y = 3", "y = 30").encode("utf-8"))
+                    r, bad = self.symbol_codes("src/a.py::third", ref)
+                    self.assertEqual(r["result"], "PASS", r["findings"])
+                    r, bad = self.symbol_codes("src/a.py::second", ref)
+                    self.assertEqual(self.codes(r), ["symbol_not_in_diff"])
+
         def _invoice_repo(self):
             """A C# class of three methods; only Gamma's body changes since
             the returned ref (Alpha returns 0, Beta 1, Gamma 2)."""
@@ -2299,15 +2481,44 @@ def run_self_test():
             self.assertEqual(r["result"], "PASS", r["findings"])
 
         def test_a_path_must_name_exactly_one_file(self):
-            """Review F10: a directory, a glob or pathspec magic would widen
-            the diff to every matching file."""
+            """Review F10/F16: a directory is grammar; a glob or `:` magic is
+            read literally, so it matches no file and the claim is refused."""
             ref = self.make_repo()
             (self.dir / "src" / "a.py").write_text("def alpha():\n    pass\n",
                                                    encoding="utf-8")
-            for path in ("src", "src/*.py", ":/"):
+            r, bad = self.symbol_codes("src::alpha", ref)
+            self.assertEqual(self.codes(r), ["changed_symbols_grammar"])
+            for path in ("src/[ab].py", "src/*.py", ":/"):
                 r, bad = self.symbol_codes(f"{path}::alpha", ref)
-                self.assertEqual(self.codes(r), ["changed_symbols_grammar"], path)
+                self.assertEqual(self.codes(r), ["symbol_not_in_diff"], path)
             r, bad = self.symbol_codes("src/a.py::alpha", ref)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+
+        def test_a_bracketed_filename_is_one_literal_file(self):
+            """Review F16: Nuxt's `pages/users/[id].vue` is a real file."""
+            (self.dir / "pages" / "users").mkdir(parents=True)
+            page = self.dir / "pages" / "users" / "[id].vue"
+            page.write_text("<script setup>\n</script>\n", encoding="utf-8")
+            ref = self.make_repo()
+            (self.dir / "src" / "a.py").write_text("edited", encoding="utf-8")
+            page.write_text("<script setup>\nfunction loadUser() {}\n"
+                            "</script>\n", encoding="utf-8")
+            r, bad = self.symbol_codes("pages/users/[id].vue::loadUser", ref)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+
+        def test_a_deleted_directory_is_not_one_file(self):
+            """Review F17: a literal pathspec still prefix-matches every file
+            under a directory that no longer exists."""
+            (self.dir / "old").mkdir()
+            (self.dir / "old" / "one.py").write_text("def gone():\n    pass\n",
+                                                     encoding="utf-8")
+            (self.dir / "old" / "two.py").write_text("x = 1\n", encoding="utf-8")
+            ref = self.make_repo()
+            (self.dir / "src" / "a.py").write_text("edited", encoding="utf-8")
+            shutil.rmtree(self.dir / "old")
+            r, bad = self.symbol_codes("old::gone", ref)
+            self.assertEqual(self.codes(r), ["changed_symbols_grammar"])
+            r, bad = self.symbol_codes("old/one.py::gone", ref)
             self.assertEqual(r["result"], "PASS", r["findings"])
 
         def test_a_colour_forcing_git_config_does_not_hide_the_diff(self):
