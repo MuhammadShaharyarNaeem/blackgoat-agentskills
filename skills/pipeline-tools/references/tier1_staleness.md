@@ -35,3 +35,26 @@ A `--repo` the stamps never mention is **not** one of those: the path is still v
 ## It never writes
 
 No doc is edited and no stamp is re-written. The stamp rule belongs to the discovery agent, applied at write time; a tool that re-stamped what it found stale would be closing its own finding.
+
+## --classify (Unreleased)
+
+A stale verdict says a cited file changed; it does not say whether the change could matter to the map. A refresh triggered by a trailing-space cleanup or a line-ending conversion costs a full discovery re-run for a doc whose content is still right. `--classify` labels each stamped repo's change so the person reading the worklist can tell the two apart. It adds a per-doc `change_class` map and a trailing `change class` markdown column, and only under the flag, so every existing caller's output is byte-identical.
+
+Per stamped repo, one of three values:
+- **none** — `git diff --name-status -M <sha> HEAD` is empty.
+- **cosmetic** — that list is non-empty but carries no `A`, `D` or `R` entry, and `git diff --ignore-space-at-eol --ignore-cr-at-eol --ignore-blank-lines <sha> HEAD` shows no `@@` hunk line.
+- **structural** — anything else. A stamp that cannot be resolved, or a stamped repo no `--repo` matched, is `null`.
+
+**Only end-of-line whitespace, line endings and blank lines are cosmetic.** This is deliberately narrower than treating any whitespace change as cosmetic, the plain `git diff -w` rule (convention #8). `-w` also ignores indentation and whitespace inside a line, so it classes a Python dedent and a token join (`return x` → `returnx`) as cosmetic, and both change meaning. The two error directions do not cost the same. A false `structural` costs one unneeded re-discovery. A false `cosmetic` invites a refresh to skip a doc whose map is now wrong. So indentation and intra-line whitespace are structural. The limit, stated plainly: trailing whitespace can itself carry meaning (a space after a shell line-continuation backslash, a Markdown hard line break) and is still classed `cosmetic`, which is one more reason classification never waives staleness.
+
+**The `@@`-hunk rule, not an emptiness rule.** This is also deliberately tighter than a rule that calls a change cosmetic when the whitespace-ignoring diff is empty (convention #8). What decides is the hunk line, the one thing that means a line's content changed, not whether the diff printed anything. On git 2.55 a diff whose changes are all ignored prints nothing at all, so there the two rules agree. The `@@` rule is kept because it does not depend on what a given git version prints for an ignored change.
+
+**Two header-only changes are structural.** A binary change prints `Binary files ... differ` and a chmod prints `old mode`/`new mode`, and neither has a hunk. Whitespace cannot explain either one, so both count as structural.
+
+**A rename is structural.** A pure rename or delete has no hunks at all, yet every path-shaped citation of the old name is now wrong. The `A`/`D`/`R` check in the name-status list catches it before the whitespace-ignoring diff is read.
+
+**Classification informs, never waives.** `change_class` never changes a verdict, the `result` or the exit code. A stale doc whose change is only cosmetic still fails `--fail-on-stale`, exactly as it does without the flag. Waiving it would let a gate lower its own finding.
+
+Both diffs run with `--no-color --no-ext-diff --no-textconv`, so a caller's `color.diff=always`, a `diff.external` or a repository's `diff.<driver>.textconv` cannot reshape what is parsed. They use their own subprocess call rather than the imported `git()` helper. That helper decodes output with the locale codec, which raises on diff content such as UTF-8 `Á` under cp1252. This call decodes UTF-8 with replacement, which cannot fail, and every marker it matches is ASCII. A git failure, a timeout or an unexpected OS error during classification is exit 2, never a verdict.
+
+Self-test count: 19 → 43. The new cases cover none, cosmetic and structural, the two-repo split, rename, binary, mode-only, dedent, token join, trailing whitespace, CRLF-only and blank-line-only edits, UTF-8 content the locale codec cannot decode, hostile colour/external-diff and textconv config, the two `null` cases, the git and OS error paths, the markdown column (present under the flag even with no docs), each repo and stamp classified once per run, output unchanged without the flag, and `--fail-on-stale` never waived.

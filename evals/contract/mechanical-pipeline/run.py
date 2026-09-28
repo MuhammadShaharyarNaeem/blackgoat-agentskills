@@ -55,6 +55,7 @@ MARK_MILESTONE = SCRIPTS / "mark_milestone.py"
 RECORD_RUN = SCRIPTS / "record_run.py"
 GUARD_ACTION = SCRIPTS / "guard_action.py"
 CHECK_REDELEGATION = SCRIPTS / "check_redelegation.py"
+RECORD_CAPTURE = SCRIPTS / "record_capture.py"
 
 # The shared record writer lives in evals/, two levels up from this file. Shared,
 # not copied into each case, because the record shape has to match the one
@@ -182,8 +183,8 @@ ACCEPTANCE_RESULTS_GREEN = """# Acceptance Results — proj
 
 ## Execution
 
-- AS-1.1: PASS — exit 0 — 200 + row stored
-- AS-1.2: PASS — exit 0 — 200 + row gone
+- AS-1.1: PASS — exit 0 — evidence/runtime/as-1-1-create.md — 200 + row stored
+- AS-1.2: PASS — exit 0 — evidence/runtime/as-1-2-delete.md — 200 + row gone
 - AS-1.3: PASS — evidence/runtime/m2-contacts-get.md — envelope observed on the wire
 """
 
@@ -438,11 +439,17 @@ def run_lifecycle(repo):
                "" if ok else json.dumps(data))
 
     # --- Step 5: resolve-blocker requires --evidence ------------------------
+    # --evidence names an existing non-empty FILE (resolved against the state
+    # file's directory first), not free text -- a typed sentence proves nothing.
+    resolution_evidence = state_path.parent / "b1-resolution.md"
+    resolution_evidence.write_text(
+        "# B-1 resolution\n\nRe-test passed; re-review verdict Approve.\n",
+        encoding="utf-8")
     proc_no_ev = run_py(UPDATE_STATE, ["--state", state_path,
                                         "--resolve-blocker", "validation finding"])
     proc_ev = run_py(UPDATE_STATE, ["--state", state_path,
                                      "--resolve-blocker", "validation finding",
-                                     "--evidence", "re-test passed, re-review Approve"])
+                                     "--evidence", resolution_evidence])
     log_path = state_path.parent / "blockers-resolved.log"
     ok = proc_no_ev.returncode == 2 and proc_ev.returncode == 0 and log_path.exists()
     record("5. update_state: --resolve-blocker without/with --evidence (exit 2 / exit 0, log written)",
@@ -521,6 +528,11 @@ def run_lifecycle(repo):
     evidence_file.parent.mkdir(parents=True, exist_ok=True)
     evidence_file.write_bytes(PNG_1PX)
     set_mtime(evidence_file)  # must be no older than the newest changed file
+    # A rendered PNG is evidence only with its record_capture.py provenance
+    # sidecar naming the http(s) URL the browser had open.
+    proc_rc = run_py(RECORD_CAPTURE, [evidence_file, "--url", "http://localhost:5173/contacts",
+                                      "--tool", "chrome-devtools"])
+    sidecar_recorded = proc_rc.returncode == 0
 
     with review_path.open("a", encoding="utf-8") as f:
         f.write("\nRendered evidence: evidence\\review\\m3.png\n")
@@ -529,7 +541,7 @@ def run_lifecycle(repo):
     proc = run_py(CHECK_COMMIT_GATE, gate_m3)
     data = parse_json(proc, "8c. check_commit_gate --require-rendered-evidence: evidence cited -> exit 0")
     if data is not None:
-        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+        ok = (sidecar_recorded and proc.returncode == 0 and data.get("result") == "PASS"
               and data.get("rendered_evidence_ok") is True)
         record("8c. check_commit_gate --require-rendered-evidence: evidence cited -> exit 0", ok,
                "" if ok else json.dumps(data))
@@ -675,6 +687,13 @@ def run_lifecycle(repo):
     # what proves the observation inside it is honest. Running both is the point.
     matrix_path = docs_dir / "acceptance-matrix.md"
     matrix_path.write_text(ACCEPTANCE_MATRIX, encoding="utf-8")
+
+    # The auto steps cite real run_quiet.py --capture artifacts (capture plus
+    # its .meta.json sidecar), exactly as an executed walkthrough leaves them.
+    for capture_name, probe_output in (("as-1-1-create.md", "200 row stored"),
+                                       ("as-1-2-delete.md", "200 row gone")):
+        run_py(RUN_QUIET, ["--capture", runtime_dir / capture_name, "--",
+                           sys.executable, "-c", f"print({probe_output!r})"])
 
     green_results = impl_dir / "acceptance-results.md"
     green_results.write_text(ACCEPTANCE_RESULTS_GREEN, encoding="utf-8")
@@ -866,7 +885,8 @@ def run_lifecycle(repo):
     run_git(["commit", "-qm", "handoff-step baseline"], repo)
     head = run_git(["rev-parse", "HEAD"], repo).stdout.strip()
     touched = repo / "src" / "contacts.py"
-    touched.write_text("# added after HEAD\n", encoding="utf-8")
+    touched.write_text("# added after HEAD\ndef add_contact():\n    return None\n",
+                       encoding="utf-8")
 
     handoff_dir = impl_dir / "handoffs"
     handoff_dir.mkdir(parents=True, exist_ok=True)
@@ -875,6 +895,7 @@ def run_lifecycle(repo):
     honest_handoff.write_text(
         "<handoff><status>COMPLETE</status>"
         "<changed_files>src/contacts.py</changed_files>"
+        "<changed_symbols>src/contacts.py::add_contact</changed_symbols>"
         "<blockers>None</blockers></handoff>\n", encoding="utf-8")
     proc = run_py(CHECK_HANDOFF, ["--handoff", honest_handoff, "--persona", "mason",
                                   "--repo", repo, "--since", head])
@@ -894,7 +915,9 @@ def run_lifecycle(repo):
     inflated.write_text(
         "<handoff><status>COMPLETE</status>"
         "<changed_files>src/contacts.py, src/pristine.py"
-        "</changed_files><blockers>None</blockers></handoff>\n", encoding="utf-8")
+        "</changed_files>"
+        "<changed_symbols>src/contacts.py::add_contact</changed_symbols>"
+        "<blockers>None</blockers></handoff>\n", encoding="utf-8")
     proc = run_py(CHECK_HANDOFF, ["--handoff", inflated, "--persona", "mason",
                                   "--repo", repo, "--since", head])
     data = parse_json(proc, "13b. check_handoff: a changed_files entry git never saw -> exit 1")
@@ -1059,7 +1082,7 @@ def run_lifecycle(repo):
     if data is not None:
         elements = [f.get("element") for f in (data.get("findings") or [])]
         ok = (proc.returncode == 1 and data.get("result") == "FAIL"
-              and elements == ["changed_files"])
+              and elements == ["changed_files", "changed_symbols"])
         record("17c. check_handoff --advisory does not waive <changed_files> -> exit 1",
                ok, "" if ok else json.dumps(data))
 

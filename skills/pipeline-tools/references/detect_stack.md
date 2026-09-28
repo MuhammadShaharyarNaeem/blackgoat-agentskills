@@ -52,7 +52,7 @@ decides whether that was the right half of the repo.
 
 ## Self-test inventory
 
-`python scripts/detect_stack.py --self-test` runs **26** cases: dotnet, vue3, the vue2 suppression, godot, powershell, aws via terraform, azure via bicep, an empty repo, `node_modules` skipped, db via EF, react, node, playwright, github-actions, a missing repo (exit 2), the skills mapping, the never-guess invariant (no stack without an evidence path), and markdown rendering; then eight for the defaults — node's command and globs, the dotnet/python/powershell/vue3 first commands, defaults only for detected stacks, the deduped rollup ordering, a stack with no row carrying empty lists, an empty repo's empty rollup, the markdown block (ASCII-only), and the invariant that every table key is a name the detector can actually emit and carries both lists non-empty.
+`python scripts/detect_stack.py --self-test` runs **40** cases (the tally below is the original 26; see the dated sections for the rest): dotnet, vue3, the vue2 suppression, godot, powershell, aws via terraform, azure via bicep, an empty repo, `node_modules` skipped, db via EF, react, node, playwright, github-actions, a missing repo (exit 2), the skills mapping, the never-guess invariant (no stack without an evidence path), and markdown rendering; then eight for the defaults — node's command and globs, the dotnet/python/powershell/vue3 first commands, defaults only for detected stacks, the deduped rollup ordering, a stack with no row carrying empty lists, an empty repo's empty rollup, the markdown block (ASCII-only), and the invariant that every table key is a name the detector can actually emit and carries both lists non-empty.
 
 ## Quiet-at-source suggested commands and `quiet_wrapper` (Unreleased)
 
@@ -65,3 +65,15 @@ Second, a new `quiet_wrapper` field on each stack entry gives the exact `run_qui
 Both are proposals, same as before: nothing here is ever executed by this script, and the quick lane still offers rather than adopts.
 
 Self-test count: 26 → 34, covering the new quiet flags per stack, the `quiet_wrapper` field's presence/emptiness, and its exact wrapped-command shape for the first suggested command.
+
+## Fixture skips and the .gitignore filter (2026-09-25)
+
+Run on this plugin repo, the script reported dotnet, godot, powershell and vue3 whose only evidence was eval fixtures: tracked `evals/*/fixture/**` trees and the gitignored `eval-runs/` workspaces. Two fixes:
+
+- `fixture` and `fixtures` join `SKIP_DIRS`.
+- Inside a git work tree, the bucketed marker paths go through ONE `git -C <repo> check-ignore --stdin -z` call (60 s bound, well under `pipeline_driver.py`'s 120 s bound on the whole script), and the ignored ones are dropped. Tracked files are never reported as ignored.
+  - `.` rides in the same batch. When git reports the `--repo` root itself as ignored (a workspace copied under an enclosing repo's ignored directory, e.g. an antigravity eval workspace under `eval-runs/`), nothing is dropped. Otherwise every marker would vanish and the report would read as greenfield.
+  - A marker below a directory that holds its own `.git` is decided by that nested checkout's ROOT, which rides the same batch in place of its files. Git refuses a file inside a submodule, which would otherwise disable the filter for the whole repo, but it accepts the submodule root. An untracked nested checkout's root answers like any directory. So an ignored nested checkout (a contract-suite workspace that ran `git init` under `eval-runs/`) is dropped whole, and a submodule whose root is not ignored keeps its markers.
+  - Outside git, when git is missing or fails, or when the root is ignored, nothing is dropped and `warnings` carries ".gitignore filter not applied: <reason>".
+
+Self-test count: 34 → 40. The new cases cover fixture dirs skipped, a gitignored marker dropped while a tracked one is kept, `--repo` inside an ignored dir still detecting, a submodule marker kept without disabling the filter, an ignored nested checkout dropped, and a non-git dir detecting and warning (`GIT_DIR` pinned to a missing path, so it holds even when the temp dir sits inside a checkout).

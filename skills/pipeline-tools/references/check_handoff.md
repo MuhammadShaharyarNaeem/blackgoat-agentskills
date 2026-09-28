@@ -16,8 +16,9 @@ The table is a constant in the script. A gate that re-derived it by parsing `age
 
 | Persona | Required beyond `<status>` / `<blockers>` | Source |
 |---|---|---|
-| mason, max | `<changed_files>` | Builder override |
-| dep, quinn, nova | `<changed_files>` **and** `<artifact>` | Hybrid write boundary |
+| mason, max | `<changed_files>` **and** `<changed_symbols>` | Builder override |
+| nova | `<changed_files>`, `<changed_symbols>` **and** `<artifact>` | Hybrid write boundary |
+| dep, quinn | `<changed_files>` **and** `<artifact>` | Hybrid write boundary |
 | forge | `<changed_skills>` | Meta override |
 | alex, aria, cipher, echo, iris, luna, rex, scout, vera | `<artifact>` | base-persona, unchanged |
 
@@ -233,3 +234,35 @@ On a `PARTIAL`/`BLOCKED` `<status>`, `<blockers>` must now carry at least one li
 This is the grammar `check_redelegation.py` reads to decide whether re-delegating the same agent on the same unit would just re-discover the same wall: `environment`/`credentials` halt outright, `dependency` halts unless explicitly waived, and `spec`/`defect` never halt on their own since those are squarely the agent's to keep working on.
 
 Self-test count: 57 → 67 — ten `blocked_on:` grammar cases: every known category, an unknown one, a missing line, the `COMPLETE` exemption, a bulleted/backtick-wrapped line, and the absent-`<blockers>`-is-only-`element_missing` non-duplication case.
+
+## `<changed_symbols>` (Unreleased)
+
+`<changed_files>` says which files a builder touched; it says nothing about what inside them changed, so a builder could name a function it never wrote and nothing mechanical would disagree. `<changed_symbols>` turns that claim into one checked against the diff.
+
+### The contract
+
+- **Who carries it.** Mason, Max and Nova must (`element_missing` otherwise). Every other persona may carry it without a warning.
+- **Entry grammar.** One `path::Name` per non-blank line; a list marker and backticks are stripped, and the line splits on its last `::`.
+  - `path` names exactly one file, read literally. Every git call on it runs with `--literal-pathspecs`, so `pages/users/[id].vue` is that file, and a glob-looking `src/*.py` or a leading-colon `:/` names only a file literally so called; with none, the claim is refused. A path that is a directory, or whose diff covers any file other than itself (a directory since deleted, even one that held a single file), is `changed_symbols_grammar`.
+  - `Name` is the bare identifier as source spells it. A `.` qualifier (`Store.load`) is `changed_symbols_grammar`: source rarely contains the dotted form, so every such honest claim would be refused. A hyphen stays legal, for PowerShell's `Verb-Noun`.
+  - `Name` is the innermost symbol edited: the method, not its enclosing class, unless the class declaration line itself changed. With method-scoped drivers an unchanged class line sits outside the hunk, so the class claim is refused.
+- **Files with no symbol.** A changed file with no code symbol (a doc, config or data file) is listed in `<changed_files>` only and omitted from `<changed_symbols>`. `path::none: ...` is not an entry and is `changed_symbols_grammar`.
+- **The `none:` form.** The only non-entry form is exactly one `none: <reason>` line with a non-empty reason, for a handoff with no code symbol at all. It is recorded in the ledger as `changed_symbols_none_reason` and never diff-checked.
+- **Under `--since`.** Each `Name` must appear as a whole word on an added, removed or context line inside a hunk of `git -c core.attributesFile=<temp> diff --no-color --no-ext-diff -M -W <ref> -- <path>`, never on the `---`/`+++` file headers, and on the `@@` header text only when it names an enclosing scope (below). Whole word, not substring, so `Get` cannot ride on `GetUser`.
+- **No cross-check with `<changed_files>`.** `<changed_symbols>` is not compared with `<changed_files>`, so a file left out of `<changed_symbols>` is never flagged.
+- **Problem codes.** `changed_symbols_grammar`: a line that is not `path::Name`, a qualified `Name`, a directory path (present or deleted), an empty `none:` reason, or `none:` mixed with entries. `symbol_not_in_diff`: a `Name` the diff does not show; the detail is the entry as written.
+
+### Why the diff rule is shaped this way
+
+A stricter rule, "+/- lines and `@@` headers only", rejected true claims about a change inside a multi-line constant whose name line was unchanged. Counting context lines inside the `-W` hunk widens it deliberately (convention #8): a name the diff's function context never shows is an invented or untouched claim, so the rule catches invention, not precise attribution. Two refinements of that widened rule, also deliberate (convention #8, refining this section's own rule):
+- **No `@@` header text.** Under `-W`, a hunk starts at the enclosing declaration, so git's header names the declaration *before* it, an untouched neighbour. The enclosing declaration is already a body line. One exception, a deliberate refinement of this header rule (convention #8): the header counts only while its scope is still open at the hunk's first changed line. Every non-blank line from the header's own line down to that first `+`/`-` line must be indented deeper than the header line, where deeper means the line's indent starts with the header's indent verbatim and is longer. A tab/space mix that differs from the header's is never deeper, the conservative reading, so no tab width is guessed. A change after a nested `def` starts the hunk at the nested def, so the outer function appears only in the header, and it counts. A sibling's scope closes at the next declaration's own line, so the sibling does not count, even when `-W`'s three leading context lines start the hunk in its tail and git's header names it. Git prints the header without its indentation, so the gate finds the line in the preimage blob (`--full-index` supplies its id): the nearest line above the hunk whose text starts with the header. A header line that cannot be found does not count. Preimage and diff lines are numbered as git numbers them, split on `
+` only. Known false refusals, all failing closed: a column-0 comment, or column-0 lines of a multi-line string, inside the enclosing function closes its scope; and with braces on their own line (C# Allman style) the enclosing method or class never gets header credit. Claim the innermost changed symbol instead.
+- **Built-in language drivers.** Git's default funcname heuristic matches only unindented lines, so `-W` widened an indented member (a C# method inside a class) to the whole file. A temporary `core.attributesFile` maps common extensions to drivers git ships (`csharp`, `python`, `java`, `golang`, `rust`, `ruby`, `php`, `kotlin`, `cpp`, `bash`, `perl`, `css`, `html`, `markdown`). The repository's own `.gitattributes` still wins. Git ships no JavaScript/TypeScript driver, so those files keep the default heuristic, and their residual is the enclosing unindented block.
+
+`--no-color --no-ext-diff --no-textconv` keep the caller's git config (`color.diff=always`, `diff.external`) and a repository's `diff.<driver>.textconv` from reshaping the output. An untracked file that cannot be read is exit 2, never a finding, and so is a failure to write the temporary attributes file. A failure to delete that file is ignored: a leaked temp file is harmless, but a cleanup error must never mask the verdict.
+
+Why no character ban on `path`: an earlier rule refused `*`, `?`, `[` and a leading `:`, which also refused real files such as Nuxt's `pages/users/[id].vue`. `--literal-pathspecs` already stops a path from widening the diff, so the ban only rejected valid input. A literal pathspec still prefix-matches every file under a directory, which is why an existing directory is refused before diffing and a deleted one when its diff names any file other than the path itself.
+
+**The untracked-file rule.** Builders never commit, so a symbol in a file they created is untracked and `git diff` shows nothing for it. An untracked file at `path` therefore counts as all-added lines, the same "diff plus untracked" rule `<changed_files>` already uses. A deleted file is still diffed (its removed lines count), and a renamed file is cited by its new path.
+
+Self-test count: 67 → 95.
