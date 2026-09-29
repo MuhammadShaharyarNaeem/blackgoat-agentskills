@@ -670,7 +670,7 @@ Exit codes:
   2  a missing, unreadable or non-directory --repo
 
 Self-test:
-  python detect_stack.py --self-test   (40 cases)
+  python detect_stack.py --self-test   (43 cases)
 """
 
 
@@ -850,6 +850,50 @@ def run_self_test():
             self._write("tracked/deploy.ps1", "Write-Host 'hi'")
             result = build_report(self.repo, 6)
             self.assertEqual(self._names(result), {"powershell"})
+            self.assertEqual(result["warnings"], [])
+
+        @unittest.skipUnless(shutil.which("git"), "git not on PATH")
+        def test_gitfile_submodule_root_keeps_marker_without_warning(self):
+            self._git("init", "-q")
+            self._write(".gitignore", "ignored/\n")
+            self._write("ignored/App.csproj", "<Project></Project>")
+            self._write("lib/S.csproj", "<Project></Project>")
+            modules = self.repo / ".git" / "modules"
+            modules.mkdir()
+            self._git("-C", "lib", "init", "-q", "--separate-git-dir",
+                      str(modules / "lib"))
+            self._git("update-index", "--add", "--cacheinfo",
+                      "160000," + "1" * 40 + ",lib")
+            self.assertTrue((self.repo / "lib" / ".git").is_file())
+            result = build_report(self.repo, 6)
+            dotnet = next(s for s in result["stacks"] if s["name"] == "dotnet")
+            self.assertEqual(dotnet["evidence"], ["lib/S.csproj"])
+            self.assertEqual(result["warnings"], [])
+
+        def _nested_checkouts(self, gitignore):
+            self._git("init", "-q")
+            self._write(".gitignore", gitignore)
+            self._write("wt/outer/App.csproj", "<Project></Project>")
+            self._write("wt/outer/inner/deploy.ps1", "Write-Host 'hi'")
+            self._git("-C", "wt/outer", "init", "-q")
+            self._git("-C", "wt/outer/inner", "init", "-q")
+            return build_report(self.repo, 6)
+
+        @unittest.skipUnless(shutil.which("git"), "git not on PATH")
+        def test_ignored_outer_checkout_drops_its_nested_checkout_too(self):
+            result = self._nested_checkouts("wt/\n")
+            self.assertEqual(result["stacks"], [])
+            self.assertFalse(any(GITIGNORE_WARNING in w
+                                 for w in result["warnings"]))
+
+        @unittest.skipUnless(shutil.which("git"), "git not on PATH")
+        def test_outermost_nested_root_decides_over_inner_root(self):
+            result = self._nested_checkouts("inner/\n")
+            self.assertEqual(self._names(result), {"dotnet", "powershell"})
+            powershell = next(s for s in result["stacks"]
+                              if s["name"] == "powershell")
+            self.assertEqual(powershell["evidence"],
+                             ["wt/outer/inner/deploy.ps1"])
             self.assertEqual(result["warnings"], [])
 
         def test_non_git_dir_still_detects_and_warns(self):

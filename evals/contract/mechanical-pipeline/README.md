@@ -87,7 +87,8 @@ A temp dir gets `git init` + a configured `user.name`/`user.email`, then:
 Then, in order: derive next milestone (asserts NEXT / milestone 2 / API / stale
 cursor) -> set cursor + pipeline -> builder diff + Request-Changes review -> gate
 fails on verdict -> add scoped blocker + Approve review -> gate still fails on the
-blocker -> resolve the blocker (rejected without `--evidence`, accepted with it,
+blocker -> resolve the blocker (rejected without `--evidence`, refused with free-text
+`--evidence` — exit 1, `evidence_not_found`, no log — accepted with an existing file,
 `blockers-resolved.log` written) -> `--verify-tree` catches an undeclared file ->
 remove it, `--verify-tree --commit` succeeds and a real commit lands -> mark
 milestone 2 `[x]` -> derive next milestone (asserts NEXT / milestone 3 / UI) ->
@@ -109,14 +110,16 @@ Then the two evidence gates, on fixtures the script writes into the same repo:
 - `.docs/proj/acceptance-matrix.md` — one `AS-1` scenario, 3 steps, one `manual`, with
   `[inverse of 1]` on the delete step; plus a green `acceptance-results.md` whose manual
   step cites the 10a capture, and an `acceptance-results-unevidenced.md` whose manual step
-  reports `PASS` on the agent's word alone.
+  reports `PASS` on the agent's word alone. In both, the auto steps AS-1.1/AS-1.2 cite
+  real `run_quiet.py --capture` artifacts produced in 11a, whose exit codes are asserted
+  so a failed capture surfaces as itself rather than as `auto_step_uncaptured`.
 
 `check_runtime_evidence.py` accepts the envelope capture (exit 0, `fresh: true`,
 `status: 200`) and rejects the bare one (exit 1,
 `missing_keys: ["isSuccess","notifications"]`, nothing stale, no in-process transport) ->
 `check_acceptance_suite.py` passes the green walkthrough (exit 0, 3 gated steps, 3 passed)
 and fails the unevidenced one (exit 1, `unevidenced_manual: ["AS-1.3"]`, the same key in
-`not_run`, `failed` empty) — an unevidenced manual `PASS` reading as NOT RUN rather than as
+`not_run`, `unevidenced_auto` and `failed` empty, so AS-1.3 is the only cause) — an unevidenced manual `PASS` reading as NOT RUN rather than as
 a failure is the crux of that gate and is asserted field-by-field.
 
 ## Tool defect found
