@@ -134,8 +134,9 @@ CITED_PATH_RE = re.compile(
 BARE_NAME_RE = re.compile(
     r"(?<![\w/\\.-])([A-Za-z0-9_.\-]+\.(?:%s))(?!\w)" % "|".join(SOURCE_EXTS),
     re.IGNORECASE)
-CLASSIFY_DIFF_FLAGS = ("--no-color", "--no-ext-diff", "--no-textconv")
-CLASSIFY_GIT_TIMEOUT_S = 120
+# On every `git diff`: a caller's `color.diff=always`, `diff.external` or a
+# `diff.<driver>.textconv` must not reshape the output this parses.
+DIFF_FLAGS = ("--no-color", "--no-ext-diff", "--no-textconv")
 # What a `cosmetic` change may differ by: end-of-line whitespace, CR line
 # endings, blank lines. Deliberately not `-w` (convention #8): `-w` also
 # ignores indentation and intra-line whitespace, so a dedent or a token
@@ -277,11 +278,14 @@ def git_diff(repo_path, sha):
     `renames` is a list of (old_path, new_path); `adds_mods` and `deletes`
     are flat path lists. All normalised to forward slashes.
     """
-    proc = git(repo_path, "diff", "--name-status", "--diff-filter=ADMR",
-              "-M", sha, "HEAD")
-    adds_mods, renames, deletes = [], [], []
+    proc = git(repo_path, "diff", *DIFF_FLAGS, "--name-status",
+              "--diff-filter=ADMR", "-M", sha, "HEAD")
     if proc.returncode != 0:
-        return adds_mods, renames, deletes
+        # `sha` already resolved, so this is a repo git cannot diff (a
+        # missing tree or blob): empty lists here would read as `fresh`.
+        raise GateError(f"git diff failed in {repo_path}: "
+                        f"{proc.stderr.strip()}")
+    adds_mods, renames, deletes = [], [], []
     for line in proc.stdout.splitlines():
         if not line.strip():
             continue
@@ -312,23 +316,10 @@ def commits_behind(repo_path, sha):
 def _classify_git(repo_path, *args):
     """stdout of one `git diff` for --classify; GateError (exit 2) on failure.
 
-    The flags keep the caller's config (`color.diff=always`, `diff.external`,
-    a `diff.<driver>.textconv`) from reshaping the output this parses. Its
-    own subprocess call, not the imported `git()`: that one decodes with the
-    locale codec, which raises on diff content such as UTF-8 'Á' under
-    cp1252. Decoding as UTF-8 with replacement cannot fail, and the markers
-    matched are ASCII.
+    The imported `git()` decodes UTF-8 with replacement and maps a timeout
+    or OSError to GateError; the markers matched are ASCII.
     """
-    cmd = ["git", "-C", str(repo_path), "diff", *CLASSIFY_DIFF_FLAGS, *args]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, encoding="utf-8",
-                              errors="replace",
-                              timeout=CLASSIFY_GIT_TIMEOUT_S)
-    except subprocess.TimeoutExpired:
-        raise GateError(f"git diff timed out after {CLASSIFY_GIT_TIMEOUT_S}s "
-                        f"in {repo_path}")
-    except OSError as exc:
-        raise GateError(f"git diff failed in {repo_path}: {exc}")
+    proc = git(repo_path, "diff", *DIFF_FLAGS, *args)
     if proc.returncode != 0:
         raise GateError(f"git diff failed in {repo_path}: "
                         f"{proc.stderr.strip()}")
@@ -790,12 +781,13 @@ Exit codes:
   2  a bad --summary-root, no --repo, a missing --feature, a --feature
      directory that does not exist under --summary-root, a --repo path that
      is not a directory or not a git repository (each named in "error"),
-     --json and --markdown together, or git unusable. Every one of these
-     means the check could not be performed at all, and is deliberately not
-     folded into an exit-0 report that would read as "fresh".
+     --json and --markdown together, or git unusable (a diff failing after
+     the sha resolved included). Each means the check could not be
+     performed, and is deliberately not folded into an exit-0 report
+     reading "fresh".
 
 Self-test:
-  python tier1_staleness.py --self-test   (43 cases; skipped when git is
+  python tier1_staleness.py --self-test   (44 cases; skipped when git is
   absent)
 """
 
@@ -1377,6 +1369,22 @@ def run_self_test():
             self.whitespace_fixture()
             with mock.patch("subprocess.run", side_effect=run):
                 code, out = self.cli("--classify")
+            self.assertEqual(code, 2)
+            self.assertEqual(json.loads(out)["result"], "ERROR")
+
+        def test_a_diff_failure_after_the_sha_resolves_is_exit_2(self):
+            """HEAD's Features/Billing tree object is gone: the stamped sha
+            still resolves, but git cannot diff -- never `fresh`."""
+            import os
+            import stat
+            self.write_all_docs()
+            self.advance_app()
+            tree = self.run_git(self.app, "rev-parse",
+                                "HEAD:Features/Billing").stdout.strip()
+            obj = self.app / ".git" / "objects" / tree[:2] / tree[2:]
+            os.chmod(obj, stat.S_IWRITE)
+            obj.unlink()
+            code, out = self.cli()
             self.assertEqual(code, 2)
             self.assertEqual(json.loads(out)["result"], "ERROR")
 
