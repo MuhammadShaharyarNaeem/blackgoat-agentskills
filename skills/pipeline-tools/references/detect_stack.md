@@ -52,7 +52,7 @@ decides whether that was the right half of the repo.
 
 ## Self-test inventory
 
-`python scripts/detect_stack.py --self-test` runs **40** cases (the tally below is the original 26; see the dated sections for the rest): dotnet, vue3, the vue2 suppression, godot, powershell, aws via terraform, azure via bicep, an empty repo, `node_modules` skipped, db via EF, react, node, playwright, github-actions, a missing repo (exit 2), the skills mapping, the never-guess invariant (no stack without an evidence path), and markdown rendering; then eight for the defaults — node's command and globs, the dotnet/python/powershell/vue3 first commands, defaults only for detected stacks, the deduped rollup ordering, a stack with no row carrying empty lists, an empty repo's empty rollup, the markdown block (ASCII-only), and the invariant that every table key is a name the detector can actually emit and carries both lists non-empty.
+`python scripts/detect_stack.py --self-test` runs **43** cases (the tally below is the original 26; see the dated sections for the rest): dotnet, vue3, the vue2 suppression, godot, powershell, aws via terraform, azure via bicep, an empty repo, `node_modules` skipped, db via EF, react, node, playwright, github-actions, a missing repo (exit 2), the skills mapping, the never-guess invariant (no stack without an evidence path), and markdown rendering; then eight for the defaults — node's command and globs, the dotnet/python/powershell/vue3 first commands, defaults only for detected stacks, the deduped rollup ordering, a stack with no row carrying empty lists, an empty repo's empty rollup, the markdown block (ASCII-only), and the invariant that every table key is a name the detector can actually emit and carries both lists non-empty.
 
 ## Quiet-at-source suggested commands and `quiet_wrapper` (Unreleased)
 
@@ -77,3 +77,5 @@ Run on this plugin repo, the script reported dotnet, godot, powershell and vue3 
   - Outside git, when git is missing or fails, or when the root is ignored, nothing is dropped and `warnings` carries ".gitignore filter not applied: <reason>".
 
 Self-test count: 34 → 40. The new cases cover fixture dirs skipped, a gitignored marker dropped while a tracked one is kept, `--repo` inside an ignored dir still detecting, a submodule marker kept without disabling the filter, an ignored nested checkout dropped, and a non-git dir detecting and warning (`GIT_DIR` pinned to a missing path, so it holds even when the temp dir sits inside a checkout).
+
+Self-test count (2026-09-30): 40 → 43, pinning a `.git`-file submodule root kept without a warning, an ignored outer nested checkout dropping its inner checkout too, and the outermost nested root deciding over an ignored inner root.

@@ -192,8 +192,8 @@ ACCEPTANCE_RESULTS_UNEVIDENCED = """# Acceptance Results — proj
 
 ## Execution
 
-- AS-1.1: PASS — exit 0 — 200 + row stored
-- AS-1.2: PASS — exit 0 — 200 + row gone
+- AS-1.1: PASS — exit 0 — evidence/runtime/as-1-1-create.md — 200 + row stored
+- AS-1.2: PASS — exit 0 — evidence/runtime/as-1-2-delete.md — 200 + row gone
 - AS-1.3: PASS — checked it by hand, looked right
 """
 
@@ -447,15 +447,30 @@ def run_lifecycle(repo):
         encoding="utf-8")
     proc_no_ev = run_py(UPDATE_STATE, ["--state", state_path,
                                         "--resolve-blocker", "validation finding"])
+    log_path = state_path.parent / "blockers-resolved.log"
+    proc_text_ev = run_py(UPDATE_STATE, ["--state", state_path,
+                                          "--resolve-blocker", "validation finding",
+                                          "--evidence", "Re-test passed; looks fine"])
+    try:
+        text_ev_codes = [p.get("problem") for p in
+                         json.loads(proc_text_ev.stdout).get("problems", [])]
+    except (json.JSONDecodeError, AttributeError):
+        text_ev_codes = None
+    text_ev_logged = log_path.exists()
     proc_ev = run_py(UPDATE_STATE, ["--state", state_path,
                                      "--resolve-blocker", "validation finding",
                                      "--evidence", resolution_evidence])
-    log_path = state_path.parent / "blockers-resolved.log"
-    ok = proc_no_ev.returncode == 2 and proc_ev.returncode == 0 and log_path.exists()
-    record("5. update_state: --resolve-blocker without/with --evidence (exit 2 / exit 0, log written)",
+    ok = (proc_no_ev.returncode == 2
+          and proc_text_ev.returncode == 1
+          and text_ev_codes == ["evidence_not_found"]
+          and not text_ev_logged
+          and proc_ev.returncode == 0 and log_path.exists())
+    record("5. update_state: --resolve-blocker without / free-text / file --evidence "
+           "(exit 2 / exit 1 evidence_not_found / exit 0, log written)",
            ok, "" if ok else
-           f"no-evidence rc={proc_no_ev.returncode}, with-evidence rc={proc_ev.returncode}, "
-           f"log exists={log_path.exists()}")
+           f"no-evidence rc={proc_no_ev.returncode}, free-text rc={proc_text_ev.returncode} "
+           f"codes={text_ev_codes} logged={text_ev_logged}, "
+           f"with-evidence rc={proc_ev.returncode}, log exists={log_path.exists()}")
 
     # --- Step 6: --verify-tree catches an undeclared file -------------------
     rogue = repo / "src" / "rogue.cs"
@@ -690,10 +705,17 @@ def run_lifecycle(repo):
 
     # The auto steps cite real run_quiet.py --capture artifacts (capture plus
     # its .meta.json sidecar), exactly as an executed walkthrough leaves them.
+    # A capture that failed to be produced must surface as itself, not later
+    # as the acceptance gate's auto_step_uncaptured.
+    capture_failures = []
     for capture_name, probe_output in (("as-1-1-create.md", "200 row stored"),
                                        ("as-1-2-delete.md", "200 row gone")):
-        run_py(RUN_QUIET, ["--capture", runtime_dir / capture_name, "--",
-                           sys.executable, "-c", f"print({probe_output!r})"])
+        proc = run_py(RUN_QUIET, ["--capture", runtime_dir / capture_name, "--",
+                                  sys.executable, "-c", f"print({probe_output!r})"])
+        if proc.returncode != 0:
+            capture_failures.append(
+                f"run_quiet --capture {capture_name} exit {proc.returncode}: "
+                f"{proc.stderr.strip() or proc.stdout.strip()}")
 
     green_results = impl_dir / "acceptance-results.md"
     green_results.write_text(ACCEPTANCE_RESULTS_GREEN, encoding="utf-8")
@@ -703,14 +725,15 @@ def run_lifecycle(repo):
                                            "--repo", repo])
     data = parse_json(proc, "11a. check_acceptance_suite: green walkthrough -> exit 0")
     if data is not None:
-        ok = (proc.returncode == 0 and data.get("result") == "PASS"
+        ok = (not capture_failures
+              and proc.returncode == 0 and data.get("result") == "PASS"
               and data.get("gated_scenarios") == ["AS-1"]
               and data.get("steps_gated") == 3 and data.get("passed") == 3
               and data.get("unevidenced_manual") == []
               and data.get("dangling_inverse") == []
               and data.get("missing_results") == [])
         record("11a. check_acceptance_suite: green walkthrough -> exit 0", ok,
-               "" if ok else json.dumps(data))
+               "" if ok else ("; ".join(capture_failures) or json.dumps(data)))
 
     # --- Step 11b: unevidenced manual PASS reads as NOT RUN -> exit 1 -------
     unevidenced_results = impl_dir / "acceptance-results-unevidenced.md"
@@ -723,6 +746,8 @@ def run_lifecycle(repo):
     if data is not None:
         ok = (proc.returncode == 1 and data.get("result") == "FAIL"
               and data.get("unevidenced_manual") == ["AS-1.3"]
+              # AS-1.1/AS-1.2 cite 11a's real captures, so AS-1.3 is the only cause.
+              and data.get("unevidenced_auto") == []
               and "AS-1.3" in data.get("not_run", [])
               and data.get("failed") == []
               and data.get("missing_results") == [])
