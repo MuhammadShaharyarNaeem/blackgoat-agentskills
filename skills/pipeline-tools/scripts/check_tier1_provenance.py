@@ -109,6 +109,7 @@ DATE_RE = re.compile(r"(?<!\d)(20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])(?!
 HEADING_RE = re.compile(r"^##\s", re.M)
 CONTEXT_ARTIFACT = "context.md"
 FEATURE_ARTIFACT = "overview.md"
+GIT_TIMEOUT_S = 120
 
 
 class GateError(Exception):
@@ -211,14 +212,22 @@ def parse_repo_arg(raw):
 
 
 def git(repo, *args):
-    """Run git in `repo`; raise GateError when git itself is unusable."""
+    """Run git in `repo`; raise GateError when git itself is unusable.
+
+    Output decodes as UTF-8 with replacement, never the locale codec: git
+    writes UTF-8, and cp1252 cannot decode bytes such as 0x81.
+    """
     try:
         return subprocess.run(["git", "-C", str(repo)] + list(args),
-                              capture_output=True, text=True, timeout=120)
+                              capture_output=True, encoding="utf-8",
+                              errors="replace", timeout=GIT_TIMEOUT_S)
     except FileNotFoundError:
         raise GateError("git executable not found; provenance cannot be checked")
     except subprocess.TimeoutExpired:
-        raise GateError(f"git {args[0] if args else ''} timed out after 120s")
+        raise GateError(f"git {args[0] if args else ''} timed out after "
+                        f"{GIT_TIMEOUT_S}s")
+    except OSError as exc:
+        raise GateError(f"git {args[0] if args else ''} failed in {repo}: {exc}")
 
 
 def head_sha(repo):
@@ -589,7 +598,7 @@ Exit codes:
      given without --verify-current
 
 Self-test:
-  python check_tier1_provenance.py --self-test   (39 cases)
+  python check_tier1_provenance.py --self-test   (42 cases)
 """
 
 
@@ -1103,6 +1112,39 @@ def run_self_test():
             self.assertEqual(parse_repo_arg("app=/x/y")[1], Path("/x/y"))
             with self.assertRaises(GateError):
                 parse_repo_arg("=/x/y")
+
+        def break_config_with_non_cp1252_value(self):
+            """Every git call in self.repo now fails, its stderr quoting a
+            value whose UTF-8 (C4 81) holds 0x81 -- undefined in cp1252."""
+            with open(self.repo / ".git" / "config", "a",
+                      encoding="utf-8") as config:
+                config.write("[core]\n\tbare = yā\n")
+
+        def test_git_decodes_non_cp1252_output_as_utf8(self):
+            self.break_config_with_non_cp1252_value()
+            proc = git(self.repo, "rev-parse", "HEAD")
+            self.assertIn("yā", proc.stderr)
+
+        def test_non_cp1252_git_output_is_a_finding_not_a_crash(self):
+            self.break_config_with_non_cp1252_value()
+            self.write_context()
+            self.write_overview()
+            self.assertEqual(self.codes(self.report()), ["sha_unknown"])
+
+        def test_an_os_error_from_git_is_exit_2(self):
+            import contextlib
+            import io
+            from unittest import mock
+            self.write_context()
+            self.write_overview()
+            out = io.StringIO()
+            with mock.patch("subprocess.run",
+                            side_effect=PermissionError(13, "denied")), \
+                    contextlib.redirect_stdout(out):
+                code = main(["--summary-root", str(self.summary),
+                             "--repo", f"app={self.repo}"])
+            self.assertEqual(code, 2)
+            self.assertEqual(json.loads(out.getvalue())["result"], "ERROR")
 
         def test_ledger_records_every_exit_path(self):
             ledger = self.dir / "logs" / "gates.jsonl"
