@@ -541,12 +541,16 @@ def git_changed_since(repo, ref):
     since ref and a file edited but not yet committed both appear. Untracked
     files are added separately because diff never sees them and a new source
     file is the commonest thing a builder's <changed_files> names.
+
+    `-z` keeps each path verbatim, NUL-separated: without it git C-quotes a
+    non-ASCII or control-char path (core.quotePath) and a truthful entry
+    never matches.
     """
     changed = set()
-    for args in (["diff", "--name-only", ref],
-                 ["ls-files", "--others", "--exclude-standard"]):
-        changed.update(normalize_path(line) for line in
-                       run_git_checked(repo, args).splitlines() if line.strip())
+    for args in (["diff", "--name-only", "-z", ref],
+                 ["ls-files", "-z", "--others", "--exclude-standard"]):
+        changed.update(normalize_path(name) for name in
+                       run_git_checked(repo, args).split("\0") if name.strip())
     return changed
 
 
@@ -1323,7 +1327,7 @@ Exit codes:
      unresolvable ref) or temp file, or a blank --allow-scaffolding reason
 
 Self-test:
-  python check_handoff.py --self-test   (96 cases)
+  python check_handoff.py --self-test   (98 cases)
 """
 
 
@@ -1859,6 +1863,31 @@ def run_self_test():
                     "<blockers>None</blockers></handoff>")
             r = build_report(text, "mason", self.dir, since=ref)
             self.assertEqual(r["result"], "PASS", r["findings"])
+
+        def test_non_ascii_changed_and_untracked_paths_match_the_diff(self):
+            # Without -z git C-quotes these ("src/\303\251t\303\251.py").
+            (self.dir / "src" / "été.py").write_text("a", encoding="utf-8")
+            ref = self.make_repo()
+            (self.dir / "src" / "été.py").write_text("edited", encoding="utf-8")
+            (self.dir / "src" / "naïve.py").write_text("new", encoding="utf-8")
+            text = ("<handoff><status>COMPLETE</status>"
+                    "<changed_files>src/été.py\nsrc/naïve.py</changed_files>"
+                    "<changed_symbols>none: fixture</changed_symbols>"
+                    "<blockers>None</blockers></handoff>")
+            r = build_report(text, "mason", self.dir, since=ref)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+
+        def test_non_ascii_path_not_changed_is_still_refused(self):
+            (self.dir / "src" / "été.py").write_text("a", encoding="utf-8")
+            ref = self.make_repo()
+            (self.dir / "src" / "a.py").write_text("edited", encoding="utf-8")
+            text = ("<handoff><status>COMPLETE</status>"
+                    "<changed_files>src/a.py\nsrc/été.py</changed_files>"
+                    "<changed_symbols>none: fixture</changed_symbols>"
+                    "<blockers>None</blockers></handoff>")
+            r = build_report(text, "mason", self.dir, since=ref)
+            self.assertEqual(self.codes(r), ["changed_files_not_in_diff"])
+            self.assertEqual(r["findings"][0]["path"], "src/été.py")
 
         def test_bad_since_ref_is_an_error_not_a_pass(self):
             self.make_repo()
