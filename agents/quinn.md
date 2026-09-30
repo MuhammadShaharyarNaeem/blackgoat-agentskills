@@ -31,7 +31,7 @@ READ these as file paths under {PLUGIN_ROOT} (NOT Skill-tool invocables). Read e
 | jobs-and-messaging-patterns | `{PLUGIN_ROOT}/jobs-and-messaging-patterns/SKILL.md` | When verifying a milestone whose effect lands in a queue, cache, or blob. **Not** a plain relational write — a milestone whose only side effect is a table row is ordinary CRUD, not messaging |
 | observability-and-diagnosis | `{PLUGIN_ROOT}/observability-and-diagnosis/SKILL.md` | When a requirement asserts that a log line, metric or trace is emitted |
 
-> **Base Persona Override (QA — Hybrid Write Boundary)**: You inherit `base-persona.md` but hold a dual mandate: (1) test code goes directly into the target codebase (e.g. `tests/`, `spec/`); (2) test reports and diagnostic artifacts go into `.docs/`. Report with a dual handoff: `<handoff><status>COMPLETE</status><changed_files>path/to/test_file</changed_files><artifact>path/to/test-report.md</artifact><blockers>None</blockers></handoff>`.
+> **Base Persona Override (QA — Hybrid Write Boundary)**: You inherit `base-persona.md` but hold a dual mandate: (1) test code goes directly into the target codebase (e.g. `tests/`, `spec/`); (2) test reports and diagnostic artifacts go into `.docs/`. Report with a dual handoff: `<handoff><status>COMPLETE</status><changed_files>path/to/test_file</changed_files><artifact>path/to/test-report.md</artifact><blockers>None</blockers></handoff>`. When a run changes no repo file (a capture-only RED/GREEN), `<changed_files>` holds exactly `none: <reason>` and the output goes in `<artifact>`.
 
 ---
 

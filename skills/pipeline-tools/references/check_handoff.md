@@ -265,3 +265,15 @@ Why no character ban on `path`: an earlier rule refused `*`, `?`, `[` and a lead
 **The untracked-file rule.** Builders never commit, so a symbol in a file they created is untracked and `git diff` shows nothing for it. An untracked file at `path` therefore counts as all-added lines, the same "diff plus untracked" rule `<changed_files>` already uses. A deleted file is still diffed (its removed lines count), and a renamed file is cited by its new path.
 
 Self-test count: 67 → 98 (the current total, which includes two later non-ASCII `--since` cases: a changed and an untracked non-ASCII path pass; an unchanged one is still refused).
+
+## `<changed_files>none:` for a capture-only run (2026-09-30)
+
+In `/bgpdd-bugfix`, Quinn's Phase 1 RED and Phase 4 GREEN change no repo file: they write only a capture and a report under the gitignored `.docs/` tree, and the lane passes `--since` on every return. Both honest spellings failed. `<changed_files>None</changed_files>` was read as a path (`path_missing`), and naming the capture was `changed_files_not_in_diff`, since git never lists an ignored file. The Orchestrator had to run the gate without `--since`, so the gate stopped checking anything.
+
+- **Grammar.** The element's entire content is one line, `none: <non-empty reason>`, matched case-insensitively after the list-marker and backtick stripping `<changed_symbols>` uses. It means "this handoff changed no repo file"; the real output is in `<artifact>`, which stays required and is checked exactly as before (existence, scaffolding sweep).
+- **Quinn only.** This is deliberately tighter than `<changed_symbols>`' `none:`, which any persona may write (convention #8). Quinn is the one persona whose runs legitimately produce only `.docs/` artifacts; every other persona's run exists to change files, so `none:` in its `<changed_files>` is a finding.
+- **Under `--since`.** The form claims the empty set, so the subset check passes trivially. It passes without `--since` too. The gate never checked for unclaimed edits, and this change does not add that check.
+- **Findings.** `changed_files_grammar`: `none:` from a persona other than Quinn, an empty reason, or `none:` mixed with paths (on its own line, or after a comma). The legacy bare `None` stays `path_missing`; `none: <reason>` is the only spelling.
+- **Ledger and JSON.** The reason is recorded as `changed_files_none_reason`, following `changed_symbols_none_reason`. The JSON report always carries the key (`null` unless the form passed), and the ledger record carries it only when set.
+
+Self-test count: 99 → 104. The new cases: Quinn's `none:` passes with and without `--since`, and its reason reaches the ledger; every other persona is refused; an empty reason fails; `none:` mixed with a path fails; bare `None` stays `path_missing`.
