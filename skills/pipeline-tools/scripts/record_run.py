@@ -459,11 +459,102 @@ def check_tier_inversion(log_path, fields):
             TIER_ORDER[producer_tier]))
 
 
+class RunLogLock:
+    """Exclusive cross-process lock on the run log, held around one append.
+
+    On Windows the runtime's append is a seek-to-end then a write, not one
+    atomic step, so two unlocked appenders land at the same offset and one
+    record overwrites the other while both exit 0. Same design as
+    check_ledger.py's LedgerLock (deliberately a local copy: this script is
+    not a chained gate and carries none of the chain helper): the lock sits
+    on the log file itself -- `fcntl.flock` on POSIX, a `msvcrt.locking`
+    byte far past EOF on Windows -- so there is no sidecar and the OS drops
+    it if the holder dies. A wait past WAIT_SECONDS, or any lock error,
+    warns on stderr and the append goes ahead unlocked: a possibly-colliding
+    append beats a certainly-dropped record.
+    """
+
+    WAIT_SECONDS = 10.0
+    POLL_SECONDS = 0.005
+    WINDOWS_LOCK_OFFSET = 1 << 62
+
+    def __init__(self, log_path):
+        self.log_path = log_path
+        self.fh = None
+
+    def _lock_call(self, unlock):
+        """One non-blocking lock (or unlock) attempt; OSError when busy."""
+        if sys.platform == "win32":
+            import msvcrt
+            import os
+            os.lseek(self.fh.fileno(), self.WINDOWS_LOCK_OFFSET, os.SEEK_SET)
+            msvcrt.locking(self.fh.fileno(),
+                           msvcrt.LK_UNLCK if unlock else msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN if unlock
+                        else fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _acquired(self):
+        """True once locked, False while another holder has it."""
+        import errno
+        try:
+            self._lock_call(unlock=False)
+            return True
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK):
+                return False
+            raise
+
+    def __enter__(self):
+        import time
+        deadline = time.monotonic() + self.WAIT_SECONDS
+        try:
+            p = Path(self.log_path)
+            if str(p.parent):
+                p.parent.mkdir(parents=True, exist_ok=True)
+            self.fh = open(p, "ab")
+            while not self._acquired():
+                if time.monotonic() >= deadline:
+                    raise OSError("lock still held after {0}s".format(
+                        self.WAIT_SECONDS))
+                time.sleep(self.POLL_SECONDS)
+        except (OSError, ImportError, ValueError) as exc:
+            if self.fh is not None:
+                self.fh.close()
+                self.fh = None
+            print("Warning: appending to run log {0} without a lock: "
+                  "{1}".format(self.log_path, exc), file=sys.stderr)
+        return self
+
+    def __exit__(self, *exc_info):
+        if self.fh is not None:
+            try:
+                self._lock_call(unlock=True)
+            except OSError as exc:
+                print("Warning: could not release the lock on run log "
+                      "{0}: {1}".format(self.log_path, exc), file=sys.stderr)
+            self.fh.close()
+            self.fh = None
+        return False
+
+
 def append_record(log_path, record):
+    """Append one JSON line under RunLogLock. Failure is exit 2.
+
+    main holds the lock itself across its duplicate check and calls
+    write_record directly: the lock is not re-entrant.
+    """
+    with RunLogLock(log_path):
+        write_record(log_path, record)
+
+
+def write_record(log_path, record):
     """Append one JSON line, creating parent directories. Failure is exit 2.
 
     Unlike the gate ledger's best-effort write, this IS the artifact: a record
-    that silently failed to land is a measurement that never happened.
+    that silently failed to land is a measurement that never happened. The
+    caller holds RunLogLock.
     """
     try:
         p = Path(log_path)
@@ -533,7 +624,7 @@ Exit codes:
      --from-json, or an unwritable --log
 
 Self-test:
-  python record_run.py --self-test   (70 cases)
+  python record_run.py --self-test   (72 cases)
 """
 
 
@@ -764,6 +855,15 @@ def main(argv):
                          "measured."}))
             return 2
 
+    # The checks read the log and the write joins it, so all of it runs under
+    # one RunLogLock: two concurrent writers of the same tuple cannot both
+    # pass the duplicate check, and neither append overwrites the other.
+    with RunLogLock(args.log):
+        return check_and_append(args, fields, fail)
+
+
+def check_and_append(args, fields, fail):
+    """The read-then-append half of main; the caller holds RunLogLock."""
     # Duplicate is checked FIRST, and before the write: it decides whether
     # this record should exist at all, where the inversion check below judges
     # the content of a record that should. A re-wake writes nothing.
@@ -792,7 +892,7 @@ def main(argv):
     if problem:
         record["tier_inversion_reason"] = args.allow_tier_inversion.strip()
     try:
-        append_record(args.log, record)
+        write_record(args.log, record)
     except RecordError as exc:
         return fail(str(exc))
 
@@ -1519,7 +1619,66 @@ def run_self_test():
                 "--tokens-unavailable", "test harness: not under test")), 0)
             self.assertIsNone(self._lines()[0]["runtime"])
 
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(RecordRunTests)
+        # ---- concurrent appenders (RunLogLock) ---------------------------
+        def _race(self, procs, argv_tail, per_proc):
+            """Start `procs` workers, release them together, return exits."""
+            import subprocess
+            import time
+            go = self.dir / "go"
+            workers = []
+            for n in range(procs):
+                ready = self.dir / "ready{0}".format(n)
+                workers.append((ready, subprocess.Popen(
+                    [sys.executable, "-c", CONCURRENT_WORKER,
+                     str(Path(__file__).resolve().parent), str(ready),
+                     str(go), str(per_proc), str(self.log)] + argv_tail,
+                    stdout=subprocess.DEVNULL)))
+            deadline = time.monotonic() + 120
+            while (not all(r.exists() for r, _ in workers)
+                   and time.monotonic() < deadline):
+                time.sleep(0.01)
+            go.touch()
+            return [w.wait(timeout=300) for _, w in workers]
+
+        def test_concurrent_appenders_lose_no_record(self):
+            """Unlocked, Windows appenders overwrite each other's lines."""
+            procs, per_proc = 5, 40
+            exits = self._race(procs, [
+                "--pipeline", "bgpdd-build", "--phase", "Phase 1",
+                "--event", "note", "--note", "x" * 200], per_proc)
+            self.assertEqual(exits, [0] * procs)
+            raw = self.log.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(raw), procs * per_proc)
+            self.assertEqual(len(self._lines()), procs * per_proc)
+
+        def test_concurrent_duplicate_delegations_record_once(self):
+            """The duplicate check and the append share one lock."""
+            procs = 5
+            exits = self._race(procs, [
+                "--pipeline", "bgpdd-build", "--phase", "Phase 1",
+                "--event", "delegation", "--unit", "M1", "--agent", "mason",
+                "--model", "opus", "--tokens-unavailable",
+                "test harness: not under test"], 1)
+            self.assertEqual(sorted(exits), [0] + [1] * (procs - 1))
+            self.assertEqual(len(self._lines()), 1)
+
+    CONCURRENT_WORKER = (
+        "import sys, time\n"
+        "from pathlib import Path\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "import record_run as rr\n"
+        "ready, go, n = sys.argv[2], sys.argv[3], int(sys.argv[4])\n"
+        "argv = ['--log'] + sys.argv[5:]\n"
+        "Path(ready).touch()\n"
+        "deadline = time.monotonic() + 120\n"
+        "while not Path(go).exists() and time.monotonic() < deadline:\n"
+        "    time.sleep(0.001)\n"
+        "code = 0\n"
+        "for _ in range(n):\n"
+        "    code = max(code, rr.main(argv))\n"
+        "sys.exit(code)\n")
+
+    suite =unittest.defaultTestLoader.loadTestsFromTestCase(RecordRunTests)
     result = unittest.TextTestRunner(verbosity=1).run(suite)
     return 0 if result.wasSuccessful() else 1
 

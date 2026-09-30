@@ -715,7 +715,7 @@ def run_self_test():
             self.assertEqual(report["records"], procs * per_proc)
             self.assertTrue(report["pass"], report["problem"])
 
-        # ---- drift guard across the family's nineteen copies -----------
+        # ---- drift guard across every copy of the chain helper ---------
 
         # Every gate that appends to a shared gates.jsonl. A missing comma
         # here is not a typo with no effect: `"update_state.py"` and
