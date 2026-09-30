@@ -1472,6 +1472,99 @@ def ledger_prev_hash(ledger_path):
     return "genesis" if last is None else ledger_line_hash(last)
 
 
+class LedgerLock:
+    """Exclusive cross-process lock held around ONE ledger append.
+
+    Without it two concurrent appenders read the same last line and both
+    write the same `prev`: a chain break nobody forged (and, on Windows, a
+    record overwritten). The lock is taken on the ledger file itself, so
+    there is no sidecar file and no stale lock to clean up -- the OS drops
+    it if the holder dies: `fcntl.flock` on POSIX; on Windows a
+    `msvcrt.locking` byte far past EOF (mandatory there, so it sits where
+    no read or append ever reaches). Best-effort: a wait longer than
+    WAIT_SECONDS, or any lock error, warns on stderr and the append goes
+    ahead unlocked: it never raises, never skips its own append and never
+    changes an exit code, though an unlocked append may still collide
+    with a concurrent one.
+    """
+
+    WAIT_SECONDS = 10.0
+    POLL_SECONDS = 0.005
+    WINDOWS_LOCK_OFFSET = 1 << 62
+
+    def __init__(self, ledger_path):
+        self.ledger_path = ledger_path
+        self.fh = None
+
+    def _lock_call(self, unlock):
+        """One non-blocking lock (or unlock) attempt; OSError when busy."""
+        if sys.platform == "win32":
+            import msvcrt
+            import os
+            os.lseek(self.fh.fileno(), self.WINDOWS_LOCK_OFFSET, os.SEEK_SET)
+            msvcrt.locking(self.fh.fileno(),
+                           msvcrt.LK_UNLCK if unlock else msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN if unlock
+                        else fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _acquired(self):
+        """True once locked, False while another holder has it."""
+        import errno
+        try:
+            self._lock_call(unlock=False)
+            return True
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK):
+                return False
+            raise
+
+    def __enter__(self):
+        import time
+        deadline = time.monotonic() + self.WAIT_SECONDS
+        try:
+            self.fh = open(self.ledger_path, "ab")
+            while not self._acquired():
+                if time.monotonic() >= deadline:
+                    raise OSError("lock still held after {0}s".format(
+                        self.WAIT_SECONDS))
+                time.sleep(self.POLL_SECONDS)
+        except (OSError, ImportError, ValueError) as exc:
+            if self.fh is not None:
+                self.fh.close()
+                self.fh = None
+            print("Warning: appending to ledger {0} without a lock: "
+                  "{1}".format(self.ledger_path, exc), file=sys.stderr)
+        return self
+
+    def __exit__(self, *exc_info):
+        if self.fh is not None:
+            try:
+                self._lock_call(unlock=True)
+            except OSError as exc:
+                print("Warning: could not release the lock on ledger "
+                      "{0}: {1}".format(self.ledger_path, exc),
+                      file=sys.stderr)
+            self.fh.close()
+            self.fh = None
+        return False
+
+
+def ledger_append(p, record):
+    """Chain `record` onto ledger `p` and append it as one line, locked.
+
+    `prev` is read and the line written, closed and so flushed, inside one
+    LedgerLock. An OSError from the write itself propagates: each caller
+    keeps its own best-effort handling of a failed append.
+    """
+    with LedgerLock(p):
+        record["prev"] = ledger_prev_hash(p)
+        record["self"] = ledger_self_hash(record)
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+
+
 def ledger_self_hash(record):
     """sha256 of the record serialized canonically WITHOUT its `self` field."""
     body = {k: v for k, v in record.items() if k != "self"}
@@ -1490,10 +1583,7 @@ def append_ledger(path, record):
         p = Path(path)
         if str(p.parent) not in ("", "."):
             p.parent.mkdir(parents=True, exist_ok=True)
-        record["prev"] = ledger_prev_hash(p)
-        record["self"] = ledger_self_hash(record)
-        with open(p, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record) + "\n")
+        ledger_append(p, record)
         return None
     except OSError as exc:
         return f"cannot append to --ledger {path}: {exc}"
