@@ -27,3 +27,13 @@ The practical consequence for anyone adding a gate to this family: a new script 
 ## Who re-checks the chain, and when
 
 The gates that read a verdict out of a ledger verify the chain **before** looking at any verdict, and fail with their own chain-broken code. The short-circuit is deliberate: naming which gate recorded a PASS is pointless when the file it was read from is not trustworthy. A PASS read out of a tampered ledger is not a weaker PASS; it is no PASS.
+
+## 2026-09-30 — appends are locked
+
+Two concurrent `run_quiet.py --capture` calls broke a real ledger at line 300: both read the same last line, both wrote the same `prev`. On Windows the race was worse than a false chain break — overlapping appends overwrote each other, so records were lost too (a 6-process × 40-record repro kept 216–230 of 240 lines and broke the chain in 10/10 trials).
+
+Every gate now appends through `ledger_append(p, record)`, which lives in the shared, byte-identical helper block beside `ledger_prev_hash`. It holds `LedgerLock` from reading the last line through the closed, flushed write. The lock is an OS lock on the ledger file itself — `fcntl.flock` on POSIX, a `msvcrt.locking` byte far past EOF on Windows, where the lock is mandatory and so has to sit where no read or append reaches. That was chosen over an `O_CREAT|O_EXCL` sidecar file because the OS releases the lock when its holder dies: a killed gate leaves no stale lock file that stalls every later append. The wait is bounded (10 s, 5 ms polls). A timeout or any lock error prints a stderr warning and the append goes ahead unlocked, so the fallback never raises, never skips its own append and never changes an exit code; an unlocked append may still collide with a concurrent one. The 5 s first draft starved under the 240-append burst on a loaded host, which is why the bound is 10 s.
+
+The drift guards follow the call site. The append line now lives inside the helper block, so detection and the chaining check read the source **outside** that block. A gate must call `ledger_append(p, record)` there, and a raw `open(p, "a", …)` or a hand-set `prev` outside it fails. `test_concurrent_appenders_produce_an_intact_chain` runs four processes × 50 records against one ledger. With the lock removed it failed 5/5 runs (120 of 200 records survived).
+
+`record_run.py` is deliberately left out. Its run-log append never reads the last line, so it does not share the `prev` race. It does share the Windows overlapping-append exposure. Six processes × 40 records through `append_record` kept 175–186 of 240 intact lines in 5/5 trials. That is a separate, open item.
