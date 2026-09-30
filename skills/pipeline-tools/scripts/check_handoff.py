@@ -268,8 +268,16 @@ TAG_RE = re.compile(r"</?([A-Za-z_][\w-]*)\s*>")
 # `path::symbol`, split on the LAST `::` so a Windows drive letter or a
 # namespace-qualified path cannot be mistaken for the separator.
 CONSUMERS_LINE_RE = re.compile(r"^(?P<path>\S.*?)::(?P<symbol>[^\s:/\\]+)$")
-# `<changed_symbols>`'s only non-entry form: `none: <reason>`.
-CHANGED_SYMBOLS_NONE_RE = re.compile(r"(?i)^none:(?P<reason>.*)$")
+# The only non-entry form of `<changed_symbols>`, and of `<changed_files>`
+# for CHANGED_FILES_NONE_PERSONAS: `none: <reason>`.
+NONE_FORM_RE = re.compile(r"(?i)^none:(?P<reason>.*)$")
+# Personas whose `<changed_files>` may be `none: <reason>` -- a run that
+# changed no repo file and whose output is its <artifact> (Quinn's
+# capture-only RED/GREEN under the gitignored .docs/ tree). Deliberately
+# tighter than `<changed_symbols>`' none:, which any persona may use
+# (convention #8): every other persona's run exists to change files, so an
+# empty claim there is a finding, changed_files_grammar.
+CHANGED_FILES_NONE_PERSONAS = ("quinn",)
 # Extension -> diff driver, for the `<changed_symbols>` diff's temporary
 # core.attributesFile. Every driver named here is one git ships built in
 # (gitattributes(5), "Defining a custom hunk-header"); git has no JavaScript
@@ -757,6 +765,37 @@ def check_consumers(values):
     return bad
 
 
+def element_lines(values):
+    """Non-blank lines of an element, list marker then backticks stripped."""
+    lines = []
+    for value in values:
+        for line in value.splitlines():
+            item = re.sub(r"^[-*+]\s+", "", line.strip()).strip()
+            item = item.strip("`").strip()
+            if item:
+                lines.append(item)
+    return lines
+
+
+def parse_none_form(lines):
+    """(present, reason, bad) for the `none: <reason>` form over `lines`.
+
+    `present` is True when any line is a none: line. The form is valid only
+    as the element's single line with a non-empty reason; `reason` is set
+    only then, otherwise `bad` holds (line, why) pairs.
+    """
+    none_lines = [l for l in lines if NONE_FORM_RE.match(l)]
+    if not none_lines:
+        return False, None, []
+    if len(lines) > 1:
+        return True, None, [(l, "none: must be the element's only line")
+                            for l in none_lines]
+    reason = NONE_FORM_RE.match(none_lines[0]).group("reason")
+    if not reason.strip():
+        return True, None, [(none_lines[0], "none: carries no reason")]
+    return True, reason.strip(), []
+
+
 def parse_changed_symbols(values):
     """(entries, none_reason, bad) for a <changed_symbols> element.
 
@@ -767,22 +806,10 @@ def parse_changed_symbols(values):
     `bad` holds (line, why) pairs; `none_reason` is set only when the none
     form passed grammar.
     """
-    lines = []
-    for value in values:
-        for line in value.splitlines():
-            item = re.sub(r"^[-*+]\s+", "", line.strip()).strip()
-            item = item.strip("`").strip()
-            if item:
-                lines.append(item)
-    none_lines = [l for l in lines if CHANGED_SYMBOLS_NONE_RE.match(l)]
-    if none_lines:
-        if len(lines) > 1:
-            return [], None, [(l, "none: must be the element's only line")
-                              for l in none_lines]
-        reason = CHANGED_SYMBOLS_NONE_RE.match(none_lines[0]).group("reason")
-        if not reason.strip():
-            return [], None, [(none_lines[0], "none: carries no reason")]
-        return [], reason.strip(), []
+    lines = element_lines(values)
+    present, reason, bad = parse_none_form(lines)
+    if present:
+        return [], reason, bad
     entries, bad = [], []
     for item in lines:
         match = CONSUMERS_LINE_RE.match(item)
@@ -1008,6 +1035,34 @@ def check_honesty(elements):
     return problems
 
 
+def changed_files_none_form(values, persona_key, report, finding):
+    """True when <changed_files> uses the none: form, which skips path checks.
+
+    Valid only as the element's single line with a reason, and only for
+    CHANGED_FILES_NONE_PERSONAS; it claims the empty set, so --since's subset
+    check passes trivially. Any other use is changed_files_grammar. A none:
+    fragment after a comma is caught too, so `a.py, none: x` is not two paths.
+    """
+    lines = element_lines(values)
+    present, reason, bad = parse_none_form(lines)
+    if not present:
+        fragments = [i for i in split_paths(values) if NONE_FORM_RE.match(i)]
+        if not fragments:
+            return False
+        bad = [(i, "none: must be the element's only line") for i in fragments]
+    elif not bad and persona_key not in CHANGED_FILES_NONE_PERSONAS:
+        bad = [(lines[0], "none: is sanctioned only for "
+                + "/".join(CHANGED_FILES_NONE_PERSONAS)
+                + "; every other persona names the files it changed")]
+    for line, why in bad:
+        finding("changed_files_grammar",
+                f"<changed_files> line {why}: {line} -- repo paths, or exactly "
+                "one `none: <reason>` for a capture-only run", line=line)
+    if not bad:
+        report["changed_files_none_reason"] = reason
+    return True
+
+
 def _as_root_list(value):
     """Normalize a single path or an iterable of paths into a list.
 
@@ -1065,6 +1120,7 @@ def build_report(text, persona, repo, since=None, fix_round=False,
         "warnings": [],
         "status": None,
         "changed_files": [],
+        "changed_files_none_reason": None,
         "changed_symbols": [],
         "changed_symbols_none_reason": None,
         "artifacts": [],
@@ -1163,6 +1219,9 @@ def build_report(text, persona, repo, since=None, fix_round=False,
                 unique_roots.append(r)
         roots = unique_roots
         roots_label = ", ".join(str(r) for r in roots)
+        if name == "changed_files" and changed_files_none_form(
+                elements[name], persona_key, report, finding):
+            continue
         for raw in split_paths(elements[name]):
             state, rel, matched_root, resolved_path = path_status(roots, raw)
             declared.setdefault(name, []).append(rel)
@@ -1365,32 +1424,34 @@ Reads:
                   <category>: environment, credentials, dependency, spec,
                   defect. COMPLETE is exempt; absent is element_missing only.
       <consumers> lines in path::symbol grammar.
+      <changed_files>  paths, or (quinn only, capture-only; convention #8)
+                  one line none: <non-empty reason> = the empty set.
       <changed_symbols>  one path::Name per line, or one line none:
                   <non-empty reason>. path: one file, read literally, never
-                  a directory. Name: the innermost edited symbol, bare and
-                  unqualified (a method, not its unchanged class).
+                  a directory. Name: the innermost edited symbol, bare (a
+                  method, not its unchanged class).
     Honesty: upper-case PASS/GREEN beside NOT VERIFIED/BLOCKED in the
     SAME element; BLOCKED beside <blockers>None</blockers>.
   Cited files  every <changed_files>/<artifact>/<changed_skills> path must
-    exist inside a --repo; <artifact>/<changed_skills>
-    also resolve under a --docs-root, its parent, and the cwd.
+    exist inside a --repo; the latter two also under a --docs-root, its
+    parent, the cwd.
   --since  <changed_files> must be a subset of git diff --name-only <ref>
     plus untracked. Each <changed_symbols> Name must appear as a whole word
     on a +, - or context line (@@ text only for open scopes) of git diff -M -W
     <ref> -- <path> under git's built-in drivers (untracked = all-added;
     none: unchecked; convention #8); other names are invented.
-  Scaffolding sweep  on COMPLETE, each TEXT file in
-    <artifact>/<changed_skills> is read for base-persona's placeholder marker
-    (an underscore joined to TODO), a TODO-colon-pending phrase, an HTML
-    comment opening TODO or skeleton, and any line EXPLAINING the markers.
-    Inline code is not a hit; a fence IS. PARTIAL/BLOCKED and
-    <changed_files> are exempt.
+  Scaffolding sweep  on COMPLETE, TEXT files in <artifact>/<changed_skills>
+    are read for base-persona's placeholder (underscore joined to TODO),
+    TODO-colon-pending, an HTML comment opening TODO/skeleton, and lines
+    EXPLAINING markers. Inline code is no hit; a fence IS. PARTIAL/BLOCKED,
+    <changed_files> exempt.
 
 Problem codes:
   handoff_missing            no unfenced <handoff> block
   element_missing            required element absent or empty
   path_missing               cited path absent or outside every root
   changed_files_not_in_diff  --since: a file the diff lacks
+  changed_files_grammar      none: outside quinn, empty or mixed
   status_invalid             <status> outside the enum
   consumers_grammar          <consumers> line not path::symbol
   changed_symbols_grammar    bad path::Name, empty or mixed none:
@@ -1402,22 +1463,22 @@ Problem codes:
 JSON keys:
   result, persona, since, fix_round, advisory, advisory_waived_elements,
   required_elements, present_elements, status, changed_files,
-  changed_symbols ([{path, name}]), changed_symbols_none_reason, artifacts,
-  changed_skills, scaffolding_scanned, allow_scaffolding, scaffolding_waived,
-  findings ({code, detail, ...}; scaffolding adds path, line, marker,
-  text), warnings, error. Ledger extras: advisory;
-  changed_symbols_none_reason; allow_scaffolding_reason plus waived
-  {path, line, marker}.
+  changed_files_none_reason, changed_symbols ([{path, name}]),
+  changed_symbols_none_reason, artifacts, changed_skills,
+  scaffolding_scanned, allow_scaffolding, scaffolding_waived, findings
+  ({code, detail, ...}; scaffolding adds path, line, marker, text),
+  warnings, error. Ledger extras: advisory; both *_none_reason keys;
+  allow_scaffolding_reason plus waived {path, line, marker}.
 
 Exit codes:
   0  PASS
   1  at least one finding
-  2  usage, an unreadable handoff or untracked file, an unknown persona, a
-     --repo/--docs-root not a directory, a failing --since git call (an
-     unresolvable ref) or temp file, or a blank --allow-scaffolding reason
+  2  usage; unreadable handoff or untracked file; unknown persona;
+     --repo/--docs-root not a directory; failing --since git call
+     (unresolvable ref) or temp file; blank --allow-scaffolding reason
 
 Self-test:
-  python check_handoff.py --self-test   (99 cases)
+  python check_handoff.py --self-test   (104 cases)
 """
 
 
@@ -1448,8 +1509,7 @@ def main(argv):
     parser.add_argument("--since", help="git ref: <changed_files> must be a "
                                         "subset of what git reports changed "
                                         "since it. Optional here, REQUIRED by "
-                                        "every pipeline handoff step: it is "
-                                        "the only term git can contradict")
+                                        "every pipeline handoff step")
     parser.add_argument("--advisory", action="store_true",
                         help="the brief asked for a recommendation, not a "
                              "written artifact (Forge's propose handoff, "
@@ -1540,6 +1600,8 @@ def main(argv):
         print(json.dumps({"result": "ERROR", "error": str(exc)}))
         return finish(2, "ERROR")
 
+    if report.get("changed_files_none_reason"):
+        extra["changed_files_none_reason"] = report["changed_files_none_reason"]
     if report.get("changed_symbols_none_reason"):
         extra["changed_symbols_none_reason"] = report["changed_symbols_none_reason"]
     if report.get("allow_scaffolding"):
@@ -2715,6 +2777,63 @@ def run_self_test():
             (self.dir / "src" / "a.py").write_text("edited", encoding="utf-8")
             r, bad = self.symbol_codes("none: config only", ref)
             self.assertEqual(r["result"], "PASS", r["findings"])
+
+        # --- <changed_files>none: (handoff-capture-only) -----------------
+        def _files_none(self, changed):
+            """Every element any persona requires, so only <changed_files>
+            decides the verdict."""
+            return ("<handoff><status>COMPLETE</status>"
+                    f"<changed_files>{changed}</changed_files>"
+                    "<changed_symbols>none: fixture</changed_symbols>"
+                    "<artifact>docs.md</artifact>"
+                    "<blockers>None</blockers></handoff>")
+
+        def test_quinn_capture_only_none_passes_with_and_without_since(self):
+            ref = self.make_repo()
+            ledger = self.dir / "gates.jsonl"
+            handoff = self.dir / "h.md"
+            handoff.write_text(self._files_none("none: capture-only RED"),
+                               encoding="utf-8")
+            base = ["--handoff", str(handoff), "--persona", "quinn",
+                    "--repo", str(self.dir), "--ledger", str(ledger)]
+            self.assertEqual(main(base + ["--since", ref]), 0)
+            self.assertEqual(main(base), 0)
+            for line in ledger.read_text(encoding="utf-8").splitlines():
+                self.assertEqual(json.loads(line)["changed_files_none_reason"],
+                                 "capture-only RED")
+            r = build_report(self._files_none("none: capture-only RED"),
+                             "quinn", self.dir, since=ref)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertEqual(r["changed_files"], [])
+            self.assertEqual(r["changed_files_none_reason"], "capture-only RED")
+
+        def test_changed_files_none_is_refused_for_every_other_persona(self):
+            for persona in sorted(set(PERSONA_ELEMENTS) - {"quinn"}):
+                r = build_report(self._files_none("none: nothing changed"),
+                                 persona, self.dir)
+                self.assertIn("changed_files_grammar", self.codes(r), persona)
+                self.assertIsNone(r["changed_files_none_reason"], persona)
+            r = build_report(self._files_none("none: nothing changed"),
+                             "mason", self.dir)
+            self.assertEqual(self.codes(r), ["changed_files_grammar"])
+            self.assertIn("sanctioned only for quinn", r["findings"][0]["detail"])
+
+        def test_changed_files_none_with_a_blank_reason_fails(self):
+            r = build_report(self._files_none("none:   "), "quinn", self.dir)
+            self.assertEqual(self.codes(r), ["changed_files_grammar"])
+            self.assertIsNone(r["changed_files_none_reason"])
+
+        def test_changed_files_none_mixed_with_a_path_fails(self):
+            for changed in ("src/a.py\nnone: also nothing",
+                            "src/a.py, none: also nothing"):
+                r = build_report(self._files_none(changed), "quinn", self.dir)
+                self.assertEqual(self.codes(r), ["changed_files_grammar"],
+                                 changed)
+                self.assertIsNone(r["changed_files_none_reason"], changed)
+
+        def test_bare_none_in_changed_files_is_still_a_missing_path(self):
+            r = build_report(self._files_none("None"), "quinn", self.dir)
+            self.assertEqual(self.codes(r), ["path_missing"])
 
         def test_every_persona_file_has_a_table_row(self):
             """The table above and agents/ must not drift apart."""
