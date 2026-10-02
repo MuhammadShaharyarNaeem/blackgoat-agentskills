@@ -17,7 +17,7 @@ The **Baseline** applies to every deploy, including deploys to no named cloud at
 
 - Pin image and runtime versions explicitly — never `latest`, never floating major tags.
 - Every service runs under a least-privilege identity scoped to exactly what it uses. Never grant broad access "to be safe".
-- Secrets live ONLY in the platform's managed vault. No committed `.env` files, no secrets in pipeline variables or app config.
+- Secrets live ONLY in the platform's managed vault. No committed `.env` files, no secrets in pipeline variables or app config. Non-secret configuration lives in app config or environment variables. An environment variable may carry a secret only when the platform injects it from the vault (a Key Vault reference, an ECS `secrets` entry) — never a value typed in by hand. This bullet is the squad's single owner of secret placement; other skills cite it.
 - Staged deploy: staging → production, with an explicit gate (manual approval or automated verification) between them. No direct-to-production.
 - Health and readiness endpoints exist and are wired into the platform's probes/health checks — a deploy that can't prove liveness doesn't roll.
 - Logs are structured JSON shipped to the platform aggregator; no unstructured console dumps in production.
@@ -113,7 +113,7 @@ Before marking work complete:
 
 ### Escalate When
 
-- The target platform is ambiguous or the blueprint names neither AWS nor Azure → report to the Orchestrator; do not guess.
+- The target platform is ambiguous (the blueprint names no deploy target, or names two) → report to the Orchestrator; do not guess. A target that is known but is no named cloud (a single VM, a PaaS) is not ambiguous: apply the Baseline alone.
 - A requested permission exceeds least-privilege (wildcards, subscription-wide RBAC, cross-service admin) → report to the Orchestrator; do not grant it.
 - A secret already exists in committed history or a required vault is missing → report to the Orchestrator before deploying.
 

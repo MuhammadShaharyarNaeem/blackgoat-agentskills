@@ -5,7 +5,7 @@ description: "Provides the UI design execution contract: a committed visual dire
 
 # UI Design Patterns
 
-Visual craft held to engineering rigor. Direction is committed before code; every rule below is checked on the built result, not the intention. **The brief wins**: a pinned aesthetic, palette, font, or era in the requirements or brand guidelines overrides anything here — redirecting a clear brief toward your own taste is failure.
+Visual craft held to engineering rigor. Direction is committed before code; every rule below is checked on the built result, not the intention. **Precedence: accessibility floor > the brief > the defaults here.** A pinned aesthetic, palette, font, or era in the requirements or brand guidelines overrides every default here — redirecting a clear brief toward your own taste is failure — but never the accessibility floor (§ Escalate When).
 
 ## Worker Execution Contract
 
@@ -50,7 +50,7 @@ Pick the mode per surface (not per product); design for the visitor's success th
 
 Defaults, not bans — the brief's own words can earn any. Reaching for one on a free axis means you were not deciding; rewrite the element rather than soften it.
 
-- Same-size icon+heading+text card grids as page structure; nested cards (always wrong); the hero-metric template (big number, small label, stats, accent).
+- Same-size icon+heading+text card grids as page structure; nested cards; the hero-metric template (big number, small label, stats, accent).
 - A tracked uppercase eyebrow over every section; section numbers (01/02/03) when order carries no information; a modal for a task needing neither interruption nor protected focus.
 - Gradient text (emphasis comes from weight or size); glass/blur as decoration; colored side-borders >1px on cards and alerts; monospace as a "technical" costume rather than for code/data.
 - Light-or-dark picked by category habit — pick it from the real usage scene (who, where, what ambient light).
@@ -81,7 +81,7 @@ Run this as each component or view lands, and again before marking the milestone
 
 A review delegation covering UI work runs the design-critique axis — procedure in [references/design-critique.md](references/design-critique.md). Audit only; rewrites route to the milestone's builder (Nova for [UI] work) via the Orchestrator.
 
-**A design critique without rendered output does not pass rendered properties.** The axis is defined on the built result, so its evidence is a screenshot or a computed-style read from a real browser. No browser tooling, app unbuilt, or it will not boot → every check on a computed or rendered property is reported `NOT VERIFIED — no rendered output` and raised as a blocker on the review. NEVER quietly marked satisfied. Which properties, and the failure narrative behind this rule: `references/design-critique.md` §1 and §5.
+**A design critique without rendered output does not pass rendered properties.** The axis is defined on the built result, so its evidence is a screenshot or a computed-style read from a real browser. No browser tooling, app unbuilt, or it will not boot → every check on a computed or rendered property is reported `NOT VERIFIED — source inspection only; no rendered output` (a substitution, labelled per `{PLUGIN_ROOT}/agent-squad/base-persona.md` § Evidence Integrity — not `BLOCKED`, which is reserved for a check that never ran) and raised as a blocker on the review. NEVER quietly marked satisfied. Which properties, and the failure narrative behind this rule: `references/design-critique.md` §1 and §5.
 
 Source reading is a strictly one-directional instrument here: it can **fail** a check but never **pass** one. Report every source-visible defect — a hardcoded literal where the design system mandates a token, a missing `:focus-visible` rule, an absent empty state. NEVER pass a rendered property from a source read: a correct token reference still renders wrong if the token is undefined, overridden, or the stylesheet never loads.
 

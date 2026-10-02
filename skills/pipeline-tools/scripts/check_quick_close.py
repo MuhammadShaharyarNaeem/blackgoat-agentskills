@@ -11,6 +11,12 @@ change is still small enough for a lane with no plan behind it.
 
 Given the note, the capture and the declared file list, it verifies, in order:
 
+  * `worktree_mismatch` -- the note, capture and ledger live in the SAME git
+    worktree as `--repo` (resolved to its top level, reported as
+    `repo_toplevel`). A quick root in a sibling worktree of the same
+    repository means this gate would judge one checkout's lane and commit
+    into another -- the parallel-worktree mistake. An artifact in no
+    repository, or another repository, is not a mismatch.
   * `note_missing` / `note_incomplete` -- the note exists and carries three
     labelled, non-placeholder lines: What, Where, How verified
   * `note_where_mismatch` -- the Where line's path set EQUALS the declared
@@ -719,6 +725,72 @@ def perform_commit(changed_files, message, repo):
     run_git(["commit", "-m", message], repo)
 
 
+# --- worktree identity (shared verbatim with check_commit_gate.py and
+# check_batch_close.py): which worktree a path lives in, and the mismatch
+# rule -- see `worktree_mismatch` in the help.
+
+def git_worktree_of(path):
+    """(toplevel, common_dir) of the worktree holding `path`, or (None, None).
+
+    `path` need not exist: its nearest existing ancestor is asked. Any git
+    failure reads as (None, None) -- unknown, never a mismatch."""
+    d = Path(path).absolute()
+    while not d.exists() and d != d.parent:
+        d = d.parent
+    if d.is_file():
+        d = d.parent
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(d), "rev-parse", "--show-toplevel",
+             "--git-common-dir"],
+            capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None, None
+    lines = proc.stdout.strip().splitlines() if proc.returncode == 0 else []
+    if len(lines) < 2:
+        return None, None
+    top = os.path.normpath(lines[0])
+    common = os.path.normpath(os.path.join(str(d), lines[1]))
+    return top, common
+
+
+def _same_path(a, b):
+    return (os.path.normcase(os.path.realpath(a))
+            == os.path.normcase(os.path.realpath(b)))
+
+
+def check_worktree_match(repo, artifacts):
+    """(repo_toplevel, [{flag, path, worktree}]) for every lane artifact that
+    sits in ANOTHER worktree of the SAME repository as `repo`.
+
+    Same repository = same git common dir. An artifact in no repository, or
+    in a different repository (a workspace-root `.docs/` above `--repo`), is
+    not a mismatch: that layout is sanctioned, and only a sibling worktree of
+    the same repo is the wrong-checkout mistake this catches."""
+    repo_top, repo_common = git_worktree_of(repo)
+    mismatches = []
+    if repo_top is None:
+        return None, mismatches
+    for flag, path in artifacts:
+        if not path:
+            continue
+        top, common = git_worktree_of(path)
+        if top is None or not _same_path(common, repo_common):
+            continue
+        if not _same_path(top, repo_top):
+            mismatches.append({"flag": flag, "path": str(path),
+                               "worktree": top})
+    return repo_top, mismatches
+
+
+def worktree_mismatch_message(repo_top, m):
+    return ("{0} {1} lives in worktree {2}, but --repo resolves to worktree "
+            "{3} -- this gate would judge one checkout's lane and commit "
+            "into another. Re-run with --repo pointing at the lane's own "
+            "worktree, or the lane artifacts of the checkout you are "
+            "committing".format(m["flag"], m["path"], m["worktree"], repo_top))
+
+
 def parse_porcelain_line(line):
     """The path a `git status --porcelain` line refers to."""
     path = line[3:]
@@ -1069,6 +1141,8 @@ def build_report(args):
         "note": args.note,
         "capture": args.capture,
         "repo": repo,
+        "repo_toplevel": None,
+        "worktree_mismatches": [],
         "milestone": args.milestone,
         "note_fields": None,
         "note_where_paths": [],
@@ -1103,6 +1177,15 @@ def build_report(args):
         report["problem_codes"].append(code)
 
     declared = [normalize_repo_path(f, repo) for f in args.changed_files]
+
+    # --- 0. the lane and --repo are the same worktree ----------------------
+    report["repo_toplevel"], mismatches = check_worktree_match(
+        repo, [("--note", args.note), ("--capture", args.capture),
+               ("--ledger", args.ledger)])
+    report["worktree_mismatches"] = mismatches
+    for m in mismatches:
+        fail("worktree_mismatch",
+             worktree_mismatch_message(report["repo_toplevel"], m))
 
     # --- 1/2. the note -----------------------------------------------------
     fields, note_problems = parse_note(args.note)
@@ -1349,10 +1432,9 @@ Reads:
     heading, fences blanked) carries "- Exit code: <N>" and
     "- Captured: <ts>", agreeing with the sidecar's exit_code and finished.
     Its capture_sha256 must still match the capture's bytes, and
-    exit_code must be 0. Its recorded child argv is compared
-    with How verified on TOKEN LISTS, any of three tokenizations matching:
-    shlex.split(posix=True); the same with backslashes doubled; a raw
-    whitespace split. Freshness: the sidecar's finished (whole seconds) must
+    exit_code must be 0. Its recorded child argv must equal How verified
+    as TOKEN LISTS under any of three tokenizations (module docstring).
+    Freshness: the sidecar's finished (whole seconds) must
     be >= each changed file's mtime floored to the second.
   --changed-files, --repo  a relative entry resolves against --repo, not
     cwd. git status porcelain supplies the undeclared-change and frozen
@@ -1368,6 +1450,8 @@ Reads:
 
 Problem codes:
   In evaluation order; all are reported, none short-circuits.
+  worktree_mismatch               --note/--capture/--ledger sit in ANOTHER
+                                  worktree of --repo's repository
   note_missing                    the --note file does not exist
   note_incomplete                 a required note line is absent or placeholder
   note_where_mismatch             Where's paths are not the --changed-files set
@@ -1392,7 +1476,8 @@ Problem codes:
   problems entries read "<code>: <prose>".
 
 JSON keys:
-  note, capture, repo, milestone, note_fields, note_where_paths,
+  note, capture, repo, repo_toplevel,
+  worktree_mismatches, milestone, note_fields, note_where_paths,
   changed_files, changed_file_count, max_changed_files, size_ok,
   capture_sidecar, capture_body_agrees, capture_argv, capture_command_match,
   capture_exit_code, capture_finished,
@@ -1408,7 +1493,7 @@ Exit codes:
      failure
 
 Self-test:
-  python check_quick_close.py --self-test   (63 cases)
+  python check_quick_close.py --self-test   (65 cases)
 """
 
 
@@ -1681,6 +1766,25 @@ def run_self_test():
             self.assertEqual(r["changed_file_count"], 1)
             self.assertTrue(r["size_ok"])
             self.assertTrue(r["fresh"])
+
+        def test_repo_toplevel_reported_and_same_worktree_passes(self):
+            note, capture, changed = self._happy()
+            r = self._run(note, capture, changed)
+            self.assertEqual(r["result"], "PASS", r["problems"])
+            self.assertTrue(_same_path(r["repo_toplevel"], str(self.repo)))
+            self.assertEqual(r["worktree_mismatches"], [])
+
+        def test_lane_in_another_worktree_of_the_repo_fails(self):
+            note, capture, changed = self._happy()
+            wt = self.dir / "wt"
+            self._git("worktree", "add", "-q", str(wt), "-b", "wt")
+            r = self._run(note, capture, changed,
+                          extra=["--repo", str(wt)])
+            self.assertEqual(r["result"], "FAIL")
+            self.assertIn("worktree_mismatch", r["problem_codes"])
+            self.assertTrue(_same_path(r["repo_toplevel"], str(wt)))
+            self.assertEqual({m["flag"] for m in r["worktree_mismatches"]},
+                             {"--note", "--capture"})
 
         def test_docs_artifacts_are_never_undeclared(self):
             """The note, capture and ledger live under .docs/ by design."""

@@ -1,17 +1,21 @@
 # Data Privacy Checklist
 
-Depth for `security-and-hardening/SKILL.md`'s Data privacy pointer. Cipher runs this as
-part of the standing Security Report (`agents/cipher.md` §4) — every line follows that
-section's check-line grammar exactly:
+Depth for `security-and-hardening/SKILL.md`'s Data privacy pointer. **Ward owns this
+checklist** and runs it inside the privacy report
+(`{PLUGIN_ROOT}/privacy-engineering-patterns/SKILL.md` § Check lines in the privacy report),
+capturing under `evidence/privacy/`. **Cipher runs only the rows tagged `[security]`** —
+credential handling, which is secret hygiene rather than personal data — inside his Security
+Report, capturing those under `evidence/security/`. Every line follows the one check-line
+grammar both reports share:
 
 ```
-- <check name>: PASS|FAIL|BLOCKED|NOT RUN — `<command executed>` — exit <N> — <terse counts/result> — capture: evidence/security/<file>.md
+- <check name>: PASS|FAIL|BLOCKED|NOT RUN — `<command executed>` — exit <N> — <terse counts/result> — capture: evidence/privacy/<file>.md
 ```
 
 `capture:` is required on `PASS`/`FAIL` and must record the same exit code the line claims;
 `BLOCKED`/`NOT RUN` carry their reason instead and cite nothing. A `PASS`/`FAIL` line with no
-capture is refused by the gate (`check_uncaptured`) — see `pipeline-tools/SKILL.md`
-(`check_agent_report.py`) for the full grammar this checklist inherits rather than restates.
+capture is refused by the gate (`check_uncaptured`) — `check_agent_report.py --help` is the
+contract of record for the full grammar this checklist inherits rather than restates.
 
 ## PII classes
 
@@ -25,7 +29,12 @@ contact method) — audit it under each class it belongs to.
 - **Financial** — card number, bank account/routing number, billing address, transaction
   history.
 - **Health** — any medical, diagnostic, or health-insurance data (PHI where regulated).
-- **Credentials** — password, API key, session token, MFA secret, security-question answer.
+- **Credentials** `[security]` — password, API key, session token, MFA secret,
+  security-question answer.
+- **Quasi-identifiers** — fields that identify no one alone but re-identify in combination
+  (zip code, birth date, gender). Classify them, never wave them through: a
+  zip/birthdate/gender trio re-identifies most people, so "we removed the name" is never the
+  label *anonymized*.
 
 ## Where each class may live
 
@@ -37,9 +46,7 @@ placements are non-negotiable regardless of store:
 - **Never in logs** — no PII class is written to application, access, or error logs in
   plaintext. Structured loggers must redact by field name (see Log redaction below).
 - **Never in URLs** — no PII class appears in a URL path or query string (proxies, browser
-  history, and access logs all retain URLs verbatim; see `security-and-hardening/SKILL.md`'s
-  own privacy rule under Escalate/Ask First for the related "never place personal data in
-  URL parameters" boundary).
+  history, and access logs all retain URLs verbatim).
 - **Never in analytics events** — no PII class is sent to a third-party analytics or
   product-metrics pipeline as an event property; use the internal user ID only if the
   analytics vendor is itself a reviewed third-party flow (see Third-party data flows below).
@@ -47,7 +54,7 @@ placements are non-negotiable regardless of store:
 Check line:
 
 ```
-- PII placement audit: PASS|FAIL — `<grep/scanner command over logs, event schemas, and route definitions>` — exit N — <count of forbidden placements found> — capture: evidence/security/pii-placement.md
+- PII placement audit: PASS|FAIL — `<grep/scanner command over logs, event schemas, and route definitions>` — exit N — <count of forbidden placements found> — capture: evidence/privacy/pii-placement.md
 ```
 
 ## Retention rule stated per store
@@ -60,7 +67,7 @@ PII is a finding (`Important`, or `Critical` if the class is Financial/Health/Cr
 Check line:
 
 ```
-- Retention rule coverage: PASS|FAIL — `<command listing stores vs. documented retention>` — exit N — <N of M stores have a stated rule> — capture: evidence/security/retention-rules.md
+- Retention rule coverage: PASS|FAIL — `<command listing stores vs. documented retention>` — exit N — <N of M stores have a stated rule> — capture: evidence/privacy/retention-rules.md
 ```
 
 ## Deletion path exists and is tested
@@ -73,7 +80,7 @@ code, never exercised" is `FAIL`, not `PASS`.
 Check line:
 
 ```
-- Deletion path verified: PASS|FAIL|BLOCKED — `<test command exercising the delete/purge path>` — exit N — <result> — capture: evidence/security/deletion-path.md
+- Deletion path verified: PASS|FAIL|BLOCKED — `<test command exercising the delete/purge path>` — exit N — <result> — capture: evidence/privacy/deletion-path.md
 ```
 
 ## Log redaction verified by a capture
@@ -91,8 +98,8 @@ carries a synthetic PII value through the system and inspecting the resulting lo
    `- Command:` line):
 
    ```
-   python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/security/log-redaction-<class>-request.md --ledger .docs/{project-name}/implementation/gates.jsonl -- <the single argv-runnable request command>
-   python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/security/log-redaction-<class>.md --ledger .docs/{project-name}/implementation/gates.jsonl -- grep -n <marker or synthetic value> <log path>
+   python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/privacy/log-redaction-<class>-request.md --ledger .docs/{project-name}/implementation/gates.jsonl -- <the single argv-runnable request command>
+   python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/privacy/log-redaction-<class>.md --ledger .docs/{project-name}/implementation/gates.jsonl -- grep -n <marker or synthetic value> <log path>
    ```
 
    Where the two genuinely must be one command — the log is a stream, not a file — put the
@@ -107,10 +114,11 @@ carries a synthetic PII value through the system and inspecting the resulting lo
 Check line — one backticked command, the grep, matching the cited capture's argv:
 
 ```
-- Log redaction (<PII class>): PASS|FAIL — `grep -n <marker or synthetic value> <log path>` — exit N — <redaction marker found | raw value found | log line absent> — capture: evidence/security/log-redaction-<class>.md
+- Log redaction (<PII class>): PASS|FAIL — `grep -n <marker or synthetic value> <log path>` — exit N — <redaction marker found | raw value found | log line absent> — capture: evidence/privacy/log-redaction-<class>.md
 ```
 
-Repeat per PII class actually present in the system — a system with no Financial data does
+`Log redaction (Credentials)` is the `[security]` row: Cipher runs it, and its two captures
+go under `evidence/security/` instead. Repeat per PII class actually present in the system — a system with no Financial data does
 not need a Financial redaction capture, but the checklist's coverage should say so
 explicitly (`NOT RUN — no Financial fields in this system`) rather than omit the line.
 
@@ -126,5 +134,5 @@ known. An unreviewed third-party flow carrying a PII class is a finding (`Import
 Check line:
 
 ```
-- Third-party flow inventory: PASS|FAIL — `<command or manual audit listing outbound integrations vs. PII classes sent>` — exit N — <N flows reviewed, M with a DPA on file> — capture: evidence/security/third-party-flows.md
+- Third-party flow inventory: PASS|FAIL — `<command or manual audit listing outbound integrations vs. PII classes sent>` — exit N — <N flows reviewed, M with a DPA on file> — capture: evidence/privacy/third-party-flows.md
 ```

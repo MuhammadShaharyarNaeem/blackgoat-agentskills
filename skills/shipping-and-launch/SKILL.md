@@ -230,14 +230,16 @@ Every deployment needs a rollback plan before it happens:
 ### Rollback Steps
 1. Disable feature flag (if applicable)
    OR
-1. Deploy previous version: `git revert <commit> && git push`
+1. Deploy previous version: `git revert <commit>`, then `git push` — two commands, never chained
 2. Verify rollback: health check, error monitoring
 3. Communicate: notify team of rollback
 
 ### Database Considerations
-- Migration [X] rolls back via a tested forward migration:
-  `dotnet ef migrations script --idempotent --from <target> --to <previous>`, reviewed and rehearsed on non-prod
-  (never a down-migration in production — `{PLUGIN_ROOT}/database-migration-patterns/SKILL.md`)
+- Migration [X] rolls back via a tested forward fix migration — a new migration that restores
+  the previous behaviour, its SQL generated and reviewed in the form
+  `{PLUGIN_ROOT}/database-migration-patterns/SKILL.md` § The Reviewed SQL Diff Artifact gives
+  (`dotnet ef migrations script --idempotent --from <current> --to <fix-migration>`), rehearsed on non-prod.
+  That skill owns the rule (§ Rollback): never a down-migration, never a `--to <previous>` script
 - Data inserted by new feature: [preserved / cleaned up]
 
 ### Time to Rollback
@@ -250,14 +252,14 @@ Every deployment needs a rollback plan before it happens:
 
 **Dep-owned. Before the GO, not after the incident.** A written rollback plan is a plan; it is not evidence that anything reverts. Perform the revert **and** the health check that proves the revert landed, timed, on a non-production environment, and record what it actually took.
 
-1. **Run it end to end on a non-production environment** — the same command sequence the Rollback Steps above name, with the health check as the last command in the sequence so a revert that leaves the service down cannot record as a success.
-2. **Capture the run**, so the timing and the outcome are recorded by the tool rather than remembered by you:
-   `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/rollback/<date>-rehearsal.md --ledger .docs/{project-name}/implementation/gates.jsonl -- <the revert command sequence, health check included>`
-3. **Record the result in `ship-decision.md`** on one line, in exactly this grammar:
+1. **Run it end to end on a non-production environment** — the same steps the Rollback Steps above name, one command per step, with the health check as the last step so a revert that leaves the service down cannot record as a success.
+2. **Capture each step separately**, so the timing and the outcome are recorded by the tool rather than remembered by you. `run_quiet.py` runs its argv with no shell (`run_quiet.py --help`), so `&&`, `|` or `;` inside one capture reach the program as literal arguments — one `run_quiet.py --capture` call per step (the revert, the push or redeploy, the health check):
+   `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/rollback/<date>-rehearsal-<NN>-<step>.md --ledger .docs/{project-name}/implementation/gates.jsonl -- <that one step's command>`
+3. **Record the result in `ship-decision.md`** on one line, in exactly this grammar — `<N>` is the **sum** of every step capture's `Duration:`, and `evidence:` cites the health-check capture (the last step, the one that proves the revert landed):
 
    `Time to Rollback: <N><unit> — rehearsed <YYYY-MM-DD> on <env> — evidence: <path under evidence/rollback/>`
 
-   `<unit>` is `s`/`sec`/`seconds` or `m`/`min`/`minutes`; either separator may be an em dash, en dash, or hyphen; `<env>` names where you ran it. The pipelines read this line mechanically via `check_ship_decision.py --require-rehearsal`; the grammar authority is `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
+   `<unit>` is `s`/`sec`/`seconds` or `m`/`min`/`minutes`; either separator may be an em dash, en dash, or hyphen; `<env>` names where you ran it. The pipelines read this line mechanically via `check_ship_decision.py --require-rehearsal`; the grammar authority is `check_ship_decision.py --help`.
 4. **The recorded time must fit the Time to Rollback ladder above for the rollback type this release uses** — a feature-flag rollback that measured 6 minutes did not meet the `< 1 minute` rung, and the honest response is to fix the rollback path or re-classify the release's rollback type, never to record the ladder's number instead of the measured one.
 
 **Deliberate refinement of the Time to Rollback ladder (convention #8).** That ladder is a planning estimate — the expected cost of each rollback type. This section makes the *measured* value binding: where the two disagree, the rehearsal wins, because the ladder describes rollbacks in general and the rehearsal describes this one.

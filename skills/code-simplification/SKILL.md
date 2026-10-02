@@ -1,6 +1,6 @@
 ---
 name: code-simplification
-description: "Simplifies code for clarity. Use when refactoring code for clarity without changing behavior. Use when code works but is harder to read, maintain, or extend than it should be. Use when reviewing code that has accumulated unnecessary complexity. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator applies the Worker Execution Contract itself in the main session — no delegation."
+description: "Simplifies code for clarity. Use when refactoring code for clarity without changing behavior. Use when code works but is harder to read, maintain, or extend than it should be. Use when reviewing code that has accumulated unnecessary complexity. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself."
 ---
 
 # Code Simplification
@@ -11,7 +11,7 @@ Reduce complexity while preserving exact behavior — not fewer lines, but code 
 
 ## Direct invocation
 
-A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no editing tests to pass, no unobserved claims (`base-persona.md`, Evidence Integrity). Over three files, or shared behaviour: route via `/bg` to a lane.
+Direct asks on named files are a deliberate refinement of agent-audit Metric 12, not a trigger collision. Direct invocation: the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself. Owner: **Max**. Over three files, or shared behaviour: route via `/bg` to a lane.
 
 ## Quick card
 
@@ -20,7 +20,7 @@ Derived from the contract below for a ≤ 3-file change; no new rules (conventio
 1. Run the suite first — a green baseline before you touch anything (§ Rules).
 2. Preserve behaviour exactly; every existing test passes unmodified (§ The Five Principles, 1).
 3. Can't say why the code exists? Don't simplify it (§ Chesterton's Fence).
-4. One kind of change; no drive-by refactor of code you did not already touch (§ Rules).
+4. Scope to what changed; no drive-by refactor of code you did not already touch (§ The Five Principles, 5).
 5. It only passes by modifying a test → revert and escalate (§ Escalate When).
 
 - Brief → the quick note (What / Where / How verified)
@@ -73,8 +73,8 @@ Scan for these patterns — each one is a concrete signal, not a vague smell:
 
 | Pattern | Signal | Simplification |
 |---------|--------|----------------|
-| Duplicated logic | Same 5+ lines in multiple places | Extract to a shared function |
-| Dead code | Unreachable branches, unused variables, unused imports, whole unreferenced files, commented-out blocks | Remove — after confirming nothing references it |
+| Duplicated logic | Same 5+ lines in three or more places — the rule of three (`code-review-and-quality/SKILL.md` § The Five Axes) | Extract to a shared function; two copies stay as they are |
+| Dead code | Unreachable branches, unused variables, unused imports, whole unreferenced files, commented-out blocks | Remove — only inside this pass's brief, after confirming nothing references it; dead code outside the brief is listed and asked about, as `code-review-and-quality/SKILL.md` § Rules does |
 | Settled feature flags | Flag guarding a feature confirmed shipped or killed | Remove the flag and collapse the branch that can no longer be taken |
 | Leftover debug logging | Trace/`console` calls on a production path | Remove |
 | Resolved TODOs | `TODO` with no issue-tracker reference | Remove; keep only TODOs that carry a tracker reference |
@@ -86,10 +86,10 @@ Scan for these patterns — each one is a concrete signal, not a vague smell:
 ### Rules
 
 - Establish a green baseline **before** you touch anything: run the suite first. A suite that was already red cannot prove your refactor preserved behavior.
-- One simplification at a time; run the test suite after each. Pass → continue/commit. Fail → revert and reconsider.
+- One simplification at a time; run the test suite after each. Pass → continue (never commit — the lane's gate does). Fail → revert and reconsider.
 - One *kind* of change per pass and per report — never mix performance work, abstraction extraction, and cleanup in a single pass.
 - Refactoring changes ship separately from feature or bug-fix changes — never combine in one PR.
-- Removing dead code never edits a caller. If deleting a function, class or DI registration means changing a file that uses it, it is not dead — stop and leave it in place.
+- Removing dead code never edits a caller. If deleting a function, class or DI registration means changing a file that uses it, it is not dead — stop and leave it in place. One deliberate exception (convention #8, refining this rule): collapsing a settled feature flag (§ Simplification Signals, handed here by `feature-flag-patterns`) edits the call site that read the flag — that edit is the removal itself.
 - **The Rule of 500:** a refactor touching more than 500 lines uses automation (codemods, sed scripts, AST transforms), never hand-editing.
 
 ### Verification Checklist

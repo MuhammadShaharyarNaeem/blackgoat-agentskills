@@ -1,6 +1,6 @@
 ---
 name: feature-flag-patterns
-description: "Provides the feature flag execution contract: every flag created with a named owner, an expiry and a removal task already in the plan; default-off; kill-switch semantics that fail to the safe state; config-as-code rather than a hand-edited row; both branches tested; and an expired flag treated as a plan-level blocker rather than a comment. Use if the project gates behaviour behind a runtime flag. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator applies the Worker Execution Contract itself in the main session — no delegation."
+description: "Provides the feature flag execution contract: every release flag created with a named owner, an expiry and a removal task already in the plan, every kill switch with an owner and a review date; default-off; kill-switch semantics that fail to the safe state; config-as-code rather than a hand-edited row; both branches tested; and an expired flag treated as a plan-level blocker rather than a comment. Use if the project gates behaviour behind a runtime flag. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself."
 ---
 
 # Feature Flag Patterns
@@ -9,13 +9,13 @@ A feature flag is a branch that ships. It buys a decoupling of deploy from relea
 
 ## Direct invocation
 
-A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract inline, in the main session: no delegation, no unobserved claims (`base-persona.md`, Evidence Integrity). **Scope: three files or fewer, on an existing flag.** Anything larger, or a new flag, routes through `/bg`.
+Direct asks on named files are a deliberate refinement of agent-audit Metric 12, not a trigger collision. Direct invocation: the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself. Owner: **Mason**. **Scope: ≤ 3 files, an existing flag;** larger, or a new flag, routes through `/bg`.
 
 ## Quick card
 
 Derived from the contract below for a ≤ 3-file change; no new rules (convention #8 — deliberately narrower than the full contract, which binds inside any lane).
 
-1. No flag without an owner, an expiry, and a removal task already in the plan (§ The declaration).
+1. No release flag without an owner, an expiry, and a planned removal task; a kill switch carries a review date instead (§ The declaration).
 2. Default off; a flag that cannot be read is off, never on (§ Defaults and kill switches).
 3. Flag state is config-as-code — never a row edited by hand in production (§ Config as code).
 4. Test both branches; an untested off-branch is a rollback nobody has performed (§ Both branches).
@@ -27,28 +27,28 @@ Derived from the contract below for a ≤ 3-file change; no new rules (conventio
 
 ## Worker Execution Contract
 
-This is the operational spine. Follow it as written.
+This is the operational spine. Follow it as written. For a change of ≤ 3 files outside a pipeline, the Quick card above is the contract; the full contract applies inside a lane.
 
 ### The declaration
 
-Every flag is declared, in the config the *Config as code* section defines, with four fields and no exceptions:
+Every flag is declared, in the config the *Config as code* section defines, with these five fields — the one exception is that a kill switch carries `review` in place of both `expiry` and `removal-task`:
 
 ```
 checkout-v2:
   owner: <the person or team who decides its fate>
   kind: release | kill-switch
   expiry: <YYYY-MM-DD>        # release flags; kill switches carry `review: <YYYY-MM-DD>`
-  removal-task: <task id in the plan that deletes it>
+  removal-task: <task id in the plan that deletes it>   # release flags only; a kill switch has none
   default: off
 ```
 
 `owner` is a name, never "the team that owns the service". `expiry` is the date by which the flag is expected to be gone, chosen at creation while the intent is still known ([flag-lifecycle.md](references/flag-lifecycle.md)).
 
-**`kind` picks which clock applies.** A **release flag** is temporary rollout scaffolding and carries an `expiry`. A **kill switch** is a permanent operational control and carries a `review` date instead — a deliberate exception to *Expiry is a blocker*, not an escape from it: an unreviewed kill switch is the same finding, raised on the review date.
+**`kind` picks which clock applies.** A **release flag** is temporary rollout scaffolding and carries an `expiry`. A **kill switch** is a permanent operational control and carries a `review` date instead, and no removal task — the review re-confirms it rather than deleting it ([flag-lifecycle.md](references/flag-lifecycle.md)). This is a deliberate exception (convention #8) to *Expiry is a blocker* and to § The removal task is created at creation time, not an escape from them: an unreviewed kill switch is the same finding, raised on the review date.
 
 ### The removal task is created at creation time
 
-The task that deletes the flag is written into the plan **in the same planning pass that authorizes the flag** — a numbered task with acceptance criteria, sequenced after the rollout it waits on. Not a TODO, not a ticket filed later, not a `Future` section item.
+For a release flag, the task that deletes the flag is written into the plan **in the same planning pass that authorizes the flag** — a numbered task with acceptance criteria, sequenced after the rollout it waits on. Not a TODO, not a ticket filed later, not a `Future` section item.
 
 **The producer's end is documented for the planner** in `{PLUGIN_ROOT}/planning-and-task-breakdown/SKILL.md` (§ Contract-change tags), which owns the task grammar. Express the seam in its `Boundary contracts:` line, so ordering is enforced by the `consumes-provides` lint rather than by anyone remembering:
 
@@ -86,8 +86,8 @@ The **removal trigger** is the `code-simplification` skill's *settled feature fl
 
 ### Verification Checklist
 
-- [ ] Every new flag declares `owner`, `kind`, `expiry` (or `review`), `removal-task` and `default: off`
-- [ ] The removal task exists in the plan, numbered and with acceptance criteria, **before the flag is declared**
+- [ ] Every new release flag declares `owner`, `kind`, `expiry`, `removal-task` and `default: off`; every kill switch declares `owner`, `kind`, `review` and `default: off`
+- [ ] For a release flag, the removal task exists in the plan, numbered and with acceptance criteria, **before the flag is declared**
 - [ ] `Boundary contracts:` lines carry the flag identifier, and the `consumes-provides` lint passes
 - [ ] The declaration and its defaults are in a committed file; no hand-edited row or console change
 - [ ] The suite covers both branches of every gated behaviour, off-branch included
@@ -99,7 +99,7 @@ The **removal trigger** is the `code-simplification` skill's *settled feature fl
 
 | WHEN | DO |
 |---|---|
-| A flag is requested with no owner, no expiry, or no plan to put the removal task in | Escalate to the Orchestrator before creating it; the flag is the easy half |
+| A release flag is requested with no owner, no expiry, or no plan to put the removal task in (a kill switch: no owner or no review date) | Escalate to the Orchestrator before creating it; the flag is the easy half |
 | A flag in the config is past its `expiry` or `review` | Report it to the Orchestrator as a plan-level blocker (*Expiry is a blocker*); never extend the date yourself |
 | The removal would collapse a branch you cannot prove is settled | Escalate to the Orchestrator — the `code-simplification` signal has not fired |
 | Flag state is only changeable by hand in production, with no committed configuration | Report it to the Orchestrator; do not make the hand edit, and do not build on it (*Config as code*) |

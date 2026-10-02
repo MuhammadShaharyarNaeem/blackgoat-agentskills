@@ -103,7 +103,7 @@ Documentation only — do not recreate by hand; `update_state.py` is the only sa
 
 ## § Phase 3.6's state writes — why `--init` and `--set-pipeline` are both mandatory
 
-`--init` on a fresh run: Phase 4 step 3 only creates `orchestrator-state.json` later, so without `--init` both Phase 3.6 commands exit 2 (`state file not found`). On a file that already exists `--init` is a warning-level no-op and every other action in the same call still applies (`{PLUGIN_ROOT}/pipeline-tools/SKILL.md`, `update_state.py` → Actions), so it is safe whichever command runs first.
+`--init` on a fresh run: Phase 4 step 3 only creates `orchestrator-state.json` later, so without `--init` both Phase 3.6 commands exit 2 (`state file not found`). On a file that already exists `--init` is a warning-level no-op and every other action in the same call still applies (`update_state.py --help`), so it is safe whichever command runs first.
 
 `--set-pipeline bgpdd-plan` alongside it: `--init` on its own writes `pipeline: ""`. `/bgpdd-build`'s hydration whitelist requires `pipeline` to be one of `bgpdd-plan`, `bgpdd-lite`, `bgpdd-build` or `bgpdd-shipping` and HALTs otherwise, so a run interrupted between Phase 3.6 and Phase 4 — which is where the pipeline value used to first appear — leaves a state file build cannot enter and no named route to report. Naming the route here makes 3.6's write self-sufficient; Phase 4 re-stamping the same value is an idempotent no-op.
 

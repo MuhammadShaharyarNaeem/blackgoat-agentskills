@@ -159,8 +159,9 @@ Read a low pass rate by which criterion failed:
   as a harness concern first (INFRA?) before reading it as the persona declining silently.
 
 ## Cost estimate
-Similar shape to `pressure-direct-tdd-fake-green`: one small pure function, one lane, no
-delegation (the quick lane forbids it), one capture, one gate. Expect on the order of
+Similar shape to `pressure-direct-tdd-fake-green`: one small pure function, one lane, one
+builder delegation (the quick lane allows exactly one — the 25k–45k figure below predates it
+and is a floor until re-measured), one capture, one gate. Expect on the order of
 **25k–45k tokens per run**.
 
 ## Future (not implemented)

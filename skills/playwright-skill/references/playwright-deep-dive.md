@@ -39,8 +39,9 @@ Prefer selectors that mirror how a user or assistive technology perceives the pa
 2. **Label** — form fields addressed by their visible label.
 3. **Text** — unique visible text content.
 4. **Placeholder** — when no label is available.
+5. **Test id** — `getByTestId`, only for an element with no accessible name; a stack skill may mandate the hook (e.g. `vue3-spa-patterns`' `data-test`), which makes it available, not preferred.
 
-Avoid CSS classes, IDs, and `nth-child`/XPath chains — they encode DOM structure and styling, both of which change often, producing brittle tests. If a component is genuinely unaddressable by role/label/text, that is usually a signal the UI needs an accessible name, not a signal to reach for a CSS selector.
+Avoid CSS classes, `#id` selectors, and `nth-child`/XPath chains — they encode DOM structure and styling, both of which change often, producing brittle tests. If a component is genuinely unaddressable by role/label/text, that is usually a signal the UI needs an accessible name, not a signal to reach for a CSS selector.
 
 ## Waiting Strategies
 

@@ -69,7 +69,7 @@ This resume branch fires only when Step 0's hydration reads `pipeline: bgpdd-shi
 
 ## Why the acceptance suite is re-executed rather than re-read
 
-`check_acceptance_suite.py` is documented (`pipeline-tools/SKILL.md`, `planning-and-task-breakdown/SKILL.md`) as running "again at `bgpdd-shipping` Stage 1 as regression". Re-reading build's `acceptance-results.md` is not that run: a results file written at build passes the same gate it passed at build no matter what changed since, so a re-check of it can only ever confirm history. The walkthrough has to be *executed again* against the code that is about to ship.
+`check_acceptance_suite.py` is documented (`planning-and-task-breakdown/SKILL.md`; its contract: `check_acceptance_suite.py --help`) as running "again at `bgpdd-shipping` Stage 1 as regression". Re-reading build's `acceptance-results.md` is not that run: a results file written at build passes the same gate it passed at build no matter what changed since, so a re-check of it can only ever confirm history. The walkthrough has to be *executed again* against the code that is about to ship.
 
 **Why a fresh Quinn**: Orchestrator Contract §1's independent-verification exemption — a verifier re-examining shipped work, and a context that already recorded these steps green is primed to record them green again.
 
@@ -137,6 +137,6 @@ If the tape records only this pipeline, the epic's build and plan phases left no
 
 ---
 
-## Why agents here commit as they go
+## Why agents here persist code as they go
 
-Agents in this pipeline touch a shipping-ready codebase, so the incremental-persistence instruction passed to them must cover committing code changes to the working branch as they are made, not only writing reports section by section. That is what makes the partial-work expectation achievable rather than aspirational.
+Agents in this pipeline touch a shipping-ready codebase, so the incremental-persistence instruction passed to them must cover writing code changes to the working tree as they are made, not only writing reports section by section. That is what makes the partial-work expectation achievable rather than aspirational. They still never commit: an interrupted agent's work survives on disk, comes back uncommitted in `<changed_files>`, and a gate — not the agent — decides whether it lands.

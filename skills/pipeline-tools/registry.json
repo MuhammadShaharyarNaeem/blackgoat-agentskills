@@ -208,7 +208,8 @@
       "reads": [
         "{batch-root}/orchestrator-state.json",
         "{batch-root}/batch.md",
-        "{bugfix-root}/gates.jsonl"
+        "{bugfix-root}/gates.jsonl",
+        "<git rev-parse --show-toplevel of --repo and each batch artifact>"
       ],
       "writes": [
         "{batch-root}/gates.jsonl"
@@ -273,7 +274,7 @@
           "phase": "5",
           "step": "5",
           "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_commit_gate.py --review-report {report-root}/review-report.md --state {state-file} --milestone \"{bug-slug}\" --changed-files <the builder's paths> --verify-tree --require-files-reviewed --max-changed-files 5 --waiver {bugfix-root}/rca.md --require-ledger-gates check_bugfix_intake.py,check_red_green.py,check_handoff.py,check_test_authenticity.py --require-run-log {bugfix-root}/run-log.jsonl --require-agents quinn,luna,<the builder(s) Phase 3 delegated> --ledger {bugfix-root}/gates.jsonl --repo <the target repo root — REQUIRED whenever the invocation's cwd is not that repo> [--docs-root <the shared .docs/ root, only if it is not --repo/.docs>] --commit --message \"<the commit message>\"",
-          "gate": "Exit 1 = BLOCK and the JSON names the stale verdict, standing blocker, standing Critical/Important finding, unreviewed file, tree mismatch, size overrun or unbacked sibling gate; exit 2 = non-conforming report, back to Luna."
+          "gate": "Exit 1 = BLOCK and the JSON names the stale verdict, standing blocker, standing Critical/Important finding, unreviewed file, tree mismatch, size overrun, unbacked sibling gate or a lane artifact in another worktree than --repo (worktree_ok); exit 2 = non-conforming report, back to Luna."
         }
       ],
       "reads": [
@@ -283,7 +284,8 @@
         "run-log.jsonl",
         "test-report.md",
         "evidence/**/*.meta.json",
-        "rca.md"
+        "rca.md",
+        "<git rev-parse --show-toplevel of --repo and each lane artifact>"
       ],
       "writes": [
         "gates.jsonl",
@@ -377,98 +379,105 @@
           "lane": "bgpdd-bugfix",
           "phase": "*",
           "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <quinn|mason|nova|luna> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched that delegation> --ledger {bugfix-root}/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <quinn|mason|nova|luna> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched that delegation> [--transcript <the session transcript, when your runtime exposes one>] --ledger {bugfix-root}/gates.jsonl",
           "gate": "Exit 1 = the agent's contract was not met: return it to that same agent, counting a round under this lane's 2-round bound."
         },
         {
           "lane": "bgpdd-build",
           "phase": "*",
           "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <name> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched that delegation> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <name> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched that delegation> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = the agent's contract was not met - back to that agent, counting the round its own phase counts."
         },
         {
           "lane": "bgpdd-discovery",
           "phase": "*",
           "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <iris|scout|echo> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched that delegation> --ledger .docs/summary/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <iris|scout|echo> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched that delegation> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/summary/gates.jsonl",
           "gate": "Exit 1 = the agent's contract was not met: return it to that same agent, subject to the error-recovery bound in section 2."
         },
         {
           "lane": "bgpdd-lite",
           "phase": "2",
           "step": "4",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <alex|scout> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched the delegation> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <alex|scout> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched the delegation> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = his contract was not met - back to Alex under section 2's 2-round bound, not on to the coverage gate."
         },
         {
           "lane": "bgpdd-plan",
           "phase": "*",
           "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <rex|aria|alex> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched that delegation> --milestone \"<phase>\" --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <rex|aria|alex> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched that delegation> --milestone \"<phase>\" [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = the agent's contract was not met - return to that same agent, counting the round its own loop's bound counts; exit 2 = usage or an artifact defect - fix the invocation or the artifact, not the agent."
+        },
+        {
+          "lane": "bgpdd-quick",
+          "phase": "1",
+          "step": "2",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff {quick-root}/handoff.md --persona <mason|nova|max> --repo . --since <the sha HEAD held when you launched the builder> [--transcript <the session transcript, when your runtime exposes one>] --ledger {quick-root}/gates.jsonl",
+          "gate": "Exit 1 = the builder's contract was not met - back to that same builder; `<changed_files>` wider than the note goes back to Phase 0 instead."
         },
         {
           "lane": "bgpdd-secure",
           "phase": "2",
           "step": "6",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona cipher --repo . --since <the sha HEAD held when you launched him> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona cipher --repo . --since <the sha HEAD held when you launched him> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = a delta-only follow-up under section 2's bound, not a Phase 3 gate run."
         },
         {
           "lane": "bgpdd-shipping",
           "phase": "step-3",
           "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <Vera's saved handoff> --persona vera --repo . --since <the sha HEAD held when you launched Stage 1> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <Vera's saved handoff> --persona vera --repo . --since <the sha HEAD held when you launched Stage 1> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = Vera's contract was not met - back to her, counting the round under the Fix-routing bound."
         },
         {
           "lane": "bgpdd-shipping",
           "phase": "step-3",
           "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <Cipher's saved handoff> --persona cipher --repo . --since <the sha HEAD held when you launched Stage 2> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <Cipher's saved handoff> --persona cipher --repo . --since <the sha HEAD held when you launched Stage 2> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = Cipher's contract was not met - back to him, counting the round under the Fix-routing bound."
         },
         {
           "lane": "bgpdd-shipping",
           "phase": "step-3",
           "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <Dep's saved handoff> --persona dep --repo . --since <the sha HEAD held when you launched Stage 2> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <Dep's saved handoff> --persona dep --repo . --since <the sha HEAD held when you launched Stage 2> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = Dep's contract was not met - back to him, counting the round under the Fix-routing bound."
         },
         {
           "lane": "bgpdd-shipping",
           "phase": "step-3",
           "step": "2b",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <her saved handoff> --persona quinn --repo . --since <the sha HEAD held when you launched this fresh delegation> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <her saved handoff> --persona quinn --repo . --since <the sha HEAD held when you launched this fresh delegation> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = back to her, counting the round under this gate's own bound."
         },
         {
           "lane": "bgpdd-shipping",
           "phase": "step-5.5",
           "step": "2b",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <his saved handoff> --persona dep --repo . --since <the sha HEAD held when you launched this fresh delegation> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <his saved handoff> --persona dep --repo . --since <the sha HEAD held when you launched this fresh delegation> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = back to him, counting the round under Step 3's fix-and-reverify bound."
         },
         {
           "lane": "bgpdd-shipping",
           "phase": "step-7",
           "step": "2b",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <his saved handoff> --persona forge --advisory --repo . --since <the sha HEAD held when you launched this delegation> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <his saved handoff> --persona forge --repo . --since <the sha HEAD held when you launched this delegation> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = the proposal's contract was not met - do not HALT for approval on it; return to Forge for a conforming proposal."
         },
         {
           "lane": "bgpdd-shipping",
           "phase": "step-7",
           "step": "5b",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <his saved handoff> --persona forge --repo . --since <the sha HEAD held when you launched the apply delegation> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <his saved handoff> --persona forge --repo . --since <the sha HEAD held when you launched the apply delegation> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = back to Forge for a conforming `<changed_skills>` list."
         },
         {
           "lane": "bgpdd-verify",
           "phase": "2",
           "step": "5",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona quinn --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched her> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona quinn --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched her> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = a delta-only follow-up under section 2's bound, not a Phase 3 gate run."
         }
       ],
@@ -478,6 +487,39 @@
       ],
       "writes": [
         "gates.jsonl"
+      ]
+    },
+    {
+      "name": "check_learn_approval",
+      "script": "scripts/check_learn_approval.py",
+      "description": "Decides whether a learn-lane plan was approved by the user in the transcript, and whether only approved destinations changed.",
+      "kind": "gate",
+      "runner": "orchestrator",
+      "agents": [],
+      "lanes": [
+        {
+          "lane": "bgpdd-learn",
+          "phase": "-",
+          "step": "4",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_learn_approval.py --record --plan .docs/learn/{YYYY-MM-DD}-{learn-slug}/forge-handoff.md --transcript <the session transcript path> --quote \"<the user's whole answer, verbatim>\" --repo <this plugin's directory> [--repo <the target project, when a rules file is a destination>] --milestone \"{learn-slug}\" --ledger .docs/learn/{YYYY-MM-DD}-{learn-slug}/gates.jsonl",
+          "gate": "Exit 1 = no approval on the runtime's record (plan not relayed, no human answer, a --quote that is not the whole answer, or an answer carrying a negation word) - halt and ask; exit 2 = no transcript on this runtime, so the prose rule stands. Never start Step 5 without this PASS."
+        },
+        {
+          "lane": "bgpdd-learn",
+          "phase": "-",
+          "step": "5",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_learn_approval.py --close --plan .docs/learn/{YYYY-MM-DD}-{learn-slug}/forge-handoff.md --repo <this plugin's directory> [--repo <the target project>] --milestone \"{learn-slug}\" --ledger .docs/learn/{YYYY-MM-DD}-{learn-slug}/gates.jsonl",
+          "gate": "Exit 1 = Forge changed a watched file no approved lesson named (or agents/blackgoat.md) - HALT and leave the revert to the user, exactly as Step 5's post-apply guard does."
+        }
+      ],
+      "reads": [
+        "{learn-root}/forge-handoff.md",
+        "<the session transcript JSONL>",
+        "<git status --porcelain of each --repo>",
+        "{learn-root}/gates.jsonl"
+      ],
+      "writes": [
+        "{learn-root}/gates.jsonl"
       ]
     },
     {
@@ -544,14 +586,16 @@
           "lane": "bgpdd-quick",
           "phase": "3",
           "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_quick_close.py --note {quick-root}/note.md --capture {quick-root}/evidence/check.md --changed-files <paths> --repo . --max-changed-files 3 --frozen '<glob>' [--frozen '<glob>']... --milestone \"{slug}\" --ledger {quick-root}/gates.jsonl --commit --message \"<msg>\"",
-          "gate": "Exit 1 = BLOCK and `problem_codes` names the term - `size_bound_exceeded` is unfixable here because the bound is the lane; exit 2 = artifact or environment defect, never hand-edited to pass."
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_quick_close.py --note {quick-root}/note.md --capture {quick-root}/evidence/check.md --changed-files <paths> --repo . --max-changed-files 3 --frozen '<glob>' [--frozen '<glob>']... --milestone \"{slug}\" --ledger {quick-root}/gates.jsonl --require-ledger-gates check_handoff.py --commit --message \"<msg>\"",
+          "gate": "Exit 1 = BLOCK and `problem_codes` names the term - `size_bound_exceeded` is unfixable here because the bound is the lane; `required_ledger_gate_missing` on check_handoff.py means no builder handoff passed Phase 1 over the current handoff.md - the edit was not delegated, so delegate it; exit 2 = artifact or environment defect, never hand-edited to pass."
         }
       ],
       "reads": [
         "{quick-root}/note.md",
         "{quick-root}/evidence/check.md",
         "{quick-root}/evidence/check.md.meta.json",
+        "{quick-root}/handoff.md (rehashed for --require-ledger-gates check_handoff.py)",
+        "<git rev-parse --show-toplevel of --repo and each quick artifact>",
         "gates.jsonl"
       ],
       "writes": [
@@ -909,7 +953,7 @@
     {
       "name": "guard_action",
       "script": "scripts/guard_action.py",
-      "description": "PreToolUse hook that denies a tool call violating one of eight pipeline restraints; the model never invokes it directly.",
+      "description": "PreToolUse hook that denies a tool call violating one of nine pipeline restraints; the model never invokes it directly.",
       "kind": "hook",
       "runner": "orchestrator",
       "agents": [],
@@ -919,7 +963,9 @@
         "orchestrator-state.json",
         "gates.jsonl",
         "bug-report.md",
-        "note.md"
+        "note.md",
+        "<git rev-parse --show-toplevel of a commit's target directory>",
+        ".docs/learn/*/forge-handoff.md"
       ],
       "writes": []
     },
@@ -935,8 +981,8 @@
           "lane": "bgpdd-build",
           "phase": "*",
           "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/mark_milestone.py --plan .docs/{project-name}/implementation/plan.md --milestone \"<milestone title>\" --repo . --require-commit --require-game-tape .docs/{project-name}/implementation/game-tape.md --ledger .docs/{project-name}/implementation/gates.jsonl",
-          "gate": "It refuses the `[x]` without a commit naming the milestone, a PASS `check_commit_gate.py` entry in an intact-chain ledger, and a conforming Phase 6 checkpoint - completion is recorded only here, never by hand."
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/mark_milestone.py --plan .docs/{project-name}/implementation/plan.md --milestone \"<milestone title>\" --repo . --require-commit --require-game-tape .docs/{project-name}/implementation/game-tape.md --require-exit-capture --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "It refuses the `[x]` without a commit naming the milestone, a PASS `check_commit_gate.py` entry in an intact-chain ledger, a conforming Phase 6 checkpoint, and - for each RUNTIME EXIT CRITERION - a ledgered exit-0 `run_quiet.py --capture` of its command scoped to this milestone; completion is recorded only here, never by hand."
         },
         {
           "lane": "bgpdd-shipping",
@@ -1124,6 +1170,13 @@
           "gate": "`--model` is mandatory on a delegation record - exit 2 without it - and a token measurement is equally mandatory."
         },
         {
+          "lane": "bgpdd-quick",
+          "phase": "1",
+          "step": "2",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/record_run.py --log {quick-root}/run-log.jsonl --pipeline bgpdd-quick --phase \"Phase 1\" --event delegation --agent <mason|nova|max> --model <tier> --unit {slug} …",
+          "gate": "`--model` is mandatory on a delegation record - exit 2 without it - and a token measurement is equally mandatory; this record is the lane's one delegation, and /bgpdd-learn reads it."
+        },
+        {
           "lane": "bgpdd-secure",
           "phase": "*",
           "step": "-",
@@ -1209,7 +1262,7 @@
         "vera",
         "ward"
       ],
-      "reason": "base-persona.md section Command Timeout Discipline (Anti-Hang): EVERY agent wraps the commands it runs in run_quiet.py --log, and agents/cipher.md and agents/vera.md take each check through --capture. An agent running it is doing its own work properly, not adjudicating it; the gate that reads the capture still runs in the main session.",
+      "reason": "base-persona.md section Command Timeout Discipline (Anti-Hang): run_quiet.py --log is the plugin's timeout wrapper, MANDATORY for a raw build/test runner inside a lane (guard_action.py rule 5) and one sanctioned option (beside the runtime's own timeout) for any other command; agents/cipher.md and agents/vera.md take each check through --capture. An agent running it is doing its own work properly, not adjudicating it; the gate that reads the capture still runs in the main session.",
       "lanes": [
         {
           "lane": "bgpdd-bugfix",
@@ -1414,7 +1467,7 @@
           "lane": "bgpdd-bugfix-batch",
           "phase": "1",
           "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state {batch-root}/orchestrator-state.json --set-artifact \"bug:{bug-slug}:root=<bugfix-root>\" --set-artifact \"bug:{bug-slug}:worktree=<path>\" --set-artifact \"bug:{bug-slug}:status=OPEN\" --milestone \"{bug-slug}\"",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state {batch-root}/orchestrator-state.json --set-artifact \"bug:{bug-slug}:root=.docs/bugfix/{bug-slug}/\" --set-artifact \"bug:{bug-slug}:worktree=<path>\" --set-artifact \"bug:{bug-slug}:status=OPEN\" --milestone \"{bug-slug}\"",
           "gate": "An unrecorded root, worktree or status leaves the bug invisible to `check_batch_close.py` and to the batch driver, which read these fields."
         },
         {

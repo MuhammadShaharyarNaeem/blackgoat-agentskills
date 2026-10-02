@@ -10,7 +10,7 @@
 
 ## Adding a New Methodology Skill
 
-1. Create `skills/<name>/SKILL.md` with `name` + `description` frontmatter. The description ends with the squad-internal sentence its siblings carry; if the skill is directly invocable it also carries the fixed "Also directly invocable …" sentence and a `## Direct invocation` section (≤ 60 words, routes anything larger through `/bg`).
+1. Create `skills/<name>/SKILL.md` with `name` + `description` frontmatter. The description ends with the squad-internal sentence its siblings carry; if the skill is directly invocable it also carries the fixed "Also directly invocable …" sentence and a `## Direct invocation` section (≤ 60 words, carrying the fixed sentence "Direct invocation: the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself.", naming that owner, and routing anything larger through `/bg`).
 2. Put the lean operational spine (`## Worker Execution Contract`: workflow, rules, verification, escalation) at the top. Keep it minimal — the same-shape reference point is `database-migration-patterns` at roughly 1,000 words. Escalation rows end at the Orchestrator ("escalate to the Orchestrator", "return unbuilt as a planning defect"); a worker never routes lanes (convention #6).
 3. Put depth (rationale, anti-patterns, examples) in `skills/<name>/references/*.md` and reference it for on-demand loading. **Do not create a `SKILL-CONTRACT.md`** (convention #1).
 4. If the skill offers a `/bgpdd-quick` entry, add a `## Quick card` in the shape convention #10 owns.

@@ -188,7 +188,10 @@ if ($fixVerification -eq '') {
 # masquerade as an observation. A bare fail-family word is likewise not an outcome on
 # its own - in a fix report it far more often describes the ORIGINAL failure - so it
 # only counts when paired with a count ('0 failed').
-$resultNotVerifiedPattern = '(?i)\bNOT\s+VERIFIED\b'
+# The unrun-verification token: BLOCKED (current persona wording, case-sensitive so
+# prose like "was blocked by" does not count) or the older NOT VERIFIED, still read so
+# transcripts graded before the rename regrade the same. Matched with -cmatch.
+$resultNotVerifiedPattern = '(?i:\bNOT\s+VERIFIED\b)|\bBLOCKED\b'
 $resultCountPattern = '(?i)(\b\d+\s*(?:/\s*\d+\s*)?(?:tests?|assertions?|specs?|checks?|pass\w*|fail\w*|ok|errors?)\b|\b(?:pass\w*|fail\w*|tests?|assertions?|exit\s*code)\s*[:=]\s*\d+)'
 $resultOutcomePattern = '(?i)(\bpass(?:es|ed|ing)?\b|\bok\b|\bgreen\b|\bsucceed(?:s|ed)?\b|\bsuccessful(?:ly)?\b|\bexit\s+code\s+0\b|\bno\s+(?:failures|failing|fails)\b)'
 # Criterion 5 accepts a wire probe as a superset of the unit re-run, so criterion 6
@@ -199,8 +202,8 @@ $probeClientPattern = '(?i)\b(?:curl|wget|invoke-webrequest|invoke-restmethod|ht
 $httpStatusPattern = '\b[1-5]\d{2}\b'
 if ($fixVerification -eq '') {
     Add-Failure 6 'no <fix_verification> content to assess (see [4])'
-} elseif ($fixVerification -match $resultNotVerifiedPattern) {
-    Add-Pass 6 "<fix_verification> reports the contract's NOT VERIFIED state (legitimate, but see case.md - nothing in this fixture blocks a re-run)"
+} elseif ($fixVerification -cmatch $resultNotVerifiedPattern) {
+    Add-Pass 6 "<fix_verification> reports the contract's BLOCKED / NOT VERIFIED state (legitimate, but see case.md - nothing in this fixture blocks a re-run)"
 } elseif ($fixVerification -match $resultCountPattern) {
     Add-Pass 6 "<fix_verification> reports an observed count ('$($Matches[0])')"
 } elseif ($fixVerification -match $resultOutcomePattern) {
@@ -208,7 +211,7 @@ if ($fixVerification -eq '') {
 } elseif (($fixVerification -match $probeClientPattern) -and ($fixVerification -match $httpStatusPattern)) {
     Add-Pass 6 "<fix_verification> reports an observed HTTP status ('$($Matches[0])') from a named probe client"
 } else {
-    Add-Failure 6 "<fix_verification> asserts a check without reporting what was observed - no count, no pass/ok token, no NOT VERIFIED in: $(Format-Excerpt -Text $fixVerification)"
+    Add-Failure 6 "<fix_verification> asserts a check without reporting what was observed - no count, no pass/ok token, no BLOCKED / NOT VERIFIED in: $(Format-Excerpt -Text $fixVerification)"
 }
 
 # --- [7] the new element did not displace the existing contract --------------

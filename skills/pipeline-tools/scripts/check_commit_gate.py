@@ -1042,6 +1042,72 @@ def check_blockers(state_path, milestone, ignore_unscoped):
     return scoped, unscoped, other, skipped_ids, warnings
 
 
+# --- worktree identity (shared verbatim with check_quick_close.py and
+# check_batch_close.py): which worktree a path lives in, and the mismatch
+# rule -- see `worktree_ok` in the help.
+
+def git_worktree_of(path):
+    """(toplevel, common_dir) of the worktree holding `path`, or (None, None).
+
+    `path` need not exist: its nearest existing ancestor is asked. Any git
+    failure reads as (None, None) -- unknown, never a mismatch."""
+    d = Path(path).absolute()
+    while not d.exists() and d != d.parent:
+        d = d.parent
+    if d.is_file():
+        d = d.parent
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(d), "rev-parse", "--show-toplevel",
+             "--git-common-dir"],
+            capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None, None
+    lines = proc.stdout.strip().splitlines() if proc.returncode == 0 else []
+    if len(lines) < 2:
+        return None, None
+    top = os.path.normpath(lines[0])
+    common = os.path.normpath(os.path.join(str(d), lines[1]))
+    return top, common
+
+
+def _same_path(a, b):
+    return (os.path.normcase(os.path.realpath(a))
+            == os.path.normcase(os.path.realpath(b)))
+
+
+def check_worktree_match(repo, artifacts):
+    """(repo_toplevel, [{flag, path, worktree}]) for every lane artifact that
+    sits in ANOTHER worktree of the SAME repository as `repo`.
+
+    Same repository = same git common dir. An artifact in no repository, or
+    in a different repository (a workspace-root `.docs/` above `--repo`), is
+    not a mismatch: that layout is sanctioned, and only a sibling worktree of
+    the same repo is the wrong-checkout mistake this catches."""
+    repo_top, repo_common = git_worktree_of(repo)
+    mismatches = []
+    if repo_top is None:
+        return None, mismatches
+    for flag, path in artifacts:
+        if not path:
+            continue
+        top, common = git_worktree_of(path)
+        if top is None or not _same_path(common, repo_common):
+            continue
+        if not _same_path(top, repo_top):
+            mismatches.append({"flag": flag, "path": str(path),
+                               "worktree": top})
+    return repo_top, mismatches
+
+
+def worktree_mismatch_message(repo_top, m):
+    return ("{0} {1} lives in worktree {2}, but --repo resolves to worktree "
+            "{3} -- this gate would judge one checkout's lane and commit "
+            "into another. Re-run with --repo pointing at the lane's own "
+            "worktree, or the lane artifacts of the checkout you are "
+            "committing".format(m["flag"], m["path"], m["worktree"], repo_top))
+
+
 def run_git(args, repo):
     proc = subprocess.run(["git"] + args, cwd=repo, capture_output=True,
                           text=True, timeout=240)
@@ -1586,6 +1652,9 @@ def build_report(args):
         "review_report": args.review_report,
         "state_file": args.state,
         "docs_root": str(docs_root),
+        "repo_toplevel": None,
+        "worktree_mismatches": [],
+        "worktree_ok": True,
         "review_found": False,
         "verdict": None,
         "ambiguous_review_section": False,
@@ -1624,6 +1693,19 @@ def build_report(args):
         "result": "FAIL",
         "error": None,
     }
+    # The lane's artifacts and --repo must be the SAME worktree: otherwise
+    # this gate judges one checkout's lane and commits into another.
+    report["repo_toplevel"], mismatches = check_worktree_match(
+        args.repo, [("--review-report", args.review_report),
+                    ("--state", args.state),
+                    ("--docs-root", args.docs_root),
+                    ("--ledger", args.ledger)])
+    report["worktree_mismatches"] = mismatches
+    report["worktree_ok"] = not mismatches
+    for m in mismatches:
+        report["warnings"].append(
+            "worktree_mismatch: " +
+            worktree_mismatch_message(report["repo_toplevel"], m))
     # Fences are stripped ONCE, here: every downstream reader (verdict lines,
     # rendered-evidence citations) then sees a document with no example blocks
     # in it.
@@ -1792,6 +1874,7 @@ def build_report(args):
                and report["size_ok"]
                and report["tree_verified"]
                and report["files_reviewed_ok"]
+               and report["worktree_ok"]
                and not report["already_committed"])
     report["result"] = "PASS" if gate_ok else "FAIL"
 
@@ -1830,12 +1913,10 @@ Reads:
     subheading or the section reads as no-verdict and fails closed. Two
     terms instead scan the WIDER matched_section_range, that heading
     forward to the next level-2 `##`:
-    (a) verdict/severity consistency, DEFAULT ON, no flag. A FINDING LINE
-    is one whose first non-list-marker content is `**Critical:**` or
-    `**Important:**` (a `|`-prefixed row never counts); its block runs to a
-    blank line, a heading, or a sibling list item, and is resolved only if
-    that block holds the literal uppercase RESOLVED. Approve with one
-    standing unresolved fails; Request Changes is unaffected.
+    (a) verdict/severity consistency, DEFAULT ON, no flag: a line whose
+    first non-list-marker content is `**Critical:**` or `**Important:**`
+    (never a `|` row) is a finding; unless its block (to a blank line,
+    heading or sibling item) holds the literal RESOLVED, Approve fails.
     (b) --require-files-reviewed: a level 3-4 `Files reviewed` heading in
     that range, first backticked path per list item. Every resolved
     --changed-files path must appear (forward-slash, case-sensitive) --
@@ -1849,6 +1930,9 @@ Reads:
     absolute one must lie under --repo. --repo defaults to '.'; --docs-root
     to the nearest '.docs' ancestor of --review-report or --state, else
     --repo/.docs.
+  --repo's git top level is repo_toplevel; --review-report, --state,
+    --docs-root or --ledger in ANOTHER worktree of that repository fails
+    worktree_ok.
   --max-changed-files <N>  counts the DECLARED paths; --verify-tree makes
     that count the real diff. N < 1 is exit 2; unset, unapplied.
     --waiver <path> (exit 2 without it) waives an overrun when it carries a
@@ -1875,7 +1959,9 @@ Problem codes:
   exit-2: changed_file_missing, changed_file_outside_repo
 
 JSON keys:
-  milestone, review_report, state_file, docs_root, review_found, verdict,
+  milestone, review_report, state_file, docs_root, repo_toplevel,
+  worktree_mismatches ([{flag, path, worktree}]), worktree_ok, review_found,
+  verdict,
   ambiguous_review_section, standing_findings ([{severity, line, text}]),
   findings_consistent, stale, blocking, unscoped_blockers,
   other_milestone_blockers, ignored_unscoped_ids, rendered_evidence,
@@ -1893,17 +1979,16 @@ Exit codes:
   1  verdict not Approve, ambiguous_review_section, stale, non-empty
      blocking, unignored unscoped_blockers, any of findings_consistent /
      rendered_evidence_ok / runtime_evidence_ok / ledger_gates_ok /
-     run_log_ok / size_ok / tree_verified / files_reviewed_ok false, or
+     run_log_ok / size_ok / tree_verified / files_reviewed_ok /
+     worktree_ok false, or
      already_committed true (committed outside this gate: reset it,
      keeping the tree, and re-run).
-  2  usage error (--waiver without --max-changed-files,
-     --max-changed-files 0, --require-agents without --require-run-log or
-     vice versa), changed_file_missing, changed_file_outside_repo, an
+  2  usage error (each named under Reads), changed_file_missing, changed_file_outside_repo, an
      unreadable artifact, invalid state JSON, a git failure, or a
      delegated runtime-gate structural failure.
 
 Self-test:
-  python check_commit_gate.py --self-test   (131 cases)
+  python check_commit_gate.py --self-test   (134 cases)
 """
 
 
@@ -2334,6 +2419,56 @@ def run_self_test():
             self.review.write_text(REVIEW_OK)
             self._order(self.changed, self.review)
             self.assertEqual(self._run()["result"], "PASS")
+
+        def _git_init_with_worktree(self):
+            """self.dir becomes a repo; returns a linked worktree of it."""
+            def git(*a):
+                subprocess.run(["git", "-C", str(self.dir)] + list(a),
+                               check=True, capture_output=True, timeout=60)
+            git("init", "-q")
+            git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
+                "--allow-empty", "-m", "base")
+            wt_parent = Path(tempfile.mkdtemp())
+            self.addCleanup(shutil.rmtree, wt_parent, ignore_errors=True)
+            wt = wt_parent / "wt"
+            git("worktree", "add", "-q", str(wt), "-b", "wt")
+            return wt
+
+        def test_same_worktree_passes_and_reports_toplevel(self):
+            self._git_init_with_worktree()
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            r = self._run()
+            self.assertEqual(r["result"], "PASS", r["warnings"])
+            self.assertTrue(r["worktree_ok"])
+            self.assertTrue(_same_path(r["repo_toplevel"], str(self.dir)))
+
+        def test_lane_artifacts_in_another_worktree_fail(self):
+            wt = self._git_init_with_worktree()
+            changed = wt / "src_file.py"
+            changed.write_text("code\n")
+            self.review.write_text(REVIEW_OK)
+            self._order(changed, self.review)
+            r = build_report(self._ns(changed=[str(changed)], repo=str(wt)))
+            self.assertEqual(r["result"], "FAIL")
+            self.assertFalse(r["worktree_ok"])
+            self.assertTrue(_same_path(r["repo_toplevel"], str(wt)))
+            self.assertEqual({m["flag"] for m in r["worktree_mismatches"]},
+                             {"--review-report", "--state"})
+
+        def test_artifacts_outside_any_repo_are_not_a_mismatch(self):
+            # The sanctioned workspace-root layout: .docs/ above --repo, in
+            # no repository (or another one) -- unknown is never a mismatch.
+            repo = self.dir / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "-C", str(repo), "init", "-q"],
+                           check=True, capture_output=True, timeout=60)
+            changed = repo / "src_file.py"
+            changed.write_text("code\n")
+            self.review.write_text(REVIEW_OK)
+            self._order(changed, self.review)
+            r = build_report(self._ns(changed=[str(changed)], repo=str(repo)))
+            self.assertTrue(r["worktree_ok"], r["worktree_mismatches"])
 
         def test_request_changes_fails(self):
             self.review.write_text(REVIEW_RC)

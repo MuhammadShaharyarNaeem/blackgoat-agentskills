@@ -155,7 +155,7 @@ Everything related to a single feature (the route, the request/response models, 
 
 ## 2. Project Structure
 
-**Case 1 (new API)** uses **4 projects** — `Api`, `Core`, `DAL.EF`, `Infrastructure` — plus a `Tests` project and, for scaffolding only, a `DAL.EF.Design` project (§6.5). There is no `Application` project: REPR has no MediatR handlers to put in one. For small microservices, a single project is acceptable. The `Api` project's name is not fixed (`.Api`, `.API` or bare — the real projects use all three); pick one per solution. **Case 2** keeps the existing projects — §2.6.
+**Case 1 (new API)** uses **4 projects** — `Api`, `Core`, `DAL.EF`, `Infrastructure` — plus a `Tests` project and, for scaffolding only, a `DAL.EF.Design` project (§6.5). There is no `Application` project: REPR has no MediatR handlers to put in one. The four-project split holds for a small microservice too — `dotnet-backend-patterns/SKILL.md` Mode B grants no single-project exception. The `Api` project's name is not fixed (`.Api`, `.API` or bare — the real projects use all three); pick one per solution. **Case 2** keeps the existing projects — §2.6.
 
 | Project | References |
 |---|---|
@@ -374,7 +374,7 @@ One file maps one route. A real exception exists (FunctionInbound's `CreatePDFEn
 
 ### 3.4 Configuration — Azure App Configuration
 
-Configuration, connection strings and settings come from **Azure App Configuration** through `IConfiguration`, bound to `Core/Config/AppConfiguration` (case 2: the solution's existing `AppConfiguration`) and injected as `IOptions<AppConfiguration>` — never `Environment.GetEnvironmentVariable()`. The real projects agree on this shape:
+Read configuration through `IConfiguration`, never `Environment.GetEnvironmentVariable()`: non-secret settings live in **Azure App Configuration**; secrets, connection strings included, live in **Key Vault** and reach `IConfiguration` as Key Vault references (owner: `cloud-deploy-patterns/SKILL.md` § Baseline — Platform Invariants). Bind it to `Core/Config/AppConfiguration` (case 2: the solution's existing `AppConfiguration`) and inject it as `IOptions<AppConfiguration>`. The real projects agree on this shape:
 
 - **Connect:** Development connects with `AzureAppConfiguration:ConnectionString`; every other environment with `AzureAppConfiguration:EndpointUrl` + `DefaultAzureCredential`.
 - **Label:** `AppConfig_Label` is **required** — resolve it and throw `InvalidOperationException` when it is missing. Never default it.
@@ -1024,14 +1024,14 @@ The real file is Gorelo.Integrations.REPR `Gorelo.Integrations.REPR.API/Endpoint
 ### 11.3 Critique
 **What it gets right** — and is worth copying:
 - The slice boundary: route, metadata and request types in one file, registered by the feature's extension; no MediatR, no repository.
-- The external HTTP call happens **before** the transaction and the Service Bus publish **after** the commit, so the transaction span stays in-process (SKILL.md's span rule).
+- The external HTTP call happens **before** the transaction and the Service Bus publish **after** the commit, so the transaction span stays in-process (SKILL.md's span rule). Publish-after-commit is still a dual write, though — see item 4.
 - Redis sits behind a Core interface (`IPax8AuthCacheService`), its implementation in Infrastructure.
 
 **What it gets wrong:**
 1. **Size.** About 190 lines inline — well past §6.3's ~80-line extraction point — mixing an OAuth exchange, a cache, persistence and messaging in one method.
 2. **Per-handler try/catch.** The outer catch-all turns every failure — including `OperationCanceledException` — into the same 500 with a generic message, discarding the exception type the caller and the logs need. Failures belong to the one `IExceptionHandler`.
 3. **Three error-body shapes from one endpoint:** a bare string (400), `ProblemDetails` with a specific message (500), `ProblemDetails` with a generic message (500).
-4. **Partial-failure ordering.** The token is written to Redis *before* the database commit and compensated by hand on rollback; and when the publish in step 7 fails, the outer catch returns 500 although the database and the cache are already committed — the client sees a failed exchange that succeeded, and an OAuth code is single-use, so its retry fails.
+4. **Partial-failure ordering.** The token is written to Redis *before* the database commit and compensated by hand on rollback; and when the publish in step 7 fails, the outer catch returns 500 although the database and the cache are already committed — the client sees a failed exchange that succeeded, and an OAuth code is single-use, so its retry fails. No ordering of a commit and a direct publish closes that window; an outbox does (`{PLUGIN_ROOT}/jobs-and-messaging-patterns/SKILL.md` § Publish-With-Write Uses the Outbox — Never a Dual Write).
 5. **A transaction it does not need.** Two tracked changes saved by one `SaveChangesAsync` are already atomic. If the context is registered with `EnableRetryOnFailure`, the explicit `BeginTransactionAsync` also throws unless wrapped in an execution strategy (§6.5).
 6. **Tenant and actor.** `ctx.ServiceProviderId` is `0` when the query string omits it (§5.3), so the handler can write a token row for tenant `0`; `CreatedById = 1` is hard-coded although `ctx.TechnicianId` is in hand.
 7. **Misplaced types.** `SendMessage` is a cross-service message contract, not a slice DTO; it belongs in Core `Models/` beside `ITopicSender`. The file also imports the legacy project's namespace (`Gorelo.API.Integration.Filters`) for the context filter.
@@ -1051,8 +1051,8 @@ public static async Task<IResult> HandleAsync(
 }
 ```
 
-- **`CreatePax8OAuthService`** in `Endpoints/Pax8/` (one feature uses it), in this order: exchange the code (outside any transaction) → one `SaveChangesAsync` upserting both rows with `CreatedById = ctx.TechnicianId` → write Redis **after** the commit → publish. Configuration validated at startup (§3.4), not per request. Whether a publish failure fails the request is a decision to make explicitly — today it does, after the data is committed.
-- **Tests:** the service against SQLite in-memory (§8.2) with fakes for the token endpoint, Redis and the topic; the wire at Tier 3 (§8.4).
+- **`CreatePax8OAuthService`** in `Endpoints/Pax8/` (one feature uses it), in this order: exchange the code (outside any transaction) → one `SaveChangesAsync` upserting both rows with `CreatedById = ctx.TechnicianId` **and** adding the SignalR-sync outbox row, so state and event commit atomically → refresh Redis **after** the commit. The service takes no `ITopicSender`: the outbox relay publishes the row to the `signalr-message-send` topic (`{PLUGIN_ROOT}/jobs-and-messaging-patterns/SKILL.md` § Publish-With-Write Uses the Outbox — Never a Dual Write), so a broker outage delays the event rather than failing a request whose data is already committed. Configuration validated at startup (§3.4), not per request.
+- **Tests:** the service against SQLite in-memory (§8.2) with fakes for the token endpoint and Redis, asserting the outbox row is written in the same save; the wire at Tier 3 (§8.4).
 
 ---
 

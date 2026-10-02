@@ -1,0 +1,9 @@
+{
+  "name": "orders-svc",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Frozen fixture for the verify-matrix-derivation eval. A healthy orders service, already discovered: .docs/summary/ carries Echo's manual-testing baseline plus stamped context.md and orders/overview.md. Nothing here is broken and nothing here may change - the case grades only the acceptance matrix the bgpdd-verify lane derives from the baseline, and that it stops at the confirmation checkpoint.",
+  "scripts": {
+    "start": "node src/server.js"
+  }
+}

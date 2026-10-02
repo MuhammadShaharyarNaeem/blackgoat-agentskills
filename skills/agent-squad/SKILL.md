@@ -45,7 +45,7 @@ Log: "⚠️ Context integrity check failed — rebuilt from semantic memory."
 | Nova | UI Builder | Implementation | After Alex for `[UI]` milestones, or "build the UI" |
 | Quinn | QA Tester | Testing | After Mason/Nova, or "write tests / test this" |
 | Luna | Reviewer | Code Review | After Quinn's tests pass, or "review this code" |
-| Max | Optimizer | Refactoring | On explicit optimization request (retired from bgpdd-build) |
+| Max | Optimizer | Refactoring | On explicit optimization request, or a `bgpdd-quick` refactor (retired from bgpdd-build) |
 | Vera | Launch Verifier | Shipping | bgpdd-shipping Stage 1, or "run the pre-launch checklist" |
 | Cipher | Security Auditor | Deployment | After the build cycle completes, [SEC]-tagged build milestones, or "audit security / check for vulnerabilities" |
 | Ward | Privacy & Compliance Engineer | Deployment | Data-handling rows of a `bgpdd-secure` attack matrix, or "privacy audit / DSAR / retention / consent" language |

@@ -98,8 +98,9 @@ Each of these is accepted, not overlooked. Every one of them fails **open**.
 - **Clock and checkout.** A fresh `clone`/`checkout`, or a machine whose clock
   moved, can make an old lane look active (over-block — recoverable via
   `--explain` and the named gate) or a new one look stale (under-block).
-- **Wrong cwd.** Detection is rooted at the hook's `cwd`; a call issued from
-  outside the repo sees no `.docs/`.
+- **Wrong cwd.** Rules 2–8 are rooted at the hook's `cwd`; a call issued from
+  outside the repo sees no `.docs/`. Rule 1 is rooted at the commit's
+  **target worktree** instead — see *Rule 1 roots at the target worktree*.
 - **Non-native path form.** The interpreter must be able to resolve `cwd` as
   given. A Windows python handed an MSYS path (`/c/Users/...`) resolves
   nothing and allows — observed while building this file. Claude Code passes a
@@ -158,7 +159,7 @@ An explicit `"allow"` from a `PreToolUse` hook **short-circuits the user's own
 permission prompt**. This guard is a restraint, not a permission grant: it must
 never convert a call the user would have been asked about into one they were
 not. So an allow prints nothing and the host's normal permission flow runs
-untouched. `test_39` pins this in both output formats.
+untouched. `test_39` pins this.
 
 ## Per-runtime packaging (convention #5)
 
@@ -168,14 +169,6 @@ is which event fires it and which JSON shape it reads:
 | Runtime | Event | Wiring | Output |
 |---|---|---|---|
 | Claude Code | `PreToolUse` × 3 matchers | `hooks/hooks.json` → `run-hook.cmd guard-action` | `hookSpecificOutput.permissionDecision` |
-| Cursor | `beforeShellExecution` | `hooks/hooks-cursor.json` (template → `.cursor/hooks.json`) | `permission` / `agent_message` |
-
-Cursor's documented pre-execution hooks cover shell, MCP and file reads — not
-file writes, and not subagent spawning. So **only rule 1 is mechanically
-enforceable under Cursor**; rules 2–4 hold there as prose contract
-(`rules/cursor-runtime.mdc`). `normalize_payload()` absorbs Cursor's flat
-`beforeShellExecution` shape into the same `(tool_name, tool_input, cwd)` triple
-the rest of the file works in, so no rule is written twice.
 
 `hooks/guard-action` is the bash launcher: it resolves the plugin root and a
 python, pipes stdin through, and passes stdout back. It holds **no rule text**.
@@ -310,8 +303,8 @@ The 2.6.0 forty-two:
 - **Fail-open (6)** — malformed stdin (six shapes) allows; unknown tool allows;
   missing `tool_input` allows; a `.docs` that is a file yields no lanes; corrupt
   state and ledger do not raise; an empty `pipeline` is not a lane.
-- **Contract (7)** — both payload shapes normalize; both deny payload shapes
-  match their host; allow prints nothing in either format; `main` never exits
+- **Contract (6)** — the payload normalizes; the deny payload shape matches
+  the host; allow prints nothing; `main` never exits
   non-zero; `--explain` runs; **BOM-prefixed stdin still denies**.
 
 ## Rule 5 (`build_and_test_through_the_wrapper`) and Rule 6 (`delegation_halted_for_the_user`) (Unreleased)
@@ -347,3 +340,26 @@ Agents were observed opening a `pipeline-tools` script's full source (some 700+ 
 **Carve-out: the cwd's own repository root IS this plugin repository.** Checked by `cwd_is_plugin_repo()` — the presence of `skills/pipeline-tools/scripts/guard_action.py` directly under `cwd` — exactly the detection the task that added this rule specified. When true, the call is allowed **lane or no lane**: editing the tools (this file included) requires reading them, and that is authoring, not the execution this rule restrains. This is the one rule in the family whose carve-out is keyed on WHERE the call runs rather than on an artifact the lane itself wrote — a deliberate divergence (convention #8), because "am I inside the plugin's own source tree" is a property of `cwd`, not of a `.docs/` lane.
 
 Self-test count: 112 → 118 — rule 8's `Read` and `Bash` (`cat`/`type`/`Get-Content`/`head`/`tail`/`less`/`sed -n`) denials during an active lane, its allow with no active lane, its allow under the plugin-repo carve-out (with a fabricated active lane there, so the carve-out is shown overriding an armed rule rather than merely coinciding with an unarmed one), and `sed -i`/a non-script read staying outside the rule.
+
+## Rule 1 roots at the target worktree (Unreleased)
+
+**The failure.** Three pieces of work ran at once in three worktrees. One checkout had an unclosed lane; a commit into a *different* worktree — `git -C <wt> commit`, `cd <wt> && git commit`, `Set-Location <wt>; git commit` — was refused, because every detector was rooted at the hook payload's `cwd`, and the session's cwd was the checkout with the lane.
+
+**The fix.** Rule 1 alone now resolves where the history write lands. `commit_target_dir()` walks the command's segments in order, applying each leading `cd`/`chdir`/`pushd`/`Set-Location`/`sl`/`Push-Location <dir>` relative to the running directory (`-Path`-style flags skipped; an MSYS `/c/...` path read as `C:/...` on Windows), then every `git -C <dir>` on the write segment, cumulatively as git composes them. `git -C <target> rev-parse --show-toplevel` turns the target into its worktree top level, and lanes are detected **only** under that top level (plus the target itself when it is a subdirectory — which also fixes the old under-block where a cwd of `repo/src` saw no `.docs/`). A lane in another worktree never blocks; a lane in the target worktree still does.
+
+**Fail-open, unchanged in direction.** Any git error — no git on PATH, not a repository, a 5 s timeout — falls back to detecting under the target directory alone: never under an unrelated cwd, and never a deny on the strength of the error. Rules 2–8 keep the hook's `cwd`: none of them keys on a git command's target (rule 4's `git checkout -- <path>` is unconditional and needs no root).
+
+**What it cannot see.** A target reached through a variable (`cd $WT`), a script file, or `Start-Process -WorkingDirectory` resolves to the hook's `cwd`, as every target did before. `--explain --command "<cmd>"` prints the resolved target, its top level, and which lanes arm rule 1 there.
+
+Self-test count: 119 → 126 — lane in cwd + `-C` to another worktree allows; lane in the `-C` target denies; seven `cd`-prefixed forms (bash `&&`/`;`/newline/subshell, `Set-Location`, `Set-Location -Path`, `pushd`) allow and deny by where the lane sits; relative `-C`, relative `cd`, composed `-C -C`; a subdirectory cwd resolving to its top level; target parsing without git (including MSYS on Windows); an unresolvable `-C` target never borrowing the cwd's lane. These cases build a real repo and linked worktree, so the self-test needs `git` on PATH.
+
+## Rule 9 (`learn_applies_only_what_was_approved`) (Unreleased)
+
+`bgpdd-learn` Step 4 and `agents/forge.md` both say "never apply without explicit approval", and only `agents/blackgoat.md` had a mechanical guard (rule 7). **Rule 9** denies a write — tool or Bash mutation, through the same `write_targets_of()` rules 2/4/7 use — to a rule layer (`agents/*.md`, `skills/**/SKILL.md`, `CLAUDE.md`, `AGENTS.md`) while a learn run is active, unless that run's latest `check_learn_approval.py --record` PASS lists the path among its approved destinations.
+
+- **Active** = `.docs/learn/*/forge-handoff.md` (the plan bgpdd-learn Step 3 saves) inside the freshness window, with no `--close` PASS in that root's `gates.jsonl`. A separate detector, not a `detect_lanes()` kind: a learn run arms no other rule (no commit gate, no build wrapper, no source-read restraint).
+- **Why the ledger record is enough here.** The guard trusts the `record` PASS because `check_learn_approval.py` wrote it only after verifying the approval against the session transcript — a user-role entry the model cannot author — and rule 4 denies a hand write to the ledger. The guard itself checks no string the model typed.
+- **Disarmed** by the `--close` PASS, or by the 12h window, as every lane is.
+- **Fails open without a transcript.** When the hook payload names no `transcript_path` file that exists, `check_learn_approval.py --record` cannot run (exit 2), so no approval record can ever be made; rule 9 then allows rather than deny a legitimately approved apply, and `bgpdd-learn` Step 4's prose rule stands alone (the same fail-open stance as § Fail-open is a hard requirement). `test_126` pins it, and that an existing transcript keeps the deny. The Cursor payload shape and `--format cursor` were removed with Cursor support (test 37 retired), so the count stays 130.
+
+Self-test count: 126 → 130 — denied before approval (Edit, Write, a CLAUDE.md, a Bash redirect); an approved destination allowed (absolute and `{PLUGIN_ROOT}/` forms) while another persona is denied; disarmed with no run, after a close, and when stale; non-rule-layer paths (`src/`, a `references/` page, README) unaffected.

@@ -24,7 +24,7 @@ The table is a constant in the script. A gate that re-derived it by parsing `age
 
 `<consumers>` is standing-but-optional for mason and nova only ("when the brief asks for it" — the `/bgpdd-bugfix` Phase 3 brief does). `--require consumers` promotes it for any persona, and warns when the persona named carries no standing consumers contract, because that is more often a caller slip than a real bar.
 
-`<fix_verification>` is required under `--fix-round`, per base-persona: "'Already complete' exempts nothing." The gate deliberately accepts `NOT VERIFIED — <what blocked you>` as a value; base-persona says a missing element is the defect, not an honest negative.
+`<fix_verification>` is required under `--fix-round`, per base-persona: "'Already complete' exempts nothing." The gate deliberately accepts `NOT VERIFIED — <what was observed instead>` (a weaker re-run; no `blocked_on:` line required on a `COMPLETE` handoff) and `BLOCKED — <what blocked you>` (never re-ran) as values; base-persona says a missing element is the defect, not an honest negative.
 
 ## The status enum
 
@@ -277,3 +277,14 @@ In `/bgpdd-bugfix`, Quinn's Phase 1 RED and Phase 4 GREEN change no repo file: t
 - **Ledger and JSON.** The reason is recorded as `changed_files_none_reason`, following `changed_symbols_none_reason`. The JSON report always carries the key (`null` unless the form passed), and the ledger record carries it only when set.
 
 Self-test count: 99 → 104. The new cases: Quinn's `none:` passes with and without `--since`, and its reason reaches the ledger; every other persona is refused; an empty reason fails; `none:` mixed with a path fails; bare `None` stays `path_missing`.
+
+## `--transcript`: the handoff came back from a delegation (Unreleased)
+
+Orchestrator Contract §1's "you MUST NOT roleplay a delegated agent's work yourself" was prose, and every artifact this gate reads could be authored by the Orchestrator: a handoff file, a report, and even `record_run.py`'s delegation record (its `--model` is typed by the same hand). The session transcript is the one artifact whose **roles** the runtime assigns, so `--transcript <session.jsonl>` checks the handoff block (all whitespace ignored — a runtime may re-wrap it) against the runtime's record:
+
+- **accepted** — the `tool_result` of a `Task`/`Agent`/`SendMessage` call (a foreground delegation; `delegation_source.via = delegation_result`, with the call's `subagent_type`), or a user-role text entry: a background agent's `<task-notification>` (mapped back to its `Agent` call through `<tool-use-id>`, `via = delegation_notification`) or a human paste (`via = user_message`);
+- **refused** — `handoff_not_delegated` when the block appears only in assistant text (the model wrote it), only in another tool's result (`cat handoff.md` returns what the model wrote), or only in a sidechain.
+
+Optional and backward compatible: without the flag nothing changes. The persona is reported (`subagent_type`), not enforced — a delegation to the wrong agent is still a delegation, and the roleplay this converts is the absence of one. Runtime scope is the Claude Code JSONL shape; a runtime with no transcript file simply does not pass the flag.
+
+Self-test count: 104 → 108 — a foreground delegation result passes (re-wrapped whitespace included), a background notification passes and maps to its call, assistant text / a `cat` of the file / a sidechain each fail `handoff_not_delegated`, and an unreadable transcript is exit 2.

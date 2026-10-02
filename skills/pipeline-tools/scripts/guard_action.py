@@ -1,28 +1,29 @@
 #!/usr/bin/env python3
-"""Pre-execution guard: converts eight restraint rules from "should not" to "cannot".
+"""Pre-execution guard: converts nine restraint rules from "should not" to "cannot".
 
 Every other script in this family verifies AFTER the fact, and the decision to
 run it is the model's. This one runs BEFORE the tool call, decided by the
 runtime rather than by the model, and returns a deny that the model cannot
 route around. It is the mechanical form of CLAUDE.md convention #9 applied to
-the eight restraints that bite at the exact moment the model most wants to
+the nine restraints that bite at the exact moment the model most wants to
 proceed: committing, editing the RED, delegating before intake, delegating
 into a lane a human has to clear, hand-writing the artifacts the gates read,
 running a build or test raw instead of through the log wrapper, hand-
-editing the one persona file in this tree no agent may touch, and opening a
-pipeline-tools script's SOURCE instead of running its --help.
+editing the one persona file in this tree no agent may touch, opening a
+pipeline-tools script's SOURCE instead of running its --help, and applying
+a learn-lane lesson the user never approved.
 
 This file is the DECISION LOGIC and it is runtime-neutral (convention #5).
 The per-runtime packaging -- which hook event fires it, and which JSON shape
-the host reads -- lives in `hooks/hooks.json` (Claude Code),
-`hooks/hooks-cursor.json` (Cursor) and the `--format` flag below. No rule text
-is duplicated into either.
+the host reads -- lives in `hooks/hooks.json` (Claude Code) and `emit()`
+below. No rule text is duplicated into either.
 
-THE SEVEN RULES
-----------------
+THE NINE RULES
+---------------
 1. `commit_through_the_gate` -- tool `Bash`, a history-writing `git`
    invocation (`commit|merge|cherry-pick|revert|rebase|am|notes|tag|stash`) or
-   `gh pr merge`, while a lane is ACTIVE and NOT yet closed -> DENY, naming
+   `gh pr merge`, while a lane in the COMMIT'S TARGET WORKTREE (not the
+   hook's cwd -- see WORKTREE TARGET) is ACTIVE and NOT yet closed -> DENY, naming
    the gate that commits for that lane. The gates commit from their own
    subprocess, not through the model's Bash tool, so this can never block a
    gate. Outside any lane the call is allowed: `always-on.md` § Outside any
@@ -115,6 +116,21 @@ THE SEVEN RULES
    `Read` carries no `tool_input.command` and cannot write, so this rule
    reads `paths_of()` for `Read` and a dedicated read-verb scan for `Bash`,
    never `bash_write_targets()`.
+9. `learn_applies_only_what_was_approved` -- a write (tool OR Bash mutation)
+   targeting a rule layer -- `agents/*.md`, `skills/**/SKILL.md`, a
+   `CLAUDE.md` or `AGENTS.md` -- while a LEARN run is active -> DENY unless
+   that run's latest `check_learn_approval.py --record` PASS lists the path
+   among its approved destinations. Active = `.docs/learn/*/forge-handoff.md`
+   (the plan bgpdd-learn Step 3 saves) inside the freshness window, with no
+   `--close` PASS in that root's `gates.jsonl`. Rooted at the hook's cwd and
+   independent of `detect_lanes()`: a learn run arms no other rule. The
+   approval itself is read from the session transcript by that script (a
+   user-role entry the model cannot author), so this rule never trusts a
+   string the model typed. Converts bgpdd-learn Step 4 / forge.md's "never
+   apply without explicit approval" (convention #9); rule 7 still owns
+   agents/blackgoat.md, which no approval unlocks. A payload with no
+   existing `transcript_path` file disarms it: no record can be made there,
+   so it fails open and the prose rule stands alone.
 
 RUNNER MATCHING (rule 5)
 -------------------------
@@ -285,8 +301,27 @@ Known failure modes, each deliberate rather than overlooked:
     `git clone`, or a machine whose clock moved can make an old lane look
     active (over-blocking, recoverable by `--explain` + the named gate) or a
     new one look stale (under-blocking).
-  * WRONG CWD. Detection is rooted at the hook's `cwd`. A tool call issued
-    with a cwd outside the repo sees no `.docs/` and no lane.
+  * WRONG CWD. Rules 2-8 are rooted at the hook's `cwd`; a tool call issued
+    with a cwd outside the repo sees no `.docs/` and no lane. Rule 1 is NOT
+    cwd-rooted -- see WORKTREE TARGET: it detects lanes only under the
+    commit's own target worktree, so an open lane in one checkout never
+    blocks a commit into another. What it cannot see: a target reached
+    through a variable (`cd $WT`), a script file, or `Start-Process
+    -WorkingDirectory`; those resolve to the hook's `cwd`, as before.
+
+WORKTREE TARGET (rule 1)
+------------------------
+`commit_target_dir()` resolves where the history write actually lands: it
+walks the command's segments in order, applying each leading `cd` / `chdir`
+/ `pushd` / `Set-Location` / `sl` / `Push-Location <dir>` (relative to the
+running directory, `-Path`-style flags skipped, an MSYS `/c/...` path read as
+`C:/...` on Windows), then every `git -C <dir>` global option on the write
+segment itself, cumulatively as git does. `git -C <dir> rev-parse
+--show-toplevel` turns that into the worktree top level, and lanes are
+detected under that top level (plus the target directory, when it is a
+subdirectory). Any git error -- no git, not a repository, a timeout --
+falls back to detecting under the target directory alone: never under an
+unrelated cwd, and never a deny on the strength of the error itself.
   * NON-NATIVE PATH FORM. The interpreter has to be able to resolve `cwd` as
     given. A Windows python handed an MSYS path (`/c/Users/...`) resolves
     nothing, finds no `.docs/`, and allows -- observed while testing this
@@ -354,8 +389,8 @@ Pure standard library. Every file is read as utf-8-sig, so a BOM cannot break
 parsing. All output is ASCII.
 
 Usage:
-    guard_action.py [--format claude|cursor] [--window-hours N] < hook.json
-    guard_action.py --explain [--cwd DIR] [--window-hours N]
+    guard_action.py [--window-hours N] < hook.json
+    guard_action.py --explain [--cwd DIR] [--command CMD] [--window-hours N]
     guard_action.py --self-test
 """
 
@@ -404,6 +439,10 @@ BLACKGOAT_PERSONA_SEGMENTS = ("agents", "blackgoat.md")
 BLACKGOAT_PART_VIII_HEADING = "## Part VIII: Problem & Solution Ledger"
 BLACKGOAT_APPEND_ENV_VAR = "BLACKGOAT_ALLOW_PART_VIII_APPEND"
 
+# Rule 9: the learn lane's plan file and approval gate.
+LEARN_PLAN_NAME = "forge-handoff.md"
+LEARN_GATE = "check_learn_approval.py"
+
 # A pipeline whose lane has no commit gate: it arms every rule EXCEPT rule 1.
 NO_COMMIT_GATE_PIPELINES = ("bgpdd-verify", "bgpdd-secure")
 
@@ -429,6 +468,10 @@ GIT_WRITE_RE = re.compile(
 # `gh pr merge` writes the same history through a different binary.
 GH_WRITE_RE = re.compile(r"\bgh\s+pr\s+merge\b")
 HELP_RE = re.compile(r"(?:^|\s)(--help|-h)(?=\s|$)")
+# Rule 1's target worktree (see WORKTREE TARGET in the docstring).
+CD_VERBS = ("cd", "chdir", "pushd", "set-location", "sl", "push-location")
+MSYS_DRIVE_RE = re.compile(r"^/([A-Za-z])(?:/(.*))?$")
+GIT_TIMEOUT_SECONDS = 5
 COMMAND_SEPARATORS = re.compile(r"[;&|\n]")
 
 # --- Bash write extraction (rules 2 and 4); see BASH WRITES in the docstring.
@@ -728,6 +771,18 @@ def detect_lanes(cwd, now=None, window_hours=WINDOW_HOURS_DEFAULT):
     return lanes
 
 
+def lanes_under(roots, now=None, window_hours=WINDOW_HOURS_DEFAULT):
+    """`detect_lanes` over each root, de-duplicated by lane root."""
+    seen, found = set(), []
+    for root in roots:
+        for lane in detect_lanes(root, now=now, window_hours=window_hours):
+            key = os.path.normcase(os.path.normpath(lane.root))
+            if key not in seen:
+                seen.add(key)
+                found.append(lane)
+    return found
+
+
 def lane_status(root):
     """The `status` string in `root`'s own orchestrator-state.json, or None.
 
@@ -841,20 +896,13 @@ def halted_lanes(lanes):
 # ---------------------------------------------------------------------------
 
 def normalize_payload(payload):
-    """(tool_name, tool_input, cwd) from a Claude Code or Cursor hook payload."""
+    """(tool_name, tool_input, cwd) from a Claude Code hook payload."""
     if not isinstance(payload, dict):
         raise GuardError("hook payload is not a JSON object")
 
-    event = payload.get("hook_event_name")
-    cwd = payload.get("cwd") or payload.get("workspace_roots") or os.getcwd()
-    if isinstance(cwd, list):
-        cwd = cwd[0] if cwd else os.getcwd()
+    cwd = payload.get("cwd") or os.getcwd()
     if not isinstance(cwd, str) or not cwd:
         cwd = os.getcwd()
-
-    # Cursor's beforeShellExecution is flat: the command sits at the top level.
-    if event == "beforeShellExecution":
-        return "Bash", {"command": payload.get("command")}, cwd
 
     tool_name = payload.get("tool_name")
     if not isinstance(tool_name, str):
@@ -953,6 +1001,67 @@ def is_blackgoat_persona_path(path):
     parts = _segments(path)
     return (len(parts) >= 2
             and tuple(s.lower() for s in parts[-2:]) == BLACKGOAT_PERSONA_SEGMENTS)
+
+
+def is_learn_guarded_path(path):
+    """Rule 9's targets: agents/*.md, skills/**/SKILL.md, CLAUDE.md, AGENTS.md.
+
+    The same watched set check_learn_approval.py --close reads -- the layers
+    Forge's write boundary covers. Segment-based like the predicates above.
+    """
+    parts = [s.lower() for s in _segments(path)]
+    if not parts:
+        return False
+    name = parts[-1]
+    if name in ("claude.md", "agents.md"):
+        return True
+    if name == "skill.md" and "skills" in parts[:-1]:
+        return True
+    return len(parts) >= 2 and parts[-2] == "agents" and name.endswith(".md")
+
+
+def _learn_norm(path):
+    p = (path or "").replace("\\", "/").strip().lower()
+    p = p.replace("{plugin_root}/", "skills/")
+    while p.startswith("./"):
+        p = p[2:]
+    return p
+
+
+def learn_destination_matches(path, destinations):
+    """check_learn_approval.py's destination_matches, restated."""
+    r = _learn_norm(path)
+    for dest in destinations or []:
+        d = _learn_norm(dest)
+        if d == r or d.endswith("/" + r) or r.endswith("/" + d):
+            return True
+    return False
+
+
+def active_learn_runs(cwd, now, window_hours=WINDOW_HOURS_DEFAULT):
+    """[(root, ledger, approved_destinations_or_None)] -- rule 9's detector.
+
+    A learn run is ACTIVE when `.docs/learn/*/forge-handoff.md` (the plan,
+    saved at bgpdd-learn Step 3) is inside the freshness window and its
+    `gates.jsonl` holds no check_learn_approval.py `close` PASS. Its
+    approved destinations are the latest `record` PASS's, else None.
+    """
+    runs = []
+    for d in _iter_dirs(Path(cwd) / ".docs" / "learn"):
+        if not _fresh(d / LEARN_PLAN_NAME, now, window_hours):
+            continue
+        ledger = d / "gates.jsonl"
+        records = [r for r in read_ledger(ledger)
+                   if r.get("gate") == LEARN_GATE]
+        if any(r.get("action") == "close" and r.get("verdict") == "PASS"
+               for r in records):
+            continue
+        approvals = [r for r in records if r.get("action") == "record"]
+        latest = approvals[-1] if approvals else None
+        dests = (latest.get("destinations")
+                 if latest and latest.get("verdict") == "PASS" else None)
+        runs.append((str(d), str(ledger), dests))
+    return runs
 
 
 def is_pipeline_tool_script_path(path):
@@ -1179,6 +1288,98 @@ def git_write_invocation(command):
     return None
 
 
+def _native_path(text):
+    """An MSYS `/c/Users/...` path as `C:/Users/...` on Windows; else as given."""
+    match = MSYS_DRIVE_RE.match(text or "")
+    if os.name == "nt" and match:
+        return match.group(1).upper() + ":/" + (match.group(2) or "")
+    return text
+
+
+def _join_dir(base, arg):
+    """`arg` resolved against `base` the way a shell's `cd` would."""
+    arg = os.path.expanduser(_native_path(arg))
+    return os.path.normpath(os.path.join(base, arg))
+
+
+def commit_target_dir(command, cwd):
+    """The directory the history-writing command in `command` runs in.
+
+    Walks the `;`/`&`/`|`/newline segments in order, tracking a leading
+    `cd`/`Set-Location`/`pushd`/`Push-Location`/`chdir <dir>`, and on the
+    first segment carrying the git (or `gh pr merge`) write applies every
+    `git -C <dir>` global option cumulatively, as git does. Returns `cwd`
+    when nothing moves it. See WORKTREE TARGET in the module docstring.
+    """
+    current = cwd
+    for segment in COMMAND_SEPARATORS.split(command or ""):
+        tokens = bash_tokens(segment.strip().lstrip("("))
+        if not tokens:
+            continue
+        verb = command_basename(tokens[0])
+        if verb in CD_VERBS:
+            args = [t for t in tokens[1:]
+                    if not t.startswith("-") and t.lower() != "/d"]
+            if args:
+                current = _join_dir(current, args[0])
+            continue
+        if not git_write_invocation(segment):
+            continue
+        idx = 0
+        while idx < len(tokens) and command_basename(tokens[idx]) != "git":
+            idx += 1
+        idx += 1
+        while idx < len(tokens) and tokens[idx].startswith("-"):
+            if tokens[idx] == "-C" and idx + 1 < len(tokens):
+                current = _join_dir(current, tokens[idx + 1])
+                idx += 2
+            elif tokens[idx] == "-c" and idx + 1 < len(tokens):
+                idx += 2
+            else:
+                idx += 1
+        return current
+    return current
+
+
+def worktree_toplevel(directory):
+    """`git -C <directory> rev-parse --show-toplevel`, or None on ANY error."""
+    import subprocess
+    try:
+        proc = subprocess.run(
+            ["git", "-C", directory, "rev-parse", "--show-toplevel"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=GIT_TIMEOUT_SECONDS)
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    top = proc.stdout.decode("utf-8", errors="replace").strip()
+    return os.path.normpath(top) if top else None
+
+
+def _same_dir(a, b):
+    return (os.path.normcase(os.path.normpath(a))
+            == os.path.normcase(os.path.normpath(b)))
+
+
+def commit_lane_roots(command, cwd):
+    """(target_dir, toplevel_or_None, [roots to detect lanes under]).
+
+    The roots are the target's worktree top level plus the target directory
+    itself when it is a subdirectory of it; when `git rev-parse` fails, the
+    target directory alone -- rooted at the target, never at an unrelated
+    hook cwd.
+    """
+    target = commit_target_dir(command, cwd)
+    top = worktree_toplevel(target)
+    if top is None:
+        return target, None, [target]
+    roots = [top]
+    if not _same_dir(top, target):
+        roots.append(target)
+    return target, top, roots
+
+
 def _skip_env_prefix(tokens):
     """`tokens` with any leading `NAME=value` assignments and `env` stripped.
 
@@ -1256,16 +1457,24 @@ def raw_runner_invocation(command):
 # ---------------------------------------------------------------------------
 
 def _plugin_root():
-    return (os.environ.get("CLAUDE_PLUGIN_ROOT")
-            or os.environ.get("CURSOR_PLUGIN_ROOT")
-            or "{PLUGIN_ROOT}")
+    return os.environ.get("CLAUDE_PLUGIN_ROOT") or "{PLUGIN_ROOT}"
 
 
 def _gate_command(gate):
     return "python {0}/skills/pipeline-tools/scripts/{1}".format(_plugin_root(), gate)
 
 
-def decide(tool_name, tool_input, cwd, now=None, window_hours=WINDOW_HOURS_DEFAULT):
+def transcript_available(payload):
+    """Rule 9's precondition: the hook payload names a session transcript
+    file that exists. Without one, check_learn_approval.py --record cannot
+    run (exit 2), so no approval can ever be recorded -- rule 9 then fails
+    open and bgpdd-learn's prose approval rule stands alone."""
+    path = payload.get("transcript_path") if isinstance(payload, dict) else None
+    return isinstance(path, str) and bool(path.strip()) and os.path.isfile(path)
+
+
+def decide(tool_name, tool_input, cwd, now=None, window_hours=WINDOW_HOURS_DEFAULT,
+           has_transcript=True):
     """Return (decision, rule_id, reason). decision is 'allow' or 'deny'."""
     if now is None:
         now = time.time()
@@ -1314,18 +1523,51 @@ def decide(tool_name, tool_input, cwd, now=None, window_hours=WINDOW_HOURS_DEFAU
             .format(path, how, BLACKGOAT_APPEND_ENV_VAR)
         )
 
+    # Rule 9 -- an active learn run applies only what the user approved.
+    # No transcript -> no record can exist -> fail open (see transcript_available).
+    learn_targets = [(s, p) for s, p in targets if is_learn_guarded_path(p)]
+    if learn_targets and has_transcript:
+        for root, ledger, dests in active_learn_runs(cwd, now, window_hours):
+            for source, path in learn_targets:
+                if dests is not None and learn_destination_matches(path, dests):
+                    continue
+                how = ("" if source == "tool" else
+                       " (matched the shell construct `{0}`)".format(source))
+                why = ("no check_learn_approval.py --record PASS exists yet"
+                       if dests is None else
+                       "it is not one of the approved destinations {0}"
+                       .format(dests))
+                return "deny", "learn_applies_only_what_was_approved", (
+                    "Blocked: `{0}`{1} is a rule layer and the learn run at "
+                    "`{2}` is active, but {3}. bgpdd-learn Step 4: never "
+                    "apply without explicit approval -- relay the plan, take "
+                    "the user's answer, then run\n  {4} --record --plan "
+                    "{2}/forge-handoff.md --transcript <session.jsonl> "
+                    "--quote \"<their whole answer>\" --repo <dir> --milestone "
+                    "<slug> --ledger {5}\nA run that is finished closes "
+                    "with --close, which disarms this rule."
+                    .format(path, how, root, why, _gate_command(LEARN_GATE),
+                            ledger)
+                )
+
     lanes = detect_lanes(cwd, now=now, window_hours=window_hours)
 
     # Rule 1 -- commit through the gate.
     if tool_name in BASH_TOOLS:
-        subcommand = git_write_invocation(command_of(tool_input))
-        arming = [lane for lane in lanes if lane.arms_rule_1()]
+        command = command_of(tool_input)
+        subcommand = git_write_invocation(command)
+        arming = []
+        if subcommand:
+            target, _top, roots = commit_lane_roots(command, cwd)
+            arming = [lane for lane in lanes_under(roots, now, window_hours)
+                      if lane.arms_rule_1()]
         if subcommand and arming:
             lane = arming[0]
             prefix = "" if subcommand.startswith("gh ") else "git "
             return "deny", "commit_through_the_gate", (
                 "Blocked: `{0}{1}` by hand while the {2} lane at `{3}` is "
-                "active. In this lane the gate makes the commit -- run\n"
+                "active in the commit's target worktree `{6}`. In this lane "
+                "the gate makes the commit -- run\n"
                 "  {4} ... --commit --message \"<the commit message>\"\n"
                 "which commits from its own subprocess (not through the Bash "
                 "tool, so this guard never blocks it) once the verdict, the "
@@ -1338,7 +1580,8 @@ def decide(tool_name, tool_input, cwd, now=None, window_hours=WINDOW_HOURS_DEFAU
                         _gate_command(lane.gate),
                         repr(lane.milestone) if lane.milestone
                         else "(unreadable from this lane's path -- see "
-                             "--explain)")
+                             "--explain)",
+                        target)
             )
 
     # Rule 2 -- the builder never edits the RED.
@@ -1448,24 +1691,17 @@ def decide(tool_name, tool_input, cwd, now=None, window_hours=WINDOW_HOURS_DEFAU
 # Output -- per-runtime packaging of one decision
 # ---------------------------------------------------------------------------
 
-def emit(decision, reason, fmt):
+def emit(decision, reason):
     """Print the host's deny payload. An ALLOW prints NOTHING, on purpose."""
     if decision != "deny":
         return
-    if fmt == "cursor":
-        payload = {
-            "permission": "deny",
-            "agent_message": reason,
-            "user_message": "blackgoat guard_action denied this call.",
+    payload = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
         }
-    else:
-        payload = {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": reason,
-            }
-        }
+    }
     sys.stdout.write(json.dumps(payload) + "\n")
 
 
@@ -1489,7 +1725,7 @@ def read_stdin():
     return data.decode("utf-8-sig", errors="replace").lstrip("﻿")
 
 
-PURPOSE = ("PreToolUse hook that denies a tool call violating one of eight "
+PURPOSE = ("PreToolUse hook that denies a tool call violating one of nine "
            "pipeline restraints; the model never invokes it directly.")
 
 EPILOG = """Reads:
@@ -1506,6 +1742,13 @@ EPILOG = """Reads:
     check_quick_close.py PASS carrying --commit for the lane's CURRENT
     milestone closes it) and orchestrator-state.json ("halt" for rule 6;
     a "status" of escalated/closed closes a standalone bugfix lane).
+  Rule 1 only: `git -C <target> rev-parse --show-toplevel`, where <target>
+    is the commit's directory after any leading cd/Set-Location/pushd and
+    `git -C`; lanes are detected under THAT worktree, not the hook's cwd
+    (any git error: under <target> itself). --explain --command CMD prints
+    the resolved target.
+  Rule 9 only: .docs/learn/*/forge-handoff.md (fresh = a learn run) and
+    that root's gates.jsonl (check_learn_approval.py record/close PASS).
 
 Writes:
   stdout -- nothing on an allow; on a deny, the host's decision payload
@@ -1522,12 +1765,13 @@ Problem codes:
   delegation_halted_for_the_user     Task/Agent while a halt stands
   blackgoat_persona_is_hand_edited_only  any write to agents/blackgoat.md
   pipeline_tools_are_help_not_source   reading a pipeline-tools script source
+  learn_applies_only_what_was_approved  rule-layer write, unapproved, in a
+                                        learn run
 
 JSON keys:
   Printed on stdout on a deny only.
-  --format claude  {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+  {"hookSpecificOutput": {"hookEventName": "PreToolUse",
     "permissionDecision": "deny", "permissionDecisionReason": "<text>"}}
-  --format cursor  {"permission": "deny", "userMessage": "<text>"}
   The reason names the violated restraint and the command to run instead.
 
 Exit codes:
@@ -1538,7 +1782,7 @@ Exit codes:
   1  --self-test, at least one case failed
 
 Self-test:
-  python guard_action.py --self-test   (119 cases)
+  python guard_action.py --self-test   (130 cases; needs git on PATH)
 """
 
 
@@ -1567,12 +1811,13 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=EPILOG,
     )
-    parser.add_argument("--format", choices=("claude", "cursor"), default="claude",
-                        help="which host's decision payload to emit")
     parser.add_argument("--window-hours", type=float, default=WINDOW_HOURS_DEFAULT,
                         help="lane freshness window (default 12)")
     parser.add_argument("--cwd", default=None,
                         help="root for lane detection (--explain; else the payload's)")
+    parser.add_argument("--command", default=None,
+                        help="with --explain: a git command whose target "
+                             "worktree and rule-1 lanes to print")
     parser.add_argument("--explain", action="store_true",
                         help="print the rules and the detected lanes, then exit 0")
     parser.add_argument("--self-test", action="store_true")
@@ -1617,6 +1862,10 @@ def run_explain(args):
                "scripts/*.py file, any active lane; carve-out is the cwd's "
                "own repo root being this plugin repo (editing the tools is "
                "authoring, not execution)")
+    out.append("  9 learn_applies_only_what_was_approved  write (tool OR Bash "
+               "mutation) to agents/*.md, skills/**/SKILL.md, CLAUDE.md or "
+               "AGENTS.md while a .docs/learn/* run is active, unless its "
+               "check_learn_approval.py --record PASS approved that path")
     out.append("")
     out.append("cwd            : {0}".format(cwd))
     out.append("window (hours) : {0:g}".format(args.window_hours))
@@ -1655,6 +1904,16 @@ def run_explain(args):
     arming = [l for l in lanes if l.arms_rule_1()]
     out.append("Rule 1 armed for: {0}".format(
         ", ".join(l.root for l in arming) if arming else "nothing"))
+    command = args.command or "git commit"
+    target, top, roots = commit_lane_roots(command, cwd)
+    target_arming = [l for l in lanes_under(roots, now, args.window_hours)
+                     if l.arms_rule_1()]
+    out.append("Rule 1 target for `{0}`: {1} (worktree top level: {2}); "
+               "armed for: {3}".format(
+                   command, target,
+                   top or "unresolved -- git failed, target dir used",
+                   ", ".join(l.root for l in target_arming)
+                   if target_arming else "nothing"))
     out.append("Rule 2 armed for: {0}".format(
         ", ".join(l.root for l in unfixed) if unfixed else "nothing"))
     out.append("Rule 3 armed for: {0}".format(
@@ -1671,6 +1930,11 @@ def run_explain(args):
         ", ".join(l.root for l in lanes) if lanes else "nothing",
         " (carve-out: allowed anyway, cwd is this plugin repo)"
         if lanes and cwd_is_plugin_repo(cwd) else ""))
+    learn = active_learn_runs(cwd, now, args.window_hours)
+    out.append("Rule 9 armed for: {0}".format(
+        "; ".join("{0} (approved: {1})".format(
+            root, dests if dests is not None else "nothing yet")
+            for root, _ledger, dests in learn) if learn else "nothing"))
     print("\n".join(out))
     return 0
 
@@ -1703,8 +1967,9 @@ def main(argv):
         if args.cwd:
             cwd = args.cwd
         decision, _rule, reason = decide(
-            tool_name, tool_input, cwd, window_hours=args.window_hours)
-        emit(decision, reason, args.format)
+            tool_name, tool_input, cwd, window_hours=args.window_hours,
+            has_transcript=transcript_available(payload))
+        emit(decision, reason)
     except Exception as exc:
         print("guard_action: {0}; allowing.".format(exc), file=sys.stderr)
     return 0
@@ -1853,7 +2118,10 @@ def run_self_test():
 
         def test_09_global_option_bypass_is_closed(self):
             self.make_feature()
-            for cmd in ("git -C /repo commit -m x",
+            # -C pointing at the lane's own tree (here: the tree itself, and
+            # `.`) still denies; -C elsewhere is WORKTREE TARGET's business.
+            for cmd in ('git -C "{0}" commit -m x'.format(self.root),
+                        "git -C . commit -m x",
                         "git --no-pager commit -m x",
                         "git -c user.name=x commit -m y"):
                 self.assertEqual(self.decide("Bash", {"command": cmd})[0], "deny",
@@ -2072,19 +2340,12 @@ def run_self_test():
             self.assertEqual(normalize_payload(payload),
                              ("Bash", {"command": "git commit -m x"}, self.root))
 
-        def test_37_cursor_shell_payload_normalizes_to_bash(self):
-            payload = {"hook_event_name": "beforeShellExecution",
-                       "command": "git commit -m x", "cwd": self.root}
-            tool, tin, cwd = normalize_payload(payload)
-            self.assertEqual((tool, tin["command"], cwd),
-                             ("Bash", "git commit -m x", self.root))
-
-        def test_38_deny_payload_shapes_match_each_host(self):
+        def test_38_deny_payload_shape_matches_the_host(self):
             import contextlib
             import io
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                emit("deny", "because", "claude")
+                emit("deny", "because")
             claude = json.loads(buf.getvalue())
             self.assertEqual(
                 claude["hookSpecificOutput"]["permissionDecision"], "deny")
@@ -2092,19 +2353,14 @@ def run_self_test():
                 claude["hookSpecificOutput"]["hookEventName"], "PreToolUse")
             self.assertEqual(
                 claude["hookSpecificOutput"]["permissionDecisionReason"], "because")
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                emit("deny", "because", "cursor")
-            self.assertEqual(json.loads(buf.getvalue())["permission"], "deny")
 
-        def test_39_allow_prints_nothing_in_either_format(self):
+        def test_39_allow_prints_nothing(self):
             import contextlib
             import io
-            for fmt in ("claude", "cursor"):
-                buf = io.StringIO()
-                with contextlib.redirect_stdout(buf):
-                    emit("allow", "", fmt)
-                self.assertEqual(buf.getvalue(), "", fmt)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                emit("allow", "")
+            self.assertEqual(buf.getvalue(), "")
 
         def test_40_main_never_exits_nonzero(self):
             import contextlib
@@ -2789,6 +3045,202 @@ def run_self_test():
                 "Read", {"file_path": "README.md"})[0], "allow")
             self.assertEqual(self.decide(
                 "Bash", {"command": "cat README.md"})[0], "allow")
+
+        # -- rule 1: the commit's TARGET worktree (WORKTREE TARGET) -------
+
+        def make_worktrees(self):
+            """root/main (a repo) and root/wt (its linked worktree)."""
+            import subprocess
+            main = Path(self.root) / "main"
+            wt = Path(self.root) / "wt"
+            main.mkdir()
+            env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1")
+            for argv in (["init", "-q"],
+                         ["-c", "user.name=t", "-c", "user.email=t@t",
+                          "commit", "-q", "--allow-empty", "-m", "init"],
+                         ["worktree", "add", "-q", str(wt), "-b", "wt"]):
+                subprocess.run(["git", "-C", str(main)] + argv, check=True,
+                               env=env, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
+            return str(main), str(wt)
+
+        @staticmethod
+        def lane_at(root):
+            d = Path(root) / ".docs" / "demo"
+            touch(d / "orchestrator-state.json",
+                  json.dumps({"pipeline": "bgpdd-build",
+                              "milestone_cursor": "M1"}))
+            touch(d / "implementation" / "gates.jsonl", "")
+
+        def rule1(self, command, cwd):
+            return decide("Bash", {"command": command}, cwd)[:2]
+
+        DENY1 = ("deny", "commit_through_the_gate")
+
+        def test_115_lane_in_cwd_commit_to_other_worktree_allows(self):
+            main, wt = self.make_worktrees()
+            self.lane_at(main)
+            self.assertEqual(self.rule1(
+                'git -C "{0}" commit -m x'.format(wt), main)[0], "allow")
+            # ... while a plain commit in the lane's own checkout still denies.
+            self.assertEqual(self.rule1("git commit -m x", main), self.DENY1)
+
+        def test_116_lane_in_target_worktree_via_dash_c_denies(self):
+            main, wt = self.make_worktrees()
+            self.lane_at(wt)
+            self.assertEqual(self.rule1(
+                'git -C "{0}" commit -m x'.format(wt), main), self.DENY1)
+            self.assertEqual(self.rule1("git commit -m x", main)[0], "allow")
+
+        def test_117_cd_prefixed_forms_bash_and_powershell(self):
+            main, wt = self.make_worktrees()
+            forms = ('cd "{0}" && git commit -m x',
+                     'cd "{0}"; git commit -m x',
+                     'cd "{0}"\ngit commit -m x',
+                     'Set-Location "{0}"; git commit -m x',
+                     'Set-Location -Path "{0}"; git commit -m x',
+                     'pushd "{0}" && git merge main',
+                     '(cd "{0}" && git commit -m x)')
+            self.lane_at(main)
+            for form in forms:
+                self.assertEqual(self.rule1(form.format(wt), main)[0],
+                                 "allow", form)
+            self.lane_at(wt)
+            shutil.rmtree(str(Path(main) / ".docs"))
+            for form in forms:
+                self.assertEqual(self.rule1(form.format(wt), main),
+                                 self.DENY1, form)
+
+        def test_118_relative_dash_c_and_relative_cd(self):
+            main, wt = self.make_worktrees()
+            self.lane_at(wt)
+            parent = self.root
+            self.assertEqual(self.rule1("git -C wt commit -m x", parent),
+                             self.DENY1)
+            self.assertEqual(self.rule1("git -C main commit -m x", parent)[0],
+                             "allow")
+            self.assertEqual(self.rule1("cd ../wt && git commit -m x", main),
+                             self.DENY1)
+            # Two -C options compose, as git composes them.
+            self.assertEqual(self.rule1("git -C main -C ../wt commit -m x",
+                                        parent), self.DENY1)
+
+        def test_119_subdirectory_cwd_resolves_to_the_toplevel(self):
+            main, _wt = self.make_worktrees()
+            self.lane_at(main)
+            sub = Path(main) / "src"
+            sub.mkdir()
+            self.assertEqual(self.rule1("git commit -m x", str(sub)),
+                             self.DENY1)
+
+        def test_120_target_parsing_without_git(self):
+            base = os.path.normpath("/base")
+            self.assertEqual(commit_target_dir("git commit -m x", base), base)
+            self.assertEqual(commit_target_dir("git -C sub commit", base),
+                             os.path.join(base, "sub"))
+            self.assertEqual(
+                commit_target_dir("cd a; cd b && git -c x=y -C c commit", base),
+                os.path.join(base, "a", "b", "c"))
+            # a cd AFTER the write does not move it
+            self.assertEqual(commit_target_dir("git commit; cd elsewhere", base),
+                             base)
+            if os.name == "nt":
+                self.assertEqual(
+                    commit_target_dir("cd /c/Users/x && git commit", base),
+                    os.path.normpath("C:/Users/x"))
+
+        # -- rule 9: a learn run applies only what was approved ----------
+
+        def make_learn(self, record_dests=None, closed=False, age_hours=0.0):
+            d = Path(self.root) / ".docs" / "learn" / "2026-10-02-x"
+            touch(d / "forge-handoff.md", "- Destination: agents/quinn.md",
+                  age_hours)
+            lines = ""
+            if record_dests is not None:
+                lines += json.dumps({"gate": "check_learn_approval.py",
+                                     "action": "record", "verdict": "PASS",
+                                     "destinations": record_dests}) + "\n"
+            if closed:
+                lines += json.dumps({"gate": "check_learn_approval.py",
+                                     "action": "close",
+                                     "verdict": "PASS"}) + "\n"
+            touch(d / "gates.jsonl", lines, age_hours)
+            return str(d)
+
+        RULE9 = "learn_applies_only_what_was_approved"
+
+        def test_122_rule_layer_edit_denied_before_approval(self):
+            self.make_learn()
+            for tool, inp in (
+                    ("Edit", {"file_path": "agents/quinn.md"}),
+                    ("Write", {"file_path": "skills/bgpdd-build/SKILL.md"}),
+                    ("Edit", {"file_path": "C:\\proj\\CLAUDE.md"}),
+                    ("Bash", {"command": "echo x >> agents/mason.md"})):
+                self.assertEqual(self.decide(tool, inp)[:2],
+                                 ("deny", self.RULE9), inp)
+
+        def test_123_approved_destination_allowed_others_denied(self):
+            self.make_learn(record_dests=["agents/quinn.md",
+                                          "{PLUGIN_ROOT}/bgpdd-build/SKILL.md"])
+            self.assertEqual(self.decide(
+                "Edit", {"file_path": "C:/p/agents/quinn.md"})[0], "allow")
+            self.assertEqual(self.decide(
+                "Edit", {"file_path": "skills/bgpdd-build/SKILL.md"})[0],
+                "allow")
+            d, rule, reason = self.decide(
+                "Edit", {"file_path": "agents/mason.md"})
+            self.assertEqual((d, rule), ("deny", self.RULE9))
+            self.assertIn("approved destinations", reason)
+
+        def test_124_rule_9_disarmed_by_close_staleness_or_no_run(self):
+            inp = {"file_path": "agents/mason.md"}
+            self.assertEqual(self.decide("Edit", inp)[0], "allow")
+            self.make_learn(closed=True)
+            self.assertEqual(self.decide("Edit", inp)[0], "allow")
+            shutil.rmtree(str(Path(self.root) / ".docs"))
+            self.make_learn(age_hours=13.0)
+            self.assertEqual(self.decide("Edit", inp)[0], "allow")
+
+        def test_125_non_rule_layer_paths_unaffected_by_learn(self):
+            self.make_learn()
+            for path in ("src/app.py", "skills/x/references/notes.md",
+                         "README.md"):
+                self.assertEqual(self.decide(
+                    "Edit", {"file_path": path})[0], "allow", path)
+
+        def test_126_rule_9_fails_open_without_a_transcript(self):
+            import contextlib
+            import io
+            self.make_learn()
+            inp = {"file_path": "agents/mason.md"}
+            self.assertEqual(decide("Edit", inp, self.root,
+                                    has_transcript=False)[0], "allow")
+            real = Path(self.root) / "session.jsonl"
+            touch(real, "{}\n")
+            for tp, want in ((None, ""), ("", ""),
+                             (str(Path(self.root) / "gone.jsonl"), ""),
+                             (str(real), "check_learn_approval.py --record")):
+                payload = {"hook_event_name": "PreToolUse", "tool_name": "Edit",
+                           "tool_input": inp, "cwd": self.root}
+                if tp is not None:
+                    payload["transcript_path"] = tp
+                buf = io.StringIO()
+                stdin, sys.stdin = sys.stdin, io.StringIO(json.dumps(payload))
+                try:
+                    with contextlib.redirect_stdout(buf):
+                        main([])
+                finally:
+                    sys.stdin = stdin
+                self.assertIn(want, buf.getvalue(), tp)
+                if not want:
+                    self.assertEqual(buf.getvalue(), "", tp)
+
+        def test_121_unresolvable_target_never_borrows_the_cwd_lane(self):
+            self.make_feature()  # lane at self.root, which is not a repo
+            missing = str(Path(self.root).parent / "no-such-dir-guard")
+            self.assertEqual(self.rule1(
+                'git -C "{0}" commit -m x'.format(missing), self.root)[0],
+                "allow")
 
     suite = unittest.TestLoader().loadTestsFromTestCase(GuardTest)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
