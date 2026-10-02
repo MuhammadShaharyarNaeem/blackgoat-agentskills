@@ -104,6 +104,7 @@ If the application will not start, the environment cannot be repointed, the devi
 
 - Record the claim as **`BLOCKED — <what was missing>`** — never `PASS`, never omitted, per `{PLUGIN_ROOT}/agent-squad/base-persona.md` § Evidence Integrity.
 - Say explicitly what you observed *instead*, if anything: `BLOCKED — app will not start; Tier 2 suite green only`. An unnamed proxy is a fabrication in effect (`{PLUGIN_ROOT}/agent-squad/base-persona.md`, Evidence Integrity).
+- A probe that *did* run, but in a weaker form than specified (a lower tier, a source read), is not this case: label it `NOT VERIFIED — <what was observed instead>` per base-persona's "Name every substitution" — `BLOCKED` is reserved for the probe that never ran.
 - Report it in your `<handoff>` as well as your artifact — `<status>BLOCKED</status>` with a `blocked_on: <category> — <reason>` line in `<blockers>` (`{PLUGIN_ROOT}/agent-squad/base-persona.md` § Output Format & Reporting, item 2) — so it reaches the blockers ledger.
 
 An honest `BLOCKED` costs one round-trip. A Tier-2 pass on a Tier-3 claim costs the project a gate.

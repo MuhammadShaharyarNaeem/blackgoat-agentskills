@@ -5,6 +5,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.10.0] — 2026-10-02
+
+The review wave: the Orchestrator stops coding and agents stop committing, every lane gets one escalation ratchet, the commit guard learns which worktree a commit targets, and three dead targets (Cursor, `github-pr-review`, `prompt-engineering`) are removed.
+
+### Breaking / behaviour changes
+- **`/bgpdd-quick` delegates its edit to one builder**, chosen by kind of change — Mason (backend, scripts, config, docs), Nova (UI), Max (refactor). The close gate now requires a `check_handoff` ledger entry (`--require-ledger-gates`).
+- **The Orchestrator never edits `src/` or `tests/`, in any lane** (`orchestrator-contract.md`).
+- **Agents never commit.** INCREMENTAL PERSISTENCE hands partial work back uncommitted and the lane's gate commits; build, Mason, shipping, bugfix, code-simplification and dependency-upgrade aligned. Build freshness is measured against the last working-tree change, since there is no agent commit to anchor it.
+- **Direct invocation delegates to the skill's owning persona** in every methodology skill (and `agent-audit` Metric 12); the Orchestrator no longer applies a Worker Execution Contract itself.
+- **One escalation ratchet, bugfix → lite → plan**, everywhere, including `next_bugfix_route.py`.
+- **`/bgpdd-learn` applies only what the user approved**: the approval is recorded and closed through `check_learn_approval.py`, and guard rule 9 enforces it.
+- **An unrun verification is `BLOCKED` and carries a `blocked_on: <category> — <reason>` line**, matching `check_handoff.py` (base-persona, Mason, Nova, Quinn, bugfix, verify, runtime-evidence, powershell). **A check that ran in a weaker form is `NOT VERIFIED — <what was observed instead>`** and needs no `blocked_on:` line — the design-critique source-only labels move from `BLOCKED — no rendered output` to `NOT VERIFIED — source inspection only; no rendered output`.
+- `/bg` routes dependency upgrades, PR review, performance, observability, docs-only changes, incidents and large refactors. Luna reviews a change of any size under `review_package.py`'s diff ceiling instead of bouncing it to `/bg`.
+
+### Fixed
+- **Worktree-aware commit guard**: `guard_action.py` rule 1 resolves the commit's target worktree (`git -C`, `cd`/`pushd`/`Set-Location` prefixes, MSYS paths) and detects open lanes only there, so a lane open in one worktree no longer blocks a commit in another. New `--explain --command`. `check_commit_gate.py`, `check_quick_close.py` and `check_batch_close.py` report `repo_toplevel` and refuse lane artifacts from a different worktree.
+- Methodology contradictions resolved: review verdict vs checklist, forward-only rollback migration, per-step rollback rehearsal captures, cloud-deploy scope, one secrets rule owned by `cloud-deploy-patterns` (Key Vault references in the REPR playbook, outbox instead of dual write), selector order, debugging scope, kill-switch removal task, Ward owns the privacy checklist (Cipher runs its `[security]` rows), and eighteen minor ones. Quick-card citations and shapes realigned to convention #10.
+- Shipping Step 7 no longer passes `--advisory` on a briefed artifact. Stale `SKILL.md` cross-references and per-script pointers now go to `<script> --help`. `run_quiet.py --log` is mandatory only for build/test runners.
+- Forge may read the project's `.docs` records and write `agent-improvements.md`.
+- `dotnet-backend-patterns`: REPR Mode B uses Api/Core/DAL.EF/Infrastructure as a labelled divergence; a Mode B migration keeps its existing wire contract while new APIs use `BaseResponse<T>`.
+
+### Added
+- `check_learn_approval.py` (`--record` / `--close`): `--quote` must equal the whole user answer and a negated answer is refused (`approval_negated`).
+- `check_handoff.py --transcript` — the handoff block must sit in a real delegation's tool result, so a roleplayed handoff fails (`handoff_not_delegated`).
+- `mark_milestone.py --require-exit-capture` — a milestone does not advance on an aggregate green; build closes milestones with it.
+- `check_attack_matrix.py`: target hosts must be local or match a declared `Staging hosts:` pattern. The secure preamble asks for `Authorization:` and `Scope exclusions:`.
+- Guard rule 9 (learn-apply approval); fails open when the hook payload names no existing transcript, so an approved apply is never denied where no approval record can exist.
+- Eval cases: trigger cases 30–33 (`bgpdd-secure`, `bgpdd-bugfix-batch`, `bg`, `bg` → `dependency-upgrade-patterns`) and contract case `verify-matrix-derivation`; quick-lane and pressure-quick-skip-gate expect one builder delegation, `run-log.jsonl` and a `check_handoff` PASS; Mason/Nova graders accept both `BLOCKED` and `NOT VERIFIED`.
+
+### Removed
+- Cursor support: `.cursor-plugin/`, `docs/cursor-setup.md`, `rules/cursor-runtime.mdc`, `hooks/hooks-cursor.json`, the Cursor-only hook branches, and `guard_action.py --format cursor`.
+- `skills/github-pr-review` (loaded by no agent) and its `github-mcp-server` entry; shipping points at `code-review-and-quality`.
+- `skills/prompt-engineering` (general-purpose, loaded by no agent).
+
+### Known open items
+- No mechanical gate yet for "wait for proceed": enforcing it needs a phase-start record the gate can read.
+
 ## [2.9.0] — 2026-09-18
 
 The pipeline-tools spine split: each script's own `--help` becomes its contract of record, `tool_registry.py` becomes the router that finds it, and `pipeline-tools/SKILL.md` shrinks to the four contracts that really are shared. Plus `bgpdd-secure`, Ward, and the adoption-wave gates.
