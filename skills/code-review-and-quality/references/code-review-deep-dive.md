@@ -204,7 +204,7 @@ When reviewing code — whether written by you, another agent, or a human:
 - **Don't soften real issues.** "This might be a minor concern" when it's a bug that will hit production is dishonest.
 - **Quantify problems when possible.** "This N+1 query will add ~50ms per item in the list" is better than "this could be slow."
 - **Push back on approaches with clear problems.** Sycophancy is a failure mode in reviews. If the implementation has issues, say so directly and propose alternatives.
-- **Accept override gracefully.** If the author has full context and disagrees, defer to their judgment. Comment on code, not people — reframe personal critiques to focus on the code itself.
+- **Comment on code, not people.** A disagreement on a Critical or Important finding goes to the Orchestrator; it never flips the verdict, which stays arithmetic over the findings (`code-review-and-quality/SKILL.md` § The Review Report). Reframe personal critiques to focus on the code itself.
 
 ## Dependency Discipline
 

@@ -1,6 +1,6 @@
 ---
 name: security-and-hardening
-description: "Hardens code against vulnerabilities. Use when handling user input, authentication, data storage, or external integrations. Use when building any feature that accepts untrusted data, manages user sessions, or interacts with third-party services. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator applies the Worker Execution Contract itself in the main session — no delegation."
+description: "Hardens code against vulnerabilities. Use when handling user input, authentication, data storage, or external integrations. Use when building any feature that accepts untrusted data, manages user sessions, or interacts with third-party services. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself."
 ---
 
 # Security and Hardening
@@ -9,7 +9,7 @@ Security-first development practices for web applications. Treat every external 
 
 ## Direct invocation
 
-A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no editing tests to pass, no unobserved claims (`base-persona.md`, Evidence Integrity). Over three files, or shared behaviour: route via `/bg` to a lane.
+Direct asks on named files are a deliberate refinement of agent-audit Metric 12, not a trigger collision. Direct invocation: the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself. Owner: **Cipher**. Over three files, or shared behaviour: route via `/bg` to a lane.
 
 ## Quick card
 
@@ -111,7 +111,7 @@ One-line prevention rule per category. For code patterns and worked examples, se
 - **XSS:** rely on framework auto-escaping; sanitize (e.g. DOMPurify) if you must render HTML.
 - **Broken Access Control:** check resource ownership on every request — authentication is not authorization.
 - **Security Misconfiguration:** set security headers (helmet), a Content Security Policy, and a CORS origin allowlist.
-- **Sensitive Data Exposure:** strip sensitive fields from API responses; secrets come from environment variables.
+- **Sensitive Data Exposure:** strip sensitive fields from API responses; secrets live in the vault, and an environment variable carries one only when injected from it — rule owner `{PLUGIN_ROOT}/cloud-deploy-patterns/SKILL.md` § Baseline — Platform Invariants.
 - **SSRF:** allowlist scheme + host for any server-side fetch of user-influenced URLs, reject private/reserved IPs, forbid redirects.
 
 ### Coverage & Provability
@@ -127,7 +127,7 @@ Not every category above admits agent-executed proof. This table names what clos
 | Security Misconfiguration | Headers/CORS captured from a live response, not just the config read | provable |
 | Sensitive Data Exposure | Response body inspected for excluded fields; source/history searched for secrets | provable |
 | SSRF | An out-of-allowlist target probed and observed rejected | provable |
-| Logging & Monitoring Failures | — | not agent-testable |
+| Logging & Monitoring Failures | A security event triggered and its log line captured — `{PLUGIN_ROOT}/observability-and-diagnosis/SKILL.md` § Verification; log-redaction rows of `references/data-privacy-checklist.md`. Alert routing and on-call response stay unproven | partial |
 | Business Logic Flaws | — | not agent-testable |
 
 A category in the `not agent-testable` tier reports `BLOCKED`, never `PASS` (`base-persona.md`, Evidence Integrity) — absence of a finding there is absence of a test. A `partial` row names which part was not covered. "Reviewed" is not evidence; the `How it is proven` cell names the artifact that is.

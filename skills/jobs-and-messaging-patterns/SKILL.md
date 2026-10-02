@@ -1,6 +1,6 @@
 ---
 name: jobs-and-messaging-patterns
-description: "Provides the background jobs and messaging execution contract: an idempotency key on every handler, at-least-once delivery assumed, bounded retries with backoff, poison-message routing to a dead letter with the payload preserved, the outbox pattern instead of a dual write, ordering assumptions stated explicitly, and a readable run record per scheduled job. Use if the project runs background jobs, queues, schedulers, or message consumers. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator applies the Worker Execution Contract itself in the main session — no delegation."
+description: "Provides the background jobs and messaging execution contract: an idempotency key on every handler, at-least-once delivery assumed, bounded retries with backoff, poison-message routing to a dead letter with the payload preserved, the outbox pattern instead of a dual write, ordering assumptions stated explicitly, and a readable run record per scheduled job. Use if the project runs background jobs, queues, schedulers, or message consumers. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself."
 ---
 
 # Jobs and Messaging Patterns
@@ -9,7 +9,7 @@ A request that fails is retried by a person who sees the error. A message that f
 
 ## Direct invocation
 
-A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no claim without the replay capture (`base-persona.md`, Evidence Integrity). **Scope: three files or fewer.** Over three files, or a new queue: route through `/bg`.
+Direct asks on named files are a deliberate refinement of agent-audit Metric 12, not a trigger collision. Direct invocation: the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself. Owner: **Mason**. **Scope: ≤ 3 files;** larger, or a new queue, routes through `/bg`.
 
 ## Quick card
 
@@ -27,7 +27,7 @@ Derived from the contract below for a ≤ 3-file change; no new rules (conventio
 
 ## Worker Execution Contract
 
-This is the operational spine. Follow it as written.
+This is the operational spine. Follow it as written. For a change of ≤ 3 files outside a pipeline, the Quick card above is the contract; the full contract applies inside a lane.
 
 ### At-Least-Once Is the Only Assumption
 
@@ -54,7 +54,7 @@ The handler resolves the key first, records it in the same transaction as the ef
 
 When the attempt bound is reached, the message moves to a dead-letter destination carrying **the failing payload verbatim**, plus the reason, the attempt count, and the correlation id. Never log-and-drop, and never acknowledge a message you did not process — an acknowledged failure is silent data loss with a green dashboard over it.
 
-Redaction rule: secrets and personal data in a dead-lettered payload follow `{PLUGIN_ROOT}/security-and-hardening/SKILL.md`; a dead letter is storage like any other.
+Redaction rule: personal data in a dead-lettered payload follows `{PLUGIN_ROOT}/privacy-engineering-patterns/SKILL.md`, and secrets follow `{PLUGIN_ROOT}/security-and-hardening/SKILL.md`; a dead letter is storage like any other.
 
 ### Publish-With-Write Uses the Outbox — Never a Dual Write
 

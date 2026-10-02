@@ -158,21 +158,25 @@ const { data } = await axios.get('/api/orders')   // NO — bypasses interceptor
 ## 5. data-test IDs on Every Interactive Element
 
 ```vue
-<!-- GOOD: Playwright selectors survive any restyle -->
+<!-- GOOD: an accessible name for the spec, plus the data-test fallback hook -->
 <button data-test="order-submit" @click="onSubmit">Submit</button>
-<input data-test="order-search" v-model="query" />
-<select data-test="order-status-filter" v-model="status">...</select>
+<label for="order-search">Search orders</label>
+<input id="order-search" data-test="order-search" v-model="query" />
+<select data-test="order-status-filter" aria-label="Status" v-model="status">...</select>
 ```
 
 ```ts
-// Playwright side
-await page.getByTestId('order-submit').click()
+// Playwright side — accessible selectors first (playwright-skill/SKILL.md § Rules owns the order)
+await page.getByRole('button', { name: 'Submit' }).click()
+await page.getByLabel('Search orders').fill('1042')
+// getByTestId only for an element with no accessible name, e.g. an icon-only control
+await page.getByTestId('order-row-menu').click()
 ```
 
 ```vue
-<!-- BAD: selector coupled to styling/text — breaks on redesign -->
+<!-- BAD: selector coupled to styling — breaks on redesign -->
 <button class="btn btn-primary mt-2">Submit</button>
-<!-- page.locator('.btn-primary') / getByText('Submit')  → fragile -->
+<!-- page.locator('.btn-primary')  → fragile -->
 ```
 
 ## 6. Route-Level Lazy Loading

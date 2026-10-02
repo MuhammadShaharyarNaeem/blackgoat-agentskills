@@ -1,6 +1,6 @@
 ---
 name: api-contract-evolution
-description: "Provides the API contract evolution execution contract: additive-only change within a major version, the seven named breaking-change classes, one declared versioning strategy per API (URL, header or media type — never mixed), deprecation with a sunset date and a named replacement published in the contract document, a listed consumer set, and the mechanical OpenAPI diff gate that verifies all of it. Use if the project publishes an HTTP API whose contract document changes. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator applies the Worker Execution Contract itself in the main session — no delegation."
+description: "Provides the API contract evolution execution contract: additive-only change within a major version, the seven named breaking-change classes, one declared versioning strategy per API (URL, header or media type — never mixed), deprecation with a sunset date and a named replacement published in the contract document, a listed consumer set, and the mechanical OpenAPI diff gate that verifies all of it. Use if the project publishes an HTTP API whose contract document changes. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself."
 ---
 
 # API Contract Evolution
@@ -9,7 +9,7 @@ A published API is the one artifact you cannot change by redeploying. Every cons
 
 ## Direct invocation
 
-A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no unobserved claims (`base-persona.md`, Evidence Integrity). **Scope: three files or fewer, additive only.** Anything larger, and every breaking change, routes through `/bg`.
+Direct asks on named files are a deliberate refinement of agent-audit Metric 12, not a trigger collision. Direct invocation: the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself. Owner: **Mason**. **Scope: ≤ 3 files, additive only;** larger, or any breaking change, routes through `/bg`.
 
 ## Quick card
 
@@ -27,7 +27,7 @@ Derived from the contract below for a ≤ 3-file change; no new rules (conventio
 
 ## Worker Execution Contract
 
-This is the operational spine. Follow it as written.
+This is the operational spine. Follow it as written. For a change of ≤ 3 files outside a pipeline, the Quick card above is the contract; the full contract applies inside a lane.
 
 ### The Three Declared Lines
 
@@ -39,7 +39,7 @@ This is the operational spine. Follow it as written.
 
 ### Additive-Only Within a Major
 
-Inside a major version the only sanctioned changes are **additions a consumer written against the previous document keeps working under**: a new endpoint or method; a new **optional** request field or parameter; a new response field; a new response status code; a widened **request** enum. Anything else is breaking until the gate says otherwise.
+Inside a major version the only sanctioned changes are **additions a consumer written against the previous document keeps working under**: a new endpoint or method; a new **optional** request field or parameter; a new response field; a widened **request** enum. **A new response status code is not on this list**: like a widened response enum (§ The Breaking-Change Classes), it breaks any consumer that switches exhaustively on status, so call it out by name the same way. Anything else is breaking until the gate says otherwise.
 
 **Never reason your way to "no one uses that field"** — that is § Consumers' job, answered by reading callers.
 
