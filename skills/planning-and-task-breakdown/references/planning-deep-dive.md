@@ -208,7 +208,7 @@ Reads the `{ data: Contact[], error: null }` envelope from `GET /api/contacts` a
 ### Checkpoint: Milestone 2
 - [ ] All tests pass
 - [ ] Application builds without errors
-- [ ] RUNTIME EXIT CRITERION — open `/contacts`, submit the create form; expect the new contact to appear in the rendered list without a reload
+- [ ] RUNTIME EXIT CRITERION — run `npx playwright test contacts-create.spec.ts`; expect `1 passed` — the spec opens `/contacts`, submits the create form, and asserts the new contact appears in the rendered list without a reload
 - [ ] RUNTIME PROBE: start: `npm run dev:api` and `npm run dev:web` with the web config repointed at `localhost:3000`; probe: drive `/contacts` in a browser and submit the create form; expect-status: 200; require-keys: data, error
 - [ ] Review with human before proceeding
 

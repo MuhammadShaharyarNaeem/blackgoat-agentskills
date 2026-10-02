@@ -141,7 +141,7 @@ The reviewer's output is data, not verdict. **You are still the orchestrator.** 
 For each finding, classify in this **precedence order** (first matching class wins):
 
 1. **Contract misread** — reviewer flagged something specifically because the CONTRACT you provided was unclear or incomplete. Fix the contract first, re-classify on the next cycle.
-2. **Valid + actionable** — real issue requiring a change to the artifact. Change it, re-loop.
+2. **Valid + actionable** — real issue requiring a change to the artifact. Change it — through the owning builder when the artifact is code, since you write none — and re-loop.
 3. **Valid trade-off** — issue is real but cost of fixing exceeds cost of accepting. Document the trade-off explicitly so the user sees it.
 4. **Noise** — reviewer flagged something that's actually correct under context the reviewer didn't have. Note it, move on, and ask: would adding that context to the contract have prevented the false flag?
 

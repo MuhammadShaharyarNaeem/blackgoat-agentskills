@@ -11,7 +11,7 @@ Multi-axis review before merge — no change merges unreviewed. Five axes: corre
 
 ## Direct invocation
 
-Direct asks on named files are a deliberate refinement of agent-audit Metric 12, not a trigger collision. Direct invocation: the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself. Owner: **Luna**, for a review request of **any size** — a review is never bounced back to `/bg`, which routes someone else's PR here (deliberately unlike the sibling skills' "over three files: route via `/bg`" rule, convention #8 — that bounce would loop). Over three files the Quick card no longer applies and Luna reviews under the full Worker Execution Contract. Size is bounded mechanically, not by file count: package the change with `python {PLUGIN_ROOT}/pipeline-tools/scripts/review_package.py` under `--max-diff-lines 1500` (the lanes' ceiling; contract: its `--help`) and hand Luna that package; exit 2 over the ceiling with no `--waiver` is this contract's "too large → request a split" escalation (§ Escalate When) — relay it to the user, who splits the change or hand-types a size waiver.
+Direct asks on named files are a deliberate refinement of agent-audit Metric 12, not a trigger collision. Direct invocation: the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself. Owner: **Luna**, any size, no `/bg` bounce (convention #8); over the `review_package.py --max-diff-lines 1500` ceiling, § Escalate When.
 
 ## Quick card
 
@@ -128,6 +128,7 @@ After review is complete:
 ### Escalate When
 
 - The change is too large to review properly → report to the Orchestrator (manager) and request a split.
+- **Direct invocation sizing (Orchestrator side).** A direct review request of any size goes to Luna and is never bounced back to `/bg`, which routes someone else's PR here — deliberately unlike the sibling skills' "over three files: route via `/bg`" rule (convention #8): that bounce would loop. Over three files the Quick card no longer applies and Luna reviews under this full contract. Size is bounded mechanically, not by file count: the Orchestrator packages the change with `python {PLUGIN_ROOT}/pipeline-tools/scripts/review_package.py` under `--max-diff-lines 1500` (the lanes' ceiling; contract: its `--help`) and hands Luna that package. Exit 2 over the ceiling with no `--waiver` is this contract's "too large → request a split" escalation — the Orchestrator relays it to the user, who splits the change or hand-types a size waiver.
 - You lack the context to judge correctness (missing spec, ambiguous requirements) → ask the Orchestrator (manager).
 - Critical or Important findings remain unresolved after the author's fixes → escalate to the Orchestrator (manager); do not approve.
 

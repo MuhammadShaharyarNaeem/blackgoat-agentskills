@@ -86,7 +86,7 @@ Scan for these patterns — each one is a concrete signal, not a vague smell:
 ### Rules
 
 - Establish a green baseline **before** you touch anything: run the suite first. A suite that was already red cannot prove your refactor preserved behavior.
-- One simplification at a time; run the test suite after each. Pass → continue/commit. Fail → revert and reconsider.
+- One simplification at a time; run the test suite after each. Pass → continue (never commit — the lane's gate does). Fail → revert and reconsider.
 - One *kind* of change per pass and per report — never mix performance work, abstraction extraction, and cleanup in a single pass.
 - Refactoring changes ship separately from feature or bug-fix changes — never combine in one PR.
 - Removing dead code never edits a caller. If deleting a function, class or DI registration means changing a file that uses it, it is not dead — stop and leave it in place. One deliberate exception (convention #8, refining this rule): collapsing a settled feature flag (§ Simplification Signals, handed here by `feature-flag-patterns`) edits the call site that read the flag — that edit is the removal itself.

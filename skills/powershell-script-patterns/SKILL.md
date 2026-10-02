@@ -44,7 +44,7 @@ When the script lives inside a host-language string (e.g. a C# string literal, a
 ### Missing Parameters — Escalate, Don't Invent
 
 - If the script requires parameters or values you cannot infer from the codebase or the task brief (tenant IDs, install paths, license keys, service names), do NOT invent plausible-looking values.
-- Escalate via your standard `<handoff>` (status BLOCKED, blocker naming the exact parameters and why they are un-inferable). The Orchestrator asks the user — you cannot ask the user directly.
+- Escalate via your standard `<handoff>` (status BLOCKED, with a `blocked_on: spec — <the exact parameters and why they are un-inferable>` line in `<blockers>`). The Orchestrator asks the user — you cannot ask the user directly.
 
 ### External URL Verification
 
@@ -71,6 +71,6 @@ Before marking work complete:
 
 ### Escalate When
 
-- Required parameters cannot be inferred → BLOCKED `<handoff>` listing them; do not invent values.
+- Required parameters cannot be inferred → BLOCKED `<handoff>` with a `blocked_on: spec — <the parameters>` line in `<blockers>`; do not invent values.
 - The script needs an environment you don't have (elevation, target OS, network, licensed software) → `<handoff>` stating exactly what ran and what could not.
 - A vendor URL is dead and research cannot identify the current official replacement → `<handoff>` with the candidates you found; do not guess.

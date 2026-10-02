@@ -82,7 +82,7 @@ This is deliberately **not** the `**Runtime evidence:**` line, and `check_runtim
 
 ### Step 6 — One commit, and say how to undo it
 
-The commit contains the manifest, **its lockfile**, and the call sites the brief listed — nothing else. State the rollback explicitly in the report: **`git revert <sha>` of that one commit.**
+The commit contains the manifest, **its lockfile**, and the call sites the brief listed — nothing else. State the rollback explicitly in the report: **`git revert <sha>` of that one commit.** You never commit — the lane's gate does — so write `<sha>` as the placeholder; the Orchestrator fills in the sha after the gate commits.
 
 **Two mechanisms carry this rule, not the sentence above (convention #9)** — both at the close, both in the checklist:
 
@@ -115,7 +115,7 @@ Before marking upgrade work complete:
 - [ ] Every call site the brief listed was updated; a fresh search for the removed API returns nothing
 - [ ] `changed-files-<package>.md` captured; it lists the manifest **and** its lockfile, and nothing the brief did not name (§ Step 6)
 - [ ] The closing gate ran with `--max-changed-files` set to the brief's file count (§ Step 6)
-- [ ] The report names `git revert <sha>` as the rollback
+- [ ] The report names `git revert <sha>` as the rollback (the Orchestrator records the sha after the gate commits)
 
 ### Escalate When
 
