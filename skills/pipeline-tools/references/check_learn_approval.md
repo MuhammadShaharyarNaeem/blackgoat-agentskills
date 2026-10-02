@@ -14,7 +14,9 @@ So `--record` asks three things of the transcript, each of which the model canno
 
 1. an **assistant** entry named every destination — the plan was relayed;
 2. the **first human entry after it** exists — the Orchestrator halted for an answer;
-3. that entry contains `--quote` — the answer was an approval, in the user's words.
+3. that entry **is** `--quote`, whole, and carries no negation word — the answer was an approval, in the user's words.
+
+**Why the whole answer, not a substring.** The Orchestrator — the party being gated — picks `--quote`. Under substring matching it could lift `apply` out of "no, don't apply this" and pass. Requiring the quote to equal the entire first human answer (casefolded, whitespace collapsed, surrounding punctuation stripped) leaves it nothing to choose, and the recorded quote is then the user's full reply for any later audit. That alone still passes a refusal quoted in full, so a second rule refuses any answer carrying a negation word (`approval_negated`). The word list is deliberately crude and fails closed: a hedged "yes, but not #2" is refused too, and the user re-answers plainly — a partial approval is a different plan, which Forge re-issues. Judging intent beyond that is not a job a stdlib gate can do honestly.
 
 Runtime-injected user-role entries (`isMeta`, `<task-notification>`, `<system-reminder>`) are skipped because they are not a human answer. A `tool_result` that echoes the words (`cat` of a file the model wrote) is not a user text entry and never counts.
 

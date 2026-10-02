@@ -446,7 +446,7 @@ The plugin's failure doctrine is *halt and surface* — never guess, never silen
 
 ## Enforcement Hooks: "should not" → "cannot"
 
-Every gate in this plugin verifies *after* the fact, and the decision to run one is the model's. `hooks/hooks.json` closes that hole for six restraints by registering a **`PreToolUse` hook** — `skills/pipeline-tools/scripts/guard_action.py` — which the runtime invokes before a tool call and which can refuse it outright. The refusal reason is fed back to Claude, so a block reads as "run this gate instead", not as a crash.
+Every gate in this plugin verifies *after* the fact, and the decision to run one is the model's. `hooks/hooks.json` closes that hole for nine restraints by registering a **`PreToolUse` hook** — `skills/pipeline-tools/scripts/guard_action.py` — which the runtime invokes before a tool call and which can refuse it outright. The refusal reason is fed back to Claude, so a block reads as "run this gate instead", not as a crash.
 
 | It blocks | When | Instead |
 |---|---|---|
@@ -456,8 +456,11 @@ Every gate in this plugin verifies *after* the fact, and the decision to run one
 | hand-editing `gates.jsonl`, `orchestrator-state.json`, `run-log.jsonl`, `*.meta.json` | **always** | use the pipeline-tools script that owns that artifact |
 | a raw `dotnet build`/`dotnet test`/`npm test`/`pytest`/`npx playwright test`/… via the Bash tool | any lane is active | wrap it: `run_quiet.py --log <log> -- <command>` — the log and capture are the evidence the gates read |
 | spawning a subagent | the active lane's `orchestrator-state.json` carries a standing `halt` | run the printed `update_state.py --clear-halt` command — a human decision, never the model's |
+| writing `agents/blackgoat.md` | **always** | the author edits it by hand; the only carve-out is a checked append to its Part VIII ledger |
+| reading a `pipeline-tools/scripts/*.py` file's source | any lane is active, outside this plugin's own repo | run the script's `--help` (or `tool_registry.py show <script>`) |
+| writing `agents/*.md`, a `SKILL.md`, `CLAUDE.md` or `AGENTS.md` | a `/bgpdd-learn` run is active | get the user's approval recorded first: `check_learn_approval.py --record` must PASS for that path; its `--close` PASS disarms the rule |
 
-The active lane is detected from artifacts in the working tree (a state file's `pipeline`, a bug report, a quick note, each with a 12-hour freshness window — `--window-hours`, default 12; a lane abandoned longer than that stops being active) — never from prose or a model assertion. `python skills/pipeline-tools/scripts/guard_action.py --explain` prints the rules and what it currently detects; `--self-test` runs 100 cases. **It fails open by design**: any internal error, a missing python, or an unparseable payload allows the call, because a guard that bricks a session gets deleted and a deleted guard enforces nothing. Every block is therefore a positive identification, never an inability to decide — and the guard raises the cost of the wrong action rather than making the repo tamper-proof. Under Cursor only the commit rule is mechanically enforceable (`hooks/hooks-cursor.json`, a template); see `rules/cursor-runtime.mdc`.
+The active lane is detected from artifacts in the working tree (a state file's `pipeline`, a bug report, a quick note, each with a 12-hour freshness window — `--window-hours`, default 12; a lane abandoned longer than that stops being active) — never from prose or a model assertion. `python skills/pipeline-tools/scripts/guard_action.py --explain` prints the rules and what it currently detects; `--self-test` runs 130 cases. **It fails open by design**: any internal error, a missing python, or an unparseable payload allows the call, because a guard that bricks a session gets deleted and a deleted guard enforces nothing. Every block is therefore a positive identification, never an inability to decide — and the guard raises the cost of the wrong action rather than making the repo tamper-proof.
 
 ---
 

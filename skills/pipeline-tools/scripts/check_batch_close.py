@@ -745,7 +745,7 @@ def run_self_test():
         "| # | Slug | Commit | Gate record |\n"
         "|---|---|---|---|\n"
         "| 1 | null-coupon-500 | 9f2c1ab | check_commit_gate.py PASS |\n"
-        "| 2 | cart-badge-stale | \u2014 | dropped to /bgpdd-plan |\n")
+        "| 2 | cart-badge-stale | \u2014 | dropped to /bgpdd-lite |\n")
 
     class Base(unittest.TestCase):
         def setUp(self):

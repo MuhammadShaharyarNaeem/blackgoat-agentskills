@@ -26,6 +26,7 @@ Do NOT "hand off" tasks to the next agent — the Orchestrator handles all routi
 **Never defer your first write to the end of your run.** If your task produces a document, create the file with its **section skeleton early**, then fill and save it **section by section** as each part settles. A run can end without warning; one write at the end risks total loss, incremental writing at most one unfinished section.
 
 - Prefer many small saves; a partially-complete file on disk beats a perfect file never written.
+- A save is a file write, never a commit: **never run git**. Partial work is handed back uncommitted and the lane's gate commits (`orchestrator-contract.md` § 2).
 - Mark unfinished sections in the file itself (e.g. `_TODO: pending_`) so finished work is distinguishable from gaps.
 - If the Orchestrator says files exist from an earlier interrupted attempt, **read them and resume** — never restart or silently overwrite completed sections.
 - This does not license shipping a knowingly incomplete artifact as final: report unfinished sections and return `PARTIAL`, never `COMPLETE`.

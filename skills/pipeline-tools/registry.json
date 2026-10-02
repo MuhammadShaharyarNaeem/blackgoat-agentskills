@@ -501,8 +501,8 @@
           "lane": "bgpdd-learn",
           "phase": "-",
           "step": "4",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_learn_approval.py --record --plan .docs/learn/{YYYY-MM-DD}-{learn-slug}/forge-handoff.md --transcript <the session transcript path> --quote \"<the user's approving words, verbatim>\" --repo <this plugin's directory> [--repo <the target project, when a rules file is a destination>] --milestone \"{learn-slug}\" --ledger .docs/learn/{YYYY-MM-DD}-{learn-slug}/gates.jsonl",
-          "gate": "Exit 1 = no approval on the runtime's record (plan not relayed, no human answer, or an answer that does not approve) - halt and ask; exit 2 = no transcript on this runtime, so the prose rule stands. Never start Step 5 without this PASS."
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_learn_approval.py --record --plan .docs/learn/{YYYY-MM-DD}-{learn-slug}/forge-handoff.md --transcript <the session transcript path> --quote \"<the user's whole answer, verbatim>\" --repo <this plugin's directory> [--repo <the target project, when a rules file is a destination>] --milestone \"{learn-slug}\" --ledger .docs/learn/{YYYY-MM-DD}-{learn-slug}/gates.jsonl",
+          "gate": "Exit 1 = no approval on the runtime's record (plan not relayed, no human answer, a --quote that is not the whole answer, or an answer carrying a negation word) - halt and ask; exit 2 = no transcript on this runtime, so the prose rule stands. Never start Step 5 without this PASS."
         },
         {
           "lane": "bgpdd-learn",
@@ -586,14 +586,15 @@
           "lane": "bgpdd-quick",
           "phase": "3",
           "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_quick_close.py --note {quick-root}/note.md --capture {quick-root}/evidence/check.md --changed-files <paths> --repo . --max-changed-files 3 --frozen '<glob>' [--frozen '<glob>']... --milestone \"{slug}\" --ledger {quick-root}/gates.jsonl --commit --message \"<msg>\"",
-          "gate": "Exit 1 = BLOCK and `problem_codes` names the term - `size_bound_exceeded` is unfixable here because the bound is the lane; exit 2 = artifact or environment defect, never hand-edited to pass."
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_quick_close.py --note {quick-root}/note.md --capture {quick-root}/evidence/check.md --changed-files <paths> --repo . --max-changed-files 3 --frozen '<glob>' [--frozen '<glob>']... --milestone \"{slug}\" --ledger {quick-root}/gates.jsonl --require-ledger-gates check_handoff.py --commit --message \"<msg>\"",
+          "gate": "Exit 1 = BLOCK and `problem_codes` names the term - `size_bound_exceeded` is unfixable here because the bound is the lane; `required_ledger_gate_missing` on check_handoff.py means no builder handoff passed Phase 1 over the current handoff.md - the edit was not delegated, so delegate it; exit 2 = artifact or environment defect, never hand-edited to pass."
         }
       ],
       "reads": [
         "{quick-root}/note.md",
         "{quick-root}/evidence/check.md",
         "{quick-root}/evidence/check.md.meta.json",
+        "{quick-root}/handoff.md (rehashed for --require-ledger-gates check_handoff.py)",
         "<git rev-parse --show-toplevel of --repo and each quick artifact>",
         "gates.jsonl"
       ],
@@ -1466,7 +1467,7 @@
           "lane": "bgpdd-bugfix-batch",
           "phase": "1",
           "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state {batch-root}/orchestrator-state.json --set-artifact \"bug:{bug-slug}:root=<bugfix-root>\" --set-artifact \"bug:{bug-slug}:worktree=<path>\" --set-artifact \"bug:{bug-slug}:status=OPEN\" --milestone \"{bug-slug}\"",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state {batch-root}/orchestrator-state.json --set-artifact \"bug:{bug-slug}:root=.docs/bugfix/{bug-slug}/\" --set-artifact \"bug:{bug-slug}:worktree=<path>\" --set-artifact \"bug:{bug-slug}:status=OPEN\" --milestone \"{bug-slug}\"",
           "gate": "An unrecorded root, worktree or status leaves the bug invisible to `check_batch_close.py` and to the batch driver, which read these fields."
         },
         {

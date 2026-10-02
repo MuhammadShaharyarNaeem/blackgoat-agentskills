@@ -16,9 +16,16 @@ model cannot author a user-role entry. It verifies, in order:
   * an ASSISTANT text entry relayed every destination to the user
     (`plan_not_relayed` otherwise -- the user cannot approve what they
     were never shown);
-  * the FIRST human user entry after that relay contains the `--quote`
-    (case- and whitespace-insensitive): `approval_not_found` when no human
-    entry follows, `approval_quote_mismatch` when it says something else.
+  * the FIRST human user entry after that relay IS the `--quote`: the
+    WHOLE answer, compared case- and whitespace-insensitively with
+    surrounding punctuation stripped -- never a substring, so `apply`
+    cannot be lifted out of "no, don't apply this". `approval_not_found`
+    when no human entry follows, `approval_quote_mismatch` when the answer
+    is anything other than the quote, `approval_negated` when the answer
+    carries a negation word (no, not, never, nope, stop, cancel, wait,
+    hold, reject, decline, skip, or an n't contraction). That last rule
+    fails closed on a hedged yes ("yes, but not #2") -- the user re-answers
+    plainly; a partial approval is a new plan, not this one.
     A runtime-injected `<task-notification>` / `<system-reminder>` entry is
     not a human answer and is skipped.
 
@@ -73,6 +80,16 @@ DESTINATION_RE = re.compile(
     re.IGNORECASE)
 NOT_HUMAN_PREFIXES = ("<task-notification>", "<system-reminder>")
 RULES_FILE_NAMES = ("claude.md", "agents.md")
+NEGATION_RE = re.compile(
+    r"\b(?:no|not|never|nope|stop|cancel|wait|hold|reject|decline|skip)\b"
+    r"|\b(?:dont|cant|wont)\b|n['\u2019]t\b")
+# surrounding punctuation stripped before the whole-answer comparison
+EDGE_PUNCT = " \t\n.,!?;:'\"\u2018\u2019\u201c\u201d()"
+
+
+def normalise_answer(text):
+    """Casefold, collapse whitespace, strip surrounding punctuation."""
+    return " ".join(text.split()).casefold().strip(EDGE_PUNCT)
 
 
 class GateError(Exception):
@@ -511,13 +528,19 @@ def run_record(args):
              "halt and wait for the user's answer".format(relay))
         return report
     report["approval_line"] = answer_line
-    said = " ".join(" ".join(answer).split()).casefold()
-    quote = " ".join(args.quote.split()).casefold()
-    if quote not in said:
+    said = normalise_answer(" ".join(answer))
+    quote = normalise_answer(args.quote)
+    if quote != said:
         fail("approval_quote_mismatch",
-             "the user's answer at transcript line {0} does not contain the "
-             "quoted approval; they said: {1!r}".format(
-                 answer_line, said[:160]))
+             "--quote must be the user's whole answer at transcript line {0}, "
+             "verbatim; they said: {1!r}".format(answer_line, said[:160]))
+        return report
+    negation = NEGATION_RE.search(said)
+    if negation:
+        fail("approval_negated",
+             "the user's answer at transcript line {0} carries the negation "
+             "{1!r} -- not a plain approval; halt and ask again".format(
+                 answer_line, negation.group(0)))
         return report
 
     baseline = {}
@@ -623,7 +646,10 @@ Reads:
   --transcript  (--record) the session JSONL, Claude Code shape, sidechains
     skipped. An assistant text entry must name every destination; the FIRST
     human user entry after it (not isMeta, not a <task-notification> or
-    <system-reminder>) must contain --quote, case/whitespace-insensitive.
+    <system-reminder>) must EQUAL --quote as a whole answer (casefolded,
+    whitespace collapsed, surrounding punctuation stripped; never a
+    substring) and carry no negation word (no, not, never, nope, stop,
+    cancel, wait, hold, reject, decline, skip, n't).
   --repo        (repeatable, default .) `git status --porcelain` of each
     worktree; watched: agents/*.md, skills/**/SKILL.md, CLAUDE.md,
     AGENTS.md. --record stores them with sha256 as the baseline; --close
@@ -642,7 +668,8 @@ Problem codes:
   plan_has_no_destinations     the plan names no Destination: line
   plan_not_relayed             no assistant entry named every destination
   approval_not_found           no human entry follows that relay
-  approval_quote_mismatch      the human entry does not contain --quote
+  approval_quote_mismatch      the human entry is not --quote, whole
+  approval_negated             the human entry carries a negation word
   ledger_chain_broken          --close: the ledger chain does not verify
   no_approval_record           --close: no PASS --record for --milestone
   plan_changed_since_approval  --close: the plan's sha256 moved
@@ -661,12 +688,12 @@ Exit codes:
   0  PASS
   1  any problem code
   2  usage (neither or both modes, a missing --plan/--milestone/--ledger,
-     --record without --transcript or a non-empty --quote), an unreadable
+     --record without --transcript or without a non-empty --quote), an unreadable
      plan or transcript (transcript_unreadable), or a --repo that is not a
      git worktree
 
 Self-test:
-  python check_learn_approval.py --self-test   (13 cases)
+  python check_learn_approval.py --self-test   (16 cases)
 """
 
 
@@ -825,7 +852,7 @@ def run_self_test():
                 entry("assistant", [{"type": "text", "text": RELAY}]),
                 entry("user", "<system-reminder>x</system-reminder>",
                       isMeta=True),
-                entry("user", "Yes, apply both please."))
+                entry("user", "Yes, apply both."))
 
         def edit(self, rel, text="changed\n"):
             (self.repo / rel).write_text(text, encoding="utf-8")
@@ -904,6 +931,30 @@ def run_self_test():
                 entry("assistant", RELAY), entry("user", "no, drop #2")))
             self.assertEqual((code, r["problem_codes"]),
                              (1, ["approval_quote_mismatch"]))
+
+        def test_substring_of_a_refusal_fails(self):
+            # "apply" lifted out of a refusal is not the user's answer
+            code, r = self.record(self.transcript(
+                entry("assistant", RELAY),
+                entry("user", "no, don't apply this")), quote="apply")
+            self.assertEqual((code, r["problem_codes"]),
+                             (1, ["approval_quote_mismatch"]))
+
+        def test_negated_whole_answer_fails(self):
+            for said in ("no, don't apply this", "Yes, but not #2",
+                         "wait, don’t apply yet"):
+                code, r = self.record(self.transcript(
+                    entry("assistant", RELAY), entry("user", said)),
+                    quote=said)
+                self.assertEqual((code, r["problem_codes"]),
+                                 (1, ["approval_negated"]), said)
+
+        def test_whole_answer_ignores_case_space_and_edge_punctuation(self):
+            code, r = self.record(self.transcript(
+                entry("assistant", RELAY),
+                entry("user", "  YES,   apply  both!  ")),
+                quote="yes, apply both")
+            self.assertEqual(code, 0, r)
 
         def test_unrelayed_plan_fails(self):
             code, r = self.record(self.transcript(

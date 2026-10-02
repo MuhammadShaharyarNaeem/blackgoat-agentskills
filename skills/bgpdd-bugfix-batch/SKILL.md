@@ -24,7 +24,7 @@ risk: safe
 > **§3 and §5 dropped — a deliberate convention-#8 trim of bugfix's read-in-full rule**: every phase a bug spends is bugfix's, under bugfix's own reads.
 
 - `{batch-root}` = `.docs/bugfix-batch/{YYYY-MM-DD}-{batch-slug}/`, **in the main tree**: `batch.md` (the bug list with per-bug status), `orchestrator-state.json` (the bugs list and each bug's `{bugfix-root}`, worktree path and status — `OPEN`/`MERGED`/`DROPPED-PLAN` — written only through `update_state.py --set-artifact`), `gates.jsonl`, `run-log.jsonl`, `game-tape.md` — no epic to live under, exactly as `bgpdd-bugfix` § 1 refines `base-persona.md` (convention #8).
-- **Each bug's `{bugfix-root}` is inside ITS worktree, resolved by `bgpdd-bugfix` § 1 unchanged.**
+- **Each bug's `{bugfix-root}` is inside ITS worktree, resolved by `bgpdd-bugfix` § 1 unchanged.** Record it in the batch state **repo-relative** (`.docs/bugfix/{bug-slug}/`), never as the worktree's absolute path: Phase 3 merges that directory into the base and Phase 4 removes the worktree, so only the relative path still resolves when `check_batch_close.py` reads `{bugfix-root}/gates.jsonl` from the main tree.
 - **Phase transitions at the batch level are emitted, not recalled (convention #9), the same obligation `bgpdd-bugfix` § 1 states for its own phases**: before deciding what to do next, run `python {PLUGIN_ROOT}/pipeline-tools/scripts/tool_registry.py for --lane bgpdd-bugfix-batch --phase '*'` and execute the `pipeline_driver` line it prints. It reads `orchestrator-state.json` and prints the next open bug's own driver invocation, or — once every bug is terminal — the close gate, or — once that gate has PASSed — that the batch is complete (exit 3). Each bug's OWN phase inside its worktree stays driven by `bgpdd-bugfix` § 1's `--root {bugfix-root} --lane bugfix` invocation, unchanged; the batch driver names it rather than substituting for it.
 
 ## 2. Execution Workflow
@@ -38,7 +38,7 @@ Per bug: `git worktree add <path> -b fix/{bug-slug} <base>`, `<base>` read from 
 ### Phase 2: Waves
 Each wave launches every eligible bug's step in **one message, in the background** (Contract §1); worktrees already partition the write surfaces. **Per bug the step is what that bug's own driver emits there — run `python {PLUGIN_ROOT}/pipeline-tools/scripts/tool_registry.py for --lane bgpdd-bugfix-batch --phase 2` and execute the `pipeline_driver` line it prints, inside that bug's worktree.** In order: **RED** (`bgpdd-bugfix` § Phase 1), **RCA and route** (§ Phase 2, main session), **Fix** (§ Phase 3, Mason and/or Nova by that bug's `- Surface:`), **GREEN** (§ Phase 4), **Review** (§ Phase 5 steps 1–4b, a **fresh** Luna per bug).
 
-`PLAN` at the route step **drops that bug**. `bgpdd-bugfix` § Phase 2 step 5's own HALT close-out runs first, in that bug's worktree: state set `escalated`, its `bug-report.md` and RED capture named as the evidence seed. **Before `git worktree remove`** — which refuses a worktree holding untracked files or, with `--force`, destroys them, and that bug's `.docs/bugfix/{bug-slug}/` evidence is still untracked (a dropped bug never reaches Phase 3's commit) — copy `{bugfix-root}` into `{batch-root}/escalated/{bug-slug}/` and hand **that** path, not the about-to-vanish worktree path, to `/bgpdd-plan`. Then record the drop — `update_state.py --state {batch-root}/orchestrator-state.json --set-artifact "bug:{bug-slug}:status=DROPPED-PLAN" --milestone "{bug-slug}"` (Rules §3's game-tape bullet) — mark `DROPPED-PLAN` in `batch.md` citing the escalated-evidence path, remove its worktree, and continue with the rest.
+`PLAN` at the route step **drops that bug**. `bgpdd-bugfix` § Phase 2 step 5's own HALT close-out runs first, in that bug's worktree: state set `escalated`, its `bug-report.md` and RED capture named as the evidence seed. **Before `git worktree remove`** — which refuses a worktree holding untracked files or, with `--force`, destroys them, and that bug's `.docs/bugfix/{bug-slug}/` evidence is still untracked (a dropped bug never reaches Phase 3's commit) — copy `{bugfix-root}` into `{batch-root}/escalated/{bug-slug}/` and hand **that** path, not the about-to-vanish worktree path, to `/bgpdd-lite` (the one ratchet, `bg/SKILL.md` § The ratchet). Then record the drop — `update_state.py --state {batch-root}/orchestrator-state.json --set-artifact "bug:{bug-slug}:status=DROPPED-PLAN" --milestone "{bug-slug}"` (Rules §3's game-tape bullet) — mark `DROPPED-PLAN` in `batch.md` citing the escalated-evidence path, remove its worktree, and continue with the rest.
 
 ### Phase 3: Close, then merge
 1. Per bug, § Phase 5 step 5 — its own `check_commit_gate.py --commit`, in its worktree, unchanged.
@@ -60,7 +60,7 @@ Each wave launches every eligible bug's step in **one message, in the background
 ## 4. Escalation
 | Condition | Route |
 |---|---|
-| A bug routes `PLAN` | `/bgpdd-plan`; the batch continues |
+| A bug routes `PLAN` | `/bgpdd-lite`; the batch continues |
 | A rebase cannot replay, or one survives a round | HALT that bug (Contract §2) |
 | N > 5, or a bug bugfix would refuse alone | sequential `/bgpdd-bugfix` runs |
 | A bug belongs to an in-flight epic | bugfix's feature route |

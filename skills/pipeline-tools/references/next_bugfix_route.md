@@ -143,10 +143,12 @@ the two scripts — never silently routed around.
 
 ## Route rules, term by term
 
-**PLAN outranks everything.** It means *this is not a bugfix*:
+**PLAN outranks everything.** It means *this is not a bugfix* — route the user
+to `/bgpdd-lite`, the one ratchet (bugfix → lite → plan), which escalates to
+`/bgpdd-plan` under its own bound:
 
 - `- New capability: yes` — building something that does not exist is
-  `/bgpdd-plan` work, and the bugfix lane has no requirements or design artifact
+  lite-or-plan work, and the bugfix lane has no requirements or design artifact
   to hang it on.
 - `- Schema or contract change: yes` — Aria owns contracts; a bugfix that
   changes one has consumers to renegotiate, which is exactly the blast radius

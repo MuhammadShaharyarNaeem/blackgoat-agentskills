@@ -89,7 +89,7 @@ bug its own port.
 Phase 0  intake, one bug at a time, with the user   (interactive: never parallel)
 Phase 1  wt/bug-a      wt/bug-b      wt/bug-c        (worktrees created)
 Phase 2  RED    ──┐    RED    ──┐    RED    ──┐      wave 1  (parallel, background)
-         RCA    ──┤    RCA    ──┤    RCA ── PLAN ──> /bgpdd-plan, dropped
+         RCA    ──┤    RCA    ──┤    RCA ── PLAN ──> /bgpdd-lite, dropped
          Fix    ──┤    Fix    ──┤                    wave 3
          GREEN  ──┤    GREEN  ──┤                    wave 4
          Luna   ──┘    Luna   ──┘                    wave 5  (fresh per bug)
@@ -187,7 +187,7 @@ Written at Phase 0 with the status column empty, updated as waves land, closed a
   `src/pricing.js` — serialised: 2 merges after 1, rebased on the merged base, GREEN
   re-run there (spine Phase 3 step 3).
 - 3 is independent (ui) and was dropped at its route step: `next_bugfix_route.py` printed
-  `PLAN` (new capability), handed to `/bgpdd-plan` with its `bug-report.md`.
+  `PLAN` (new capability), handed to `/bgpdd-lite` with its `bug-report.md`.
 
 ## Final
 
@@ -195,7 +195,7 @@ Written at Phase 0 with the status column empty, updated as waves land, closed a
 |---|---|---|---|
 | 1 | `null-coupon-500` | `9f2c1ab` | `check_commit_gate.py` PASS `--commit`, 2026-09-08T11:04:12Z, `.docs/bugfix/null-coupon-500/gates.jsonl` line 7 (`check_ledger.py` exit 0) |
 | 2 | `tax-rounding-cents` | `4d7e880` | `check_commit_gate.py` PASS `--commit`, 2026-09-08T11:31:55Z, `.docs/bugfix/tax-rounding-cents/gates.jsonl` line 9 (`check_ledger.py` exit 0) |
-| 3 | `cart-badge-stale` | — | dropped to `/bgpdd-plan` before Phase 3 |
+| 3 | `cart-badge-stale` | — | dropped to `/bgpdd-lite` before Phase 3 |
 ```
 
 ## Anti-patterns

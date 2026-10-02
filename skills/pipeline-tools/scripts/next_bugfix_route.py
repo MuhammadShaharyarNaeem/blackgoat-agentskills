@@ -666,7 +666,7 @@ def build_report(args):
         report["route"] = "PLAN"
         report["result"] = "PLAN"
         report["reasons"] = plan_reasons + [
-            "PLAN means route the user to /bgpdd-plan or /bgpdd-build — this "
+            "PLAN means route the user to /bgpdd-lite (bugfix -> lite -> plan) — this "
             "lane fixes a localized defect and does not build capability"]
         return report
 

@@ -1543,7 +1543,7 @@ def decide(tool_name, tool_input, cwd, now=None, window_hours=WINDOW_HOURS_DEFAU
                     "apply without explicit approval -- relay the plan, take "
                     "the user's answer, then run\n  {4} --record --plan "
                     "{2}/forge-handoff.md --transcript <session.jsonl> "
-                    "--quote \"<their words>\" --repo <dir> --milestone "
+                    "--quote \"<their whole answer>\" --repo <dir> --milestone "
                     "<slug> --ledger {5}\nA run that is finished closes "
                     "with --close, which disarms this rule."
                     .format(path, how, root, why, _gate_command(LEARN_GATE),

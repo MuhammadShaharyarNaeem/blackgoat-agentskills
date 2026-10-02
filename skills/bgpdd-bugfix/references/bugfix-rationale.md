@@ -136,7 +136,7 @@ Two design constraints follow:
 
 PLAN is the third value and outranks the other two: it means *this is not a
 bugfix*. A new capability, a schema or contract change, or a fix over the file
-bound is `/bgpdd-plan` work, and catching that at Phase 2 saves three
+bound is `/bgpdd-lite` work (the ratchet; lite escalates to plan), and catching that at Phase 2 saves three
 delegations against discovering it at Phase 5 step 4's blast-radius HALT.
 
 Depth: `{PLUGIN_ROOT}/pipeline-tools/references/next_bugfix_route.md`.
