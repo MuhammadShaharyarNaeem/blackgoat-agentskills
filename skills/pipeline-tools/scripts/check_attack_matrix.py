@@ -61,6 +61,23 @@ lane routes that failure class to Phase 4 as a confirmed-vulnerability
 finding, never as a defect loop, so a caller distinguishes it from a real
 gate defect by rule code alone.
 
+BOTH MODES — the lane's "staging or local only, never production" boundary,
+converted from the preamble's prose attestation into a host check:
+
+  H1. Every target host in the document is local or declared staging.
+      Collected: the host of every `scheme://host` URL anywhere outside a
+      fence, plus each bare `host[:port]` on a `Base URL(s):` line.
+      Skipped: lines under a `Forbidden host(s):`, `Scope exclusion(s):`,
+      `Staging host(s):` or `Reference(s):` label (and that label's indented
+      continuation lines) — those name hosts NOT to probe, or patterns.
+      Allowed: `localhost`, `127.0.0.1`, `[::1]`, `*.localhost`, `*.test`,
+      or a match (fnmatch, case-insensitive) for a pattern on the matrix's
+      own `Staging hosts:` line. Anything else is `target-host-not-local`,
+      naming the host. A declared pattern with a wildcard in either of its
+      last two labels (`*`, `*.com`, `*.example.*`) is
+      `staging-pattern-too-broad` and allows nothing: a declaration that
+      matches the internet is not a staging declaration.
+
 Every violation is reported with its row's Category and source line number;
 this gate never stops at the first failure. A missing or malformed table,
 report, or bad `--require-priority` token is a structural/usage error
@@ -168,8 +185,119 @@ PREAMBLE_SCOPE_RE = re.compile(
     r"(?im)^\s*(?:[-*]\s*)?\**scope\s+exclusions?\**\s*:")
 
 
+# H1 -- the target-host check (see BOTH MODES in the docstring).
+URL_HOST_RE = re.compile(
+    r"\b[a-z][a-z0-9+.-]*://(\[[0-9A-Fa-f:.]+\]|[^/\s:?#|`'\"()<>\[\],;]+)",
+    re.IGNORECASE)
+LABEL_RE = re.compile(r"^(\s*)(?:[-*]\s*)?\**([A-Za-z][A-Za-z ()-]*?)\**\s*:(.*)$")
+HOST_EXEMPT_LABEL_RE = re.compile(
+    r"^(?:forbidden[ -]hosts?(?: patterns?)?|scope exclusions?|"
+    r"staging hosts?|references?)$", re.IGNORECASE)
+BASE_URL_LABEL_RE = re.compile(r"^base urls?$", re.IGNORECASE)
+STAGING_LABEL_RE = re.compile(r"^staging hosts?$", re.IGNORECASE)
+BARE_HOST_RE = re.compile(
+    r"^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)(?::\d+)?(?:/.*)?$")
+LOCAL_HOSTS = ("localhost", "127.0.0.1", "[::1]")
+LOCAL_SUFFIXES = (".localhost", ".test")
+
+
 class GateError(Exception):
     """A structural or usage contract failure (exit code 2)."""
+
+
+def _label_of(line):
+    """(indent, label, value) for a `Label: value` line, else None."""
+    m = LABEL_RE.match(line)
+    if not m or "|" in m.group(2):
+        return None
+    return len(m.group(1)), m.group(2).strip(), m.group(3)
+
+
+def staging_patterns(text):
+    """[(pattern, too_broad)] from every `Staging hosts:` line."""
+    out = []
+    for line in text.split("\n"):
+        lab = _label_of(line)
+        if not lab or not STAGING_LABEL_RE.match(lab[1]):
+            continue
+        for raw in re.split(r"[,\s]+", lab[2]):
+            pat = raw.strip("`'\"").lower()
+            if not pat:
+                continue
+            parts = pat.split(".")
+            too_broad = len(parts) < 2 or any(
+                ch in p for p in parts[-2:] for ch in "*?[")
+            out.append((pat, too_broad))
+    return out
+
+
+def target_hosts(text):
+    """[(line_no, host)] for every probe target host (H1's collection)."""
+    hosts = []
+    exempt_indent = None
+    for line_no, line in enumerate(text.split("\n"), start=1):
+        lab = _label_of(line)
+        indent = len(line) - len(line.lstrip())
+        if exempt_indent is not None:
+            if line.strip() and indent <= exempt_indent and not (
+                    lab and HOST_EXEMPT_LABEL_RE.match(lab[1])):
+                exempt_indent = None
+            else:
+                continue
+        if lab and HOST_EXEMPT_LABEL_RE.match(lab[1]):
+            exempt_indent = lab[0]
+            continue
+        found = [m.group(1) for m in URL_HOST_RE.finditer(line)]
+        if lab and BASE_URL_LABEL_RE.match(lab[1]):
+            for raw in re.split(r"[,\s]+", lab[2]):
+                tok = raw.strip("`'\"<>()")
+                if tok and "://" not in tok:
+                    m = BARE_HOST_RE.match(tok)
+                    if m:
+                        found.append(m.group(1))
+        hosts.extend((line_no, h.lower().rstrip(".")) for h in found)
+    return hosts
+
+
+def host_allowed_by(host, patterns):
+    """The rule that allows `host` ('local', or the staging pattern), or None."""
+    import fnmatch
+    if host in LOCAL_HOSTS or host.endswith(LOCAL_SUFFIXES):
+        return "local"
+    for pat, too_broad in patterns:
+        if not too_broad and fnmatch.fnmatchcase(host, pat):
+            return pat
+    return None
+
+
+def evaluate_target_hosts(raw_text):
+    """(failures, target_hosts report, staging patterns) for rule H1."""
+    text = strip_fenced_blocks(raw_text)
+    patterns = staging_patterns(text)
+    failures, seen = [], []
+    for pat, too_broad in patterns:
+        if too_broad:
+            failures.append({
+                "line": None, "category": "<Staging hosts>",
+                "rule": "staging-pattern-too-broad",
+                "detail": "staging pattern `{0}` wildcards one of its last "
+                          "two labels -- it would match production hosts; "
+                          "declare the staging host or `*.<staging>.<domain>`"
+                          .format(pat)})
+    for line_no, host in target_hosts(text):
+        allowed = host_allowed_by(host, patterns)
+        seen.append({"host": host, "line": line_no, "allowed_by": allowed})
+        if allowed is None:
+            failures.append({
+                "line": line_no, "category": "<target host>",
+                "rule": "target-host-not-local",
+                "detail": "`{0}` is not localhost/127.0.0.1/[::1]/*.localhost"
+                          "/*.test and matches no `Staging hosts:` pattern -- "
+                          "this lane probes staging or local only, never "
+                          "production. Declare it on the matrix's `Staging "
+                          "hosts:` line only if the user confirmed it is "
+                          "non-production (Phase 0 step 2)".format(host)})
+    return failures, seen, [p for p, _ in patterns]
 
 
 def read_text(path):
@@ -448,6 +576,8 @@ def build_lint_report(matrix_path):
         "mode": "lint",
         "matrix_file": matrix_path,
         "rows_checked": 0,
+        "target_hosts": [],
+        "staging_patterns": [],
         "failures": [],
         "result": "ERROR",
         "error": None,
@@ -476,6 +606,10 @@ def build_lint_report(matrix_path):
                       "and `Scope exclusions:`)",
         })
 
+    host_failures, report["target_hosts"], report["staging_patterns"] = (
+        evaluate_target_hosts(raw))
+    failures.extend(host_failures)
+
     report["rows_checked"] = len(rows)
     report["failures"] = failures
     report["result"] = "FAIL" if failures else "PASS"
@@ -488,6 +622,8 @@ def build_report(matrix_path, repo):
         "matrix_file": matrix_path,
         "repo": repo,
         "rows_checked": 0,
+        "target_hosts": [],
+        "staging_patterns": [],
         "failures": [],
         "result": "ERROR",
         "error": None,
@@ -503,6 +639,10 @@ def build_report(matrix_path, repo):
     failures = []
     for line_no, cells in rows:
         failures.extend(evaluate_row(line_no, cells, repo))
+
+    host_failures, report["target_hosts"], report["staging_patterns"] = (
+        evaluate_target_hosts(text))
+    failures.extend(host_failures)
 
     report["rows_checked"] = len(rows)
     report["failures"] = failures
@@ -874,7 +1014,12 @@ Reads:
     Tier is a bare token: provable | partial | not agent-testable.
     Verdict is PASS | FAIL | BLOCKED (blank at lint time).
     The document also carries an environment preamble naming
-    `Authorization:` and `Scope exclusions:`.
+    `Authorization:` and `Scope exclusions:`, and may declare
+    `Staging hosts: <host-glob>[, ...]`. Every scheme://host URL outside a
+    fence, and every bare host on a `Base URL(s):` line, must be localhost,
+    127.0.0.1, [::1], *.localhost, *.test or match a declared pattern
+    (lines under Forbidden hosts / Scope exclusions / Staging hosts /
+    References are not targets). Checked in both modes.
   --report <path>  (results mode only) Cipher's security-report.md, read
     under check_agent_report.py's check-line grammar:
       - <name>: PASS|FAIL|BLOCKED|NOT RUN -- `<command>` -- exit <N> -- <counts> -- capture: evidence/<dir>/<file>.md
@@ -887,6 +1032,10 @@ Reads:
 
 Problem codes:
   Emitted in failures[].rule.
+  Both modes:
+  target-host-not-local        a target host is neither local nor declared
+  staging-pattern-too-broad    a Staging hosts pattern wildcards its last
+                               two labels (it allows nothing)
   Lint mode:
   row-incomplete               a row is missing one of the six fields
   tier-token                   Tier is not one bare recognized token
@@ -911,6 +1060,7 @@ JSON keys:
   Always printed on stdout (there is no --json flag):
   mode (lint report only), matrix_file, repo, report_file,
   require_priority (sorted list or null), rows_checked,
+  target_hosts ([{host, line, allowed_by}]), staging_patterns,
   failures ([{line, category, rule, detail}]), result, error
 
 Exit codes:
@@ -921,7 +1071,7 @@ Exit codes:
      unrecognized --require-priority token.
 
 Self-test:
-  python check_attack_matrix.py --self-test   (57 cases)
+  python check_attack_matrix.py --self-test   (65 cases)
 """
 
 
@@ -1322,6 +1472,89 @@ def run_self_test():
             r = self._lint(row(), preamble="# Attack matrix\n\n")
             self.assertIn("preamble-missing", self._codes(r))
             self.assertEqual(r["result"], "FAIL")
+
+        # ---- H1: target hosts are local or declared staging ----
+
+        def _hosts_preamble(self, *lines):
+            return ("# Attack matrix\n\n- Authorization: confirmed\n"
+                    "- Scope exclusions: none\n" + "".join(
+                        l + "\n" for l in lines) + "\n")
+
+        def test_h1_local_hosts_pass_in_both_modes(self):
+            pre = self._hosts_preamble(
+                "- Base URLs: http://localhost:5000, `127.0.0.1:8080`, "
+                "http://[::1]:3000, https://app.localhost, https://shop.test")
+            r = self._lint(row(planned="TBD"), preamble=pre)
+            self.assertNotIn("target-host-not-local", self._codes(r))
+            self.assertEqual(len(r["target_hosts"]), 5, r["target_hosts"])
+            r = self._run(row(planned="TBD"), preamble=pre)
+            self.assertNotIn("target-host-not-local", self._codes(r))
+
+        def test_h1_production_host_fails_naming_it(self):
+            pre = self._hosts_preamble("- Base URLs: https://api.shop.com")
+            r = self._lint(row(planned="TBD"), preamble=pre)
+            fails = [f for f in r["failures"]
+                     if f["rule"] == "target-host-not-local"]
+            self.assertEqual(len(fails), 1)
+            self.assertIn("api.shop.com", fails[0]["detail"])
+            self.assertEqual(r["result"], "FAIL")
+            # results mode refuses the same host
+            r = self._run(row(planned="TBD"), preamble=pre)
+            self.assertIn("target-host-not-local", self._codes(r))
+
+        def test_h1_bare_base_url_host_and_surface_url_are_checked(self):
+            pre = self._hosts_preamble("- Base URL: shop.example.com:443")
+            self.assertIn("target-host-not-local",
+                          self._codes(self._lint(row(planned="TBD"), preamble=pre)))
+            r = self._lint(row(planned="TBD", surface="https://prod.example.com/api"))
+            self.assertIn("target-host-not-local", self._codes(r))
+
+        def test_h1_declared_staging_pattern_allows(self):
+            pre = self._hosts_preamble(
+                "- Staging hosts: *.staging.example.com, qa.example.com",
+                "- Base URLs: https://api.staging.example.com, "
+                "https://qa.example.com")
+            r = self._lint(row(planned="TBD"), preamble=pre)
+            self.assertEqual(r["result"], "PASS", r["failures"])
+            self.assertEqual(r["staging_patterns"],
+                             ["*.staging.example.com", "qa.example.com"])
+
+        def test_h1_too_broad_pattern_fails_and_allows_nothing(self):
+            for pat in ("*", "*.com", "*.example.*"):
+                pre = self._hosts_preamble(
+                    "- Staging hosts: " + pat,
+                    "- Base URLs: https://api.example.com")
+                codes = self._codes(self._lint(row(planned="TBD"), preamble=pre))
+                self.assertIn("staging-pattern-too-broad", codes, pat)
+                self.assertIn("target-host-not-local", codes, pat)
+
+        def test_h1_forbidden_and_excluded_hosts_are_not_targets(self):
+            pre = self._hosts_preamble(
+                "- Forbidden hosts: https://shop.com, https://api.shop.com",
+                "- References:",
+                "  - https://owasp.org/Top10/",
+                "- Base URLs: http://localhost:5000")
+            r = self._lint(row(planned="TBD"), preamble=pre)
+            self.assertEqual(r["result"], "PASS", r["failures"])
+            self.assertEqual([h["host"] for h in r["target_hosts"]],
+                             ["localhost"])
+
+        def test_h1_fenced_example_url_is_ignored(self):
+            pre = self._hosts_preamble("```", "Base URL: https://prod.com",
+                                       "```")
+            self.assertEqual(self._lint(row(planned="TBD"), preamble=pre)["result"], "PASS")
+
+        def test_h1_shipped_fixtures(self):
+            fixtures = Path(__file__).resolve().parent.parent / "fixtures"
+            good = fixtures / "attack-matrix-local-hosts" / "attack-matrix.md"
+            bad = fixtures / "attack-matrix-production-host" / "attack-matrix.md"
+            if not (good.is_file() and bad.is_file()):
+                self.skipTest("attack-matrix fixtures not present")
+            self.assertEqual(build_lint_report(str(good))["result"], "PASS")
+            r = build_lint_report(str(bad))
+            self.assertEqual(sorted(set(self._codes(r))),
+                             ["staging-pattern-too-broad",
+                              "target-host-not-local"])
 
         # ---- verdict-dependent rules must NOT fire in lint mode ----
 

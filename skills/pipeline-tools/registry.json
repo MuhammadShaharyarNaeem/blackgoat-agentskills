@@ -208,7 +208,8 @@
       "reads": [
         "{batch-root}/orchestrator-state.json",
         "{batch-root}/batch.md",
-        "{bugfix-root}/gates.jsonl"
+        "{bugfix-root}/gates.jsonl",
+        "<git rev-parse --show-toplevel of --repo and each batch artifact>"
       ],
       "writes": [
         "{batch-root}/gates.jsonl"
@@ -273,7 +274,7 @@
           "phase": "5",
           "step": "5",
           "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_commit_gate.py --review-report {report-root}/review-report.md --state {state-file} --milestone \"{bug-slug}\" --changed-files <the builder's paths> --verify-tree --require-files-reviewed --max-changed-files 5 --waiver {bugfix-root}/rca.md --require-ledger-gates check_bugfix_intake.py,check_red_green.py,check_handoff.py,check_test_authenticity.py --require-run-log {bugfix-root}/run-log.jsonl --require-agents quinn,luna,<the builder(s) Phase 3 delegated> --ledger {bugfix-root}/gates.jsonl --repo <the target repo root — REQUIRED whenever the invocation's cwd is not that repo> [--docs-root <the shared .docs/ root, only if it is not --repo/.docs>] --commit --message \"<the commit message>\"",
-          "gate": "Exit 1 = BLOCK and the JSON names the stale verdict, standing blocker, standing Critical/Important finding, unreviewed file, tree mismatch, size overrun or unbacked sibling gate; exit 2 = non-conforming report, back to Luna."
+          "gate": "Exit 1 = BLOCK and the JSON names the stale verdict, standing blocker, standing Critical/Important finding, unreviewed file, tree mismatch, size overrun, unbacked sibling gate or a lane artifact in another worktree than --repo (worktree_ok); exit 2 = non-conforming report, back to Luna."
         }
       ],
       "reads": [
@@ -283,7 +284,8 @@
         "run-log.jsonl",
         "test-report.md",
         "evidence/**/*.meta.json",
-        "rca.md"
+        "rca.md",
+        "<git rev-parse --show-toplevel of --repo and each lane artifact>"
       ],
       "writes": [
         "gates.jsonl",
@@ -481,6 +483,39 @@
       ]
     },
     {
+      "name": "check_learn_approval",
+      "script": "scripts/check_learn_approval.py",
+      "description": "Decides whether a learn-lane plan was approved by the user in the transcript, and whether only approved destinations changed.",
+      "kind": "gate",
+      "runner": "orchestrator",
+      "agents": [],
+      "lanes": [
+        {
+          "lane": "bgpdd-learn",
+          "phase": "-",
+          "step": "4",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_learn_approval.py --record --plan .docs/learn/{YYYY-MM-DD}-{learn-slug}/forge-handoff.md --transcript <the session transcript path> --quote \"<the user's approving words, verbatim>\" --repo <this plugin's directory> [--repo <the target project, when a rules file is a destination>] --milestone \"{learn-slug}\" --ledger .docs/learn/{YYYY-MM-DD}-{learn-slug}/gates.jsonl",
+          "gate": "Exit 1 = no approval on the runtime's record (plan not relayed, no human answer, or an answer that does not approve) - halt and ask; exit 2 = no transcript on this runtime, so the prose rule stands. Never start Step 5 without this PASS."
+        },
+        {
+          "lane": "bgpdd-learn",
+          "phase": "-",
+          "step": "5",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_learn_approval.py --close --plan .docs/learn/{YYYY-MM-DD}-{learn-slug}/forge-handoff.md --repo <this plugin's directory> [--repo <the target project>] --milestone \"{learn-slug}\" --ledger .docs/learn/{YYYY-MM-DD}-{learn-slug}/gates.jsonl",
+          "gate": "Exit 1 = Forge changed a watched file no approved lesson named (or agents/blackgoat.md) - HALT and leave the revert to the user, exactly as Step 5's post-apply guard does."
+        }
+      ],
+      "reads": [
+        "{learn-root}/forge-handoff.md",
+        "<the session transcript JSONL>",
+        "<git status --porcelain of each --repo>",
+        "{learn-root}/gates.jsonl"
+      ],
+      "writes": [
+        "{learn-root}/gates.jsonl"
+      ]
+    },
+    {
       "name": "check_ledger",
       "script": "scripts/check_ledger.py",
       "description": "Decides whether a gate ledger's hash chain is intact, naming the first broken link, before any verdict is read out of it.",
@@ -552,6 +587,7 @@
         "{quick-root}/note.md",
         "{quick-root}/evidence/check.md",
         "{quick-root}/evidence/check.md.meta.json",
+        "<git rev-parse --show-toplevel of --repo and each quick artifact>",
         "gates.jsonl"
       ],
       "writes": [
@@ -909,7 +945,7 @@
     {
       "name": "guard_action",
       "script": "scripts/guard_action.py",
-      "description": "PreToolUse hook that denies a tool call violating one of eight pipeline restraints; the model never invokes it directly.",
+      "description": "PreToolUse hook that denies a tool call violating one of nine pipeline restraints; the model never invokes it directly.",
       "kind": "hook",
       "runner": "orchestrator",
       "agents": [],
@@ -919,7 +955,9 @@
         "orchestrator-state.json",
         "gates.jsonl",
         "bug-report.md",
-        "note.md"
+        "note.md",
+        "<git rev-parse --show-toplevel of a commit's target directory>",
+        ".docs/learn/*/forge-handoff.md"
       ],
       "writes": []
     },
@@ -1209,7 +1247,7 @@
         "vera",
         "ward"
       ],
-      "reason": "base-persona.md section Command Timeout Discipline (Anti-Hang): EVERY agent wraps the commands it runs in run_quiet.py --log, and agents/cipher.md and agents/vera.md take each check through --capture. An agent running it is doing its own work properly, not adjudicating it; the gate that reads the capture still runs in the main session.",
+      "reason": "base-persona.md section Command Timeout Discipline (Anti-Hang): run_quiet.py --log is the plugin's timeout wrapper, MANDATORY for a raw build/test runner inside a lane (guard_action.py rule 5) and one sanctioned option (beside the runtime's own timeout) for any other command; agents/cipher.md and agents/vera.md take each check through --capture. An agent running it is doing its own work properly, not adjudicating it; the gate that reads the capture still runs in the main session.",
       "lanes": [
         {
           "lane": "bgpdd-bugfix",

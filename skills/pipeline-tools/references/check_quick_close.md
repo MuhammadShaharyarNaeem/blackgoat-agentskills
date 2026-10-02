@@ -272,3 +272,14 @@ tests this change must not touch, and record why in the note's `## Result`
 section.** Only a defect whose test was genuinely wrong goes to
 `/bgpdd-bugfix`. The narrowing is a written act in the note, which is what
 keeps it from being a silent opt-out.
+
+## `worktree_mismatch` — the quick root and `--repo` are one worktree
+
+`--repo` is resolved to its git top level (`repo_toplevel`), and `--note`,
+`--capture` and `--ledger` are resolved the same way. One that sits in
+**another worktree of the same repository** is `worktree_mismatch`: with
+several worktrees open, a note from checkout A and a `--repo` of checkout B
+would close A's lane by committing into B. A path in no repository, a
+different repository, or any git failure is not a mismatch — the same
+narrowing `check_commit_gate.py`'s `worktree_ok` uses, with the same helper
+block, held identical by `check_batch_close.py`'s self-test.

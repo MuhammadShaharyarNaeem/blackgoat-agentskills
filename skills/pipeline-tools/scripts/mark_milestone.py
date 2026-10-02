@@ -64,6 +64,7 @@ import argparse
 import hashlib
 import json
 import re
+import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -612,6 +613,101 @@ def check_ledger_gates(ledger_path, gate_names, milestone):
     return problems
 
 
+# --- --require-exit-capture: Orchestrator Contract §4 "never advance on
+# aggregate green", converted (convention #9). The plan's own
+# `RUNTIME EXIT CRITERION — run `<cmd>`` lines name the command; run_quiet.py
+# --capture --ledger --milestone is the only writer of the CAPTURED record
+# that proves it ran (guard_action.py rule 4 denies a hand write).
+
+EXIT_CRITERION_RE = re.compile(r"RUNTIME EXIT CRITERION", re.IGNORECASE)
+EXIT_CRITERION_CMD_RE = re.compile(
+    r"RUNTIME EXIT CRITERION\s*[^`]*?\brun\s+`(?P<cmd>[^`]+)`", re.IGNORECASE)
+# next_milestone.py's parse_milestones() block rule, restated as a predicate:
+# a level-2 heading ends the block unless it starts with Task or Checkpoint.
+BLOCK_END_RE = re.compile(r"^#{1,2}(?!#)\s*(?!task|checkpoint)\S",
+                          re.IGNORECASE)
+
+
+def milestone_exit_criteria(lines, index):
+    """[(raw_line, command_or_None)] for every exit-criterion line in the
+    milestone block -- next_milestone.py's block: up to the next milestone
+    heading or a level-1/2 heading that is not a Task or Checkpoint heading.
+    Fenced lines are not read."""
+    out = []
+    contents = blank_fenced_lines([c for c, _e in lines])
+    for content in contents[index + 1:]:
+        if MILESTONE_HEADING_RE.match(content) or BLOCK_END_RE.match(content):
+            break
+        if EXIT_CRITERION_RE.search(content):
+            m = EXIT_CRITERION_CMD_RE.search(content)
+            out.append((content.strip(),
+                        m.group("cmd").strip() if m else None))
+    return out
+
+
+def command_token_candidates(command):
+    """Every legitimate tokenization of a declared command string.
+
+    Byte-identical to check_quick_close.py's function of the same name
+    (family convention: one file each, no shared module).
+    """
+    candidates = []
+    for label, text in (("shlex", command),
+                        ("shlex-escaped", command.replace("\\", "\\\\"))):
+        try:
+            tokens = shlex.split(text, posix=True)
+        except ValueError:
+            continue    # unbalanced quotes: that candidate does not apply
+        if tokens:
+            candidates.append((label, tokens))
+    raw = command.split()
+    if raw:
+        candidates.append(("whitespace", raw))
+    return candidates
+
+
+def check_exit_captures(ledger_path, criteria, milestone):
+    """Each declared criterion's LATEST ledgered capture for this milestone
+    must have run THAT command and exited 0."""
+    if not criteria:
+        return [{"problem": "no_exit_criterion",
+                 "detail": "the milestone block declares no RUNTIME EXIT "
+                           "CRITERION line -- that absence is the defect "
+                           "(Orchestrator Contract §4): add one to the plan"}]
+    chain_ok, chain = verify_ledger_chain(ledger_path)
+    if not chain_ok:
+        return [{"problem": "ledger_chain_broken",
+                 "detail": "line {0} ({1}): {2}".format(
+                     chain["line"], chain["reason"], chain["detail"])}]
+    captures = [r for r in read_ledger(ledger_path)
+                if r.get("gate") == "run_quiet.py"
+                and r.get("verdict") == "CAPTURED"
+                and r.get("milestone") == milestone
+                and isinstance(r.get("command_argv"), list)]
+    problems = []
+    for raw, command in criteria:
+        if command is None:
+            problems.append({
+                "problem": "exit_criterion_unparseable",
+                "detail": f"{raw!r} names no backticked `run `<command>`` "
+                          "-- the grammar is planning-and-task-breakdown's"})
+            continue
+        tokens = [t for _l, t in command_token_candidates(command)]
+        matching = [r for r in captures if r["command_argv"] in tokens]
+        if not matching:
+            problems.append({
+                "problem": "exit_criterion_not_run",
+                "detail": f"no run_quiet.py --capture --ledger --milestone "
+                          f"{milestone!r} record ran `{command}` -- run it "
+                          "through the wrapper and read the output"})
+        elif matching[-1].get("exit") != 0:
+            problems.append({
+                "problem": "exit_criterion_failed",
+                "detail": f"the latest capture of `{command}` exited "
+                          f"{matching[-1].get('exit')!r}"})
+    return problems
+
+
 def build_report(args):
     report = {
         "plan_file": args.plan,
@@ -664,6 +760,12 @@ def build_report(args):
     if getattr(args, "require_game_tape", None):
         report["problems"] += check_game_tape(
             args.require_game_tape, args.milestone)
+
+    if getattr(args, "require_exit_capture", False):
+        criteria = milestone_exit_criteria(lines, index)
+        report["exit_criteria"] = [c for _r, c in criteria]
+        report["problems"] += check_exit_captures(
+            args.ledger, criteria, args.milestone)
 
     if report["problems"]:
         return report
@@ -769,7 +871,7 @@ EPILOG = """Reads:
     headings; completion is the literal " [x]" appended to the heading. The
     title matches case-insensitively and WHOLE-TOKEN, so "Milestone 1" never
     matches "Milestone 10". utf-8-sig; line endings and BOM survive.
-  --ledger -- the gate ledger (one JSON object per line). Its hash chain is
+  --ledger -- the gate ledger. Its hash chain is
     walked FIRST (ledger_chain_broken); then each required gate's LATEST
     record scoped to this milestone must carry "verdict": "PASS" -- the
     VERDICT only, deliberately not a re-hash of inputs. Gate backing is ON
@@ -780,17 +882,17 @@ EPILOG = """Reads:
   --require-commit -- git log --fixed-strings --grep="<title>" in --repo.
   --require-game-tape -- a game-tape file. With fences blanked it must carry
     a "## bgpdd-<lane> - <milestone> - <date>" heading matching by whole
-    token (full title or its leading identifier; an epic-summary heading
-    does not count, last matching section wins), 3-6 bullets, at least one
-    fenced block, and either a summarize_run mention or a table row. Any
-    lane name matches; shared byte-for-byte with update_state.py.
-  --reopen -- --evidence (a file that must exist), a non-empty --reason and
-    --ledger are all mandatory.
+    token (full title or leading identifier; last matching section wins),
+    3-6 bullets, a fenced block, and a summarize_run mention or a table
+    row. Shared byte-for-byte with update_state.py.
+  --require-exit-capture -- every "RUNTIME EXIT CRITERION ... run `<cmd>`"
+    line in the milestone's next_milestone.py block needs, in --ledger, a
+    run_quiet.py CAPTURED record for this milestone whose command_argv
+    token-matches <cmd>; the latest must exit 0.
 
 Writes:
   --plan -- " [x]" appended to the matched heading, or, under --reopen, that
-    marker REMOVED (never replaced with "[ ]": the grammar has no such
-    token, and it would become part of the title later gates are scoped by).
+    marker REMOVED (never replaced with "[ ]", which is no grammar token).
   --ledger -- one chained record per run, on every exit path:
     {"ts", "gate": "mark_milestone.py", "argv", "milestone", "inputs":
      {"<path>": "<sha256>"}, "verdict": "PASS|FAIL|ERROR", "exit", "prev",
@@ -812,11 +914,16 @@ Problem codes:
   bullet-count          the section does not carry 3-6 bullets
   no-pasted-output      the section carries no fenced block
   no-telemetry          no summarize_run mention and no table row
+  no_exit_criterion     --require-exit-capture: the block declares none
+  exit_criterion_unparseable  a criterion line names no `run `<cmd>``
+  exit_criterion_not_run      no ledgered capture of that command
+  exit_criterion_failed       its latest capture exited non-zero
 
 JSON keys:
   plan_file, milestone, matched_heading, require_commit, commit_found,
   ledger, require_gates, require_game_tape, problems (each {problem,
-  detail}), marked, result, error. A --reopen run prints instead:
+  detail}), exit_criteria (with --require-exit-capture), marked, result,
+  error. A --reopen run prints instead:
   plan_file, milestone, matched_heading, evidence, evidence_sha256, reason,
   ledger, problems, reopened, result, error.
 
@@ -824,12 +931,12 @@ Exit codes:
   0  the marker was appended (or, under --reopen, removed)
   1  a refusal -- any problem code above
   2  missing --plan, missing --milestone/--reopen, an unreadable plan, no
-     milestone headings, a gate requirement (default or named) with no
+     milestone headings, --require-gates or --require-exit-capture with no
      --ledger, --reopen without --evidence / --reason / --ledger, --reopen
      beside --require-commit or --require-game-tape, or a git failure
 
 Self-test:
-  python mark_milestone.py --self-test   (50 cases)
+  python mark_milestone.py --self-test   (55 cases)
 """
 
 
@@ -874,6 +981,9 @@ def build_parser():
     parser.add_argument(
         "--require-game-tape", dest="require_game_tape",
         help="game-tape file that must carry this milestone's checkpoint")
+    parser.add_argument(
+        "--require-exit-capture", action="store_true",
+        help="each RUNTIME EXIT CRITERION needs a ledgered exit-0 capture")
     parser.add_argument(
         "--reopen",
         help="REMOVE this milestone's '[x]' so next_milestone.py returns it "
@@ -1000,6 +1110,12 @@ def main(argv):
                      "--ledger <path>, or waive it deliberately with "
                      "--require-gates none if this milestone legitimately has "
                      "no gate behind it (a docs-only milestone, a spike)"}))
+        return finish(2, "ERROR")
+    if args.require_exit_capture and not args.ledger:
+        print(json.dumps({
+            "result": "ERROR",
+            "error": "--require-exit-capture requires --ledger: the CAPTURED "
+                     "records it reads live there"}))
         return finish(2, "ERROR")
 
     try:
@@ -1569,6 +1685,64 @@ def run_self_test():
             self.assertEqual(game_tape_tokens("M2: Persistence"),
                              ["m2: persistence", "m2"])
             self.assertEqual(game_tape_tokens("Milestone 2"), ["milestone 2"])
+
+        # ---- --require-exit-capture (never advance on aggregate green) ----
+
+        # The real plan shape: the checkpoint sits AFTER a `## Task` heading,
+        # which must not end the milestone block (next_milestone.py's rule).
+        EXIT_PLAN = PLAN.replace(
+            "## Task 2: Add DB layer",
+            "## Task 2: Add DB layer\n\n### Checkpoint: persistence\n\n"
+            "- [ ] RUNTIME EXIT CRITERION — run `npm test -- --grep "
+            "orders`; expect `3 passing`") + (
+            "\n## Risks\n\n- RUNTIME EXIT CRITERION — run `not mine`\n")
+
+        def _exit(self, **kw):
+            self.plan.write_text(self.EXIT_PLAN, encoding="utf-8")
+            return build_report(self._args(ledger=str(self.ledger),
+                                           require_exit_capture=True, **kw))
+
+        def _capture(self, argv, exit_code=0, milestone="Milestone 2"):
+            self._write_ledger(gate="run_quiet.py", verdict="CAPTURED",
+                               exit=exit_code, milestone=milestone,
+                               command_argv=argv, capture_sha256="0" * 64)
+
+        def _codes(self, report):
+            return [p["problem"] for p in report["problems"]]
+
+        def test_exit_capture_of_the_declared_command_passes(self):
+            self._capture(["npm", "test", "--", "--grep", "orders"])
+            r = self._exit()
+            self.assertEqual(r["result"], "PASS", r["problems"])
+            self.assertEqual(r["exit_criteria"],
+                             ["npm test -- --grep orders"])
+
+        def test_exit_capture_missing_or_other_command_refuses(self):
+            self.assertIn("exit_criterion_not_run", self._codes(self._exit()))
+            self._capture(["npm", "test"])               # a different command
+            self._capture(["npm", "test", "--", "--grep", "orders"],
+                          milestone="Milestone 1")       # another milestone
+            self.assertIn("exit_criterion_not_run", self._codes(self._exit()))
+
+        def test_latest_failing_capture_refuses(self):
+            argv = ["npm", "test", "--", "--grep", "orders"]
+            self._capture(argv, 0)
+            self._capture(argv, 1)
+            self.assertIn("exit_criterion_failed", self._codes(self._exit()))
+
+        def test_no_declared_exit_criterion_refuses(self):
+            r = build_report(self._args(ledger=str(self.ledger),
+                                        require_exit_capture=True))
+            self.assertIn("no_exit_criterion", self._codes(r))
+
+        def test_require_exit_capture_without_ledger_is_exit_2(self):
+            import contextlib
+            import io
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = main(["--plan", str(self.plan), "--milestone",
+                             "Milestone 2", "--require-gates", "none",
+                             "--require-exit-capture"])
+            self.assertEqual(code, 2)
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(MarkMilestoneTests)
     result = unittest.TextTestRunner(verbosity=1).run(suite)

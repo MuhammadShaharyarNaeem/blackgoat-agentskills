@@ -22,6 +22,6 @@ Unlike every other reader in this family, this gate verifies the chain of the le
 
 ## What it deliberately does not do
 
-It touches no git, commits nothing and removes no worktree. Those are the Orchestrator's own close steps, performed by hand before this runs; the gate verifies what they left behind. A gate that performed the close as well as verifying it would be grading its own submission — the same separation the spine's *Single contract authority* section draws between the gates that decide and the agents that produce.
+It writes no git, commits nothing and removes no worktree (its one git read, `rev-parse`, backs `worktree_mismatch`: `{batch-root}` lives in the main tree, so a `--state`/`--batch-md`/`--ledger` inside another worktree of `--repo`'s repository means the gate is judging the wrong checkout — same rule and helper block as `check_commit_gate.py`'s `worktree_ok`). Those are the Orchestrator's own close steps, performed by hand before this runs; the gate verifies what they left behind. A gate that performed the close as well as verifying it would be grading its own submission — the same separation the spine's *Single contract authority* section draws between the gates that decide and the agents that produce.
 
 It also never re-derives a per-bug phase. A bug's state belongs to its own lane driver (`pipeline_driver.py --lane bugfix`), and a second derivation here would be a second table to keep in step.

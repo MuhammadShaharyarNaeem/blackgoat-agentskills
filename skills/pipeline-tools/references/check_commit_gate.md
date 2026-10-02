@@ -168,3 +168,9 @@ The waiver is **deliberately hand-typed** (CLAUDE.md convention #8, the same lab
 
 A self-test asserts the verdict JSON is byte-identical across every `pipeline` value and with the field absent, and that the report never echoes it. The bugfix lane's feature route shares the epic's state file and never stamps its own pipeline, so it cites that test rather than asserting the property in prose (convention #9).
 
+### The lane and `--repo` must be the same worktree (`worktree_ok`)
+
+With three worktrees open at once, a gate run whose `--review-report`/`--state` came from one checkout and whose `--repo` named another would judge one lane's verdict and commit into a different tree. `--repo` is now resolved to its git top level (`repo_toplevel` in the JSON), and each of `--review-report`, `--state`, `--docs-root` and `--ledger` is resolved the same way; one that sits in **another worktree of the same repository** (same `git rev-parse --git-common-dir`, different top level) lands in `worktree_mismatches` and fails `worktree_ok` (exit 1).
+
+Deliberately narrower than "any path outside `--repo`" (convention #8): the docs-root-above-repo layout `resolve_docs_root()` already sanctions — a workspace-root `.docs/` in no repository, or in a different one — is not a mismatch, and neither is any git failure (unknown is never a FAIL). Only the sibling-worktree mistake is caught. The helper block is shared verbatim with `check_quick_close.py` and `check_batch_close.py`; `check_batch_close.py`'s self-test asserts the three copies are identical.
+

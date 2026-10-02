@@ -1386,6 +1386,107 @@ def build_report(text, persona, repo, since=None, fix_round=False,
     return report
 
 
+# --- session-transcript reader (shared verbatim with
+# check_learn_approval.py): the runtime writes the transcript, so an entry's
+# ROLE is not the model's to choose -- assistant text is model-authored, a
+# user text entry is human- or runtime-authored, and a tool_result is the
+# runtime's record of what a tool returned.
+
+DELEGATION_TOOL_NAMES = ("Task", "Agent", "SendMessage")
+NOTIFICATION_TOOL_ID_RE = re.compile(r"<tool-use-id>\s*(\S+?)\s*</tool-use-id>")
+
+
+def collapse_ws(text):
+    """`text` with ALL whitespace removed: a runtime may re-wrap a block."""
+    return "".join((text or "").split())
+
+
+def _content_parts(content):
+    """[(kind, text, extra)] for one message's content (str or block list)."""
+    if isinstance(content, str):
+        return [("text", content, {})]
+    parts = []
+    for block in content if isinstance(content, list) else []:
+        if not isinstance(block, dict):
+            continue
+        kind = block.get("type")
+        if kind == "text":
+            parts.append(("text", block.get("text") or "", {}))
+        elif kind == "tool_use":
+            parts.append(("tool_use", "", {"id": block.get("id"),
+                                           "name": block.get("name"),
+                                           "input": block.get("input") or {}}))
+        elif kind == "tool_result":
+            inner = block.get("content")
+            text = (inner if isinstance(inner, str) else "\n".join(
+                b.get("text") or "" for b in inner or []
+                if isinstance(b, dict) and b.get("type") == "text"))
+            parts.append(("tool_result", text,
+                          {"tool_use_id": block.get("tool_use_id")}))
+    return parts
+
+
+def transcript_messages(path):
+    """[(line_no, role, kind, text, extra)] from a session-transcript JSONL
+    (Claude Code shape: {"type", "message": {"role", "content"}}).
+    Sidechain entries are skipped; `extra["meta"]` carries isMeta."""
+    try:
+        raw = Path(path).read_text(encoding="utf-8-sig", errors="replace")
+    except OSError as exc:
+        raise GateError(f"cannot read --transcript {path}: {exc}")
+    out = []
+    for line_no, line in enumerate(raw.splitlines(), start=1):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict) or entry.get("isSidechain"):
+            continue
+        message = entry.get("message")
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role") or entry.get("type")
+        if role not in ("user", "assistant"):
+            continue
+        for kind, text, extra in _content_parts(message.get("content")):
+            extra["meta"] = bool(entry.get("isMeta"))
+            out.append((line_no, role, kind, text, extra))
+    return out
+
+
+def delegation_source(messages, block):
+    """Where the runtime recorded this handoff block, or None.
+
+    Accepted: the tool_result of a Task/Agent call (a foreground delegation)
+    or a user-role text entry (a background agent's completion notification,
+    or a human paste). Never assistant text, and never another tool's result
+    -- `cat handoff.md` would return text the model wrote itself."""
+    needle = collapse_ws(block)
+    if not needle:
+        return None
+    calls = {e["id"]: e for _l, r, k, _t, e in messages
+             if r == "assistant" and k == "tool_use"}
+    for line_no, role, kind, text, extra in messages:
+        if role != "user" or needle not in collapse_ws(text):
+            continue
+        if kind == "tool_result":
+            call = calls.get(extra.get("tool_use_id"))
+            if call and call.get("name") in DELEGATION_TOOL_NAMES:
+                return {"line": line_no, "via": "delegation_result",
+                        "tool": call["name"],
+                        "subagent_type": call["input"].get("subagent_type")}
+        elif kind == "text":
+            ids = NOTIFICATION_TOOL_ID_RE.findall(text)
+            call = calls.get(ids[0]) if ids else None
+            if call and call.get("name") in DELEGATION_TOOL_NAMES:
+                return {"line": line_no, "via": "delegation_notification",
+                        "tool": call["name"],
+                        "subagent_type": call["input"].get("subagent_type")}
+            return {"line": line_no, "via": "user_message",
+                    "tool": None, "subagent_type": None}
+    return None
+
+
 class PurposeFirstParser(argparse.ArgumentParser):
     """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
 
@@ -1445,6 +1546,10 @@ Reads:
     TODO-colon-pending, an HTML comment opening TODO/skeleton, and lines
     EXPLAINING markers. Inline code is no hit; a fence IS. PARTIAL/BLOCKED,
     <changed_files> exempt.
+  --transcript  a session JSONL (Claude Code shape, sidechains skipped). The
+    block, whitespace ignored, must sit in a Task/Agent tool_result or a
+    user-role text entry (a background agent's notification) -- never
+    assistant text or another tool's result.
 
 Problem codes:
   handoff_missing            no unfenced <handoff> block
@@ -1459,6 +1564,7 @@ Problem codes:
   honesty_contradiction      see Honesty above
   artifact_scaffolding_left  COMPLETE artifact keeps a marker
   blockers_uncategorised     PARTIAL/BLOCKED with no blocked_on: line
+  handoff_not_delegated      --transcript: no delegation returned it
 
 JSON keys:
   result, persona, since, fix_round, advisory, advisory_waived_elements,
@@ -1467,18 +1573,21 @@ JSON keys:
   changed_symbols_none_reason, artifacts, changed_skills,
   scaffolding_scanned, allow_scaffolding, scaffolding_waived, findings
   ({code, detail, ...}; scaffolding adds path, line, marker, text),
-  warnings, error. Ledger extras: advisory; both *_none_reason keys;
-  allow_scaffolding_reason plus waived {path, line, marker}.
+  warnings, error; with --transcript, transcript and delegation_source
+  ({line, via, tool, subagent_type} or null). Ledger extras: advisory;
+  both *_none_reason keys; allow_scaffolding_reason plus waived {path,
+  line, marker}; delegation_source.
 
 Exit codes:
   0  PASS
   1  at least one finding
   2  usage; unreadable handoff or untracked file; unknown persona;
      --repo/--docs-root not a directory; failing --since git call
-     (unresolvable ref) or temp file; blank --allow-scaffolding reason
+     (unresolvable ref) or temp file; blank --allow-scaffolding reason;
+     unreadable --transcript
 
 Self-test:
-  python check_handoff.py --self-test   (104 cases)
+  python check_handoff.py --self-test   (108 cases)
 """
 
 
@@ -1493,40 +1602,31 @@ def main(argv):
                                           "(default: read stdin)")
     parser.add_argument("--persona", help="squad persona that produced it")
     parser.add_argument("--repo", action="append", default=None,
-                        help="repository root the handoff's paths are relative "
-                             "to. Repeatable: a <changed_files> path is "
-                             "accepted if it resolves under ANY listed repo. "
-                             "Defaults to '.' when omitted.")
+                        help="repository root (repeatable; a path may resolve "
+                             "under any). Default '.'")
     parser.add_argument("--docs-root", dest="docs_root", action="append",
                         default=None,
-                        help="a directory holding cross-repo artifacts/reports "
-                             "(e.g. a shared .docs/ tree above several repos). "
-                             "Repeatable. <artifact> and <changed_skills> "
-                             "additionally resolve under any --docs-root; "
-                             "<changed_files> never does. Defaults to the "
-                             "nearest ancestor of --handoff named '.docs', if "
-                             "any.")
+                        help="shared artifact root (repeatable) for "
+                             "<artifact>/<changed_skills>; default: nearest "
+                             "'.docs' ancestor of --handoff")
     parser.add_argument("--since", help="git ref: <changed_files> must be a "
                                         "subset of what git reports changed "
                                         "since it. Optional here, REQUIRED by "
                                         "every pipeline handoff step")
     parser.add_argument("--advisory", action="store_true",
-                        help="the brief asked for a recommendation, not a "
-                             "written artifact (Forge's propose handoff, "
-                             "Aria Mode 2): <artifact>/<changed_skills> "
-                             "become optional and the ledger records "
-                             "advisory: true. Nothing else relaxes.")
+                        help="a recommendation brief: <artifact>/"
+                             "<changed_skills> optional; ledger records "
+                             "advisory: true")
     parser.add_argument("--fix-round", action="store_true",
                         help="a remediation round: <fix_verification> is required")
     parser.add_argument("--require", action="append", choices=["consumers"],
                         default=[], help="promote an optional element to required")
     parser.add_argument("--allow-scaffolding", dest="allow_scaffolding",
-                        help="a written reason for a COMPLETE artifact that "
-                             "legitimately carries a scaffolding marker (a "
-                             "page that QUOTES the marker). Waives "
-                             "artifact_scaffolding_left and nothing else; the "
-                             "reason is recorded in the ledger. An empty "
-                             "reason is exit 2.")
+                        help="a reason waiving artifact_scaffolding_left only "
+                             "(recorded; empty = exit 2)")
+    parser.add_argument("--transcript",
+                        help="session transcript JSONL: the block must be a "
+                             "delegation's return there")
     parser.add_argument("--milestone", help="recorded in the ledger line")
     parser.add_argument("--ledger", help="append one JSON record per run to this path")
     parser.add_argument("--self-test", action="store_true")
@@ -1599,6 +1699,31 @@ def main(argv):
     except GateError as exc:
         print(json.dumps({"result": "ERROR", "error": str(exc)}))
         return finish(2, "ERROR")
+
+    if args.transcript:
+        # Orchestrator Contract §1 "MUST NOT roleplay a delegated agent's
+        # work", converted (convention #9): the block must be on the
+        # runtime's record as a delegation's return, not just in a file.
+        block, _w = extract_handoff(text)
+        try:
+            source_entry = (delegation_source(
+                transcript_messages(args.transcript), block)
+                if block is not None else None)
+        except GateError as exc:
+            print(json.dumps({"result": "ERROR", "error": str(exc)}))
+            return finish(2, "ERROR")
+        report["transcript"] = args.transcript
+        report["delegation_source"] = source_entry
+        if block is not None and source_entry is None:
+            report["findings"].append({
+                "code": "handoff_not_delegated",
+                "detail": "this <handoff> block appears in no Task/Agent "
+                          "result and no user-role entry of --transcript: "
+                          "the runtime never returned it from a delegation. "
+                          "Delegate the named agent; never author its "
+                          "handoff yourself"})
+            report["result"] = "FAIL"
+        extra["delegation_source"] = source_entry
 
     if report.get("changed_files_none_reason"):
         extra["changed_files_none_reason"] = report["changed_files_none_reason"]
@@ -2843,6 +2968,78 @@ def run_self_test():
             on_disk = {p.stem for p in agents_dir.glob("*.md")} - {"blackgoat"}
             self.assertEqual(on_disk - set(PERSONA_ELEMENTS), set())
             self.assertEqual(set(PERSONA_ELEMENTS) - on_disk, set())
+
+        # --- --transcript: the handoff came back from a delegation ---------
+        def _transcript(self, *entries):
+            path = self.dir / "session.jsonl"
+            path.write_text("\n".join(json.dumps(e) for e in entries) + "\n",
+                            encoding="utf-8")
+            return str(path)
+
+        @staticmethod
+        def _call(tool_id, name, **inp):
+            return {"type": "assistant", "message": {"role": "assistant",
+                    "content": [{"type": "tool_use", "id": tool_id,
+                                 "name": name, "input": inp}]}}
+
+        @staticmethod
+        def _result(tool_id, text):
+            return {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": tool_id,
+                 "content": [{"type": "text", "text": text}]}]}}
+
+        def _gate(self, transcript):
+            import contextlib
+            import io
+            path = self.dir / "h.md"
+            path.write_text(GOOD_MASON, encoding="utf-8")
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = main(["--handoff", str(path), "--persona", "mason",
+                             "--repo", str(self.dir),
+                             "--transcript", transcript])
+            out = buf.getvalue()
+            return code, (json.loads(out) if out.strip().startswith("{")
+                          and code != 2 else out)
+
+        def test_transcript_delegated_handoff_passes(self):
+            # whitespace may differ between the runtime record and the file
+            code, r = self._gate(self._transcript(
+                self._call("t1", "Agent", subagent_type="x:mason"),
+                self._result("t1", "done.\n" + GOOD_MASON.replace("><", ">\n<"))))
+            self.assertEqual(code, 0, r)
+            self.assertEqual(r["delegation_source"]["via"], "delegation_result")
+            self.assertEqual(r["delegation_source"]["subagent_type"], "x:mason")
+
+        def test_transcript_background_notification_passes(self):
+            code, r = self._gate(self._transcript(
+                self._call("t9", "Agent", subagent_type="x:mason"),
+                self._result("t9", "Async agent launched"),
+                {"type": "user", "message": {"role": "user", "content":
+                 "<task-notification><tool-use-id>t9</tool-use-id><result>"
+                 + GOOD_MASON + "</result></task-notification>"}}))
+            self.assertEqual(code, 0, r)
+            self.assertEqual(r["delegation_source"]["via"],
+                             "delegation_notification")
+            self.assertEqual(r["delegation_source"]["subagent_type"], "x:mason")
+
+        def test_transcript_handoff_authored_by_the_model_fails(self):
+            for entries in (
+                    # the model wrote it in its own reply
+                    [{"type": "assistant", "message": {"role": "assistant",
+                      "content": [{"type": "text", "text": GOOD_MASON}]}}],
+                    # ...or wrote it to a file and cat-ed it back
+                    [self._call("t2", "Bash", command="cat h.md"),
+                     self._result("t2", GOOD_MASON)],
+                    # ...or a sidechain carries it, not the main thread
+                    [dict(self._result("t3", GOOD_MASON), isSidechain=True)]):
+                code, r = self._gate(self._transcript(*entries))
+                self.assertEqual(code, 1, r)
+                self.assertEqual(self.codes(r), ["handoff_not_delegated"])
+
+        def test_transcript_unreadable_is_exit_2(self):
+            code, _out = self._gate(str(self.dir / "missing.jsonl"))
+            self.assertEqual(code, 2)
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(HandoffTests)
     result = unittest.TextTestRunner(verbosity=1).run(suite)
