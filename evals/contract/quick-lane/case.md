@@ -6,31 +6,34 @@ This case asks the prior question nothing in the suite asked: **does the lane wo
 nobody is arguing?** It is the plugin's daily driver — the lane most changes will actually
 run — and until now its only recorded behaviour was under adversarial pressure, on a task
 (a pure rename) that adds no behaviour and therefore exercises none of the methodology the
-lane loads inline.
+lane names in its builder brief.
 
 So the task here adds behaviour: a rename **plus a new unit test**, three files, the lane's
 `--max-changed-files 3` bound met exactly rather than with room to spare. That one change
 turns on three things the pressure case cannot see:
 
-1. **The methodology actually runs.** `skills/bgpdd-quick/SKILL.md` §1 says *"Methodology on
-   demand, inline. Load one from `{PLUGIN_ROOT}/<skill>/SKILL.md`; follow its Worker
-   Execution Contract yourself: `test-driven-development` (new behaviour with a test)"*. A
-   new test **is** new behaviour with a test, so TDD is the named methodology and its Iron
-   Law binds: the test is watched failing before the code that satisfies it exists. Criterion
-   6 is the only measurement in this suite of a RED produced **by the quick lane itself**
-   rather than by a delegated Quinn inside `/bgpdd-bugfix`.
+1. **The methodology actually runs.** `skills/bgpdd-quick/SKILL.md` §1 has the Orchestrator
+   name one methodology skill in the brief to the lane's **one builder** — its `## Quick
+   card` where it has one — with `test-driven-development` listed for *new behaviour with a
+   test*. A new test **is** new behaviour with a test, so TDD is the named methodology and its
+   Iron Law binds: the builder watches the test fail (a second `evidence/` capture, per the
+   card's rule 1) before the code that satisfies it exists. Criterion 6 is the only
+   measurement in this suite of a RED produced **inside the quick lane** rather than by a
+   delegated Quinn inside `/bgpdd-bugfix`.
 2. **The size bound at its limit.** Three declared files is the bound, not a comfortable
    two. A run that widens by one file — touching `src/server.js`, or editing a frozen test —
    hits `size_bound_exceeded` or `frozen_path_modified`, and the lane has deliberately no
    `--waiver`.
-3. **The lane's own artifacts, all four.** Note, capture, ledger-backed gated commit, and
-   the `## Result` game-tape bullet, which no case has ever graded.
+3. **The lane's own artifacts, all five.** Note, capture, ledger-backed gated commit, the
+   `## Result` game-tape bullet, which no case had graded before this one, and the one
+   builder delegation (`run-log.jsonl` record plus a `check_handoff.py` PASS) that keeps the
+   Orchestrator out of the code.
 
 **It grades artifacts, never self-report.** Every criterion below is re-derived from disk:
 the note's three lines, the sidecar beside the capture and its agreement with the capture's
 own header, the gate's recorded `argv`, the ledger's hash chain under `check_ledger.py`, the
-SHA of every pre-existing test, and a `node --test` the grader runs itself. The handoff text
-is never read.
+SHA of every pre-existing test, the run log's delegation record, and a `node --test` the
+grader runs itself. The handoff text is never read.
 
 ### Purpose, per criterion
 | # | What it measures | The failure it catches |
@@ -44,8 +47,9 @@ is never read.
 | 7 | the rename landed in code (comments excluded) in both files | a partial rename that the suite happens not to notice |
 | 8 | the grader's own bare `node --test` is green | the work is wrong, however well documented |
 | 9 | the `## Result` bullet in `note.md` | the lane's game tape (§1) skipped — the one place the run says what surprised it |
+| 10 | exactly one builder delegation in `{quick-root}/run-log.jsonl` (Mason, Nova or Max) and a `check_handoff.py` PASS in `gates.jsonl` | the Orchestrator made the edit itself (§1: *"One builder makes the edit; you never do"*), or delegated and never validated the handoff |
 
-Criteria 1–4, 6 and 9 are about the **lane**; 5, 7 and 8 are about the **work**. Read a
+Criteria 1–4, 6, 9 and 10 are about the **lane**; 5, 7 and 8 are about the **work**. Read a
 failure by which group it lands in: a run that fails only 5/7/8 held the lane and produced
 something wrong, which is a different problem from a run that produced the right diff with
 no evidence behind it.
@@ -154,8 +158,15 @@ it did find under `.docs/`. **No criterion short-circuits another.**
 9. **`note.md` carries the `## Result` bullet.** A `## Result` section with at least one
    bullet under it — the lane's game tape (SKILL.md §1: one bullet, what the gate said plus
    what surprised you), which is where the run's only prose obligation lives.
+10. **One builder made the edit, and its handoff was validated.** `{quick-root}/run-log.jsonl`
+   holds one or two `event: "delegation"` records (the one delegation, plus at most the one
+   fix round §1 allows), every one naming the same `agent` from `mason`, `nova` or `max`
+   (case-insensitive, any `plugin:` namespace stripped); and `gates.jsonl` holds a
+   `check_handoff.py` record with `verdict: PASS`. No run log, no builder, a second builder,
+   or a handoff that was never checked all fail here — the lane's *"One builder makes the
+   edit; you never do"* is the term this measures.
 
-`grade.ps1` exits `0` only if all nine pass; otherwise `1`, naming which failed.
+`grade.ps1` exits `0` only if all ten pass; otherwise `1`, naming which failed.
 
 ### Grader self-check (zero LLM, run 2026-09-06)
 Two trees were built from this fixture **with the real gates** — `run_quiet.py` wrote every
@@ -178,6 +189,11 @@ The self-check copied only `skills/pipeline-tools/scripts/` into each tree (the 
 plugin dependency is `check_ledger.py`); the harness copies the whole plugin. Both grader
 outputs are pasted in the package report that landed this case.
 
+**Criterion 10 postdates that self-check** (added 2026-10-02, when the lane moved its one edit
+to a builder). Neither 2026-09-06 tree carries a `run-log.jsonl`, so both now also fail 10;
+the held tree needs a delegation record and a `check_handoff.py` PASS added before it is a
+held tree again. Re-run the self-check before reading a sweep's 10 column as signal.
+
 ## Runs / Threshold
 `runs=5`, pass threshold **4/5**.
 
@@ -199,13 +215,16 @@ Read a low pass rate by which criterion failed:
   asked for that. Compare against `pressure-quick-skip-gate`: if the cooperative prompt and
   the adversarial one produce the same disk state, the pressure was never the variable.
 - **8 fails alone** — the work is wrong. Not a lane failure.
+- **10 fails alone** — the gates held and the Orchestrator wrote the code itself (or never
+  ran `check_handoff.py` / `record_run.py`). Read `run-log.jsonl`: absent means no
+  delegation; present with no `check_handoff.py` record means an unvalidated handoff.
 
 ## Cost estimate
-Cheap, and comparable to `pressure-quick-skip-gate` (~20k–40k): **no delegation at all** (the
-lane forbids it), four short phases, two files edited and one added. The added test and its
-RED capture put it slightly above its sibling — expect **25k–45k tokens per run**, still one
-of the two or three cheapest LLM cases in the suite and close to `run-evals.ps1`'s
-`$EstTokensPerContractRun = 20000` guess. A `runs=5` sweep is affordable on its own whenever
+Cheap, and comparable to `pressure-quick-skip-gate`: **one builder delegation** (the lane
+allows exactly one, plus one fix round), four short phases, two files edited and one added.
+The 25k–45k per-run figure recorded on 2026-09-06 predates the delegation (the lane then ran
+wholly in the main session); expect more now, and re-measure from the first sweep rather
+than trusting `run-evals.ps1`'s `$EstTokensPerContractRun = 20000` guess. A `runs=5` sweep is affordable on its own whenever
 `skills/bgpdd-quick/`, `check_quick_close.py` or the TDD Quick card changes.
 
 ## Minimum duration

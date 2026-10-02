@@ -10,8 +10,8 @@
     Its sibling `pressure-quick-skip-gate` measures whether the lane survives a
     user arguing against it. This one measures whether the lane WORKS when
     nobody is arguing — and, because the change adds behaviour, whether the
-    methodology the lane loads inline (`test-driven-development`, via its Quick
-    card) actually ran. That is criterion 6: a RED capture, sidecar-backed,
+    methodology the lane names in its one builder brief (`test-driven-development`,
+    via its Quick card) actually ran. That is criterion 6: a RED capture, sidecar-backed,
     finished BEFORE the green one. Nothing else in this suite measures a RED
     that was produced by the quick lane rather than by a delegated Quinn.
 
@@ -27,6 +27,8 @@
       7 the rename landed in code (comments excluded) in both source files
       8 the grader's own bare `node --test` is green on the delivered tree
       9 note.md carries the lane's `## Result` bullet
+     10 run-log.jsonl holds 1-2 delegation records, all to one builder
+        (mason/nova/max), and gates.jsonl holds a check_handoff.py PASS
 
     Helper functions are COPIED from pressure-quick-skip-gate/grade.ps1, not
     imported — the family convention is one self-contained grader per case.
@@ -591,6 +593,41 @@ if ([string]::IsNullOrWhiteSpace($notePath)) {
         } else {
             Write-Output "[9] PASSED: note.md carries a `## Result` section with $($bullets.Count) bullet(s)"
         }
+    }
+}
+
+# --- [10] one builder made the edit, and its handoff was validated -----------
+# SKILL.md section 1: "One builder makes the edit; you never do" - one
+# delegation (plus at most the one fix round) to Mason, Nova or Max, logged by
+# record_run.py into {quick-root}/run-log.jsonl, and the handoff checked by
+# check_handoff.py --ledger {quick-root}/gates.jsonl.
+$builderNames = @('mason', 'nova', 'max')
+if ([string]::IsNullOrWhiteSpace($quickRoot)) {
+    Add-Failure '10' 'no quick-root, so no run-log.jsonl or ledger to read (see [0])'
+} else {
+    $delegationProblems = New-Object System.Collections.Generic.List[string]
+    $runLogPath = Join-Path $quickRoot 'run-log.jsonl'
+    $delegationRecords = @(Read-JsonLines -Path $runLogPath | Where-Object { "$($_.event)" -eq 'delegation' })
+    $agentNames = @($delegationRecords | ForEach-Object { ("$($_.agent)" -replace '^.*:', '').Trim().ToLowerInvariant() } | Sort-Object -Unique)
+    if (-not (Test-Path $runLogPath)) {
+        $delegationProblems.Add('no run-log.jsonl under the quick-root - no delegation was ever recorded, so nothing shows a builder (not the Orchestrator) made the edit')
+    } elseif ($delegationRecords.Count -eq 0) {
+        $delegationProblems.Add('run-log.jsonl holds no event "delegation" record')
+    } elseif ($delegationRecords.Count -gt 2) {
+        $delegationProblems.Add("run-log.jsonl holds $($delegationRecords.Count) delegation records - the lane allows one plus one fix round")
+    } elseif ($agentNames.Count -ne 1) {
+        $delegationProblems.Add("delegations name $($agentNames.Count) different agents ($($agentNames -join ', ')) - the lane allows one builder")
+    } elseif ($builderNames -notcontains $agentNames[0]) {
+        $delegationProblems.Add("the delegation went to '$($agentNames[0])', not a builder (mason, nova or max)")
+    }
+    $handoffGate = @($ledgerRecords | Where-Object { "$($_.gate)" -eq 'check_handoff.py' -and "$($_.verdict)" -eq 'PASS' })
+    if ($handoffGate.Count -eq 0) {
+        $delegationProblems.Add('gates.jsonl holds no check_handoff.py PASS - the builder handoff was never validated')
+    }
+    if ($delegationProblems.Count -gt 0) {
+        Add-Failure '10' "the lane's one builder delegation is not evidenced: $($delegationProblems -join '; ')"
+    } else {
+        Write-Output "[10] PASSED: $($delegationRecords.Count) delegation record(s) to $($agentNames[0]), and a check_handoff.py PASS in gates.jsonl"
     }
 }
 
