@@ -181,7 +181,7 @@ be measured. `--tokens-unavailable` together with any token figure is refused
 number and disclaim having one.
 
 **`--runtime <name>`** is new and never required: recorded verbatim on any
-event (e.g. `claude-code`, `antigravity`, `cursor`), it is what lets a later
+event (e.g. `claude-code`, `antigravity`), it is what lets a later
 read of the log tell which runtime a `tier`-only, non-Claude `model` record
 actually ran under.
 

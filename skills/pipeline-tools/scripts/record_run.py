@@ -683,7 +683,7 @@ def main(argv):
     parser.add_argument("--note")
     parser.add_argument("--runtime",
                         help="the runtime the delegation/event ran under "
-                             "(e.g. claude-code, antigravity, cursor); "
+                             "(e.g. claude-code, antigravity); "
                              "recorded verbatim, never required")
     parser.add_argument("--from-json", dest="from_json",
                         help="a runtime completion payload; explicit flags win")
@@ -1611,8 +1611,8 @@ def run_self_test():
             self.assertEqual(main([
                 "--log", str(self.log), "--pipeline", "bgpdd-build",
                 "--phase", "Phase 1", "--event", "note",
-                "--runtime", "cursor"]), 0)
-            self.assertEqual(self._lines()[0]["runtime"], "cursor")
+                "--runtime", "claude-code"]), 0)
+            self.assertEqual(self._lines()[0]["runtime"], "claude-code")
 
         def test_runtime_is_optional_and_defaults_to_null(self):
             self.assertEqual(main(self._base(

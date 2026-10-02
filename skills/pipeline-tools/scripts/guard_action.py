@@ -15,9 +15,8 @@ a learn-lane lesson the user never approved.
 
 This file is the DECISION LOGIC and it is runtime-neutral (convention #5).
 The per-runtime packaging -- which hook event fires it, and which JSON shape
-the host reads -- lives in `hooks/hooks.json` (Claude Code),
-`hooks/hooks-cursor.json` (Cursor) and the `--format` flag below. No rule text
-is duplicated into either.
+the host reads -- lives in `hooks/hooks.json` (Claude Code) and `emit()`
+below. No rule text is duplicated into either.
 
 THE NINE RULES
 ---------------
@@ -129,7 +128,9 @@ THE NINE RULES
    user-role entry the model cannot author), so this rule never trusts a
    string the model typed. Converts bgpdd-learn Step 4 / forge.md's "never
    apply without explicit approval" (convention #9); rule 7 still owns
-   agents/blackgoat.md, which no approval unlocks.
+   agents/blackgoat.md, which no approval unlocks. A payload with no
+   existing `transcript_path` file disarms it: no record can be made there,
+   so it fails open and the prose rule stands alone.
 
 RUNNER MATCHING (rule 5)
 -------------------------
@@ -388,7 +389,7 @@ Pure standard library. Every file is read as utf-8-sig, so a BOM cannot break
 parsing. All output is ASCII.
 
 Usage:
-    guard_action.py [--format claude|cursor] [--window-hours N] < hook.json
+    guard_action.py [--window-hours N] < hook.json
     guard_action.py --explain [--cwd DIR] [--command CMD] [--window-hours N]
     guard_action.py --self-test
 """
@@ -895,20 +896,13 @@ def halted_lanes(lanes):
 # ---------------------------------------------------------------------------
 
 def normalize_payload(payload):
-    """(tool_name, tool_input, cwd) from a Claude Code or Cursor hook payload."""
+    """(tool_name, tool_input, cwd) from a Claude Code hook payload."""
     if not isinstance(payload, dict):
         raise GuardError("hook payload is not a JSON object")
 
-    event = payload.get("hook_event_name")
-    cwd = payload.get("cwd") or payload.get("workspace_roots") or os.getcwd()
-    if isinstance(cwd, list):
-        cwd = cwd[0] if cwd else os.getcwd()
+    cwd = payload.get("cwd") or os.getcwd()
     if not isinstance(cwd, str) or not cwd:
         cwd = os.getcwd()
-
-    # Cursor's beforeShellExecution is flat: the command sits at the top level.
-    if event == "beforeShellExecution":
-        return "Bash", {"command": payload.get("command")}, cwd
 
     tool_name = payload.get("tool_name")
     if not isinstance(tool_name, str):
@@ -1463,16 +1457,24 @@ def raw_runner_invocation(command):
 # ---------------------------------------------------------------------------
 
 def _plugin_root():
-    return (os.environ.get("CLAUDE_PLUGIN_ROOT")
-            or os.environ.get("CURSOR_PLUGIN_ROOT")
-            or "{PLUGIN_ROOT}")
+    return os.environ.get("CLAUDE_PLUGIN_ROOT") or "{PLUGIN_ROOT}"
 
 
 def _gate_command(gate):
     return "python {0}/skills/pipeline-tools/scripts/{1}".format(_plugin_root(), gate)
 
 
-def decide(tool_name, tool_input, cwd, now=None, window_hours=WINDOW_HOURS_DEFAULT):
+def transcript_available(payload):
+    """Rule 9's precondition: the hook payload names a session transcript
+    file that exists. Without one, check_learn_approval.py --record cannot
+    run (exit 2), so no approval can ever be recorded -- rule 9 then fails
+    open and bgpdd-learn's prose approval rule stands alone."""
+    path = payload.get("transcript_path") if isinstance(payload, dict) else None
+    return isinstance(path, str) and bool(path.strip()) and os.path.isfile(path)
+
+
+def decide(tool_name, tool_input, cwd, now=None, window_hours=WINDOW_HOURS_DEFAULT,
+           has_transcript=True):
     """Return (decision, rule_id, reason). decision is 'allow' or 'deny'."""
     if now is None:
         now = time.time()
@@ -1522,8 +1524,9 @@ def decide(tool_name, tool_input, cwd, now=None, window_hours=WINDOW_HOURS_DEFAU
         )
 
     # Rule 9 -- an active learn run applies only what the user approved.
+    # No transcript -> no record can exist -> fail open (see transcript_available).
     learn_targets = [(s, p) for s, p in targets if is_learn_guarded_path(p)]
-    if learn_targets:
+    if learn_targets and has_transcript:
         for root, ledger, dests in active_learn_runs(cwd, now, window_hours):
             for source, path in learn_targets:
                 if dests is not None and learn_destination_matches(path, dests):
@@ -1688,24 +1691,17 @@ def decide(tool_name, tool_input, cwd, now=None, window_hours=WINDOW_HOURS_DEFAU
 # Output -- per-runtime packaging of one decision
 # ---------------------------------------------------------------------------
 
-def emit(decision, reason, fmt):
+def emit(decision, reason):
     """Print the host's deny payload. An ALLOW prints NOTHING, on purpose."""
     if decision != "deny":
         return
-    if fmt == "cursor":
-        payload = {
-            "permission": "deny",
-            "agent_message": reason,
-            "user_message": "blackgoat guard_action denied this call.",
+    payload = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
         }
-    else:
-        payload = {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": reason,
-            }
-        }
+    }
     sys.stdout.write(json.dumps(payload) + "\n")
 
 
@@ -1774,9 +1770,8 @@ Problem codes:
 
 JSON keys:
   Printed on stdout on a deny only.
-  --format claude  {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+  {"hookSpecificOutput": {"hookEventName": "PreToolUse",
     "permissionDecision": "deny", "permissionDecisionReason": "<text>"}}
-  --format cursor  {"permission": "deny", "userMessage": "<text>"}
   The reason names the violated restraint and the command to run instead.
 
 Exit codes:
@@ -1816,8 +1811,6 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=EPILOG,
     )
-    parser.add_argument("--format", choices=("claude", "cursor"), default="claude",
-                        help="which host's decision payload to emit")
     parser.add_argument("--window-hours", type=float, default=WINDOW_HOURS_DEFAULT,
                         help="lane freshness window (default 12)")
     parser.add_argument("--cwd", default=None,
@@ -1974,8 +1967,9 @@ def main(argv):
         if args.cwd:
             cwd = args.cwd
         decision, _rule, reason = decide(
-            tool_name, tool_input, cwd, window_hours=args.window_hours)
-        emit(decision, reason, args.format)
+            tool_name, tool_input, cwd, window_hours=args.window_hours,
+            has_transcript=transcript_available(payload))
+        emit(decision, reason)
     except Exception as exc:
         print("guard_action: {0}; allowing.".format(exc), file=sys.stderr)
     return 0
@@ -2346,19 +2340,12 @@ def run_self_test():
             self.assertEqual(normalize_payload(payload),
                              ("Bash", {"command": "git commit -m x"}, self.root))
 
-        def test_37_cursor_shell_payload_normalizes_to_bash(self):
-            payload = {"hook_event_name": "beforeShellExecution",
-                       "command": "git commit -m x", "cwd": self.root}
-            tool, tin, cwd = normalize_payload(payload)
-            self.assertEqual((tool, tin["command"], cwd),
-                             ("Bash", "git commit -m x", self.root))
-
-        def test_38_deny_payload_shapes_match_each_host(self):
+        def test_38_deny_payload_shape_matches_the_host(self):
             import contextlib
             import io
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                emit("deny", "because", "claude")
+                emit("deny", "because")
             claude = json.loads(buf.getvalue())
             self.assertEqual(
                 claude["hookSpecificOutput"]["permissionDecision"], "deny")
@@ -2366,19 +2353,14 @@ def run_self_test():
                 claude["hookSpecificOutput"]["hookEventName"], "PreToolUse")
             self.assertEqual(
                 claude["hookSpecificOutput"]["permissionDecisionReason"], "because")
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                emit("deny", "because", "cursor")
-            self.assertEqual(json.loads(buf.getvalue())["permission"], "deny")
 
-        def test_39_allow_prints_nothing_in_either_format(self):
+        def test_39_allow_prints_nothing(self):
             import contextlib
             import io
-            for fmt in ("claude", "cursor"):
-                buf = io.StringIO()
-                with contextlib.redirect_stdout(buf):
-                    emit("allow", "", fmt)
-                self.assertEqual(buf.getvalue(), "", fmt)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                emit("allow", "")
+            self.assertEqual(buf.getvalue(), "")
 
         def test_40_main_never_exits_nonzero(self):
             import contextlib
@@ -3225,6 +3207,33 @@ def run_self_test():
                          "README.md"):
                 self.assertEqual(self.decide(
                     "Edit", {"file_path": path})[0], "allow", path)
+
+        def test_126_rule_9_fails_open_without_a_transcript(self):
+            import contextlib
+            import io
+            self.make_learn()
+            inp = {"file_path": "agents/mason.md"}
+            self.assertEqual(decide("Edit", inp, self.root,
+                                    has_transcript=False)[0], "allow")
+            real = Path(self.root) / "session.jsonl"
+            touch(real, "{}\n")
+            for tp, want in ((None, ""), ("", ""),
+                             (str(Path(self.root) / "gone.jsonl"), ""),
+                             (str(real), "check_learn_approval.py --record")):
+                payload = {"hook_event_name": "PreToolUse", "tool_name": "Edit",
+                           "tool_input": inp, "cwd": self.root}
+                if tp is not None:
+                    payload["transcript_path"] = tp
+                buf = io.StringIO()
+                stdin, sys.stdin = sys.stdin, io.StringIO(json.dumps(payload))
+                try:
+                    with contextlib.redirect_stdout(buf):
+                        main([])
+                finally:
+                    sys.stdin = stdin
+                self.assertIn(want, buf.getvalue(), tp)
+                if not want:
+                    self.assertEqual(buf.getvalue(), "", tp)
 
         def test_121_unresolvable_target_never_borrows_the_cwd_lane(self):
             self.make_feature()  # lane at self.root, which is not a repo

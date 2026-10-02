@@ -159,7 +159,7 @@ An explicit `"allow"` from a `PreToolUse` hook **short-circuits the user's own
 permission prompt**. This guard is a restraint, not a permission grant: it must
 never convert a call the user would have been asked about into one they were
 not. So an allow prints nothing and the host's normal permission flow runs
-untouched. `test_39` pins this in both output formats.
+untouched. `test_39` pins this.
 
 ## Per-runtime packaging (convention #5)
 
@@ -169,14 +169,6 @@ is which event fires it and which JSON shape it reads:
 | Runtime | Event | Wiring | Output |
 |---|---|---|---|
 | Claude Code | `PreToolUse` × 3 matchers | `hooks/hooks.json` → `run-hook.cmd guard-action` | `hookSpecificOutput.permissionDecision` |
-| Cursor | `beforeShellExecution` | `hooks/hooks-cursor.json` (template → `.cursor/hooks.json`) | `permission` / `agent_message` |
-
-Cursor's documented pre-execution hooks cover shell, MCP and file reads — not
-file writes, and not subagent spawning. So **only rule 1 is mechanically
-enforceable under Cursor**; rules 2–4 hold there as prose contract
-(`rules/cursor-runtime.mdc`). `normalize_payload()` absorbs Cursor's flat
-`beforeShellExecution` shape into the same `(tool_name, tool_input, cwd)` triple
-the rest of the file works in, so no rule is written twice.
 
 `hooks/guard-action` is the bash launcher: it resolves the plugin root and a
 python, pipes stdin through, and passes stdout back. It holds **no rule text**.
@@ -311,8 +303,8 @@ The 2.6.0 forty-two:
 - **Fail-open (6)** — malformed stdin (six shapes) allows; unknown tool allows;
   missing `tool_input` allows; a `.docs` that is a file yields no lanes; corrupt
   state and ledger do not raise; an empty `pipeline` is not a lane.
-- **Contract (7)** — both payload shapes normalize; both deny payload shapes
-  match their host; allow prints nothing in either format; `main` never exits
+- **Contract (6)** — the payload normalizes; the deny payload shape matches
+  the host; allow prints nothing; `main` never exits
   non-zero; `--explain` runs; **BOM-prefixed stdin still denies**.
 
 ## Rule 5 (`build_and_test_through_the_wrapper`) and Rule 6 (`delegation_halted_for_the_user`) (Unreleased)
@@ -368,5 +360,6 @@ Self-test count: 119 → 126 — lane in cwd + `-C` to another worktree allows; 
 - **Active** = `.docs/learn/*/forge-handoff.md` (the plan bgpdd-learn Step 3 saves) inside the freshness window, with no `--close` PASS in that root's `gates.jsonl`. A separate detector, not a `detect_lanes()` kind: a learn run arms no other rule (no commit gate, no build wrapper, no source-read restraint).
 - **Why the ledger record is enough here.** The guard trusts the `record` PASS because `check_learn_approval.py` wrote it only after verifying the approval against the session transcript — a user-role entry the model cannot author — and rule 4 denies a hand write to the ledger. The guard itself checks no string the model typed.
 - **Disarmed** by the `--close` PASS, or by the 12h window, as every lane is.
+- **Fails open without a transcript.** When the hook payload names no `transcript_path` file that exists, `check_learn_approval.py --record` cannot run (exit 2), so no approval record can ever be made; rule 9 then allows rather than deny a legitimately approved apply, and `bgpdd-learn` Step 4's prose rule stands alone (the same fail-open stance as § Fail-open is a hard requirement). `test_126` pins it, and that an existing transcript keeps the deny. The Cursor payload shape and `--format cursor` were removed with Cursor support (test 37 retired), so the count stays 130.
 
 Self-test count: 126 → 130 — denied before approval (Edit, Write, a CLAUDE.md, a Bash redirect); an approved destination allowed (absolute and `{PLUGIN_ROOT}/` forms) while another persona is denied; disarmed with no run, after a close, and when stale; non-rule-layer paths (`src/`, a `references/` page, README) unaffected.
