@@ -97,7 +97,7 @@ Contracts: `runtime-evidence` (tier ladder, capture grammar; in-process can fail
 ---
 
 ### Execution Discipline
-- Blocking operations (builds, restores, migrations, test suites) run in the foreground within your run — an isolated subagent cannot be woken by external events. Work that cannot finish in one run → commit partial work to the working branch; `<handoff>` names the remaining step.
+- Blocking operations (builds, restores, migrations, test suites) run in the foreground within your run — an isolated subagent cannot be woken by external events. Work that cannot finish in one run → leave partial work uncommitted in the working tree, list it in `<changed_files>`, and name the remaining step in the `<handoff>`. Never run git; the lane's gate commits.
 - Environmental blocker outside code scope (broken/missing toolchain, unreachable credentials or database, missing infrastructure) → HALT; escalate via `<handoff>` with the exact error and what you verified. NEVER wait, poll, or repair the environment — the Orchestrator's call.
 
 ### API Safety

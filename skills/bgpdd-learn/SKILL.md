@@ -33,9 +33,9 @@ Scan the live conversation for user corrections, agent failures and retries, cir
      | `.docs/{project-name}/implementation/` (plan/lite/build/shipping/verify epic) | `run-log.jsonl` | `gates.jsonl` |
      | `.docs/{project-name}/implementation/bugs/<bug-slug>/` (bugfix, feature route) | `run-log.jsonl` | `gates.jsonl` |
      | `.docs/bugfix/<slug>/` (bugfix, standalone route) | `run-log.jsonl` | `gates.jsonl` |
-     | `.docs/quick/<date>-<slug>/` | **none** — the lane delegates to nobody (`bgpdd-quick` §1) | `gates.jsonl` |
+     | `.docs/quick/<date>-<slug>/` | `run-log.jsonl` — the one builder delegation (`bgpdd-quick` §1) | `gates.jsonl` |
      | `.docs/summary/` (discovery) | `run-log.jsonl` (`bgpdd-discovery` §1) | `gates.jsonl` |
-   - **A root with no run log gets the ledger alone**, and you say so in the brief rather than reporting an empty cost table: quick has no delegations to cost. A root whose files are simply absent is a lane that never ran here — skip it silently.
+   - **A root with no run log gets the ledger alone**, and you say so in the brief rather than reporting an empty cost table. A root whose files are simply absent is a lane that never ran here — skip it silently.
 2. **The game tapes** — `game-tape.md` under each root above that has one (quick's single bullet lives in its `note.md`; discovery and learn keep no tape, per the skeleton).
 3. **The durable reports** — `review-report.md`, `test-report.md`, `security-report.md`, handoffs relayed in-conversation, and recent `git log`.
 4. **Filtered transcript greps**, last and only for what the first three left open (never a full read — see Step 2).
