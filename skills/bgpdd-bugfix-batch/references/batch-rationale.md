@@ -38,11 +38,11 @@ repository — its own working tree and index, its own branch, one shared object
 makes the hook behave.
 
 `guard_action.py` detects the active lane **from the tree, rooted at the tool call's own
-`cwd`** (its module docstring: "Four detectors, all relative to the hook's `cwd`"). The
-bugfix detectors share one walk, `bugfix_report_dirs(cwd)`, which offers
-`<cwd>/.docs/bugfix/*/bug-report.md` (standalone) and
-`<cwd>/.docs/*/implementation[/bugs/*]/bug-report.md` (feature). Consequences, all read off
-that code:
+`cwd` — except rule 1, which is rooted at the commit's target worktree** (`guard_action.py
+--help`, *Reads*: the directory after any leading `cd`/`Set-Location`/`pushd` and `git -C`,
+resolved by `git rev-parse --show-toplevel`; `--explain --command "<cmd>"` prints it). The
+bugfix detectors offer `<root>/.docs/bugfix/*/bug-report.md` (standalone) and
+`<root>/.docs/*/implementation[/bugs/*]/bug-report.md` (feature). Consequences:
 
 - **Each worktree presents exactly one bugfix lane.** A call made with worktree W as its
   `cwd` sees W's single `bug-report.md`. So rule 2 (`frozen_tests_during_a_fix`) and rule 3
@@ -61,9 +61,10 @@ that code:
   `{batch-root}/run-log.jsonl` are hand-edit-proof exactly as a lane's are.
 - **The merges are unguarded, and that is why the spine binds a gate to them.** Rule 1
   (`commit_through_the_gate`) arms only when an active open lane with a commit gate is
-  detected in the call's `cwd`. The merges run in the **main tree**, which holds no
-  `bug-report.md` — every report is inside a worktree — so no lane is detected and
-  `git merge` is allowed. The hook cannot help here, which is precisely why Phase 3 step 2
+  detected in the commit's target worktree. A `git -C <worktree W> commit` is therefore
+  gated by W's lane wherever it is issued from, but the merges target the **main tree**,
+  which holds no `bug-report.md` — every report is inside a worktree — so no lane is
+  detected and `git merge` is allowed. The hook cannot help here, which is precisely why Phase 3 step 2
   makes the merge's precondition a command that has to be run: `check_ledger.py` on that
   bug's own ledger plus a `check_commit_gate.py` `PASS` record carrying `--commit`
   (convention #9 — a restraint at the moment of merging is an artifact, not prose).

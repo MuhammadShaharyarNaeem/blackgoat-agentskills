@@ -11,7 +11,7 @@ Multi-axis review before merge — no change merges unreviewed. Five axes: corre
 
 ## Direct invocation
 
-Direct asks on named files are a deliberate refinement of agent-audit Metric 12, not a trigger collision. Direct invocation: the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself. Owner: **Luna**. Over three files, or shared behaviour: route via `/bg` to a lane.
+Direct asks on named files are a deliberate refinement of agent-audit Metric 12, not a trigger collision. Direct invocation: the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself. Owner: **Luna**, for a review request of **any size** — a review is never bounced back to `/bg`, which routes someone else's PR here (deliberately unlike the sibling skills' "over three files: route via `/bg`" rule, convention #8 — that bounce would loop). Over three files the Quick card no longer applies and Luna reviews under the full Worker Execution Contract. Size is bounded mechanically, not by file count: package the change with `python {PLUGIN_ROOT}/pipeline-tools/scripts/review_package.py` under `--max-diff-lines 1500` (the lanes' ceiling; contract: its `--help`) and hand Luna that package; exit 2 over the ceiling with no `--waiver` is this contract's "too large → request a split" escalation (§ Escalate When) — relay it to the user, who splits the change or hand-types a size waiver.
 
 ## Quick card
 

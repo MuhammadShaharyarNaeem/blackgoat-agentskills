@@ -379,98 +379,105 @@
           "lane": "bgpdd-bugfix",
           "phase": "*",
           "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <quinn|mason|nova|luna> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched that delegation> --ledger {bugfix-root}/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <quinn|mason|nova|luna> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched that delegation> [--transcript <the session transcript, when your runtime exposes one>] --ledger {bugfix-root}/gates.jsonl",
           "gate": "Exit 1 = the agent's contract was not met: return it to that same agent, counting a round under this lane's 2-round bound."
         },
         {
           "lane": "bgpdd-build",
           "phase": "*",
           "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <name> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched that delegation> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <name> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched that delegation> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = the agent's contract was not met - back to that agent, counting the round its own phase counts."
         },
         {
           "lane": "bgpdd-discovery",
           "phase": "*",
           "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <iris|scout|echo> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched that delegation> --ledger .docs/summary/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <iris|scout|echo> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched that delegation> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/summary/gates.jsonl",
           "gate": "Exit 1 = the agent's contract was not met: return it to that same agent, subject to the error-recovery bound in section 2."
         },
         {
           "lane": "bgpdd-lite",
           "phase": "2",
           "step": "4",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <alex|scout> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched the delegation> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <alex|scout> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched the delegation> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = his contract was not met - back to Alex under section 2's 2-round bound, not on to the coverage gate."
         },
         {
           "lane": "bgpdd-plan",
           "phase": "*",
           "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <rex|aria|alex> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched that delegation> --milestone \"<phase>\" --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <rex|aria|alex> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched that delegation> --milestone \"<phase>\" [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = the agent's contract was not met - return to that same agent, counting the round its own loop's bound counts; exit 2 = usage or an artifact defect - fix the invocation or the artifact, not the agent."
+        },
+        {
+          "lane": "bgpdd-quick",
+          "phase": "1",
+          "step": "2",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff {quick-root}/handoff.md --persona <mason|nova|max> --repo . --since <the sha HEAD held when you launched the builder> [--transcript <the session transcript, when your runtime exposes one>] --ledger {quick-root}/gates.jsonl",
+          "gate": "Exit 1 = the builder's contract was not met - back to that same builder; `<changed_files>` wider than the note goes back to Phase 0 instead."
         },
         {
           "lane": "bgpdd-secure",
           "phase": "2",
           "step": "6",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona cipher --repo . --since <the sha HEAD held when you launched him> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona cipher --repo . --since <the sha HEAD held when you launched him> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = a delta-only follow-up under section 2's bound, not a Phase 3 gate run."
         },
         {
           "lane": "bgpdd-shipping",
           "phase": "step-3",
           "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <Vera's saved handoff> --persona vera --repo . --since <the sha HEAD held when you launched Stage 1> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <Vera's saved handoff> --persona vera --repo . --since <the sha HEAD held when you launched Stage 1> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = Vera's contract was not met - back to her, counting the round under the Fix-routing bound."
         },
         {
           "lane": "bgpdd-shipping",
           "phase": "step-3",
           "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <Cipher's saved handoff> --persona cipher --repo . --since <the sha HEAD held when you launched Stage 2> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <Cipher's saved handoff> --persona cipher --repo . --since <the sha HEAD held when you launched Stage 2> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = Cipher's contract was not met - back to him, counting the round under the Fix-routing bound."
         },
         {
           "lane": "bgpdd-shipping",
           "phase": "step-3",
           "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <Dep's saved handoff> --persona dep --repo . --since <the sha HEAD held when you launched Stage 2> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <Dep's saved handoff> --persona dep --repo . --since <the sha HEAD held when you launched Stage 2> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = Dep's contract was not met - back to him, counting the round under the Fix-routing bound."
         },
         {
           "lane": "bgpdd-shipping",
           "phase": "step-3",
           "step": "2b",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <her saved handoff> --persona quinn --repo . --since <the sha HEAD held when you launched this fresh delegation> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <her saved handoff> --persona quinn --repo . --since <the sha HEAD held when you launched this fresh delegation> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = back to her, counting the round under this gate's own bound."
         },
         {
           "lane": "bgpdd-shipping",
           "phase": "step-5.5",
           "step": "2b",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <his saved handoff> --persona dep --repo . --since <the sha HEAD held when you launched this fresh delegation> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <his saved handoff> --persona dep --repo . --since <the sha HEAD held when you launched this fresh delegation> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = back to him, counting the round under Step 3's fix-and-reverify bound."
         },
         {
           "lane": "bgpdd-shipping",
           "phase": "step-7",
           "step": "2b",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <his saved handoff> --persona forge --advisory --repo . --since <the sha HEAD held when you launched this delegation> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <his saved handoff> --persona forge --repo . --since <the sha HEAD held when you launched this delegation> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = the proposal's contract was not met - do not HALT for approval on it; return to Forge for a conforming proposal."
         },
         {
           "lane": "bgpdd-shipping",
           "phase": "step-7",
           "step": "5b",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <his saved handoff> --persona forge --repo . --since <the sha HEAD held when you launched the apply delegation> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <his saved handoff> --persona forge --repo . --since <the sha HEAD held when you launched the apply delegation> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = back to Forge for a conforming `<changed_skills>` list."
         },
         {
           "lane": "bgpdd-verify",
           "phase": "2",
           "step": "5",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona quinn --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched her> --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona quinn --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched her> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = a delta-only follow-up under section 2's bound, not a Phase 3 gate run."
         }
       ],
@@ -973,8 +980,8 @@
           "lane": "bgpdd-build",
           "phase": "*",
           "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/mark_milestone.py --plan .docs/{project-name}/implementation/plan.md --milestone \"<milestone title>\" --repo . --require-commit --require-game-tape .docs/{project-name}/implementation/game-tape.md --ledger .docs/{project-name}/implementation/gates.jsonl",
-          "gate": "It refuses the `[x]` without a commit naming the milestone, a PASS `check_commit_gate.py` entry in an intact-chain ledger, and a conforming Phase 6 checkpoint - completion is recorded only here, never by hand."
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/mark_milestone.py --plan .docs/{project-name}/implementation/plan.md --milestone \"<milestone title>\" --repo . --require-commit --require-game-tape .docs/{project-name}/implementation/game-tape.md --require-exit-capture --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "It refuses the `[x]` without a commit naming the milestone, a PASS `check_commit_gate.py` entry in an intact-chain ledger, a conforming Phase 6 checkpoint, and - for each RUNTIME EXIT CRITERION - a ledgered exit-0 `run_quiet.py --capture` of its command scoped to this milestone; completion is recorded only here, never by hand."
         },
         {
           "lane": "bgpdd-shipping",
@@ -1160,6 +1167,13 @@
           "step": "-",
           "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/record_run.py --log .docs/{project-name}/implementation/run-log.jsonl --pipeline bgpdd-plan --phase \"<phase>\" --event delegation --agent <name> --model <tier> --unit <the artifact the delegation produced, e.g. requirements.md> …",
           "gate": "`--model` is mandatory on a delegation record - exit 2 without it - and a token measurement is equally mandatory."
+        },
+        {
+          "lane": "bgpdd-quick",
+          "phase": "1",
+          "step": "2",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/record_run.py --log {quick-root}/run-log.jsonl --pipeline bgpdd-quick --phase \"Phase 1\" --event delegation --agent <mason|nova|max> --model <tier> --unit {slug} …",
+          "gate": "`--model` is mandatory on a delegation record - exit 2 without it - and a token measurement is equally mandatory; this record is the lane's one delegation, and /bgpdd-learn reads it."
         },
         {
           "lane": "bgpdd-secure",

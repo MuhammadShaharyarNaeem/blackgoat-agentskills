@@ -67,7 +67,7 @@ Four phases; do not skip or reorder.
 ### Phase 1: Change (one builder)
 **Driver:** the driver must report `phase: 1`.
 1. **Brief the builder** (Contract §1 delegation construction; background launch). The brief carries: the note's three lines verbatim; the methodology skill's path; Contract §2's three rules verbatim; and these constraints in their own words — *edit only the files the `Where` line names; never edit an existing test to make it pass (a wrong test is a defect with a reproduction, `/bgpdd-bugfix` — Phase 3's `--frozen` globs enforce this); never run git; report every file you touched in `<changed_files>`.*
-2. **On return**, save the handoff to `{quick-root}/handoff.md` and validate it with `check_handoff.py` exactly as Contract §1 states it, with `--ledger {quick-root}/gates.jsonl`; then append its `record_run.py` record (Contract §4) with `--log {quick-root}/run-log.jsonl --pipeline bgpdd-quick --unit {slug}`.
+2. **On return**, save the handoff to `{quick-root}/handoff.md`, run `python {PLUGIN_ROOT}/pipeline-tools/scripts/tool_registry.py for --lane bgpdd-quick --phase 1` and execute the `check_handoff` line it prints (Contract §1's validation, `--ledger {quick-root}/gates.jsonl`); then execute the `record_run` line from that same listing (Contract §4; `--log {quick-root}/run-log.jsonl --pipeline bgpdd-quick --unit {slug}`).
 3. `<changed_files>` wider than the note → back to Phase 0.
 
 ### Phase 2: Prove (you, after the builder returns)
