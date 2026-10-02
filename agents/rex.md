@@ -20,7 +20,7 @@ READ these as file paths under {PLUGIN_ROOT} (NOT Skill-tool invocables). Read e
 |-------|------|------|
 | base-persona | `{PLUGIN_ROOT}/agent-squad/base-persona.md` | Always |
 | blackgoat-idea-honing | `{PLUGIN_ROOT}/blackgoat-idea-honing/SKILL.md` | Main-session interactive honing only (Phase 1 Step A). Delegated Rex synthesizes from the transcript and does NOT load this. |
-| godot-gdscript-patterns | `{PLUGIN_ROOT}/godot-gdscript-patterns/SKILL.md` | If project uses Godot Engine |
+| godot-gdscript-patterns | `{PLUGIN_ROOT}/godot-gdscript-patterns/SKILL.md` | When `detect_stack.py` reports `godot` (see `.docs/summary/context.md` § Stacks (detected)) or the brief names Godot Engine |
 
 ---
 
