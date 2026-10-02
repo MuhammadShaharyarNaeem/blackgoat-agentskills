@@ -7,7 +7,7 @@ A Claude Code plugin that packages an **agent squad** and a **Prompt-Driven Deve
 - **Plugin:** `blackgoat-agentskills` v2.9.0 — see [CHANGELOG.md](CHANGELOG.md)
 - **Author:** shaharyar.naeem (shaharyar.naeem@gorelo.io)
 
-> Note: this plugin ships no `AGENTS.md`. Under Google Antigravity the runtime contract — how "delegate to \<Agent\>" maps to the registered squad agents, blocking delegation, and `{PLUGIN_ROOT}` resolution — lives in the user's global `~/.gemini/config/AGENTS.md`, outside the plugin. Cursor uses `rules/cursor-runtime.mdc` instead — see [docs/cursor-setup.md](docs/cursor-setup.md).
+> Note: this plugin ships no `AGENTS.md`. Under Google Antigravity the runtime contract — how "delegate to \<Agent\>" maps to the registered squad agents, blocking delegation, and `{PLUGIN_ROOT}` resolution — lives in the user's global `~/.gemini/config/AGENTS.md`, outside the plugin.
 
 ![blackgoat-agentskills: claude plugin validate passing, the plugin manifest, and the 17-agent squad inventory](assets/preview.svg)
 
@@ -17,7 +17,7 @@ A Claude Code plugin that packages an **agent squad** and a **Prompt-Driven Deve
 
 The plugin is designed with a deliberate adoption gradient. Each step gives you value on its own; none requires the previous one.
 
-**Step 0 — Use it every day, not only for epics.** Type `/bg` in front of an ordinary ask and the plugin picks the lane; for a rename, an added test or a one-file tidy that is `/bgpdd-quick`, which stays in the main session and ends with one gate and one commit. A session-start hook injects a one-screen index of the lanes and the four rules that hold outside any lane (evidence over claims, never edit a test to pass, commits go through a gate, ask before anything irreversible), so an ordinary chat already follows them. The worker methodologies — TDD, debugging, code review, simplification, source-driven development — are directly invocable on named files too.
+**Step 0 — Use it every day, not only for epics.** Type `/bg` in front of an ordinary ask and the plugin picks the lane; for a rename, an added test or a one-file tidy that is `/bgpdd-quick`, where the Orchestrator delegates the one edit to a builder (Mason, Nova or Max, chosen by kind of change) and it ends with one close gate and one commit. A session-start hook injects a one-screen index of the lanes and the four rules that hold outside any lane (evidence over claims, never edit a test to pass, commits go through a gate, ask before anything irreversible), so an ordinary chat already follows them. The worker methodologies — TDD, debugging, code review, simplification, source-driven development — are directly invocable on named files too: the Orchestrator delegates to the skill's owning persona.
 
 **Step 1 — Fix one bug with `/bgpdd-bugfix`.** One command, one bug, the smallest squad that can prove it. It walks six gated phases on written evidence: you write a lint-gated bug report with the Orchestrator, Quinn captures the failing run (RED) before anyone touches code, you trace the root cause in the main session and a script routes the fix FAST, FULL or PLAN, Mason (or Nova for UI-side bugs, both for a shared-contract bug) lands the surgical fix without touching the RED, Quinn re-runs the identical command for GREEN plus the full suite, a fresh Luna reviews the diff and its blast radius, and the commit exists only if the commit gate passes with the RED/GREEN pair, a five-file size bound and the review on record. If you currently debug with ad-hoc prompts, this is the smallest possible taste of the disciplined, gated workflow — now with the smallest squad that can carry it.
 
@@ -32,7 +32,7 @@ The plugin is designed with a deliberate adoption gradient. Each step gives you 
 | Situation | Command | Runs where |
 |---|---|---|
 | Not sure which lane, or just an everyday ask | `/bg <what you want>` | Main session — classifies and invokes exactly one lane |
-| One small contained change (≤ 3 files: rename, add a test, tidy, config) | `/bgpdd-quick` | Main session only — no agents; one captured check, one closing gate that commits |
+| One small contained change (≤ 3 files: rename, add a test, tidy, config) | `/bgpdd-quick` | Main session routes; one builder (Mason/Nova/Max by kind of change) makes the one edit; one captured check, one close gate that commits |
 | New feature, brownfield codebase | `/bgpdd-discovery` then `/bgpdd-plan` | Spawns agents (Iris/Scout/Echo, then Rex/Aria/Alex) |
 | Well-specified small feature (known pattern/contract) | `/bgpdd-lite` | Main session (mini-requirements) + spawns Alex |
 | Execute an existing plan | `/bgpdd-build [auto]` | Spawns agents (Mason/Nova, Quinn, Luna, Dep, Cipher) |
@@ -346,7 +346,7 @@ flowchart TD
     S7G -- "no" --> S7SKIP
 ```
 
-Why two stages instead of three parallel agents? Vera runs full builds and test suites that take file, build-output, and port locks; running scanners or infra verification concurrently against the same checkout causes lock collisions and flaky failures (especially on Windows). So Vera runs alone first, then Cipher and Dep launch in a single parallel batch. Dep compiles the Emergency Rollback Plan and his GO/NO-GO verdict into `ship-decision.md` — and before that GO is accepted, he has to have *rehearsed* the rollback (a timed revert-plus-health-check captured with its provenance sidecar) and *captured* the rollout baseline the threshold table's deltas are read against. After the deploy lands, **Step 5.5** sends a fresh Dep to run the post-launch checklist against the deployed environment; a `Fail` there is a live production defect, so the pipeline takes the rollback decision from the recorded time and halts for you rather than opening a fix round. Any red area may be routed back through `/bgpdd-build` for a fix — at most **2 fix-and-reverify rounds per area** before the pipeline halts and hands you the evidence. If the `github-pr-review` skill is available, Step 4.5 also offers an automated multi-repo PR review pass.
+Why two stages instead of three parallel agents? Vera runs full builds and test suites that take file, build-output, and port locks; running scanners or infra verification concurrently against the same checkout causes lock collisions and flaky failures (especially on Windows). So Vera runs alone first, then Cipher and Dep launch in a single parallel batch. Dep compiles the Emergency Rollback Plan and his GO/NO-GO verdict into `ship-decision.md` — and before that GO is accepted, he has to have *rehearsed* the rollback (a timed revert-plus-health-check captured with its provenance sidecar) and *captured* the rollout baseline the threshold table's deltas are read against. After the deploy lands, **Step 5.5** sends a fresh Dep to run the post-launch checklist against the deployed environment; a `Fail` there is a live production defect, so the pipeline takes the rollback decision from the recorded time and halts for you rather than opening a fix round. Any red area may be routed back through `/bgpdd-build` for a fix — at most **2 fix-and-reverify rounds per area** before the pipeline halts and hands you the evidence. Step 4.5 also offers a final PR review pass via `code-review-and-quality`.
 
 ---
 
@@ -379,7 +379,7 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 ### SOP orchestrators (slash-command pipelines)
 - **agent-squad** — the Orchestrator/delegation model itself; also home of `base-persona.md`, the one shared base persona
 - **bg** — the front door: classifies an everyday ask with three questions and invokes exactly one lane; never does the work itself
-- **bgpdd-quick** — the daily-driver lane: one contained change of ≤ 3 files in the main session, no delegation, a captured check, and `check_quick_close.py` as the only gate (commits the declared files, refuses undeclared tree changes, edited frozen tests, stale captures and size overruns)
+- **bgpdd-quick** — the daily-driver lane: one contained change of ≤ 3 files with its one edit delegated to a builder (Mason, Nova or Max by kind of change), a captured check, and `check_quick_close.py` as the only gate (commits the declared files, refuses undeclared tree changes, edited frozen tests, stale captures and size overruns)
 - **bgpdd-discovery** — global context discovery (Iris, Scout, Echo)
 - **bgpdd-plan** — design & architecture (Rex, Aria, Alex)
 - **bgpdd-lite** — mid-weight planning for well-specified work (Orchestrator mini-requirements + Alex; hands off to bgpdd-build)
@@ -429,8 +429,6 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 ### Standalone tools
 - **pipeline-tools** — the deterministic gate CLI family (coverage, commit gate, agent report, runtime evidence, acceptance suite, ship decision, re-delegation halts, Tier-1 staleness, the review package — including the `--require-rehearsal` and `--require-baseline` flags that make a rollback rehearsal and a rollout baseline evidenced rather than asserted — milestone-scoped blockers, milestone read/write, state writes, quiet runs, and the two static lints) executed by the Orchestrator at every bgpdd gate; there is no manual open-and-read substitute. Alongside the gates: **`detect_stack.py`** gives "if the project uses X" a mechanical floor by reporting evidence-backed stacks and the skills they imply, and **`record_run.py` / `summarize_run.py`** are the run-telemetry pair — one JSON line per delegation, rolled up into the fired-versus-rubber-stamped block the game tape pastes instead of narrating
 - **doubt-driven-development** — adversarial fresh-context verification of decisions (run by the main-session Orchestrator, never by subagents)
-- **github-pr-review** — Linear-driven multi-repo PR review via GitHub MCP
-- **prompt-engineering** — prompting patterns and optimization guidance
 
 ---
 

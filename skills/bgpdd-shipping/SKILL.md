@@ -153,7 +153,7 @@ Once the squad is fully green and coverage is verified, act as the Documenter:
 Once the squad is fully green and documentation is compiled — this is the skeleton's `## Branch close` **epic variant**: push and PR, never its three local offers.
 1. Push the working branch (the `branch` field from `orchestrator-state.json`; if absent, confirm the branch with the user — do NOT guess) to the remote.
 2. Open a pull request via the user's git hosting tool. The PR description must summarize the epic, the FR/NFR coverage (from the Step 3.5 gate), and link to `.docs/{project-name}/implementation/ship-decision.md`.
-3. If the runtime has the `github-pr-review` skill, offer an automated multi-repo PR review pass.
+3. Offer a final PR review pass via `code-review-and-quality`.
 
 ### Step 5: Final Handoff
 Present the final "Launch Readiness Report" with the PR link(s) from Step 4.5, state that all checks passed, and give the manual commands that trigger the production deployment.
