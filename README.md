@@ -155,16 +155,16 @@ Every agent lives in `agents/<name>.md` with frontmatter declaring its `role`, `
 | **Echo** | Legacy QA Analyst — reverse-engineers existing feature behavior | sonnet | Discovery |
 | **Rex** | Requirements Analyst | opus | Plan 1 — Requirements |
 | **Aria** | System Architect | opus | Plan 2 — Architecture; Build advisor on blast-radius escalations |
-| **Alex** | Strategist & Planner | opus | Plan 3 — Planning |
-| **Mason** | Builder (Backend) — `[API]` milestones | opus | Build 1 — Implementation |
-| **Nova** | Builder (UI) — `[UI]` milestones, builds user-facing interfaces from Aria's contracts and the committed design direction; rendered self-verification | opus | Build 1 — Implementation |
-| **Quinn** | QA Tester — build-phase testing | opus | Build 2 — Testing |
-| **Luna** | Code Reviewer | opus | Build 3 — Code Review |
+| **Alex** | Strategist & Planner | opus | Plan 3 — Planning; Lite — Planning; Build — re-planning loops only |
+| **Mason** | Builder (Backend) — `[API]` milestones | opus | Build 1 — Implementation; Bugfix — Fix (`api` surface) |
+| **Nova** | Builder (UI) — `[UI]` milestones, builds user-facing interfaces from Aria's contracts and the committed design direction; rendered self-verification | opus | Build 1 — Implementation; Bugfix — Fix (`ui` surface) |
+| **Quinn** | QA Tester — build-phase testing | opus | Build 2 — Testing; Bugfix — RED and GREEN captures; Verify — automation; Shipping — acceptance re-execution; Secure — browser-rendered probes |
+| **Luna** | Code Reviewer | opus | Build 3 — Code Review; Bugfix — Review & Close (always fresh) |
 | **Max** | Optimizer / Refactorer | sonnet | Ad hoc, on request — not a bgpdd-build pipeline stage |
-| **Vera** | Launch Verifier — pre-launch checklist verification | opus | Shipping — Verification (parallel with Cipher) |
-| **Cipher** | Security Auditor | opus | Shipping — Security (parallel with Vera); Build [SEC]-milestone reviews |
-| **Ward** | Privacy & Compliance Engineer | opus | Deployment — Privacy & Compliance (after the build cycle); Secure — the data-handling rows of the attack matrix (parallel with Cipher) |
-| **Dep** | DevOps Engineer | sonnet | Build 5 — Deployment Prep + epic gate; Shipping rollout |
+| **Vera** | Launch Verifier — pre-launch checklist verification | opus | Shipping — Verification (Stage 1, alone, before Cipher and Dep) |
+| **Cipher** | Security Auditor | opus | Shipping — Security (Stage 2, parallel with Dep after Vera); Build [SEC]-milestone reviews (with Luna); Secure — primary |
+| **Ward** | Privacy & Compliance Engineer | opus | Secure — the data-handling rows of the attack matrix (alongside Cipher); ad-hoc privacy audit (Orchestrator-routed, outside a lane) |
+| **Dep** | DevOps Engineer | sonnet | Build 5 — Deployment Prep + epic gate; Shipping — Infra/Rollout (Stage 2, parallel with Cipher after Vera) |
 | **Forge** | Meta-Engineer / System Coach | opus | End of epic (bgpdd-shipping Step 7); `/bgpdd-learn` on demand — always human-approved |
 
 Blurbs, in one line each: Iris scans repos and records the tech stack and Target Scope. Scout maps one feature's fragments inside one API and writes exactly one file. Echo reverse-engineers how an existing feature behaves today, from the Scouts' maps, before any requirements exist. Rex turns a honing transcript into an ID'd, testable spec. Aria designs the data model, contracts, and file structure (design only — a learned squad rule forbids delegating coding to the Architect). Alex converts the blueprint into a dependency-ordered task plan where every task cites the requirements it covers. Mason writes the code for `[API]` milestones, TDD-first, inside a strict blast radius. Nova builds `[UI]` milestones, translating Aria's contracts and the committed design direction into interfaces verified against the rendered result. Quinn proves the build-phase implementation works against the requirements. Luna reviews for correctness, readability, architecture, security, and performance without rewriting anything. Max refactors for clarity with tests staying green, on ad-hoc request outside the build pipeline. Vera runs the pre-launch verification checklist against the finished codebase. Cipher hardens boundaries. Ward audits the data itself — where personal data actually lives, on what basis it was collected, whether consent is enforced at the write path, whether a deletion provably reached every store, and whether every control claimed carries evidence (identity, SSO and secrets stay Cipher's). Dep owns containers, CI/CD, rollback plans, and the GO/NO-GO verdict. Forge coaches the squad itself.
@@ -450,7 +450,7 @@ Every gate in this plugin verifies *after* the fact, and the decision to run one
 
 | It blocks | When | Instead |
 |---|---|---|
-| `git commit` / `merge` / `cherry-pick` / `revert` via the Bash tool | any lane is active | run that lane's gate (`check_commit_gate.py --commit`, or `check_quick_close.py --commit` for `/bgpdd-quick`) — the gates commit from their own subprocess, so they are never blocked |
+| a git history-writing command (`git commit`, `merge`, `gh pr merge`, … — the full list is `guard_action.py --explain`, rule 1) from the shell | any lane is active | run that lane's gate (`check_commit_gate.py --commit`, or `check_quick_close.py --commit` for `/bgpdd-quick`) — the gates commit from their own subprocess, so they are never blocked |
 | editing an **existing** test file | a bugfix lane has not reached its commit gate | fix the code; Quinn owns tests in that lane. Adding a *new* test file is allowed |
 | spawning a subagent | a fresh `bug-report.md` has no `check_bugfix_intake.py` PASS | run the intake gate |
 | hand-editing `gates.jsonl`, `orchestrator-state.json`, `run-log.jsonl`, `*.meta.json` | **always** | use the pipeline-tools script that owns that artifact |
@@ -460,18 +460,19 @@ Every gate in this plugin verifies *after* the fact, and the decision to run one
 | reading a `pipeline-tools/scripts/*.py` file's source | any lane is active, outside this plugin's own repo | run the script's `--help` (or `tool_registry.py show <script>`) |
 | writing `agents/*.md`, a `SKILL.md`, `CLAUDE.md` or `AGENTS.md` | a `/bgpdd-learn` run is active | get the user's approval recorded first: `check_learn_approval.py --record` must PASS for that path; its `--close` PASS disarms the rule |
 
+The four write rules (existing test files, gate artifacts, `agents/blackgoat.md`, `/bgpdd-learn` paths) catch a shell mutation of the path (e.g. redirection, `sed -i`, `mv`, `rm`) as well as a write tool.
+
 The active lane is detected from artifacts in the working tree (a state file's `pipeline`, a bug report, a quick note, each with a 12-hour freshness window — `--window-hours`, default 12; a lane abandoned longer than that stops being active) — never from prose or a model assertion. `python skills/pipeline-tools/scripts/guard_action.py --explain` prints the rules and what it currently detects; `--self-test` runs 130 cases. **It fails open by design**: any internal error, a missing python, or an unparseable payload allows the call, because a guard that bricks a session gets deleted and a deleted guard enforces nothing. Every block is therefore a positive identification, never an inability to decide — and the guard raises the cost of the wrong action rather than making the repo tamper-proof.
 
 ---
 
 ## MCP Servers
 
-The plugin's `.mcp.json` wires up four MCP servers used by the testing, review, and shipping agents:
+The plugin's `.mcp.json` wires up three MCP servers used by the testing, review, and shipping agents:
 
 - **chrome-devtools-mcp** (`npx chrome-devtools-mcp@latest`) — DOM/console/network/perf inspection in a real browser
 - **playwright** (`npx @playwright/mcp@latest`) — scripted end-to-end browser flows
 - **linear-mcp-server** (`mcp-remote` → `https://mcp.linear.app/mcp`) — Linear issues/PR context (hosted, requires auth)
-- **github-mcp-server** (`mcp-remote` → GitHub Copilot MCP endpoint) — GitHub operations for PR review; requires `GITHUB_PERSONAL_ACCESS_TOKEN`
 
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: test-driven-development
-description: "Use when implementing any feature or bugfix, before writing implementation code. Provides the worker execution contract (RED/GREEN/REFACTOR, rules, verification, escalation) plus on-demand deep-dive rationale. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself."
+description: "Provides the test-first execution contract: RED before any implementation code, GREEN with the minimum change, REFACTOR under passing tests, plus its rules, verification and escalation, with deep-dive rationale on demand. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself."
 risk: unknown
 source: community
 date_added: "2026-02-27"

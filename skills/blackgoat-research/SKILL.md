@@ -9,14 +9,16 @@ description: Guides Aria's codebase/technology research and the authoring of the
 
 Technical research, technology analysis, and system architecture design: the research notes and the detailed design document that precede any implementation code.
 
-## Modes
+## Worker Execution Contract
+
+### Modes
 
 Your Orchestrator's delegation brief names the mode. NEVER infer it.
 
 - **Mode 1 — Blueprint** (`bgpdd-plan` Phase 2, the default): run the full Unified Workflow below (steps 1–9), producing `.docs/{project-name}/design/detailed-design.md`.
 - **Mode 2 — Scoped Advisory** (`bgpdd-build` Phase 1 blast-radius review): run steps 1–3 only, scoped strictly to the blast-radius report in your brief, and return your architectural recommendation directly in your `<handoff>`. Do NOT create or modify `detailed-design.md` — the epic's blueprint is already signed off; skip steps 4–7 entirely. Apply step 6's self-consistency reasoning to any snippet you put in your `<handoff>` regardless.
 
-## Unified Workflow
+### Unified Workflow
 
 1. **Identify Investigation Areas**: from the requirements, name every area needing technical investigation, codebase analysis, or API documentation reading.
 2. **Conduct Research**: conduct it yourself with your available tools (file reading, web search). Save findings to `.docs/{project-name}/research/{research_name}.md`.
