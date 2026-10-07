@@ -29,7 +29,7 @@ Nothing below is executable without knowing where personal data lives, so the in
 | Field | Class | Store(s) | Lawful basis | Retention | Delete path |
 |---|---|---|---|---|---|
 
-- **Class** — identifier, quasi-identifier, contact, financial, health, credential. A field may carry more than one class; list each. Quasi-identifiers are classified, not waved through: a zip/birthdate/gender trio re-identifies most people, so "we removed the name" is never the label *anonymized*.
+- **Class** — one or more of the classes `{PLUGIN_ROOT}/security-and-hardening/references/data-privacy-checklist.md` § PII classes defines, quasi-identifiers included; list each. Never restate the class list here.
 - **Store(s)** — enumerated from the scan, not from the schema alone. The stores that get missed are the ones nobody models: read replicas, warehouses and lakes, search indexes, caches, message queues, object storage, application and access logs, error and trace payloads, analytics event streams, backups, and third-party systems.
 - **Lawful basis** — the named basis and purpose. "Might be useful" is not a basis; a field with no basis is a finding, and the remedy is to stop collecting it, not to document it better.
 - A field the scan surfaced but nobody can classify is `UNCLASSIFIED` in the table and an `Important` finding — never omitted. Unclassified PII is unmanaged PII (`base-persona.md`, Evidence Integrity: an unscanned store is `BLOCKED`, not an empty row).

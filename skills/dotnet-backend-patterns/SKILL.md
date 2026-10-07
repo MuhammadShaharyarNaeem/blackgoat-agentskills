@@ -13,7 +13,7 @@ Derived from the contract below for a ≤ 3-file change; no new rules (conventio
 
 1. Stay in the existing layer; `Domain` stays dependency-free (§ Solution Segregation).
 2. Match the declared API mode; never mix (§ API Mode).
-3. Every response is `BaseResponse<T>`; failures are `Error`s (§ Response Pattern).
+3. `BaseResponse<T>` for new APIs; a migration keeps its wire contract (§ Response Pattern).
 4. Read-only queries: `AsNoTracking()` plus a DTO projection (§ EF Core).
 5. A wire or envelope claim needs Tier 3 (§ Testing Doctrine).
 
@@ -29,13 +29,14 @@ This is the operational spine. Follow it as written. For a change of ≤ 3 files
 
 - Segregate the solution into distinct projects: `Domain` (pure logic, zero dependencies), `Application` (use cases, MediatR handlers), `API` (endpoints/controllers), `Infrastructure` (EF Core, external APIs).
 - Third-party packages are isolated in their own projects so they can be reused across solutions. `Domain` references nothing.
+- **Mode B (REPR) uses `Api` / `Core` / `DAL.EF` / `Infrastructure` instead** — deliberately diverging from the four-project list above (convention #8): no `Application` project, since REPR has no MediatR handlers; `Core` plays `Domain`'s dependency-free role and holds only contracts — interfaces, models/DTOs, enums, constants, config POCOs; no entities, no EF, Redis, Service Bus or vendor SDK. EF Core lives in `DAL.EF`, whose entities and `AppDbContext` are **scaffolded database-first** from SQL Server as `partial` classes — no hand-written migrations; hand-written model fixes go in `AppDbContext.Partial.cs`. REPR adopted on an existing controller + MediatR solution keeps its `API` / `BLL` / `EF` projects instead — a second deliberate divergence (convention #8): the BLL serves as the service layer and the four-project split is not imposed. See [repr-playbook.md §2](references/repr-playbook.md).
 
 ### API Mode — Two Sanctioned Modes, Never Mixed
 
 The blueprint (Aria's `detailed-design.md`) — or, for lite-originated work, the mode constraint recorded in `requirements.md` — declares which mode the project uses. Follow it. Never mix modes, never invent a third.
 
 - **Mode A — CQRS + MediatR:** Commands/queries with pipeline behaviors for authorization, validation, and domain-event dispatch. Generic base controllers (`BaseController<T>`) map every result to the standardized `BaseResponse<T>` envelope from `BG.Infrastructure.Core` — via `ExecuteWithOKCommandResponse` (`ExecuteWithOKResponse` is deprecated — do not use in new code) — so the frontend receives predictable contracts. Do not hand-roll a per-service response type.
-- **Mode B — REPR minimal APIs:** Request-Endpoint-Response with minimal APIs exclusively. Everything the route needs lives in the endpoint file. Reusable logic is extracted strictly as decoupled services. NO repository pattern in REPR mode — it is bloat here. REPR emits the **same** `BaseResponse<T>` envelope as Mode A (so the frontend sees one contract), via `.ToResult()` (`IResult` bridge) for success and a native `IExceptionHandler` for failures — not a base controller.
+- **Mode B — REPR minimal APIs:** Request-Endpoint-Response with minimal APIs exclusively. Everything the route needs lives in the endpoint file. Reusable logic is extracted strictly as decoupled services. NO repository pattern in REPR mode — it is bloat here. All endpoints of a feature live in one `Endpoints/{Feature}/` folder and are mapped by that feature's `{Feature}EndpointsExtension` on one route group. A **new** REPR API emits the **same** `BaseResponse<T>` envelope as Mode A (so the frontend sees one contract), via `.ToResult()` (`IResult` bridge) for success and a native `IExceptionHandler` for failures — not a base controller. A migration of an existing API to REPR keeps that API's wire contract instead (see Response Pattern below), still with one `IExceptionHandler`.
 
 ### Response Pattern, Errors & Exceptions (Both Modes)
 
@@ -44,6 +45,7 @@ Every API result — in **both** modes — maps to the standardized `BaseRespons
 - **Errors are structured, not strings.** Failures are conveyed as `Error` records in `BaseResponse.Notifications`. Each `Error` carries a 6-digit `ErrorCode` (`MM`=microservice, `TT`=error type, `NN`=number — compose from the `MicroserviceCodes` / `ErrorTypeCodes` registries, never magic numbers), a message, and optional `PropertyName` / `ActionHint`. The `ErrorType` drives frontend UX (field / popup / toast / redirect / silent).
 - **Throw `CustomException`** from handlers/services/domain for expected failures — it carries the `ErrorCode`, HTTP status, and UX context, and maps cleanly to an `Error`.
 - **Map failures once, per mode:** Mode A via the `BaseController<T>` try/catch → `.ToActionResult()`; Mode B via a native `IExceptionHandler` → `.ToResult()`. Do not build error envelopes inline in each handler.
+- **Mode B migration — the wire contract is preserved.** Deliberate refinement (convention #8) of "every API result maps to `BaseResponse<T>`" above: that rule binds new APIs and separately declared contract changes. A migration of an existing controller + MediatR API to REPR is a pattern change, not a contract change — routes, request shapes, response bodies, status codes and headers stay byte-compatible with the legacy controllers: no envelope, no `/api/v1` prefix the legacy route lacked. Failures are still mapped once, by one `IExceptionHandler` that reproduces the legacy error body rather than the envelope; never a try/catch per handler. "Byte-compatible" is a Tier 3 claim, and that capture's `--require-key` set is the legacy body's keys, not the envelope's. Pattern and handler: [repr-playbook.md](references/repr-playbook.md), "Response Pattern in REPR".
 - Full model + code: [response-and-errors.md](references/response-and-errors.md).
 
 ### Design Principles — SOLID & Separation of Concerns
@@ -94,8 +96,8 @@ Before marking work complete:
 - [ ] No cascade delete introduced on critical records; concurrency handled where writes race
 - [ ] No `BeginTransactionAsync` / `FOR UPDATE` span awaits an out-of-process call; any check-then-write invariant that lost its span is carried by a committed reservation
 - [ ] All async methods propagate `CancellationToken`; no sync-over-async
-- [ ] Integration tests against the real Dev DB cover DB-crossing behavior — zero mocked `DbContext`. (Builders do not author these — verify they exist or flag the gap to the Orchestrator; QA (Quinn) authors them.)
-- [ ] Every response (both modes) is a `BaseResponse<T>` envelope from BG.Core; failures are structured `Error`s (registry-composed `ErrorCode`) in `Notifications`, mapped once via `ToActionResult<T>()` (Mode A) or `ToResult<T>()` + `IExceptionHandler` (Mode B) — no bare payloads, no ad-hoc status codes
+- [ ] Integration tests against the real Dev DB cover DB-crossing behavior — zero mocked `DbContext`, no EF InMemory provider. Mode B fast endpoint tests may run the real model on SQLite in-memory instead — a deliberate convention-#8 divergence, scoped in [data-and-testing.md](references/data-and-testing.md) §3.1; they never stand in for a wire claim. (Builders do not author these — verify they exist or flag the gap to the Orchestrator; QA (Quinn) authors them.)
+- [ ] Every response of Mode A and of a new Mode B API is a `BaseResponse<T>` envelope from BG.Core; failures are structured `Error`s (registry-composed `ErrorCode`) in `Notifications`, mapped once via `ToActionResult<T>()` (Mode A) or `ToResult<T>()` + `IExceptionHandler` (Mode B) — no bare payloads, no ad-hoc status codes. A Mode B migration instead keeps the legacy wire contract, failures mapped once by one `IExceptionHandler` reproducing the legacy error body, proven by Tier 3 captures of the legacy and the migrated app (Response Pattern)
 - [ ] Every response-envelope claim is backed by a **Tier 3** capture under `evidence/runtime/` — never by a `WebApplicationFactory` test alone, and never by a source read of the wrapper's registration
 - [ ] Dependencies point inward (DIP): `Core`/`Domain` defines interfaces, `Infrastructure` implements, concretes bind only at the composition root; no framework/IO types leak into `Domain`/`Core`; no `NotImplementedException` interface members
 
@@ -111,7 +113,7 @@ Before marking work complete:
 Read on demand. **Load only the playbook for the mode the blueprint declares**, plus the shared data/testing one — don't load the other mode's playbook (it's noise for this project).
 
 - **Mode A →** [cqrs-playbook.md](references/cqrs-playbook.md) — MediatR validation pipeline behavior, and how Mode A emits the Response Pattern via `BaseController<T>` (`ExecuteWithOKCommandResponse`; `ExecuteWithOKResponse` is deprecated — do not use in new code).
-- **Mode B →** [repr-playbook.md](references/repr-playbook.md) — REPR + Vertical Slice: endpoint file structure, endpoint filters (replacing MediatR behaviors), `IQueryable<T>` extensions, DI composition root, migration checklist, worked example, and how REPR emits the Response Pattern via `.ToResult()` + `IExceptionHandler`.
+- **Mode B →** [repr-playbook.md](references/repr-playbook.md) — REPR + Vertical Slice patterns for a new API and for REPR on an existing API / BLL / EF solution: endpoint file structure, feature endpoint grouping, endpoint filters (replacing MediatR behaviors), database-first scaffolding, `IQueryable<T>` extensions, DI composition root, a worked case study, anti-patterns from earlier conversions, and how REPR emits the Response Pattern (or preserves a legacy contract) through one `IExceptionHandler`.
 - **Both modes →** [response-and-errors.md](references/response-and-errors.md) — the shared `BaseResponse<T>` envelope, the `Error` / `ErrorCode` model + code registries, `Notifications`, `CustomException`, and the per-mode emit paths.
 - **Both modes →** [data-and-testing.md](references/data-and-testing.md) — AsNoTracking + projection GOOD/BAD, async + `CancellationToken` propagation, and the zero-mock integration-test-against-Dev-DB pattern.
 - **Both modes →** [solid-and-separation.md](references/solid-and-separation.md) — SoC, DIP, SRP, ISP and OCP/LSP mapped onto the structural rules above, as vocabulary for a review.

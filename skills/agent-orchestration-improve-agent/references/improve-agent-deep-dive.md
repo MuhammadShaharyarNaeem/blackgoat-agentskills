@@ -71,8 +71,7 @@ Every proposed lesson must name its destination and a one-line rationale for tha
 ## Editing Details (Delegation 2)
 
 - **Vector A scope**: a `## Procedural Memories` heading with no rule under it is placeholder scaffolding and must not be written.
-- **Compaction Rule**: If the `## Procedural Memories` section exceeds 5 bullet points, you MUST synthesize and compress them into broader core rules. Never append indefinitely.
-- **Memory Hygiene (Abstraction Rule)**: When a persona's `## Procedural Memories` section has accumulated 3 or more entries, do NOT append another — apply the Abstraction Rule instead: elevate universal engineering rules into the persona's Responsibilities (undated), generalize framework-specific lessons into language-agnostic principles, and move irreducible project-specific rules to that project's `.agents/AGENTS.md`. Dated memories are a staging area, not a permanent home.
+- **Memory Hygiene (Abstraction Rule) — the one threshold**: When a persona's `## Procedural Memories` section has accumulated 3 or more entries, do NOT append another — apply the Abstraction Rule instead, synthesizing and compressing what remains into broader rules (this absorbs the old 5-bullet Compaction Rule, which a section that stops growing at 3 could never reach): elevate universal engineering rules into the persona's Responsibilities (undated), generalize framework-specific lessons into language-agnostic principles, and move irreducible project-specific rules to that project's `.agents/AGENTS.md`. Dated memories are a staging area, not a permanent home.
 
 ### Example Append Format:
 ```markdown

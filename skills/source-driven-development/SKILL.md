@@ -1,6 +1,6 @@
 ---
 name: source-driven-development
-description: "Grounds every implementation decision in official documentation. Use when you want authoritative, source-cited code free from outdated patterns. Use when building with any framework or library where correctness matters. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator applies the Worker Execution Contract itself in the main session — no delegation."
+description: "Grounds every implementation decision in official documentation. Use when you want authoritative, source-cited code free from outdated patterns. Use when building with any framework or library where correctness matters. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself."
 ---
 
 # Source-Driven Development
@@ -9,7 +9,7 @@ Every framework-specific code decision must be backed by official documentation.
 
 ## Direct invocation
 
-A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no editing tests to pass, no unobserved claims (`base-persona.md`, Evidence Integrity). Over three files, or shared behaviour: route via `/bg` to a lane.
+Direct asks on named files are a deliberate refinement of agent-audit Metric 12, not a trigger collision. Direct invocation: the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself. Owner: **Mason**/**Nova** (UI). Over three files, or shared behaviour: route via `/bg` to a lane.
 
 ## Quick card
 

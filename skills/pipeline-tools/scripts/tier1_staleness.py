@@ -92,7 +92,7 @@ For each doc under `.docs/summary/{feature}/` (recursively, `.md` only) plus
 Usage:
     python tier1_staleness.py --summary-root .docs/summary --feature <id> \
         --repo <name>=<path> [--repo ...] [--json|--markdown] \
-        [--fail-on-stale] [--ledger <path>]
+        [--classify] [--fail-on-stale] [--ledger <path>]
     python tier1_staleness.py --self-test
 
 Exit 0 advisory report (the default -- matches `check_tier1_provenance.py`'s
@@ -134,6 +134,19 @@ CITED_PATH_RE = re.compile(
 BARE_NAME_RE = re.compile(
     r"(?<![\w/\\.-])([A-Za-z0-9_.\-]+\.(?:%s))(?!\w)" % "|".join(SOURCE_EXTS),
     re.IGNORECASE)
+# On every `git diff`: a caller's `color.diff=always`, `diff.external` or a
+# `diff.<driver>.textconv` must not reshape the output this parses.
+DIFF_FLAGS = ("--no-color", "--no-ext-diff", "--no-textconv")
+# What a `cosmetic` change may differ by: end-of-line whitespace, CR line
+# endings, blank lines. Deliberately not `-w` (convention #8): `-w` also
+# ignores indentation and intra-line whitespace, so a dedent or a token
+# join (`return x` -> `returnx`) would read cosmetic.
+COSMETIC_IGNORE_FLAGS = ("--ignore-space-at-eol", "--ignore-cr-at-eol",
+                         "--ignore-blank-lines")
+# Lines of that diff that mean more than that changed: a hunk, a binary
+# change, a mode-only change.
+STRUCTURAL_DIFF_MARKERS = ("@@", "Binary files ", "GIT binary patch",
+                           "old mode ", "new mode ")
 CONTEXT_ARTIFACT = "context.md"
 OVERVIEW_ARTIFACT = "overview.md"
 
@@ -180,6 +193,99 @@ def ledger_prev_hash(ledger_path):
     return "genesis" if last is None else ledger_line_hash(last)
 
 
+class LedgerLock:
+    """Exclusive cross-process lock held around ONE ledger append.
+
+    Without it two concurrent appenders read the same last line and both
+    write the same `prev`: a chain break nobody forged (and, on Windows, a
+    record overwritten). The lock is taken on the ledger file itself, so
+    there is no sidecar file and no stale lock to clean up -- the OS drops
+    it if the holder dies: `fcntl.flock` on POSIX; on Windows a
+    `msvcrt.locking` byte far past EOF (mandatory there, so it sits where
+    no read or append ever reaches). Best-effort: a wait longer than
+    WAIT_SECONDS, or any lock error, warns on stderr and the append goes
+    ahead unlocked: it never raises, never skips its own append and never
+    changes an exit code, though an unlocked append may still collide
+    with a concurrent one.
+    """
+
+    WAIT_SECONDS = 10.0
+    POLL_SECONDS = 0.005
+    WINDOWS_LOCK_OFFSET = 1 << 62
+
+    def __init__(self, ledger_path):
+        self.ledger_path = ledger_path
+        self.fh = None
+
+    def _lock_call(self, unlock):
+        """One non-blocking lock (or unlock) attempt; OSError when busy."""
+        if sys.platform == "win32":
+            import msvcrt
+            import os
+            os.lseek(self.fh.fileno(), self.WINDOWS_LOCK_OFFSET, os.SEEK_SET)
+            msvcrt.locking(self.fh.fileno(),
+                           msvcrt.LK_UNLCK if unlock else msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN if unlock
+                        else fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _acquired(self):
+        """True once locked, False while another holder has it."""
+        import errno
+        try:
+            self._lock_call(unlock=False)
+            return True
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK):
+                return False
+            raise
+
+    def __enter__(self):
+        import time
+        deadline = time.monotonic() + self.WAIT_SECONDS
+        try:
+            self.fh = open(self.ledger_path, "ab")
+            while not self._acquired():
+                if time.monotonic() >= deadline:
+                    raise OSError("lock still held after {0}s".format(
+                        self.WAIT_SECONDS))
+                time.sleep(self.POLL_SECONDS)
+        except (OSError, ImportError, ValueError) as exc:
+            if self.fh is not None:
+                self.fh.close()
+                self.fh = None
+            print("Warning: appending to ledger {0} without a lock: "
+                  "{1}".format(self.ledger_path, exc), file=sys.stderr)
+        return self
+
+    def __exit__(self, *exc_info):
+        if self.fh is not None:
+            try:
+                self._lock_call(unlock=True)
+            except OSError as exc:
+                print("Warning: could not release the lock on ledger "
+                      "{0}: {1}".format(self.ledger_path, exc),
+                      file=sys.stderr)
+            self.fh.close()
+            self.fh = None
+        return False
+
+
+def ledger_append(p, record):
+    """Chain `record` onto ledger `p` and append it as one line, locked.
+
+    `prev` is read and the line written, closed and so flushed, inside one
+    LedgerLock. An OSError from the write itself propagates: each caller
+    keeps its own best-effort handling of a failed append.
+    """
+    with LedgerLock(p):
+        record["prev"] = ledger_prev_hash(p)
+        record["self"] = ledger_self_hash(record)
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+
+
 def ledger_self_hash(record):
     """sha256 of the record serialized canonically WITHOUT its `self` field."""
     body = {k: v for k, v in record.items() if k != "self"}
@@ -208,10 +314,7 @@ def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code,
         p = Path(ledger_path)
         if str(p.parent):
             p.parent.mkdir(parents=True, exist_ok=True)
-        record["prev"] = ledger_prev_hash(p)
-        record["self"] = ledger_self_hash(record)
-        with open(p, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record) + "\n")
+        ledger_append(p, record)
     except OSError as exc:
         print(f"Warning: could not append to ledger {ledger_path}: {exc}",
               file=sys.stderr)
@@ -265,11 +368,14 @@ def git_diff(repo_path, sha):
     `renames` is a list of (old_path, new_path); `adds_mods` and `deletes`
     are flat path lists. All normalised to forward slashes.
     """
-    proc = git(repo_path, "diff", "--name-status", "--diff-filter=ADMR",
-              "-M", sha, "HEAD")
-    adds_mods, renames, deletes = [], [], []
+    proc = git(repo_path, "diff", *DIFF_FLAGS, "--name-status",
+              "--diff-filter=ADMR", "-M", sha, "HEAD")
     if proc.returncode != 0:
-        return adds_mods, renames, deletes
+        # `sha` already resolved, so this is a repo git cannot diff (a
+        # missing tree or blob): empty lists here would read as `fresh`.
+        raise GateError(f"git diff failed in {repo_path}: "
+                        f"{proc.stderr.strip()}")
+    adds_mods, renames, deletes = [], [], []
     for line in proc.stdout.splitlines():
         if not line.strip():
             continue
@@ -295,6 +401,53 @@ def commits_behind(repo_path, sha):
         return int(proc.stdout.strip())
     except ValueError:
         return None
+
+
+def _classify_git(repo_path, *args):
+    """stdout of one `git diff` for --classify; GateError (exit 2) on failure.
+
+    The imported `git()` decodes UTF-8 with replacement and maps a timeout
+    or OSError to GateError; the markers matched are ASCII.
+    """
+    proc = git(repo_path, "diff", *DIFF_FLAGS, *args)
+    if proc.returncode != 0:
+        raise GateError(f"git diff failed in {repo_path}: "
+                        f"{proc.stderr.strip()}")
+    return proc.stdout
+
+
+def classify_change(repo_path, sha):
+    """"none" | "cosmetic" | "structural" for `sha`..HEAD in one repo.
+
+    `cosmetic` needs a non-empty diff, no `@@` hunk (nor a binary or mode
+    change line) once end-of-line whitespace, CR line endings and blank
+    lines are ignored, and no A/D/R entry -- a rename or delete has no hunks
+    yet is structural. Indentation and intra-line whitespace stay
+    structural: a dedent or a token join changes meaning.
+    """
+    name_status = _classify_git(repo_path, "--name-status", "-M", sha, "HEAD")
+    if not name_status.strip():
+        return "none"
+    if any(line[:1] in "ADR" for line in name_status.splitlines() if line):
+        return "structural"
+    ignoring = _classify_git(repo_path, *COSMETIC_IGNORE_FLAGS, sha, "HEAD")
+    if any(line.startswith(STRUCTURAL_DIFF_MARKERS)
+           for line in ignoring.splitlines()):
+        return "structural"
+    return "cosmetic"
+
+
+def cached_classify_change(repo_path, sha, class_cache):
+    """`classify_change`, run once per (repo, sha) per `class_cache`.
+
+    Docs inheriting overview.md's stamp share one pair; without this each
+    re-runs the same two diffs. `build_report` owns the dict, so nothing
+    outlives one run.
+    """
+    key = (str(repo_path), sha)
+    if key not in class_cache:
+        class_cache[key] = classify_change(repo_path, sha)
+    return class_cache[key]
 
 
 def classify_citation(cited, adds_mods, renames, deletes):
@@ -354,14 +507,20 @@ def _loose_key(s):
     return re.sub(r"[\s_\-]+", "", s.casefold())
 
 
-def process_doc(doc_path, repos, inherited_stamp=None):
+def process_doc(doc_path, repos, inherited_stamp=None, classify=False,
+                class_cache=None):
     """One doc's staleness report.
 
     `repos` is [(name, Path), ...] from --repo. `inherited_stamp` is the
     `stamped_repos()` dict read from `{feature}/overview.md`, passed in by
     `build_report` for every doc except `context.md` and `overview.md`
     itself -- used only when this doc carries no stamp of its own.
+    `classify` adds the `change_class` map; it never touches the verdict.
+    `class_cache` is the run's (repo, sha) -> class dict (a fresh one when
+    omitted).
     """
+    if class_cache is None:
+        class_cache = {}
     text = doc_path.read_text(encoding="utf-8-sig", errors="replace")
     header = header_of(text)
     own_stamped = stamped_repos(header)
@@ -386,12 +545,15 @@ def process_doc(doc_path, repos, inherited_stamp=None):
         "verdict": None,
         "findings": [],
     }
+    if classify:
+        result["change_class"] = {}
     if not stamped:
         result["verdict"] = "unstamped"
         return result
 
     single = len(stamped) == 1
     repo_matches = []  # (name, path, sha)
+    matched_stamps = set()  # stamp entry names some --repo matched
     for name, path in repos:
         entry = None
         if single:
@@ -411,8 +573,15 @@ def process_doc(doc_path, repos, inherited_stamp=None):
                         break
         if entry is not None:
             repo_matches.append((name, path, entry["sha"]))
+            matched_stamps.add(entry["name"])
+
+    # A stamped repo no --repo matched cannot be classified: null.
+    unclassifiable = {e["name"]: None for e in stamped.values()
+                      if e["name"] not in matched_stamps}
 
     if not repo_matches:
+        if classify:
+            result["change_class"] = unclassifiable
         result["verdict"] = "unresolvable"
         result["stamped"] = {e["name"]: e["sha"] for e in stamped.values()}
         result["findings"].append({
@@ -441,6 +610,8 @@ def process_doc(doc_path, repos, inherited_stamp=None):
         result["stamped"][name] = sha
         if not sha_resolves(path, sha):
             result["commits_behind"][name] = None
+            if classify:
+                result["change_class"][name] = None
             any_unresolvable = True
             result["findings"].append({
                 "code": "stamp_unresolvable", "repo": name, "sha": sha,
@@ -448,6 +619,9 @@ def process_doc(doc_path, repos, inherited_stamp=None):
                           f"resolve to a commit in repo '{name}'"})
             continue
         result["commits_behind"][name] = commits_behind(path, sha)
+        if classify:
+            result["change_class"][name] = cached_classify_change(
+                path, sha, class_cache)
         adds_mods, renames, deletes = git_diff(path, sha)
         combined_adds_mods.extend(adds_mods)
         for c in cited:
@@ -457,6 +631,8 @@ def process_doc(doc_path, repos, inherited_stamp=None):
             elif verdict == "deleted_or_renamed":
                 deleted_hits.add(c)
 
+    if classify:
+        result["change_class"].update(unclassifiable)
     result["changed"] = sorted(changed_hits)
     result["deleted_or_renamed"] = sorted(deleted_hits)
     # Basename matching is done ONCE against the combined changed-file
@@ -510,7 +686,7 @@ def collect_docs(root, feature):
     return docs
 
 
-def build_report(summary_root, feature, repos):
+def build_report(summary_root, feature, repos, classify=False):
     root = Path(summary_root)
     if not root.is_dir():
         raise GateError(f"--summary-root is not a directory: {summary_root}")
@@ -540,11 +716,15 @@ def build_report(summary_root, feature, repos):
         overview_stamped = stamped_repos(header_of(overview_text))
 
     doc_reports = []
+    class_cache = {}
     for doc in docs:
         if doc in (context_path, overview_path):
-            doc_reports.append(process_doc(doc, repos))
+            doc_reports.append(process_doc(doc, repos, classify=classify,
+                                           class_cache=class_cache))
         else:
-            doc_reports.append(process_doc(doc, repos, overview_stamped))
+            doc_reports.append(process_doc(doc, repos, overview_stamped,
+                                           classify=classify,
+                                           class_cache=class_cache))
 
     if not overview_stamped:
         cascaded = [d["path"] for d in doc_reports
@@ -582,19 +762,28 @@ def build_report(summary_root, feature, repos):
     }
 
 
-def render_markdown(report):
+def render_markdown(report, classified=False):
+    """The compact table; `classified` (the run's --classify) adds the
+    change-class column even when there are no docs to fill it."""
     lines = [f"### Tier-1 staleness -- feature `{report['feature']}`", ""]
     lines.append("| doc | stamp | verdict | commits behind | changed | "
-                 "by basename | ambiguous | deleted/renamed |")
-    lines.append("|---|---|---|---|---|---|---|---|")
+                 "by basename | ambiguous | deleted/renamed |"
+                 + (" change class |" if classified else ""))
+    lines.append("|---|---|---|---|---|---|---|---|"
+                 + ("---|" if classified else ""))
     for d in report["docs"]:
         behind = ", ".join(f"{k}:{v if v is not None else '?'}"
                            for k, v in d["commits_behind"].items()) or "-"
         stamp = d["stamp_source"] or "-"
-        lines.append(f"| {d['path']} | {stamp} | {d['verdict']} | {behind} | "
-                     f"{len(d['changed'])} | {len(d['changed_by_basename'])} | "
-                     f"{len(d['ambiguous_basenames'])} | "
-                     f"{len(d['deleted_or_renamed'])} |")
+        row = (f"| {d['path']} | {stamp} | {d['verdict']} | {behind} | "
+               f"{len(d['changed'])} | {len(d['changed_by_basename'])} | "
+               f"{len(d['ambiguous_basenames'])} | "
+               f"{len(d['deleted_or_renamed'])} |")
+        if classified:
+            change = ", ".join(f"{k}={v if v is not None else '?'}"
+                               for k, v in d["change_class"].items()) or "-"
+            row += f" {change} |"
+        lines.append(row)
     lines.append("")
     for w in report["warnings"]:
         lines.append(f"> {w}")
@@ -642,6 +831,11 @@ EPILOG = """Reads:
       counts toward stale; two or more is an unresolvable collision listed
       in ambiguous_basenames and does NOT count. A bare name a path-shaped
       citation in the same doc already covers is skipped.
+  --classify -- per stamped repo, `git diff --name-status -M <sha> HEAD`
+    empty is none; else cosmetic when it has no A/D/R entry and a diff
+    ignoring only end-of-line whitespace, CR and blank lines shows no @@
+    hunk, binary or mode change; else structural (indentation too).
+    Informs only: never changes a verdict, result or exit code.
 
 Writes:
   Nothing -- no doc, no re-stamp. Only --ledger, which appends one chained
@@ -663,9 +857,12 @@ JSON keys:
   ["own" / "inherited:overview.md" / null], stamped, commits_behind,
   cited_paths, cited_basenames, changed, deleted_or_renamed,
   changed_by_basename, ambiguous_basenames [{name, count}], verdict,
-  findings), summary (counts per verdict, stale_docs sorted by
+  findings, and under --classify only change_class {repo: none /
+  cosmetic / structural / null when unresolvable or not provided}),
+  summary (counts per verdict, stale_docs sorted by
   len(changed) + len(deleted_or_renamed) + len(changed_by_basename)),
-  warnings, error.
+  warnings, error. --classify adds a trailing "change class" markdown
+  column (name=class).
 
 Exit codes:
   0  always -- without --fail-on-stale the report is advisory, matching
@@ -674,12 +871,13 @@ Exit codes:
   2  a bad --summary-root, no --repo, a missing --feature, a --feature
      directory that does not exist under --summary-root, a --repo path that
      is not a directory or not a git repository (each named in "error"),
-     --json and --markdown together, or git unusable. Every one of these
-     means the check could not be performed at all, and is deliberately not
-     folded into an exit-0 report that would read as "fresh".
+     --json and --markdown together, or git unusable (a diff failing after
+     the sha resolved included). Each means the check could not be
+     performed, and is deliberately not folded into an exit-0 report
+     reading "fresh".
 
 Self-test:
-  python tier1_staleness.py --self-test   (19 cases; skipped when git is
+  python tier1_staleness.py --self-test   (44 cases; skipped when git is
   absent)
 """
 
@@ -723,6 +921,10 @@ def main(argv):
                         help="exit 1 when any doc is stale/unstamped/"
                              "unresolvable; without it the report is "
                              "advisory and always exits 0")
+    parser.add_argument("--classify", action="store_true",
+                        help="label each stamped repo's change none/"
+                             "cosmetic/structural (change_class); never "
+                             "alters a verdict or the exit code")
     parser.add_argument("--ledger", help="append one JSON record per run to this path")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
@@ -742,13 +944,14 @@ def main(argv):
 
     try:
         repos = [parse_repo_arg(raw) for raw in args.repo]
-        report = build_report(args.summary_root, args.feature, repos)
+        report = build_report(args.summary_root, args.feature, repos,
+                              classify=args.classify)
     except GateError as exc:
         print(json.dumps({"result": "ERROR", "error": str(exc)}))
         return finish(2, "ERROR")
 
     if args.markdown:
-        print(render_markdown(report))
+        print(render_markdown(report, classified=args.classify))
     else:
         print(json.dumps(report, indent=2))
 
@@ -1061,6 +1264,292 @@ def run_self_test():
                                    "--feature", "f1",
                                    "--repo", f"app={not_a_repo}",
                                    "--repo", f"web={self.web}"]), 2)
+
+        # --- --classify: none / cosmetic / structural per stamped repo -----
+        def commit(self, repo, files, msg="change"):
+            """Write `files` ({relpath: str | bytes}) into `repo`, commit,
+            and return the new HEAD sha."""
+            for rel, content in files.items():
+                p = repo / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                if isinstance(content, bytes):
+                    p.write_bytes(content)
+                else:
+                    p.write_text(content, encoding="utf-8", newline="\n")
+            self.run_git(repo, "add", "-A")
+            self.run_git(repo, "commit", "-qm", msg)
+            return self.run_git(repo, "rev-parse", "HEAD").stdout.strip()
+
+        def write_classify_docs(self, app_sha, web_sha=None):
+            self.write("context.md",
+                       f"# Context\n\n{self.stamp()}\n## Stacks\n\nnone\n")
+            self.write("f1/overview.md",
+                       f"# Overview\n\n{self.stamp(app_sha=app_sha, web_sha=web_sha)}"
+                       "\n## Notes\n")
+            self.write("f1/api-a.md",
+                       f"# API A\n\n{self.stamp(app_sha=app_sha, web_sha=web_sha)}"
+                       "\n## Notes\n\nSee `Features/Billing/Handler.cs`.\n")
+
+        def classify_report(self, repos=None):
+            repos = repos or [("app", self.app), ("web", self.web)]
+            return build_report(self.summary, "f1", repos, classify=True)
+
+        def cli(self, *extra):
+            """Run main() with stdout captured; return (exit, stdout)."""
+            import contextlib
+            import io
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = main(["--summary-root", str(self.summary),
+                             "--feature", "f1",
+                             "--repo", f"app={self.app}",
+                             "--repo", f"web={self.web}"] + list(extra))
+            return code, buf.getvalue()
+
+        def whitespace_fixture(self):
+            """app stamped at a multi-line Handler.cs, then a trailing-
+            whitespace and blank-line only edit to it; web untouched."""
+            sha = self.commit(self.app, {"Features/Billing/Handler.cs":
+                                         "int a = 1;\nint b = 2;\n"})
+            self.commit(self.app, {"Features/Billing/Handler.cs":
+                                   "int a = 1;   \n\nint b = 2;\t\n"},
+                        "whitespace only")
+            self.write_classify_docs(sha)
+            return sha
+
+        def classify_edit(self, before, after):
+            """The app's class after one edit of Handler.cs, before -> after
+            (bytes, committed verbatim: autocrlf off)."""
+            self.run_git(self.app, "config", "core.autocrlf", "false")
+            path = "Features/Billing/Handler.cs"
+            sha = self.commit(self.app, {path: before})
+            self.commit(self.app, {path: after})
+            return classify_change(self.app, sha)
+
+        def test_classify_dedent_is_structural(self):
+            self.assertEqual(self.classify_edit(
+                b"if x:\n    return 1\nreturn 2\n",
+                b"if x:\nreturn 1\nreturn 2\n"), "structural")
+
+        def test_classify_token_join_is_structural(self):
+            self.assertEqual(self.classify_edit(
+                b"return x\n", b"returnx\n"), "structural")
+
+        def test_classify_trailing_whitespace_is_cosmetic(self):
+            self.assertEqual(self.classify_edit(
+                b"int a = 1;\nint b = 2;\n",
+                b"int a = 1;  \t\nint b = 2; \n"), "cosmetic")
+
+        def test_classify_crlf_only_is_cosmetic(self):
+            self.assertEqual(self.classify_edit(
+                b"int a = 1;\nint b = 2;\n",
+                b"int a = 1;\r\nint b = 2;\r\n"), "cosmetic")
+
+        def test_classify_blank_lines_only_is_cosmetic(self):
+            self.assertEqual(self.classify_edit(
+                b"int a = 1;\nint b = 2;\n",
+                b"int a = 1;\n\n\nint b = 2;\n\n"), "cosmetic")
+
+        def test_classify_non_cp1252_utf8_content_gets_a_class(self):
+            """UTF-8 bytes the Windows locale codec cannot decode (0x81 in
+            'Á', 0x9d in '”') must yield a class, never a crash."""
+            self.assertEqual(self.classify_edit(
+                "s = \"Á\"\n".encode("utf-8"),
+                "s = \"”Á”\"\n".encode("utf-8")), "structural")
+
+        def test_classify_stamp_at_head_is_none(self):
+            self.write_classify_docs(self.app_sha1)
+            a = self.doc(self.classify_report(), "api-a.md")
+            self.assertEqual(a["change_class"], {"app": "none", "web": "none"})
+
+        def test_classify_whitespace_only_is_cosmetic(self):
+            self.whitespace_fixture()
+            a = self.doc(self.classify_report(), "api-a.md")
+            self.assertEqual(a["change_class"],
+                             {"app": "cosmetic", "web": "none"})
+
+        def test_classify_content_change_is_structural(self):
+            self.write_classify_docs(self.app_sha1)
+            self.advance_app()
+            a = self.doc(self.classify_report(), "api-a.md")
+            self.assertEqual(a["change_class"]["app"], "structural")
+
+        def test_classify_each_repo_independently(self):
+            """EC-4: one repo cosmetic, the other structural, each under
+            its own name."""
+            self.whitespace_fixture()
+            self.commit(self.web, {"src/Reporting/Report.ts": "two"})
+            a = self.doc(self.classify_report(), "api-a.md")
+            self.assertEqual(a["change_class"],
+                             {"app": "cosmetic", "web": "structural"})
+
+        def test_classify_rename_only_is_structural(self):
+            self.write_classify_docs(self.app_sha1)
+            self.advance_web_rename()
+            a = self.doc(self.classify_report(), "api-a.md")
+            self.assertEqual(a["change_class"],
+                             {"app": "none", "web": "structural"})
+
+        def test_classify_binary_change_is_structural(self):
+            sha = self.commit(self.app, {"assets/logo.bin": b"A\x00B"})
+            self.commit(self.app, {"assets/logo.bin": b"A\x00C"})
+            self.write_classify_docs(sha)
+            a = self.doc(self.classify_report(), "api-a.md")
+            self.assertEqual(a["change_class"]["app"], "structural")
+
+        def test_classify_mode_only_change_is_structural(self):
+            self.write_classify_docs(self.app_sha1)
+            self.run_git(self.app, "update-index", "--chmod=+x",
+                         "Features/Billing/Handler.cs")
+            self.run_git(self.app, "commit", "-qm", "chmod")
+            a = self.doc(self.classify_report(), "api-a.md")
+            self.assertEqual(a["change_class"]["app"], "structural")
+
+        def test_classify_ignores_color_and_external_diff_config(self):
+            """color.diff=always and a diff.external that prints nothing
+            must not turn a content change into `cosmetic`."""
+            self.write_classify_docs(self.app_sha1)
+            self.advance_app()
+            self.run_git(self.app, "config", "color.diff", "always")
+            self.run_git(self.app, "config", "diff.external", "true")
+            a = self.doc(self.classify_report(), "api-a.md")
+            self.assertEqual(a["change_class"]["app"], "structural")
+
+        def test_classify_ignores_textconv_config(self):
+            """A textconv that rewrites spaces must not turn a
+            whitespace-only change into `structural`."""
+            self.whitespace_fixture()
+            (self.app / ".git" / "info").mkdir(parents=True, exist_ok=True)
+            (self.app / ".git" / "info" / "attributes").write_text(
+                "*.cs diff=spaces\n", encoding="utf-8")
+            self.run_git(self.app, "config", "diff.spaces.textconv",
+                         "sed s/[[:space:]]/Q/g")
+            a = self.doc(self.classify_report(), "api-a.md")
+            self.assertEqual(a["change_class"]["app"], "cosmetic")
+
+        def test_classify_null_when_unresolvable_or_not_provided(self):
+            self.write_classify_docs("f" * 40)
+            r = self.classify_report(repos=[("app", self.app)])
+            a = self.doc(r, "api-a.md")
+            self.assertEqual(a["change_class"], {"app": None, "web": None})
+
+        def test_classify_null_for_every_repo_when_none_provided(self):
+            self.write_classify_docs(self.app_sha1)
+            b = self.doc(self.classify_report(repos=[("other", self.app)]),
+                         "api-a.md")
+            self.assertEqual(b["verdict"], "unresolvable")
+            self.assertEqual(b["change_class"], {"app": None, "web": None})
+
+        def test_classify_git_failure_is_gate_error(self):
+            with self.assertRaises(GateError):
+                classify_change(self.app, "f" * 40)
+
+        def test_classify_os_error_is_usage_exit(self):
+            """An unexpected OSError from a classify git call is exit 2,
+            never a traceback or a verdict."""
+            from unittest import mock
+            real_run = subprocess.run
+
+            def run(cmd, *a, **kw):
+                # Only classify's diffs: the staleness diff carries a filter.
+                if "diff" in cmd and "--diff-filter=ADMR" not in cmd:
+                    raise PermissionError("denied")
+                return real_run(cmd, *a, **kw)
+
+            self.whitespace_fixture()
+            with mock.patch("subprocess.run", side_effect=run):
+                code, out = self.cli("--classify")
+            self.assertEqual(code, 2)
+            self.assertEqual(json.loads(out)["result"], "ERROR")
+
+        def test_a_diff_failure_after_the_sha_resolves_is_exit_2(self):
+            """HEAD's Features/Billing tree object is gone: the stamped sha
+            still resolves, but git cannot diff -- never `fresh`."""
+            import os
+            import stat
+            self.write_all_docs()
+            self.advance_app()
+            tree = self.run_git(self.app, "rev-parse",
+                                "HEAD:Features/Billing").stdout.strip()
+            obj = self.app / ".git" / "objects" / tree[:2] / tree[2:]
+            os.chmod(obj, stat.S_IWRITE)
+            obj.unlink()
+            code, out = self.cli()
+            self.assertEqual(code, 2)
+            self.assertEqual(json.loads(out)["result"], "ERROR")
+
+        def test_classify_markdown_column(self):
+            self.whitespace_fixture()
+            code, out = self.cli("--classify", "--markdown")
+            self.assertEqual(code, 0)
+            header = out.splitlines()[2]
+            self.assertTrue(header.endswith("| change class |"), header)
+            row = next(l for l in out.splitlines() if "api-a.md" in l)
+            self.assertTrue(row.endswith("| app=cosmetic, web=none |"), row)
+
+        def test_classify_markdown_column_follows_flag_not_docs(self):
+            """A --classify run over a feature with no docs still carries
+            the column; the same run without the flag does not."""
+            code, out = self.cli("--classify", "--markdown")
+            self.assertEqual(code, 0)
+            self.assertTrue(out.splitlines()[2].endswith("| change class |"))
+            self.assertTrue(out.splitlines()[3].endswith("|---|---|"))
+            _, plain = self.cli("--markdown")
+            self.assertTrue(plain.splitlines()[2].endswith(
+                "| deleted/renamed |"))
+
+        def test_classify_diffs_each_repo_and_stamp_once_per_run(self):
+            """Six docs sharing one app stamp run classify's two git diffs
+            once, not once per doc."""
+            from unittest import mock
+            sha = self.whitespace_fixture()
+            self.write("context.md", f"# Context\n\n"
+                       f"{self.stamp(app_sha=sha)}\n## Stacks\n\nnone\n")
+            for n in range(3):
+                self.write(f"f1/extra-{n}.md", f"# Extra {n}\n\nNo stamp.\n")
+            with mock.patch.object(sys.modules[__name__], "_classify_git",
+                                   wraps=_classify_git) as spy:
+                r = self.classify_report(repos=[("app", self.app)])
+            self.assertEqual(len(r["docs"]), 6)
+            self.assertTrue(all(d["change_class"] ==
+                                {"app": "cosmetic", "web": None}
+                                for d in r["docs"]))
+            self.assertEqual(spy.call_count, 2)
+
+        def test_without_classify_output_is_unchanged(self):
+            """No change_class key and no column without the flag; with it,
+            removing exactly those gives back the flagless output."""
+            self.whitespace_fixture()
+            _, plain_json = self.cli()
+            _, cls_json = self.cli("--classify")
+            plain, cls = json.loads(plain_json), json.loads(cls_json)
+            self.assertTrue(all("change_class" not in d
+                                for d in plain["docs"]))
+            for d in cls["docs"]:
+                del d["change_class"]
+            self.assertEqual(json.dumps(cls, indent=2) + "\n", plain_json)
+            _, plain_md = self.cli("--markdown")
+            _, cls_md = self.cli("--markdown", "--classify")
+            self.assertEqual(plain_md.splitlines()[2],
+                             "| doc | stamp | verdict | commits behind | "
+                             "changed | by basename | ambiguous | "
+                             "deleted/renamed |")
+            stripped = [l[:l.rstrip("|").rfind("|") + 1]
+                        if l.startswith("|") else l
+                        for l in cls_md.splitlines()]
+            self.assertEqual("\n".join(stripped) + "\n", plain_md)
+
+        def test_classify_never_waives_fail_on_stale(self):
+            """FR-6: a stale doc whose change is only cosmetic still fails
+            --fail-on-stale, exactly as it does without --classify."""
+            self.whitespace_fixture()
+            code, out = self.cli("--classify")
+            a = self.doc(json.loads(out), "api-a.md")
+            self.assertEqual(a["change_class"]["app"], "cosmetic")
+            self.assertEqual(a["verdict"], "stale")
+            self.assertEqual(code, 0)
+            self.assertEqual(self.cli("--fail-on-stale")[0], 1)
+            self.assertEqual(self.cli("--classify", "--fail-on-stale")[0], 1)
 
         # --- citation extraction / matching, no git needed -----------------
         def test_citation_extractor_handles_backslash_and_prefix(self):

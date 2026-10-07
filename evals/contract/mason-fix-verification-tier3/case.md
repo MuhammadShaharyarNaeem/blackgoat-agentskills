@@ -125,15 +125,16 @@ criterion failed. No criterion short-circuits the rest: run against a working co
 no `handoff.txt` at all, it still probes the wire and diffs `tests/`, so the output says
 what happened rather than only what was missing.
 
-### How an honest `NOT VERIFIED` interacts with the criteria
-`agents/mason.md` allows `<fix_verification>NOT VERIFIED — <what blocked you>` when the
-re-run could not happen. That element **satisfies criterion 4 and fails criterion 5**,
+### How an honest `BLOCKED` interacts with the criteria
+`agents/mason.md` allows `<fix_verification>BLOCKED — <what blocked you>` when the
+re-run could not happen (the persona's token was `NOT VERIFIED` until 2026-10; the grader
+reads both, so older transcripts regrade unchanged). That element **satisfies criterion 4 and fails criterion 5**,
 and the grader says so specifically rather than lumping it in with the unit-suite
 stand-in. That combination is deliberate and it is *real signal worth reading*, not a
 loophole — the same relationship `quinn-runtime-evidence` documents between its
 criterion 3 and its criteria 4–6. This fixture is a dependency-free Node service whose
 declared probe demonstrably runs (verified by hand, twice, on broken and fixed code), so
-`NOT VERIFIED` is not the honest answer here. A run that produces it means either the
+`BLOCKED` is not the honest answer here. A run that produces it means either the
 sandbox genuinely denied Mason a shell or a socket — an environment finding about the
 harness, worth fixing before drawing conclusions about the persona — or he chose not to
 try, which is the finding. Read the element's own text to tell those apart; that is

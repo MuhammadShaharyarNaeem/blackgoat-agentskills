@@ -136,7 +136,7 @@ Two design constraints follow:
 
 PLAN is the third value and outranks the other two: it means *this is not a
 bugfix*. A new capability, a schema or contract change, or a fix over the file
-bound is `/bgpdd-plan` work, and catching that at Phase 2 saves three
+bound is `/bgpdd-lite` work (the ratchet; lite escalates to plan), and catching that at Phase 2 saves three
 delegations against discovering it at Phase 5 step 4's blast-radius HALT.
 
 Depth: `{PLUGIN_ROOT}/pipeline-tools/references/next_bugfix_route.md`.
@@ -153,8 +153,8 @@ exist, which is why the lane pairs it with `--verify-tree`: that flag is what
 makes the declared list equal the real diff.
 
 The waiver is the one place in this family where **author-written text
-satisfies a gate**, and that is deliberate (a labelled divergence in
-`pipeline-tools/SKILL.md`). Exceeding the bound is a judgement call, and a
+satisfies a gate**, and that is deliberate (contract:
+`check_commit_gate.py --help`, `--waiver`). Exceeding the bound is a judgement call, and a
 judgement call is precisely what no script can verify. What the gate buys is not
 verification but **durability and attribution**: the decision is written into
 `rca.md` under `## Size waiver`, hashed into the ledger record, and readable six

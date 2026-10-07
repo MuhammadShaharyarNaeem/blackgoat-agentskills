@@ -54,7 +54,7 @@ E2E tests are slow and expensive — write them only for critical paths that uni
 
 ### Rules
 
-- Use **accessible selectors**: `role`, `text`, `label`, `placeholder` — **NOT** CSS classes or XPaths.
+- Use **accessible selectors**, in this order: `role`, `label`, `text`, `placeholder` — **NOT** CSS classes or XPaths. `getByTestId` comes last, only for an element with no accessible name (the `data-test` hook `vue3-spa-patterns` mandates is that fallback). This rule owns the selector order.
 - **Derive locators from the RENDERED DOM, never from component source.** Run the app and snapshot the accessibility tree to obtain selectors; do not transcribe `id`s/attributes off a component template during scouting or planning. UI frameworks that wrap native inputs (e.g. Quasar `QInput`/`QSelect` with `inheritAttrs: false`) strip or rewrite template `id`s, so a source-scouted `#id` looks authoritative but never renders. Confirm every scouted selector resolves against a live snapshot before it enters a plan or a spec.
 - **Anything activated by a predicate must prove it fired — guarded branches and network interception alike.** A conditional step, a route matcher, a stub, an injection: if a predicate decides whether it runs, a wrong predicate makes it a silent no-op, and a green run can never falsify what never ran. Three obligations: **(1)** emit a marker/log when the path is taken and assert the marker, so a mis-scoped predicate fails loudly instead of passing by omission; **(2)** key matchers on the **distinctive tail** of a path, never on a base-URL shape — a prefix or origin the environment can be repointed away from stops matching with no error the moment the app is pointed elsewhere, and the spec still reports itself as mock-driven; **(3)** pair every negative assertion with a positive control — an assertion that something is hidden or absent, in an environment that satisfies it anyway, is vacuous whether or not the setup worked. Verify predicates against the paths the app **actually serves**, not the paths you expect.
 - **Never stub, mock, or intercept the endpoint whose behavior the requirement asserts.** A spec that installs a route handler returning the success value and then asserts the success state is testing its own fixture: it passes identically against a broken product, and its green is worse than absent coverage because it is *reported* as coverage. Mock only collaborators outside the claim, and name which ones and why in the spec. Any flow whose requirement is "this call succeeds/fails" is driven against the real endpoint, or recorded BLOCKED.
@@ -62,7 +62,7 @@ E2E tests are slow and expensive — write them only for critical paths that uni
 - Wait for elements before interacting: use `browser_wait_for` with reasonable timeouts.
 - **Never use a hard-coded `sleep`** — wait for a specific condition instead.
 - One user flow per test. Don't chain unrelated flows.
-- Write any generated test scripts to the system temp directory (`$env:TEMP` on Windows, `/tmp` on Unix) — never into the skill directory or the user's project.
+- Write throwaway generated scripts (scouting, one-off probes) to the system temp directory (`$env:TEMP` on Windows, `/tmp` on Unix) — never into the skill directory or the user's project. Permanent specs are the exception: a permanent regression test (`test-driven-development/SKILL.md` § Rules) or a `/bgpdd-verify` spec is committed to the project's suite.
 - Set test timeouts to prevent hangs: **30s per test, 5min per suite**.
 
 ### Verification Checklist
@@ -82,7 +82,7 @@ E2E tests are slow and expensive — write them only for critical paths that uni
 ### Escalate When
 
 - The dev server won't start → ask manager.
-- A test is flaky (passes sometimes, fails others) → flag it and ask manager.
+- A test is flaky (passes sometimes, fails others) → quarantine it within 24h per `test-driven-development/SKILL.md` § Workflow (a pass on retry is not GREEN) and report it to the manager.
 - Browser interaction is blocked by **CAPTCHA, auth wall, or CORS** → ask manager.
 
 ## Deep Dive

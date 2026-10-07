@@ -57,12 +57,12 @@ This is the operational spine. Follow it as written. For a change of ≤ 3 files
 
 ### Testability
 
-- Every interactive DOM element (buttons, inputs, links, selects, toggles) carries a `data-test` ID so Playwright E2E selectors survive styling and layout changes. This is mandatory, not optional polish.
+- Every interactive DOM element (buttons, inputs, links, selects, toggles) carries a `data-test` ID. This is mandatory, not optional polish — but it is the **fallback** hook: specs select by role, label or text first and reach for `getByTestId` only where no accessible name exists, in the selector order `{PLUGIN_ROOT}/playwright-skill/SKILL.md` § Rules owns.
 - Every routed view/page carries a stable `data-test` ID on its **root element**, naming the page (not its content) — without it, an E2E navigation assertion can't distinguish the target page from a 404 or fallback route (rationale: [references/vue3-spa-patterns-rationale.md](references/vue3-spa-patterns-rationale.md)).
 
 ### Routing & Performance
 
-- **Routing Entry Eager Loading Rule**: Only the main root entry view (`/`) MAY be eagerly loaded; all other route components MUST be lazy-loaded using dynamic imports (`() => import(...)`).
+- **Routing Entry Eager Loading Rule**: Only the main root entry view (`/`) MAY be eagerly loaded; all other non-critical route components MUST be lazy-loaded using dynamic imports (`() => import(...)`).
 - Prefer `computed` over `watch` for derived state; use `watch` only for genuine side effects.
 - Use `shallowRef` for large structures where deep reactivity is not needed.
 - Add `v-memo` only with profiling evidence showing a real render hotspot — never speculatively.

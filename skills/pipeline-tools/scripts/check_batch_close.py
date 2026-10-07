@@ -30,8 +30,13 @@ every exit path, exactly like every other gate in this family. That append is
 this file's whole reason to exist: `{batch-root}/gates.jsonl` was claimed as
 a batch-layer record with no script that ever wrote to it.
 
-It does not touch git, commit anything, or remove a worktree -- Phase 4 steps
-1-2 do that by hand, and this gate only verifies what they left behind.
+It does not write git, commit anything, or remove a worktree -- Phase 4 steps
+1-2 do that by hand, and this gate only verifies what they left behind. Its
+one git READ is `rev-parse --show-toplevel --git-common-dir`: `--repo` is
+resolved to its worktree top level (`repo_toplevel`), and `--state`,
+`--batch-md` or `--ledger` sitting in ANOTHER worktree of the same repository
+is `worktree_mismatch` -- the batch root lives in the main tree, so a batch
+artifact inside a bug's worktree means the gate is judging the wrong one.
 
 Usage:
     python check_batch_close.py --state <path> --batch-md <path> \
@@ -51,12 +56,82 @@ step 3 (owned by that skill, not restated here).
 import argparse
 import hashlib
 import json
+import os
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 READ_ENCODING = "utf-8-sig"
+
+
+# --- worktree identity (shared verbatim with check_commit_gate.py and
+# check_quick_close.py): which worktree a path lives in, and the mismatch
+# rule -- see `worktree_mismatch` in the help.
+
+def git_worktree_of(path):
+    """(toplevel, common_dir) of the worktree holding `path`, or (None, None).
+
+    `path` need not exist: its nearest existing ancestor is asked. Any git
+    failure reads as (None, None) -- unknown, never a mismatch."""
+    d = Path(path).absolute()
+    while not d.exists() and d != d.parent:
+        d = d.parent
+    if d.is_file():
+        d = d.parent
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(d), "rev-parse", "--show-toplevel",
+             "--git-common-dir"],
+            capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None, None
+    lines = proc.stdout.strip().splitlines() if proc.returncode == 0 else []
+    if len(lines) < 2:
+        return None, None
+    top = os.path.normpath(lines[0])
+    common = os.path.normpath(os.path.join(str(d), lines[1]))
+    return top, common
+
+
+def _same_path(a, b):
+    return (os.path.normcase(os.path.realpath(a))
+            == os.path.normcase(os.path.realpath(b)))
+
+
+def check_worktree_match(repo, artifacts):
+    """(repo_toplevel, [{flag, path, worktree}]) for every lane artifact that
+    sits in ANOTHER worktree of the SAME repository as `repo`.
+
+    Same repository = same git common dir. An artifact in no repository, or
+    in a different repository (a workspace-root `.docs/` above `--repo`), is
+    not a mismatch: that layout is sanctioned, and only a sibling worktree of
+    the same repo is the wrong-checkout mistake this catches."""
+    repo_top, repo_common = git_worktree_of(repo)
+    mismatches = []
+    if repo_top is None:
+        return None, mismatches
+    for flag, path in artifacts:
+        if not path:
+            continue
+        top, common = git_worktree_of(path)
+        if top is None or not _same_path(common, repo_common):
+            continue
+        if not _same_path(top, repo_top):
+            mismatches.append({"flag": flag, "path": str(path),
+                               "worktree": top})
+    return repo_top, mismatches
+
+
+def worktree_mismatch_message(repo_top, m):
+    return ("{0} {1} lives in worktree {2}, but --repo resolves to worktree "
+            "{3} -- this gate would judge one checkout's lane and commit "
+            "into another. Re-run with --repo pointing at the lane's own "
+            "worktree, or the lane artifacts of the checkout you are "
+            "committing".format(m["flag"], m["path"], m["worktree"], repo_top))
+
+
 TERMINAL_STATUSES = ("MERGED", "DROPPED-PLAN")
 
 PLACEHOLDER_VALUE_RE = re.compile(
@@ -114,6 +189,99 @@ def ledger_prev_hash(ledger_path):
     return "genesis" if last is None else ledger_line_hash(last)
 
 
+class LedgerLock:
+    """Exclusive cross-process lock held around ONE ledger append.
+
+    Without it two concurrent appenders read the same last line and both
+    write the same `prev`: a chain break nobody forged (and, on Windows, a
+    record overwritten). The lock is taken on the ledger file itself, so
+    there is no sidecar file and no stale lock to clean up -- the OS drops
+    it if the holder dies: `fcntl.flock` on POSIX; on Windows a
+    `msvcrt.locking` byte far past EOF (mandatory there, so it sits where
+    no read or append ever reaches). Best-effort: a wait longer than
+    WAIT_SECONDS, or any lock error, warns on stderr and the append goes
+    ahead unlocked: it never raises, never skips its own append and never
+    changes an exit code, though an unlocked append may still collide
+    with a concurrent one.
+    """
+
+    WAIT_SECONDS = 10.0
+    POLL_SECONDS = 0.005
+    WINDOWS_LOCK_OFFSET = 1 << 62
+
+    def __init__(self, ledger_path):
+        self.ledger_path = ledger_path
+        self.fh = None
+
+    def _lock_call(self, unlock):
+        """One non-blocking lock (or unlock) attempt; OSError when busy."""
+        if sys.platform == "win32":
+            import msvcrt
+            import os
+            os.lseek(self.fh.fileno(), self.WINDOWS_LOCK_OFFSET, os.SEEK_SET)
+            msvcrt.locking(self.fh.fileno(),
+                           msvcrt.LK_UNLCK if unlock else msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN if unlock
+                        else fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _acquired(self):
+        """True once locked, False while another holder has it."""
+        import errno
+        try:
+            self._lock_call(unlock=False)
+            return True
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK):
+                return False
+            raise
+
+    def __enter__(self):
+        import time
+        deadline = time.monotonic() + self.WAIT_SECONDS
+        try:
+            self.fh = open(self.ledger_path, "ab")
+            while not self._acquired():
+                if time.monotonic() >= deadline:
+                    raise OSError("lock still held after {0}s".format(
+                        self.WAIT_SECONDS))
+                time.sleep(self.POLL_SECONDS)
+        except (OSError, ImportError, ValueError) as exc:
+            if self.fh is not None:
+                self.fh.close()
+                self.fh = None
+            print("Warning: appending to ledger {0} without a lock: "
+                  "{1}".format(self.ledger_path, exc), file=sys.stderr)
+        return self
+
+    def __exit__(self, *exc_info):
+        if self.fh is not None:
+            try:
+                self._lock_call(unlock=True)
+            except OSError as exc:
+                print("Warning: could not release the lock on ledger "
+                      "{0}: {1}".format(self.ledger_path, exc),
+                      file=sys.stderr)
+            self.fh.close()
+            self.fh = None
+        return False
+
+
+def ledger_append(p, record):
+    """Chain `record` onto ledger `p` and append it as one line, locked.
+
+    `prev` is read and the line written, closed and so flushed, inside one
+    LedgerLock. An OSError from the write itself propagates: each caller
+    keeps its own best-effort handling of a failed append.
+    """
+    with LedgerLock(p):
+        record["prev"] = ledger_prev_hash(p)
+        record["self"] = ledger_self_hash(record)
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+
+
 def ledger_self_hash(record):
     """sha256 of the record serialized canonically WITHOUT its `self` field."""
     body = {k: v for k, v in record.items() if k != "self"}
@@ -147,10 +315,7 @@ def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code,
         p = Path(ledger_path)
         if str(p.parent):
             p.parent.mkdir(parents=True, exist_ok=True)
-        record["prev"] = ledger_prev_hash(p)
-        record["self"] = ledger_self_hash(record)
-        with open(p, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record) + "\n")
+        ledger_append(p, record)
     except OSError as exc:
         print(f"Warning: could not append to ledger {ledger_path}: {exc}",
               file=sys.stderr)
@@ -325,6 +490,7 @@ def parse_final_table(text):
 def build_report(args):
     out = {
         "state": args.state, "batch_md": args.batch_md, "repo": args.repo,
+        "repo_toplevel": None, "worktree_mismatches": [],
         "milestone": args.milestone, "ledger": args.ledger,
         "bugs": [], "ledger_chain_ok": None, "final_table_present": None,
         "problems": [], "problem_codes": [], "result": None, "error": None,
@@ -347,6 +513,15 @@ def build_report(args):
 
     artifacts = state.get("artifacts") or {}
     repo = Path(args.repo)
+
+    out["repo_toplevel"], mismatches = check_worktree_match(
+        args.repo, [("--state", args.state), ("--batch-md", args.batch_md),
+                    ("--ledger", args.ledger)])
+    out["worktree_mismatches"] = mismatches
+    for m in mismatches:
+        out["problems"].append("worktree_mismatch: " + worktree_mismatch_message(
+            out["repo_toplevel"], m))
+        out["problem_codes"].append("worktree_mismatch")
 
     chain_ok, chain_problem = (True, None)
     if args.ledger:
@@ -463,18 +638,21 @@ Reads:
   Each MERGED bug's OWN ledger, {bugfix-root}/gates.jsonl: its latest
     check_commit_gate.py verdict for that milestone must be PASS with
     --commit in its argv.
-  --repo <dir>       required; used ONLY to guess a MERGED bug's
-    {bugfix-root} when its state carries no bug:<slug>:root artifact.
+  --repo <dir>       required; guesses a MERGED bug's {bugfix-root} when its
+    state carries no bug:<slug>:root artifact, and is resolved to its git
+    top level (repo_toplevel) for the worktree_mismatch check.
   --milestone        the batch slug, recorded on the ledger line.
   --ledger <path>    the append target AND, unlike every other reader here,
     the file whose own hash chain is verified before anything in it is
     trusted. This gate is the sole writer of {batch-root}/gates.jsonl.
 
   A bug's worktree is checked only when its status is terminal: an OPEN
-  bug's worktree is expected to still exist. This gate never touches git,
-  commits anything, or removes a worktree.
+  bug's worktree is expected to still exist. This gate never writes git,
+  commits anything, or removes a worktree; its one git read is rev-parse.
 
 Problem codes:
+  worktree_mismatch           --state/--batch-md/--ledger sit in ANOTHER
+                              worktree of --repo's repository
   batch_ledger_chain_broken   the batch's own ledger chain is broken
   batch_md_missing            no batch.md at --batch-md
   final_table_missing         no `## Final` section in batch.md
@@ -487,7 +665,8 @@ Problem codes:
 
 JSON keys:
   Always printed on stdout (there is no --json flag):
-  state, batch_md, repo, milestone, ledger,
+  state, batch_md, repo, repo_toplevel,
+  worktree_mismatches ([{flag, path, worktree}]), milestone, ledger,
   bugs ([{slug, status, worktree, root, problems}]),
   ledger_chain_ok, final_table_present, problems, problem_codes,
   result, error
@@ -501,7 +680,7 @@ Exit codes:
      artifacts["bugs"] list to check.
 
 Self-test:
-  python check_batch_close.py --self-test   (18 cases)
+  python check_batch_close.py --self-test   (21 cases)
 """
 
 
@@ -566,7 +745,7 @@ def run_self_test():
         "| # | Slug | Commit | Gate record |\n"
         "|---|---|---|---|\n"
         "| 1 | null-coupon-500 | 9f2c1ab | check_commit_gate.py PASS |\n"
-        "| 2 | cart-badge-stale | \u2014 | dropped to /bgpdd-plan |\n")
+        "| 2 | cart-badge-stale | \u2014 | dropped to /bgpdd-lite |\n")
 
     class Base(unittest.TestCase):
         def setUp(self):
@@ -887,12 +1066,69 @@ def run_self_test():
             mine_block = mine[mstart:mend]
             self.assertEqual(mine_block, sibling_block)
 
+        def test_worktree_block_matches_both_commit_gates(self):
+            """git_worktree_of .. worktree_mismatch_message is one rule."""
+            def block(path):
+                src = Path(path).read_text(encoding="utf-8", errors="replace")
+                start = src.index("def git_worktree_of(")
+                end = src.index("def worktree_mismatch_message(")
+                end = src.index(chr(10) * 3, end) + 1
+                return src[start:end]
+            here = Path(__file__).resolve().parent
+            mine = block(__file__)
+            for name in ("check_commit_gate.py", "check_quick_close.py"):
+                if (here / name).is_file():
+                    self.assertEqual(block(here / name), mine, name)
+
+    class WorktreeMatch(Base):
+        def _git(self, *a):
+            import subprocess as sp
+            sp.run(["git", "-C", str(self.repo)] + list(a), check=True,
+                   capture_output=True, timeout=60)
+
+        def _stage(self):
+            self._git("init", "-q")
+            self._git("-c", "user.name=t", "-c", "user.email=t@t", "commit",
+                      "-q", "--allow-empty", "-m", "base")
+            root1, wt1 = self.stage_bug("null-coupon-500", "MERGED",
+                                        worktree_exists=False)
+            self.write_state(
+                ["null-coupon-500"],
+                {"bug:null-coupon-500:status": "MERGED",
+                 "bug:null-coupon-500:worktree": wt1,
+                 "bug:null-coupon-500:root": root1})
+            self.batch_md.write_text(
+                "## Final\n\n| Slug | Commit |\n|---|---|\n"
+                "| null-coupon-500 | 9f2c1ab |\n", encoding="utf-8")
+
+        def test_batch_root_in_repo_worktree_passes(self):
+            self._stage()
+            out, code = self.run_gate()
+            self.assertEqual(code, 0, out)
+            self.assertTrue(_same_path(out["repo_toplevel"], str(self.repo)))
+            self.assertEqual(out["worktree_mismatches"], [])
+
+        def test_repo_pointing_at_another_worktree_fails(self):
+            self._stage()
+            other = self.dir / "other-wt"
+            self._git("worktree", "add", "-q", str(other), "-b", "other")
+            self.repo, real = other, self.repo
+            try:
+                out, code = self.run_gate()
+            finally:
+                self.repo = real
+            self.assertEqual(code, 1, out)
+            self.assertIn("worktree_mismatch", out["problem_codes"])
+            self.assertEqual({m["flag"] for m in out["worktree_mismatches"]},
+                             {"--state", "--batch-md", "--ledger"})
+
     loader = unittest.defaultTestLoader
     suite = unittest.TestSuite([
         loader.loadTestsFromTestCase(HappyPath),
         loader.loadTestsFromTestCase(FailClosedCases),
         loader.loadTestsFromTestCase(OtherProblems),
         loader.loadTestsFromTestCase(ChainHelperParity),
+        loader.loadTestsFromTestCase(WorktreeMatch),
     ])
     result = unittest.TextTestRunner(verbosity=1).run(suite)
     return 0 if result.wasSuccessful() else 1

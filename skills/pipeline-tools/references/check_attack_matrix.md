@@ -24,6 +24,15 @@ A matrix can be internally consistent and still describe work nobody did: every 
 
 The flag requires `--report`, since there is nothing to scan without one — a floor applied to no findings list would report a clean pass over a scan that never happened.
 
+## Why the target-host check exists (H1)
+
+`bgpdd-secure` is "staging or local only — never production", and until this rule the gate checked only that the preamble's `Authorization:` and `Scope exclusions:` labels existed — a matrix whose base URL was the production API linted clean. Convention #9: the restraint bites exactly when the Orchestrator wants to start probing, so it is now a host check, in **both** modes (a matrix edited between Phase 1 and Phase 3 is caught at Phase 3).
+
+- **What counts as a target.** The host of every `scheme://host` URL outside a fence, and each bare `host[:port]` on a `Base URL(s):` line. Lines under `Forbidden host(s):`, `Scope exclusion(s):`, `Staging host(s):` and `Reference(s):` — and their indented continuation lines — are skipped: they name hosts the lane must NOT probe, or patterns, or citations. Over-collection is deliberate: a stray production URL in prose fails closed, and the fix is to move it under one of those labels or into a fence, never to declare it.
+- **What is allowed.** `localhost`, `127.0.0.1`, `[::1]`, `*.localhost`, `*.test` (the reserved names), or an fnmatch match for a pattern on the matrix's own **`Staging hosts:`** line — the one new declaration field, labelled like `Authorization:`. Declaring a host there is the Orchestrator writing down Phase 0 step 2's user confirmation that it is non-production; the gate cannot verify that confirmation, only that it was written down and that everything probed falls inside it.
+- **Why too-broad patterns fail.** A pattern with a wildcard in either of its last two labels (`*`, `*.com`, `*.example.*`) is `staging-pattern-too-broad` and allows nothing — a declaration that matches the internet would turn the check back into the self-asserted string it replaced.
+- Fixtures: `fixtures/attack-matrix-local-hosts/` (local + declared staging, forbidden/excluded production hosts skipped — exit 0) and `fixtures/attack-matrix-production-host/` (a production base URL with a `*.com` declaration — exit 1, both codes). The self-test lints both.
+
 ## Scope limits
 
 - The gate reads the **table**. Whether a cited capture is honest — that it recorded the probe it claims, out of process, against a running surface — stays `check_runtime_evidence.py`'s and `check_agent_report.py`'s job; this gate checks that a `PASS` row's cited path resolves on disk.

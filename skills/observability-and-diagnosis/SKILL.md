@@ -1,6 +1,6 @@
 ---
 name: observability-and-diagnosis
-description: "Provides the observability execution contract: a correlation id on every request and job, the three signals named per service in an observability manifest, an alert that names its runbook and a runbook that names its first three reads, diagnosis that starts from telemetry rather than from code, and incidents that convert into a lint-gated bug report. Use if the project runs a service anyone has to diagnose in production. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator applies the Worker Execution Contract itself in the main session — no delegation."
+description: "Provides the observability execution contract: a correlation id on every request and job, the three signals named per service in an observability manifest, an alert that names its runbook and a runbook that names its first three reads, diagnosis that starts from telemetry rather than from code, and incidents that convert into a lint-gated bug report. Use if the project runs a service anyone has to diagnose in production. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself."
 ---
 
 # Observability and Diagnosis
@@ -9,7 +9,7 @@ The cost of an incident is set long before it happens, by whether the failing pa
 
 ## Direct invocation
 
-A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no claim without a capture (`base-persona.md`, Evidence Integrity). **Scope: three files or fewer.** Over three files, or new signal wiring: route through `/bg`.
+Direct asks on named files are a deliberate refinement of agent-audit Metric 12, not a trigger collision. Direct invocation: the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself. Owner: **Mason**. **Scope: ≤ 3 files;** larger, or new signal wiring, routes through `/bg`.
 
 ## Quick card
 
@@ -27,7 +27,7 @@ Derived from the contract below for a ≤ 3-file change; no new rules (conventio
 
 ## Worker Execution Contract
 
-This is the operational spine. Follow it as written.
+This is the operational spine. Follow it as written. For a change of ≤ 3 files outside a pipeline, the Quick card above is the contract; the full contract applies inside a lane.
 
 ### Scope, and What This Skill Does Not Own
 
@@ -58,14 +58,14 @@ The project records a `## Observability manifest` block naming, **for each servi
 
 - **Every alert names its runbook.**
 - **Every runbook names its first three reads**: *which log query*, *which metric*, *which trace* — actual query strings and dashboard names, not "check the logs". Three, not fifteen: the point is removing the decision of where to start.
-- After those three reads, root-causing proceeds under `{PLUGIN_ROOT}/debugging-and-error-recovery/SKILL.md`, which owns the method. This skill adds nothing to it.
+- After those three reads, root-causing proceeds under `{PLUGIN_ROOT}/debugging-and-error-recovery/SKILL.md`, which owns the method. This skill adds only the production entry order in § Diagnose From Telemetry, Not From Code.
 - A step that resolves the symptom without identifying the cause is labelled **mitigation**, not fix, and leaves the incident open.
 
 Shape: [`references/runbook-template.md`](references/runbook-template.md).
 
 ### Diagnose From Telemetry, Not From Code
 
-When a production behaviour is wrong, the first artifact read is **telemetry for the failing execution** — the log lines carrying its correlation id, its trace, the metric that moved. The order is: observe what happened → reproduce it → then read the code the evidence points at.
+When a production behaviour is wrong, the first artifact read is **telemetry for the failing execution** — the log lines carrying its correlation id, its trace, the metric that moved. The order is: observe what happened → reproduce it → then read the code the evidence points at. This deliberately refines `debugging-and-error-recovery`'s REPRODUCE-first workflow (convention #8), for production failures only: there the telemetry *is* the original evidence, so it is read before reproducing. From REPRODUCE on, that skill's workflow applies unchanged.
 
 A production claim supported only by source reading is one-directional evidence: it can *fail* a hypothesis, never *pass* one (`{PLUGIN_ROOT}/runtime-evidence/SKILL.md`, Core Principle).
 

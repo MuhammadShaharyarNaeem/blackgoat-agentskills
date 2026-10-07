@@ -103,7 +103,7 @@ ledger `extra`, the driver reports it verbatim — the code already looks.
 |---|---|---|---|---|
 | 0 | Scope | `{R}/note.md` exists with three real, non-placeholder lines (`- What:`, `- Where:`, `- How verified:`) | none | write or complete the note; the missing keys are named |
 | 1 | Change and Prove | `{R}/evidence/check.md` exists with a sidecar and exit 0 | none | edit only the Where paths, then run the `run_quiet.py --capture` |
-| 3 | Close | `check_quick_close.py` is `PASS` **with `--commit`** | `check_quick_close.py` | run the close gate, with `--changed-files` filled from the note's Where line |
+| 3 | Close | `check_quick_close.py` is `PASS` **with `--commit`** | `check_quick_close.py` | run the close gate, with `--changed-files` filled from the note's Where line and `--require-ledger-gates check_handoff.py` (the delegation proof) |
 | 4 | Complete | — | — | append the one-bullet `## Result` game tape to `note.md` |
 
 **Phases 1 and 2 are fused, deliberately.** An edit leaves no artifact of its

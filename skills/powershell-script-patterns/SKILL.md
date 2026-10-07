@@ -14,7 +14,7 @@ Derived from the contract below for a ≤ 3-file change; no new rules (conventio
 1. Execute it; capture stdout, stderr, exit code (§ Execution Testing).
 2. Embedded in a host string → extract, test, re-embed (§ Embedded Scripts).
 3. Never invent an un-inferable parameter (§ Missing Parameters).
-4. Fetch every external URL, or flag `UNVERIFIED` (§ External URL Verification).
+4. Fetch every external URL, or report it `BLOCKED` (§ External URL Verification).
 5. `Set-StrictMode -Version Latest`; PSScriptAnalyzer if present (§ Static Sanity Pass).
 
 - Brief → the quick note (What / Where / How verified)
@@ -44,14 +44,14 @@ When the script lives inside a host-language string (e.g. a C# string literal, a
 ### Missing Parameters — Escalate, Don't Invent
 
 - If the script requires parameters or values you cannot infer from the codebase or the task brief (tenant IDs, install paths, license keys, service names), do NOT invent plausible-looking values.
-- Escalate via your standard `<handoff>` (status BLOCKED, blocker naming the exact parameters and why they are un-inferable). The Orchestrator asks the user — you cannot ask the user directly.
+- Escalate via your standard `<handoff>` (status BLOCKED, with a `blocked_on: spec — <the exact parameters and why they are un-inferable>` line in `<blockers>`). The Orchestrator asks the user — you cannot ask the user directly.
 
 ### External URL Verification
 
 - Every download or external URL in a script is untested theory until fetched. Before shipping, verify each one resolves: fetch it (HEAD or a ranged GET, using your shell's HTTP client or web-fetch capability), follow redirects, and confirm the final response is a success from the vendor's current official host — not a 404, a parked domain, or a "this page has moved" notice.
 - If a URL is dead or deprecated, research the vendor's actual current official download page, replace the URL, and re-verify the replacement.
 - Never trust a URL from model memory — memorized URLs go stale. Every URL you introduce or keep must be verified in this same run.
-- If the environment has no network access, flag every unverified URL in your handoff as UNVERIFIED with the reason — never silently ship one.
+- If the environment has no network access, report every unfetched URL in your handoff as `BLOCKED — <reason>` (the token `{PLUGIN_ROOT}/runtime-evidence/SKILL.md` § When You Cannot Probe defines) — never silently ship one.
 
 ### Static Sanity Pass
 
@@ -66,11 +66,11 @@ Before marking work complete:
 - [ ] Script was executed, not just read; stdout, stderr, and exit code captured and clean (or the environmental blocker named)
 - [ ] If embedded: tested via an extracted scratch `.ps1`; re-embedded form round-trips to the tested script
 - [ ] No invented parameter values; un-inferable parameters escalated as BLOCKED
-- [ ] Every external URL fetched and confirmed live and official in this run, or explicitly flagged UNVERIFIED with reason
+- [ ] Every external URL fetched and confirmed live and official in this run, or explicitly reported `BLOCKED` with reason
 - [ ] Static sanity pass run (StrictMode; PSScriptAnalyzer if installed)
 
 ### Escalate When
 
-- Required parameters cannot be inferred → BLOCKED `<handoff>` listing them; do not invent values.
+- Required parameters cannot be inferred → BLOCKED `<handoff>` with a `blocked_on: spec — <the parameters>` line in `<blockers>`; do not invent values.
 - The script needs an environment you don't have (elevation, target OS, network, licensed software) → `<handoff>` stating exactly what ran and what could not.
 - A vendor URL is dead and research cannot identify the current official replacement → `<handoff>` with the candidates you found; do not guess.

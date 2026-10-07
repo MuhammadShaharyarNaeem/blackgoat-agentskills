@@ -1,6 +1,6 @@
 ---
 name: dependency-upgrade-patterns
-description: "Provides the dependency upgrade execution contract: a changelog-derived Upgrade brief written before any lockfile moves, an audit capture taken before and after the bump and compared, one package (or one coherent group) per commit with its lockfile, a codebase search for every removed or renamed API, `git revert` of that one commit as the rollback, and a framework-major boundary that routes out of the fast lanes. Use if the project bumps a dependency version. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator applies the Worker Execution Contract itself in the main session — no delegation."
+description: "Provides the dependency upgrade execution contract: a changelog-derived Upgrade brief written before any lockfile moves, an audit capture taken before and after the bump and compared, one package (or one coherent group) per commit with its lockfile, a codebase search for every removed or renamed API, `git revert` of that one commit as the rollback, and a framework-major boundary that routes out of the fast lanes. Use if the project bumps a dependency version. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself."
 ---
 
 # Dependency Upgrade Patterns
@@ -9,7 +9,7 @@ A version bump is the change most often made without reading anything. This cont
 
 ## Direct invocation
 
-A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no unobserved claims (`base-persona.md`, Evidence Integrity). **Scope: one package, three files or fewer.** Anything larger, or a breaking or framework-major change, routes through `/bg`.
+Direct asks on named files are a deliberate refinement of agent-audit Metric 12, not a trigger collision. Direct invocation: the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself. Owner: **Mason**/**Nova** (frontend). **Scope: one package, ≤ 3 files;** larger, breaking or framework-major routes through `/bg`.
 
 ## Quick card
 
@@ -27,7 +27,7 @@ Derived from the contract below for a ≤ 3-file change; no new rules (conventio
 
 ## Worker Execution Contract
 
-This is the operational spine. Follow it as written. Steps run in order; none is optional.
+This is the operational spine. Follow it as written. Steps run in order; none is optional. For a change of ≤ 3 files outside a pipeline, the Quick card above is the contract; the full contract applies inside a lane.
 
 ### Step 1 — Write the Upgrade brief first
 
@@ -82,7 +82,7 @@ This is deliberately **not** the `**Runtime evidence:**` line, and `check_runtim
 
 ### Step 6 — One commit, and say how to undo it
 
-The commit contains the manifest, **its lockfile**, and the call sites the brief listed — nothing else. State the rollback explicitly in the report: **`git revert <sha>` of that one commit.**
+The commit contains the manifest, **its lockfile**, and the call sites the brief listed — nothing else. State the rollback explicitly in the report: **`git revert <sha>` of that one commit.** You never commit — the lane's gate does — so write `<sha>` as the placeholder; the Orchestrator fills in the sha after the gate commits.
 
 **Two mechanisms carry this rule, not the sentence above (convention #9)** — both at the close, both in the checklist:
 
@@ -115,7 +115,7 @@ Before marking upgrade work complete:
 - [ ] Every call site the brief listed was updated; a fresh search for the removed API returns nothing
 - [ ] `changed-files-<package>.md` captured; it lists the manifest **and** its lockfile, and nothing the brief did not name (§ Step 6)
 - [ ] The closing gate ran with `--max-changed-files` set to the brief's file count (§ Step 6)
-- [ ] The report names `git revert <sha>` as the rollback
+- [ ] The report names `git revert <sha>` as the rollback (the Orchestrator records the sha after the gate commits)
 
 ### Escalate When
 

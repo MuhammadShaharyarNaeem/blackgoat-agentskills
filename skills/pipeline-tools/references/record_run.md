@@ -181,8 +181,16 @@ be measured. `--tokens-unavailable` together with any token figure is refused
 number and disclaim having one.
 
 **`--runtime <name>`** is new and never required: recorded verbatim on any
-event (e.g. `claude-code`, `antigravity`, `cursor`), it is what lets a later
+event (e.g. `claude-code`, `antigravity`), it is what lets a later
 read of the log tell which runtime a `tier`-only, non-Claude `model` record
 actually ran under.
 
 The self-test grew to **70**.
+
+## 2026-09-30 — the run-log append is locked
+
+Concurrent `record_run.py` appenders lost records on Windows while every writer exited 0: the runtime's append is a seek-to-end then a write, not one atomic step, so two writers landed at the same offset (6 processes × 40 records kept 175–186 of 240 intact lines in 5/5 trials). The same unlocked window let two writers of one delegation tuple both pass the duplicate check.
+
+`main` now holds a record_run-local `RunLogLock` from the duplicate check through the write, and `append_record` takes the same lock around its write. The design is `check_ledger.py`'s `LedgerLock` (a lock on the log file itself, 10 s bounded wait, 5 ms polls), copied locally because this script is not a chained gate and carries none of the chain helper. A timeout or lock error warns on stderr and the append goes ahead unlocked — a possibly-colliding append beats a certainly-dropped record. A failed write is still exit 2; no record byte or exit code changes on the success path.
+
+Two self-tests cover it: `test_concurrent_appenders_lose_no_record` (5 processes × 40 notes) and `test_concurrent_duplicate_delegations_record_once` (5 processes, one tuple, exactly one recorded). With the lock removed both failed 10/10 runs. The self-test grew to **72**.

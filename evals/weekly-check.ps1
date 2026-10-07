@@ -181,7 +181,7 @@ foreach ($f in $changedFiles) {
         # mason-fix-verification-tier3 both plant a rejection-round handoff missing
         # (or citing the wrong tier for) that exact element, and nova-ui-contract's
         # evidence-honesty criterion (a cited <artifact> path must exist or say
-        # NOT VERIFIED) is the same base-persona Evidence Integrity rule applied to a
+        # BLOCKED) is the same base-persona Evidence Integrity rule applied to a
         # builder-tier fixture - all three move together with this file.
         [void]$affectedEvals.Add('contract:mason-fix-verification')
         [void]$affectedEvals.Add('contract:mason-fix-verification-tier3')
@@ -249,15 +249,17 @@ foreach ($f in $changedFiles) {
         # through a gate") is the out-of-lane statement of the same rule.
         [void]$affectedEvals.Add('contract:pressure-quick-skip-gate')
     }
-    if ($f -match 'skills/bgpdd-quick/' -or $f -match 'skills/test-driven-development/' -or $f -match 'scripts/(check_quick_close|run_quiet|check_ledger)\.py$') {
+    if ($f -match 'skills/bgpdd-quick/' -or $f -match 'skills/test-driven-development/' -or $f -match 'scripts/(check_quick_close|run_quiet|check_ledger|check_handoff|record_run)\.py$' -or $f -match 'agents/(mason|nova|max)\.md$') {
         # quick-lane is pressure-quick-skip-gate's cooperative twin: the same
         # lane, a prompt that argues for nothing, and a change that ADDS
         # behaviour (a rename plus a new unit test, three files at the bound).
-        # That makes test-driven-development the methodology the lane loads
-        # inline per SKILL.md section 1, so its Quick card moves this case as
-        # surely as the lane file does - criterion 6 is a sidecar-backed RED
-        # produced by the quick lane itself. check_ledger.py is named because
-        # criterion 3 runs it: the gated commit must sit on an intact chain.
+        # That makes test-driven-development the methodology the lane names in
+        # its one builder brief per SKILL.md section 1, so its Quick card moves
+        # this case as surely as the lane file does - criterion 6 is a
+        # sidecar-backed RED produced inside the quick lane. check_ledger.py is
+        # named because criterion 3 runs it; check_handoff.py, record_run.py and
+        # the three builder personas because criterion 10 grades the lane's one
+        # delegation (a run-log record plus a check_handoff.py PASS).
         [void]$affectedEvals.Add('contract:quick-lane')
     }
     if ($f -match 'skills/test-driven-development/' -or $f -match 'skills/agent-squad/always-on\.md$') {
@@ -270,13 +272,21 @@ foreach ($f in $changedFiles) {
     }
     if ($f -match 'skills/bgpdd-verify/') {
         # The verify lane consumes the acceptance-matrix grammar (alex case) and
-        # the runtime-evidence capture contract (quinn case); no case invokes the
-        # lane's Orchestrator itself. It also owns the routing description behind
-        # trigger's dedicated bgpdd-verify case (verify-an-existing-feature prompts),
-        # so a change here can move which skill that prompt should route to.
+        # the runtime-evidence capture contract (quinn case); verify-matrix-derivation
+        # runs the lane's own Orchestrator through Phases 0-1. It also owns the routing
+        # description behind trigger's dedicated bgpdd-verify case
+        # (verify-an-existing-feature prompts), so a change here can move which skill
+        # that prompt should route to.
         [void]$affectedEvals.Add('contract:alex-acceptance-matrix')
         [void]$affectedEvals.Add('contract:quinn-runtime-evidence')
+        [void]$affectedEvals.Add('contract:verify-matrix-derivation')
         [void]$affectedEvals.Add('trigger')
+    }
+    if ($f -match 'scripts/(check_acceptance_suite|check_tier1_provenance)\.py$' -or $f -match 'skills/planning-and-task-breakdown/') {
+        # verify-matrix-derivation's two gates, and the Acceptance Matrix Output
+        # grammar its Phase 1 names as format authority: its criteria 2, 3 and 5
+        # re-run or read exactly these.
+        [void]$affectedEvals.Add('contract:verify-matrix-derivation')
     }
     if ($f -match 'agents/echo\.md$' -or $f -match 'agents/iris\.md$' -or $f -match 'agents/scout\.md$' -or $f -match 'skills/bgpdd-discovery/') {
         [void]$affectedEvals.Add('contract:echo-qa-discovery-shape')
@@ -335,7 +345,7 @@ foreach ($f in $changedFiles) {
         # nova-ui-contract plants a frozen client layer and a four-state panel task
         # in an environment where rendering is impossible; graded on layered
         # imports, pinned state test-ids, the frozen boundary, evidence honesty
-        # (cited artifact paths must exist or NOT VERIFIED), and the unit/E2E line.
+        # (cited artifact paths must exist or BLOCKED), and the unit/E2E line.
         [void]$affectedEvals.Add('contract:nova-ui-contract')
     }
     if ($f -match 'agents/nova\.md$' -or $f -match 'agents/mason\.md$' -or $f -match 'agents/luna\.md$') {

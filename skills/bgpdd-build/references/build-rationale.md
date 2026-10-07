@@ -91,7 +91,7 @@ The ship-decision shape gate runs `check_ship_decision.py` deliberately **withou
 
 A checkpoint deferred to the end of the pipeline records nothing: the context that held the evidence is long gone by then, and a run that never reaches its end leaves no record at all. **Milestones M1–M8 of a real epic ran with zero checkpoints for exactly this reason**, so the improvement run that followed had a fraction of the evidence it needed.
 
-The 3–6 bullets *per milestone* cap is a deliberate refinement of the skeleton's default once-per-run, at-most-10 cap (convention #8): the sibling pipelines check in once, this one checks in on every milestone close, so a per-run cap would shrink an eight-milestone epic's record to the size of a single lite run's.
+The 3–6 bullets *per milestone* cap is a deliberate refinement of the skeleton's at-most-10 cap (convention #8); the cadence is the skeleton's own every-state-persistence default. Most sibling pipelines persist once and so check in once; this one persists on every milestone close, so a per-run cap would shrink an eight-milestone epic's record to the size of a single lite run's.
 
 `summarize_run.py --markdown` is convention #9 in force on the same section: the cost sentence used to be written at the moment you were least able to check it, so the table is now produced by the tool that read the log.
 

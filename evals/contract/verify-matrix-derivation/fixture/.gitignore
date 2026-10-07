@@ -1,0 +1,5 @@
+# The eval harness pipes the agent's reply into handoff.txt inside this working
+# copy; ignoring it keeps the grader's "nothing outside .docs/ changed" check
+# about the run, not the harness.
+handoff.txt
+node_modules/

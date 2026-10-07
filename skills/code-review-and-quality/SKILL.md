@@ -1,6 +1,6 @@
 ---
 name: code-review-and-quality
-description: "Conducts multi-axis code review. Use before merging any change. Use when reviewing code written by yourself, another agent, or a human. Use when you need to assess code quality across multiple dimensions before it enters the main branch. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator applies the Worker Execution Contract itself in the main session — no delegation."
+description: "Conducts multi-axis code review. Use before merging any change. Use when reviewing code written by yourself, another agent, or a human. Use when you need to assess code quality across multiple dimensions before it enters the main branch. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself."
 ---
 
 # Code Review and Quality
@@ -11,7 +11,7 @@ Multi-axis review before merge — no change merges unreviewed. Five axes: corre
 
 ## Direct invocation
 
-A user can ask for this directly on named files — a deliberate refinement of agent-audit Metric 12, not a trigger collision. The Orchestrator applies the Worker Execution Contract below inline, in the main session: no delegation, no editing tests to pass, no unobserved claims (`base-persona.md`, Evidence Integrity). Over three files, or shared behaviour: route via `/bg` to a lane.
+Direct asks on named files are a deliberate refinement of agent-audit Metric 12, not a trigger collision. Direct invocation: the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself. Owner: **Luna**, any size, no `/bg` bounce (convention #8); over the `review_package.py --max-diff-lines 1500` ceiling, § Escalate When.
 
 ## Quick card
 
@@ -44,7 +44,7 @@ This is the operational spine. Follow it as written. For a change of ≤ 3 files
 
 **2. Readability & Simplicity** — understandable without the author explaining it?
 - Descriptive, convention-consistent names; straightforward control flow; no "clever" tricks; could it be done in fewer lines?
-- Abstractions must earn their complexity (don't generalize until the third use case); no dead-code artifacts (`_unused`, compat shims, `// removed` comments).
+- Abstractions must earn their complexity (rule of three: don't generalize until the third use case — `code-simplification/SKILL.md` § Simplification Signals applies the same bound); no dead-code artifacts (`_unused`, compat shims, `// removed` comments).
 
 **3. Architecture** — does the change fit the system's design?
 - Follows existing patterns (new ones must be justified); clean module boundaries; no duplication that should be shared.
@@ -80,7 +80,7 @@ This is the operational spine. Follow it as written. For a change of ≤ 3 files
 
 | Prefix | Meaning | Author Action |
 |--------|---------|---------------|
-| **Critical:** | Blocks merge | Security vulnerability, data loss, broken functionality |
+| **Critical:** | Blocks merge | Security vulnerability, data loss, broken functionality, undeclared substitution or undeclared addition (§ Rules) |
 | **Important:** | Required change | Must address before merge — correctness, reliability, or maintainability risk |
 | **Suggestion:** | Worth considering | Not required — improvements the author may adopt or decline |
 | **Nit:** | Minor, optional | Author may ignore — formatting, style preferences |
@@ -93,7 +93,7 @@ This is the operational spine. Follow it as written. For a change of ≤ 3 files
 - **Remediation fidelity: verify a fix against the RULE the finding protects, not the finding's literal text.** On re-review, first name the rule the original finding enforced, then check the fix against *that*. A remediation satisfying the finding's wording while violating its rule is rejected: a placeholder route closing a "missing route" finding, a loosened assertion silencing a failing one, `any` behind a cast closing a "no untyped boundary" finding. A fix that trades the finding for a fresh instance of the same defect class keeps the finding open. ([why](references/code-review-deep-dive.md#remediation-fidelity))
 - **Undeclared substitution and undeclared addition are both Critical.** Review the change against the requirement text as written, not only against the task that paraphrased it. **Substitution**: a capability serving the specified heading that is not the one specified (a different chart, algorithm, or mechanism). **Addition**: a capability no requirement or design asked for. Neither is closed by the substitute being better or the addition being useful — the remedy is a supersession/divergence filed against the requirement, after which the change is reviewed on its merits. ([why](references/code-review-deep-dive.md#undeclared-substitution-and-addition))
 - **Dead code:** after any change, identify orphaned or unreachable code and list it explicitly.
-  **Ask before deleting:** "Should I remove these now-unused elements: [list]?"
+  **Ask before deleting:** "Should I remove these now-unused elements: [list]?" A reviewer never deletes; removal happens only inside a simplification brief (`code-simplification/SKILL.md` § Simplification Signals).
 - **Dependencies:** prefer standard library and existing utilities over new dependencies — every dependency is a liability.
 
 ### The Review Report
@@ -119,7 +119,7 @@ The full report skeleton — the heading, the three machine-read lines, and ever
 After review is complete:
 
 - [ ] All Critical issues are resolved
-- [ ] All Important issues are resolved or explicitly deferred with justification
+- [ ] All Important issues carry `RESOLVED`; a deferred Important finding means the verdict is `Request Changes`, with the deferral and its justification recorded in the finding
 - [ ] The verdict is the exact machine-read token and consistent with the findings in the same report — no `Approve` while an unresolved Critical or Important finding stands above it
 - [ ] Tests pass
 - [ ] Build succeeds
@@ -128,6 +128,7 @@ After review is complete:
 ### Escalate When
 
 - The change is too large to review properly → report to the Orchestrator (manager) and request a split.
+- **Direct invocation sizing (Orchestrator side).** A direct review request of any size goes to Luna and is never bounced back to `/bg`, which routes someone else's PR here — deliberately unlike the sibling skills' "over three files: route via `/bg`" rule (convention #8): that bounce would loop. Over three files the Quick card no longer applies and Luna reviews under this full contract. Size is bounded mechanically, not by file count: the Orchestrator packages the change with `python {PLUGIN_ROOT}/pipeline-tools/scripts/review_package.py` under `--max-diff-lines 1500` (the lanes' ceiling; contract: its `--help`) and hands Luna that package. Exit 2 over the ceiling with no `--waiver` is this contract's "too large → request a split" escalation — the Orchestrator relays it to the user, who splits the change or hand-types a size waiver.
 - You lack the context to judge correctness (missing spec, ambiguous requirements) → ask the Orchestrator (manager).
 - Critical or Important findings remain unresolved after the author's fixes → escalate to the Orchestrator (manager); do not approve.
 

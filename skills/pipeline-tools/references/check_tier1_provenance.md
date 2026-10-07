@@ -175,3 +175,19 @@ feature overview, a directory mirror finding the drop in both artifacts, a
 missing counterpart warning only, an unstamped previous warning only, the
 missing path as exit 2 through both `build_report` and `main`, the exit code
 through `main`, and the `stamp_key` parser itself.
+
+## The shared `git()` helper decodes UTF-8
+
+`git()` is imported by `tier1_staleness.py` too. It used to decode git's
+output with the locale codec, which is cp1252 on a Windows host, and it caught
+only a missing executable and a timeout. Git writes UTF-8, and cp1252 has no
+mapping for bytes such as 0x81 (inside `ā`, UTF-8 `C4 81`). Such a byte in
+git's stderr raised `UnicodeDecodeError` in subprocess's reader thread and
+printed a traceback, and the stream came back as `None`. On POSIX the same
+error raises out of `run()`. Any other `OSError`, a `PermissionError` for
+example, was an uncaught traceback. The helper now decodes UTF-8 with
+replacement and maps every `OSError` to exit 2. The 120 s timeout is unchanged.
+
+The self-test grew to **42**: git's stderr quoting a non-cp1252 config value
+comes back decoded, the same broken repo is a `sha_unknown` finding rather
+than a crash, and an `OSError` from git is exit 2 through `main`.

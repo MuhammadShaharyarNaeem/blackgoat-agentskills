@@ -21,54 +21,49 @@ already careful and none of the 80% that is not.
 This lane is a deliberate bet: at this size, **one gate that cannot be skipped
 buys more than five gates that get skipped along with the lane.**
 
-## Why this lane reads two contract sections, not the whole contract
+## Why this lane reads part of the contract, not the whole contract
 
 Every other pipeline's MANDATORY FIRST READ pulls `orchestrator-contract.md`
-entire. This one reads `## Runtime Neutrality` and `## 3. Role Boundaries` and
+entire. This one reads `## Runtime Neutrality`, §1–§3 and §4's run-log rule and
 stops — a labelled convention-#8 refinement of that rule, for a reason specific
 to what the file contains.
 
-Of its five numbered sections, §1 governs delegation discipline, §2 the error
-recovery and circuit breaker around delegated work, §4 state hydration and the
-inter-pipeline hand-off, §5 where orchestrator lessons land. This lane delegates
-nothing, hydrates no state and hands off to nobody; §3 is the only section whose
-subject it actually performs — and it performs it by divergence, which the spine
-labels. Runtime Neutrality is universal and cheap.
+The lane delegates once, so §1 (delegation discipline), §2 (the circuit breaker
+and the three verbatim rules the builder's brief carries) and §3 (role
+boundaries) all bind it, and so does the one §4 rule that records the
+delegation. The rest of §4 is state hydration and the inter-pipeline hand-off;
+§5 is where orchestrator lessons land and §6 synthesises two handoffs. This lane
+hydrates no state, hands off to nobody and receives exactly one handoff.
 
-The cost of reading the rest is not abstract. 3,700 words is several times the
-lane's own spine, loaded before a change that touches at most three files: the
-same overhead-exceeds-the-change arithmetic that made this lane necessary in the
-first place, reappearing inside it. A daily driver that charges a heavy read for
-every use gets skipped, and a skipped lane enforces nothing.
+The cost of reading the rest is not abstract: loaded before a change that
+touches at most three files, it is the same overhead-exceeds-the-change
+arithmetic that made this lane necessary in the first place, reappearing inside
+it. A daily driver that charges a heavy read for every use gets skipped, and a
+skipped lane enforces nothing.
 
 What the trim must not do is let an escalation inherit it. **A lane escalated to
 reads the contract in full** — it is the lane that will delegate, persist state
 and hand off. The spine states that in the same block, so the two rules are
 never read apart.
 
-## Why the Orchestrator is the worker here
+## Why one builder, and no reviewer
 
-Orchestrator Contract §3 forbids the Orchestrator writing application code, for
-two reasons that are worth separating:
+Orchestrator Contract §3 forbids the Orchestrator editing product code or tests
+in every lane, this one included. An earlier version of this lane made the
+Orchestrator the worker on the grounds that a three-file session has no context
+to collapse; that exception is gone. The Orchestrator briefs, runs the captured
+check and the close gate, and commits — the same split every other lane keeps —
+so the person deciding whether the change is done is never the person who made
+it.
 
-1. **Context collapse.** Roleplaying a builder inside the main session floods
-   the window that holds the epic, the plan, the milestone cursor and every
-   prior handoff. This is the real reason, and it is *proportional to what the
-   session is holding*. A quick-lane session holds a slug, three file paths and
-   a command. There is nothing to collapse.
-2. **Separation of duties.** The author of a fix should not also be the sole
-   judge of it. Real, and this lane does not pretend otherwise — it replaces
-   the human judge with a mechanical one. Phase 3's gate is not persuadable: it
-   re-hashes the capture, re-reads the tree, and re-counts the files. What it
-   cannot do is have an opinion about design, which is exactly why any change
-   with a design question in it escalates instead.
+The lane stays cheap by spending exactly one delegation, not by skipping it:
+one builder chosen by the kind of change (Mason, Nova or Max), one brief built
+from the note, one handoff. What it still drops is the reviewer. Phase 3's gate
+is not persuadable — it re-hashes the capture, re-reads the tree, and re-counts
+the files — but it cannot have an opinion about design, which is exactly why any
+change with a design question in it escalates instead of buying a Luna here.
 
-A delegation round would cost a persona load, a brief, a handoff and a
-verification read — more context than the change itself, spent to obtain a
-separation the size of the change does not earn. That trade is the labelled
-divergence in the spine.
-
-## Why no state file and no run log
+## Why no state file, but a run log
 
 `orchestrator-state.json` exists so `/bgpdd-plan` can hand a cursor to
 `/bgpdd-build` and `/bgpdd-build` can hand one to `/bgpdd-shipping`, across
@@ -76,10 +71,9 @@ sessions. This lane has no successor and no cursor: it opens and closes inside
 one session, and its whole output is one commit.
 
 `run-log.jsonl` records what *delegations* cost — agent, model, duration,
-tokens, rounds. Contract §4's obligation is per delegation completion and per
-state persistence. This lane has neither. Writing a run log with no delegation
-records in it would be an empty file asserting that nothing ran, which is worse
-than its absence.
+tokens, rounds — and Contract §4's obligation is per delegation completion. This
+lane now has one, so it keeps the run log unrefined: one `record_run.py` record
+for the builder, and one more only if the fix round sent it a follow-up.
 
 What remains is `gates.jsonl`, and it is not optional: it is the only durable
 proof the gate fired, with which flags, against which artifact hashes. A quick

@@ -1006,7 +1006,8 @@ def build_quick_report(root, ledger, milestone_override):
     # Fused deliberately: an edit leaves no artifact of its own, so the driver
     # cannot see Phase 1 end. The capture is what Phase 2 produces and what
     # Phase 3 reads, so it is the only observable boundary either phase has.
-    prove_cmd = ("Edit only the files the note's Where line names (%s), then "
+    prove_cmd = ("Have the one builder edit only the files the note's Where "
+                 "line names (%s), then "
                  "run the check through the capture wrapper: %s --capture %s "
                  "-- %s"
                  % (", ".join(where) or "<the Where line's paths>",
@@ -1033,7 +1034,8 @@ def build_quick_report(root, ledger, milestone_override):
     test_paths = [p for p in where if looks_like_test_path(p)]
     close_cmd = ("%s --note %s --capture %s --changed-files %s --repo . "
                  '--max-changed-files 3 %s --milestone "%s" '
-                 '--ledger %s --commit --message "<msg>"'
+                 '--ledger %s --require-ledger-gates check_handoff.py '
+                 '--commit --message "<msg>"'
                  % (_script("check_quick_close.py"), rp(note_md), rp(check_md),
                     " ".join(where) or "<paths>", suggested_frozen_flags(root),
                     slug_label, rp(ledger)))
@@ -2045,6 +2047,8 @@ def run_self_test():
             self.assertEqual((rep["phase"], code), (3, EXIT_BLOCKED))
             self.assertEqual(rep["required_gate"], "check_quick_close.py")
             self.assertIn("--max-changed-files 3", rep["next_action"])
+            self.assertIn("--require-ledger-gates check_handoff.py",
+                          rep["next_action"])
             self.assertIn("--frozen tests/", rep["next_action"])
             self.assertIn("--changed-files src/a.py", rep["next_action"])
             self.assertIn('--milestone "rename-thing"', rep["next_action"])

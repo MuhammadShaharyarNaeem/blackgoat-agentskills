@@ -93,3 +93,34 @@ lane name. Build is unchanged -- `bgpdd-build` is one value of `<lane>` -- and
 every SHAPE requirement (3-6 bullets, a fenced block, a telemetry line, the
 epic-summary exclusion, fenced headings not counting) is identical for every
 lane. The regex stays byte-identical in `update_state.py`, as it was before.
+
+## `--require-exit-capture`: "never advance on aggregate green", converted
+
+Orchestrator Contract §4's *On green* rule — run the unit's declared runtime
+exit criterion and read the actual output before persisting the advance; never
+advance on "all tasks done, tests pass, review approved" — was prose at
+exactly the moment the Orchestrator most wants to mark the milestone done
+(convention #9). Both halves of a mechanical check already existed:
+
+- **the declaration** — `planning-and-task-breakdown` requires every milestone
+  and checkpoint to carry `RUNTIME EXIT CRITERION — run `<probe>`; expect
+  `<observable>``, inside the block `next_milestone.py` extracts (the same
+  block rule is used here: a `## Task` or `## Checkpoint` heading stays inside,
+  any other level-1/2 heading ends it);
+- **the observation** — `run_quiet.py --capture --ledger --milestone` writes a
+  chained `CAPTURED` record carrying the child's `command_argv` and `exit`,
+  and `guard_action.py` rule 4 denies a hand write to the ledger.
+
+`--require-exit-capture` joins them: each declared command needs a CAPTURED
+record scoped to this milestone whose argv token-matches it (the three
+tokenizations `check_quick_close.py` uses), and the **latest** such record must
+exit 0 — a later failing run supersedes an earlier pass. A block that declares
+no criterion is `no_exit_criterion`, because the contract says that absence *is*
+the defect.
+
+**Scope limit.** The `expect <observable>` half is not checked: an observable is
+prose ("the created order in `data`"), and matching it against captured output
+would turn every rephrasing into a false refusal. What the flag guarantees is
+that the declared command really ran, through the wrapper, for this milestone,
+and passed — the "read the output" half stays the Orchestrator's, now with a
+capture on disk that it can be held to.

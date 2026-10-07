@@ -9,7 +9,7 @@ risk: safe
 # bg — Lane Router
 
 ## Purpose
-One front door. Classify the request, then invoke exactly **one** lane — or say plainly that none applies. **This skill never performs the work**: no edits, no delegations, no gates. If you are reading source to answer the ask, you have left the router.
+One front door. Classify the request, then invoke exactly **one** lane (or one directly-invocable methodology skill, per the table) — or say plainly that none applies. **This skill never performs the work**: no edits, no delegations, no gates. If you are reading source to answer the ask, you have left the router.
 
 ## When to Use This Skill
 - The user asks for ordinary work without naming a lane.
@@ -29,6 +29,13 @@ Check the **state rows** first; if none matches, answer the three questions in o
 | "security audit this app" / "pentest this app" / "check for vulnerabilities" / "privacy audit this app" | `bgpdd-secure` | Cipher (Ward for privacy/compliance rows, Quinn for browser-side probes) execute the attack matrix against the running app; runtime-evidence gate. |
 | "what did we learn" | `bgpdd-learn` | One Forge triage; nothing is written without your approval. |
 | "get <squad member> to do this" | *no lane* | Ad-hoc squad use — routing triggers live in `{PLUGIN_ROOT}/agent-squad/SKILL.md`. |
+| "production is down" / "hotfix this incident" | `bgpdd-bugfix` | Question 1's cost: an incident is a reproduction of wrong behaviour, and urgency buys no skipped gate. |
+| "upgrade / bump this dependency" | `dependency-upgrade-patterns` via its Direct invocation | Its owning persona; changelog brief, before/after audit capture, one package per commit. A framework major routes out per that skill. |
+| "review this PR" — someone else's change, not one this session made | `code-review-and-quality` via its Direct invocation | Luna's multi-axis review; no edits. |
+| "this is slow" / "profile this" | `performance-optimization` via its Direct invocation | Its owning persona. |
+| "add logging / metrics / tracing" / "why can't we see what failed" | `observability-and-diagnosis` via its Direct invocation | Its owning persona. |
+| docs-only change, **≤ 3 files** | `bgpdd-quick` | Question 3's cost. Over 3 files of docs is `bgpdd-lite`. |
+| refactor over **3 files**, no behaviour change | `bgpdd-lite` | Question 3a's cost; the coverage gate proves nothing moved. |
 
 | # | Question | Lane | What it costs |
 |---|---|---|---|
@@ -36,17 +43,17 @@ Check the **state rows** first; if none matches, answer the three questions in o
 | 1a | …and are there **two or more independent bugs** for this session? A single bug stays `bgpdd-bugfix`. | `bgpdd-bugfix-batch` | Question 1's cost per bug, in waves, plus a worktree and a merge each. |
 | 2 | Does it need a **new capability, schema, or contract** — or is the spec still unknown? | `bgpdd-plan` | Heaviest lane: Rex Q&A, Aria, Alex, then `/bgpdd-build`. |
 | 2a | …and is the codebase **unmapped** (no `.docs/summary/` in the repo)? | `bgpdd-discovery` **first** | Iris, Scout and Echo write the Tier-1 knowledge base; plan follows. |
-| 3 | Is it **≤ 3 files** with no behaviour anyone outside them depends on? | `bgpdd-quick` | Cheapest: main session only, no delegation, one closing gate. |
+| 3 | Is it **≤ 3 files** with no behaviour anyone outside them depends on? | `bgpdd-quick` | Cheapest: one builder delegation (Mason, Nova or Max), one captured check, one closing gate. |
 | 3a | …else: is the spec **already known** and the pattern established in this repo? | `bgpdd-lite` | Mini-requirements with you, Alex plans, `/bgpdd-build` executes; keeps the coverage gate. |
 
-Nothing fits (a question, a read, a one-line answer): say so, and do it in the main session with whichever methodology skill fits. Over 3 files with a known spec but no established pattern is `bgpdd-lite` too — question 3a's "established" only decides whether Alex needs Aria's design, which is `bgpdd-plan`'s job (question 2).
+A "via its Direct invocation" row invokes that methodology skill instead of a lane; its `## Direct invocation` section owns what happens next — the Orchestrator delegates to the skill's owning persona, the agent whose Methodology Dependencies table loads it, and never applies the Worker Execution Contract itself. Nothing fits (a question, a read, a one-line answer): say so, and answer it in the main session — anything that edits code goes to a lane. Over 3 files with a known spec but no established pattern is `bgpdd-lite` too — question 3a's "established" only decides whether Alex needs Aria's design, which is `bgpdd-plan`'s job (question 2).
 
 The cost column lets the user push back *before* a lane spends anything. It is a summary: each lane's own `{PLUGIN_ROOT}/bgpdd-<lane>/SKILL.md` — `{PLUGIN_ROOT}/bgpdd-quick/SKILL.md` included — is authoritative, and this file restates none of it.
 
 ## Procedure
 
 1. **Classify** — walk the tables top to bottom.
-2. **Announce in one line, then invoke, in the same turn**: "Reads as *<the answer that fired>* → invoking the `bgpdd-<x>` skill." Then invoke it. Never announce a lane you do not then invoke.
+2. **Announce in one line, then invoke, in the same turn**: "Reads as *<the answer that fired>* → invoking the `<x>` skill." Then invoke it. Never announce a lane you do not then invoke.
 3. **The lane owns everything after that** — its phases, its gates, its confirmations. Add none of your own.
 
 ### Named lane wins
@@ -58,4 +65,4 @@ When two lanes fit and nothing in the message separates them, ask **the single q
 > **Refines Orchestrator Contract §1 *Phase Transitions* — deliberately looser (convention #8).** That rule requires explicit confirmation before a phase starts. Routing is not a phase, and the lane's own first step confirms anyway, so confirming here asks the same thing twice. The router invokes without confirmation, and pays for it with the one-question rule above — the only place it may stop.
 
 ### The ratchet
-A lane escalates **upward** when its own bound trips — quick → bugfix/lite/plan, lite → plan, bugfix → plan — and **never downward mid-run**. Escalation is that lane's own decision under its own rule; the router does not re-enter to authorize it, and a lane that turns out cheaper than expected still finishes where it started.
+A lane escalates **upward** when its own bound trips — quick → bugfix/lite/plan, then one chain, bugfix → lite → plan (bugfix never skips lite) — and **never downward mid-run**. Escalation is that lane's own decision under its own rule; the router does not re-enter to authorize it, and a lane that turns out cheaper than expected still finishes where it started.

@@ -76,7 +76,7 @@ public sealed class GetOrderSummaryTests : IClassFixture<DevDbApiFactory>
         // real middleware registrations, real SQL. NOT a socket: no Kestrel, no
         // host startup/config chain, no Swagger. This tier cannot falsify a
         // wire-shape claim (see the Tier ladder in SKILL.md).
-        var res = await _client.GetAsync($"/orders/{order.Id}/summary");
+        var res = await _client.GetAsync($"/api/v1/orders/{order.Id}/summary");
 
         // Assert the ENVELOPE on the raw body BEFORE binding. Closed-set over
         // top-level property names, per test-driven-development's closed-set
@@ -91,7 +91,7 @@ public sealed class GetOrderSummaryTests : IClassFixture<DevDbApiFactory>
             doc.RootElement.EnumerateObject().Select(p => p.Name).ToHashSet());
 
         // Only now bind and assert the payload.
-        var envelope = JsonSerializer.Deserialize<BaseResponse<GetOrderSummary.Response>>(
+        var envelope = JsonSerializer.Deserialize<BaseResponse<GetOrderSummaryResponse>>(
             raw, new JsonSerializerOptions(JsonSerializerDefaults.Web));
         Assert.True(envelope!.IsSuccess);
         Assert.Equal(order.Id, envelope.Data!.Id);
@@ -111,7 +111,7 @@ mockDb.Setup(d => d.Orders).ReturnsDbSet(fakeOrders);   // FORBIDDEN
 
 ```csharp
 // BAD: binding straight into BaseResponse<T> and asserting a member.
-var res = await _client.GetFromJsonAsync<BaseResponse<GetOrderSummary.Response>>(url);
+var res = await _client.GetFromJsonAsync<BaseResponse<GetOrderSummaryResponse>>(url);
 Assert.True(res!.IsSuccess);
 ```
 
@@ -122,3 +122,33 @@ to change the generic parameter to the bare DTO. That "fix" makes the test pass 
 leaves the API wrong. This is the observed 2026-08 failure: the envelope was green in
 this tier and absent in local Swagger. Assert the wire shape on the raw body, and prove
 the wire shape itself at Tier 3 — never here.
+
+### 3.1 Mode B Fast Tests — SQLite In-Memory (deliberate divergence)
+
+Deliberate divergence (convention #8) from the rule above and from SKILL.md's Tier 2 bullet,
+which put every DB-crossing test against the real Dev DB: in **Mode B**, a *fast*
+handler/endpoint test may run the real `AppDbContext` model on **EF Core SQLite in-memory**.
+This is not the forbidden kind of fake. SQLite executes real SQL — query translation,
+constraints, `ExecuteUpdateAsync`, transactions — where `Mock<AppDbContext>` and the EF
+InMemory provider execute none of it; both stay forbidden.
+
+```csharp
+// The shape of BillingFuncInbound's Tests/Common/SqliteTestDatabase.cs:
+// one open in-memory connection per test, the real model created on it.
+var connection = new SqliteConnection("DataSource=:memory:");
+connection.CreateFunction("getutcdate", () => DateTime.UtcNow);   // shim for a SQL Server default
+connection.Open();
+var options = new DbContextOptionsBuilder<AppDbContext>()
+    .UseSqlite(connection)
+    .ConfigureWarnings(w => w.Ignore(SqliteEventId.SchemaConfiguredWarning))   // SQLite has no schemas
+    .Options;
+using (var db = new AppDbContext(options)) db.Database.EnsureCreated();
+```
+
+**The limit: SQLite is not SQL Server's dialect.** No schemas, no SQL Server functions (each
+one used by a column default needs a shim), different collation and case sensitivity,
+different `datetime`/`decimal` storage, no `rowversion`, different locking and isolation. A
+SQLite pass proves the logic over real SQL; it does not prove SQL Server translation of a
+dialect-specific query, concurrency behaviour, or anything on the wire. Those stay with the
+Dev DB tests above and with Tier 3 — including, for a Mode B migration, the proof that the
+wire contract did not change.

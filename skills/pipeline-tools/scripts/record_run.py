@@ -24,26 +24,57 @@ Record shape (one JSON object per line):
      "status": "COMPLETE"|"PARTIAL"|"BLOCKED"|"PASS"|"FAIL"|"ERROR"|null,
      "note": str|null, "runtime": str|null}
 
-`--model` is OPTIONAL on `--event delegation` (defaults to 'inherit' when
-omitted, satisfying downstream commit gates while supporting runtimes like
-Antigravity where model tiers are not strictly pinned). When specified, it may
-be a Claude tier (haiku, sonnet, opus, fable), a model identifier, or 'inherit'.
+`--model` is MANDATORY on `--event delegation`. Measured finding: model
+choice left to prose decays -- 17 dispatches in one audited wave silently
+inherited the most expensive tier, and nothing in the run log could tell that
+apart from a deliberate choice, because the field was simply null. A null
+there is not "not measured": the tier is always known at dispatch time, so
+its absence records a decision nobody made (`CLAUDE.md` convention #9 -- a
+restraint rule the Orchestrator skips at the moment it wants to proceed
+becomes a mechanical gate, not louder prose). `--from-json` may supply it.
 Every other event is unchanged: a gate, phase or note record has no model.
 
-When `--model` names a Claude tier, `--tier` is optional and, if given, must
-agree (`tier_mismatch` otherwise). When `--model` does not name a Claude tier
-(e.g. 'gemini-3.8-flash', 'gpt-4o', 'inherit') and no `--tier` is supplied, it
-records cleanly with `tier: None`.
+`--model inherit` (case-insensitively) is refused outright (`model_inherit`):
+`inherit` names a runtime setting the Orchestrator configured, not the tier a
+delegation measurably ran at, and recording it would launder the same decay
+this file exists to stop under a string that "looks like" a value.
 
-TOKENS ON A DELEGATION RECORD
------------------------------
-Tokens are optional on delegation records (defaulting to null when omitted, to
-support runtimes like Antigravity where subagent completion messages carry no
-token usage payload). If available, `--tokens-total`, `--tokens-in`,
-`--tokens-out`, or `--tokens-unavailable "<runtime>: <reason>"` may be supplied.
-`--tokens-unavailable` alongside an actual token figure is refused
+An UNRESOLVABLE `--model` is exit 2 (`model_unknown`), not a null tier,
+UNLESS `--tier` supplies the tier explicitly. The tier-inversion check below
+reads the record's `tier` field, and a `--model` value it cannot resolve on
+its own -- `gpt-4o`, a name that mentions two tiers (`sonnet-or-opus`), a
+typo, or an honest non-Claude id such as `gemini-3.8-flash` -- used to record
+cleanly with `tier: null` and silently DELETE the check for that delegation.
+A mistyped flag must not be able to disable a gate, and a real non-Claude
+runtime must not be forced to lie about running on a Claude tier just to get
+recorded (two runs that actually executed on Google Antigravity with Gemini
+did exactly that). Resolvable means: `--model` contains exactly one of
+`haiku`/`sonnet`/`opus`/`fable`, case-insensitively, so `opus`, `Opus`,
+`opus-4.1`, `claude-opus-5` and `claude-fable-5-1` all resolve and `gpt-4o`
+does not. When `--model` resolves, `--tier` is optional and, if given, must
+agree (`tier_mismatch` otherwise). When `--model` does NOT resolve, `--tier`
+is REQUIRED -- the model is stored verbatim and the tier comes from `--tier`
+alone. Only `--event delegation` is checked -- a gate, phase or note record
+has no model or tier.
+
+TOKENS ARE MANDATORY ON A DELEGATION RECORD
+--------------------------------------------
+Field audit of 25 real runs: only 20 of 138 delegation records carried any
+token figure at all. A cost ledger that is 85% null on its own headline
+number is not a ledger, and the gap was never a refusal -- it was silence,
+because nothing required the Orchestrator to say why a number was missing.
+`--event delegation` now requires ONE of: `--tokens-total`, both
+`--tokens-in` and `--tokens-out`, a `--from-json` payload carrying any of
+those, or `--tokens-unavailable "<runtime>: <reason>"` -- free text naming
+the runtime and why no token figure could be measured (e.g. a runtime whose
+completion payload exposes no usage numbers at all). None of the four is
+`tokens_missing`, exit 2. This is the same integrity rule as the tier check
+above, applied to the other headline number: an absence must be a stated
+refusal, not a null nobody explains. `--tokens-unavailable` alongside an
+actual token figure (explicit or from `--from-json`) is refused too
 (`tokens_contradiction`, exit 2): a record cannot claim a measurement both
-exists and does not.
+exists and does not, and a downstream summary would have no way to know
+which half to believe.
 
 ONE DELEGATION, ONE RECORD (`duplicate_delegation`)
 ---------------------------------------------------
@@ -428,11 +459,102 @@ def check_tier_inversion(log_path, fields):
             TIER_ORDER[producer_tier]))
 
 
+class RunLogLock:
+    """Exclusive cross-process lock on the run log, held around one append.
+
+    On Windows the runtime's append is a seek-to-end then a write, not one
+    atomic step, so two unlocked appenders land at the same offset and one
+    record overwrites the other while both exit 0. Same design as
+    check_ledger.py's LedgerLock (deliberately a local copy: this script is
+    not a chained gate and carries none of the chain helper): the lock sits
+    on the log file itself -- `fcntl.flock` on POSIX, a `msvcrt.locking`
+    byte far past EOF on Windows -- so there is no sidecar and the OS drops
+    it if the holder dies. A wait past WAIT_SECONDS, or any lock error,
+    warns on stderr and the append goes ahead unlocked: a possibly-colliding
+    append beats a certainly-dropped record.
+    """
+
+    WAIT_SECONDS = 10.0
+    POLL_SECONDS = 0.005
+    WINDOWS_LOCK_OFFSET = 1 << 62
+
+    def __init__(self, log_path):
+        self.log_path = log_path
+        self.fh = None
+
+    def _lock_call(self, unlock):
+        """One non-blocking lock (or unlock) attempt; OSError when busy."""
+        if sys.platform == "win32":
+            import msvcrt
+            import os
+            os.lseek(self.fh.fileno(), self.WINDOWS_LOCK_OFFSET, os.SEEK_SET)
+            msvcrt.locking(self.fh.fileno(),
+                           msvcrt.LK_UNLCK if unlock else msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN if unlock
+                        else fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _acquired(self):
+        """True once locked, False while another holder has it."""
+        import errno
+        try:
+            self._lock_call(unlock=False)
+            return True
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK):
+                return False
+            raise
+
+    def __enter__(self):
+        import time
+        deadline = time.monotonic() + self.WAIT_SECONDS
+        try:
+            p = Path(self.log_path)
+            if str(p.parent):
+                p.parent.mkdir(parents=True, exist_ok=True)
+            self.fh = open(p, "ab")
+            while not self._acquired():
+                if time.monotonic() >= deadline:
+                    raise OSError("lock still held after {0}s".format(
+                        self.WAIT_SECONDS))
+                time.sleep(self.POLL_SECONDS)
+        except (OSError, ImportError, ValueError) as exc:
+            if self.fh is not None:
+                self.fh.close()
+                self.fh = None
+            print("Warning: appending to run log {0} without a lock: "
+                  "{1}".format(self.log_path, exc), file=sys.stderr)
+        return self
+
+    def __exit__(self, *exc_info):
+        if self.fh is not None:
+            try:
+                self._lock_call(unlock=True)
+            except OSError as exc:
+                print("Warning: could not release the lock on run log "
+                      "{0}: {1}".format(self.log_path, exc), file=sys.stderr)
+            self.fh.close()
+            self.fh = None
+        return False
+
+
 def append_record(log_path, record):
+    """Append one JSON line under RunLogLock. Failure is exit 2.
+
+    main holds the lock itself across its duplicate check and calls
+    write_record directly: the lock is not re-entrant.
+    """
+    with RunLogLock(log_path):
+        write_record(log_path, record)
+
+
+def write_record(log_path, record):
     """Append one JSON line, creating parent directories. Failure is exit 2.
 
     Unlike the gate ledger's best-effort write, this IS the artifact: a record
-    that silently failed to land is a measurement that never happened.
+    that silently failed to land is a measurement that never happened. The
+    caller holds RunLogLock.
     """
     try:
         p = Path(log_path)
@@ -502,7 +624,7 @@ Exit codes:
      --from-json, or an unwritable --log
 
 Self-test:
-  python record_run.py --self-test   (70 cases)
+  python record_run.py --self-test   (72 cases)
 """
 
 
@@ -539,26 +661,29 @@ def main(argv):
     parser.add_argument("--unit")
     parser.add_argument("--agent")
     parser.add_argument("--model",
-                        help="the model id the delegation ran at (e.g. inherit, "
-                             "pro, flash, sonnet); defaults to 'inherit' when "
-                             "omitted on delegation")
+                        help="the model id the delegation ran at; REQUIRED "
+                             "for --event delegation (may come via "
+                             "--from-json). 'inherit' is refused.")
     parser.add_argument("--tier",
-                        help="haiku|sonnet|opus|fable; optional override for "
-                             "Claude tier; must agree when --model already resolves")
+                        help="haiku|sonnet|opus|fable; REQUIRED when --model "
+                             "names no Claude tier on its own (e.g. a "
+                             "non-Claude runtime id); optional, and must "
+                             "agree, when --model already resolves")
     parser.add_argument("--duration-s", dest="duration_s")
     parser.add_argument("--tokens-in", dest="tokens_in")
     parser.add_argument("--tokens-out", dest="tokens_out")
     parser.add_argument("--tokens-total", dest="tokens_total")
     parser.add_argument("--tokens-unavailable", dest="tokens_unavailable",
                         help="free text \"<runtime>: <reason>\" explaining "
-                             "why no token figure could be measured; optional "
-                             "on delegation")
+                             "why no token figure could be measured; one of "
+                             "four ways to satisfy the token requirement on "
+                             "--event delegation")
     parser.add_argument("--rounds")
     parser.add_argument("--status")
     parser.add_argument("--note")
     parser.add_argument("--runtime",
                         help="the runtime the delegation/event ran under "
-                             "(e.g. claude-code, antigravity, cursor); "
+                             "(e.g. claude-code, antigravity); "
                              "recorded verbatim, never required")
     parser.add_argument("--from-json", dest="from_json",
                         help="a runtime completion payload; explicit flags win")
@@ -617,6 +742,27 @@ def main(argv):
     fields["phase"] = args.phase
     fields["event"] = args.event
     fields["note"] = args.note
+
+    # `inherit` is refused outright, on any event that carries a --model: it
+    # names a runtime setting the Orchestrator configured, not a measurement
+    # of the tier the delegation actually ran at.
+    if fields.get("model") and fields["model"].strip().lower() == "inherit":
+        print(json.dumps({
+            "recorded": False, "problem": "model_inherit",
+            "error": "--model 'inherit' names a runtime setting, not a "
+                     "measurement: record the tier the delegation actually "
+                     "ran at (--model naming a Claude tier, or --model "
+                     "<non-Claude id> --tier <haiku|sonnet|opus|fable>)."}))
+        return 2
+
+    # Checked AFTER --from-json is merged: the payload is a legitimate source
+    # for the tier. Only `delegation` is gated -- a gate/phase/note record has
+    # no model to report, and demanding one there would invite a fabrication.
+    if fields["event"] == "delegation" and not fields.get("model"):
+        return fail("--model is required for --event delegation: record the "
+                    "tier the delegation actually ran at (supply --model, or "
+                    "a --from-json payload carrying it)")
+
     # --tier: validate the value itself (any event may carry one), then
     # resolve the delegation's tier from --model and --tier together.
     explicit_tier = None
@@ -627,8 +773,6 @@ def main(argv):
                 args.tier, "/".join(sorted(TIER_ORDER, key=TIER_ORDER.get))))
 
     if fields["event"] == "delegation":
-        if not fields.get("model"):
-            fields["model"] = "inherit"
         resolved_tier = model_tier(fields.get("model"))
         if resolved_tier is not None:
             # --model already names a Claude tier: --tier is optional, and
@@ -650,15 +794,33 @@ def main(argv):
             # --model is stored verbatim.
             fields["tier"] = explicit_tier
         else:
-            # Unresolvable or non-Claude model with no --tier: records as None.
-            fields["tier"] = None
+            # Unresolvable and no --tier to fall back on. An unresolvable
+            # string recorded cleanly with tier: null and silently deleted
+            # the inversion check for that record.
+            print(json.dumps({
+                "recorded": False, "problem": "model_unknown",
+                "error": "--model {0!r} resolves to no tier: it must "
+                         "contain exactly one of {1} (case-insensitive), "
+                         "e.g. `opus`, `claude-opus-5` or "
+                         "`claude-fable-5-1` -- OR pass --tier <{1}> naming "
+                         "the tier this (likely non-Claude) model actually "
+                         "ran at. An unresolved tier is not a measured one, "
+                         "and recording it as null would disable the "
+                         "verifier-below-producer check for this delegation "
+                         "without saying so.".format(
+                             fields.get("model"),
+                             "/".join(sorted(TIER_ORDER,
+                                             key=TIER_ORDER.get)))}))
+            return 2
     else:
         fields["tier"] = explicit_tier
 
-    # Tokens on delegation records:
-    # Tokens are optional (default to null when absent).
-    # If --tokens-unavailable is given alongside any token figure,
-    # reject as contradiction.
+    # Tokens are mandatory on a delegation record: one of --tokens-total,
+    # both --tokens-in and --tokens-out, a --from-json payload carrying any
+    # of those (already merged above), or --tokens-unavailable -- and never
+    # both a figure and --tokens-unavailable at once (fields is already
+    # merged, so this catches an explicit flag OR a --from-json-supplied
+    # figure alike).
     if fields["event"] == "delegation":
         any_token_figure = (fields.get("tokens_total") is not None or
                             fields.get("tokens_in") is not None or
@@ -679,6 +841,29 @@ def main(argv):
                              fields.get("tokens_out"))}))
             return 2
 
+        tokens_present = (fields.get("tokens_total") is not None or
+                          (fields.get("tokens_in") is not None and
+                           fields.get("tokens_out") is not None))
+        if not tokens_present and not fields.get("tokens_unavailable"):
+            print(json.dumps({
+                "recorded": False, "problem": "tokens_missing",
+                "error": "--event delegation requires a token measurement: "
+                         "supply --tokens-total, both --tokens-in and "
+                         "--tokens-out, a --from-json payload carrying any "
+                         "of those, or --tokens-unavailable "
+                         "\"<runtime>: <reason>\" naming why none could be "
+                         "measured."}))
+            return 2
+
+    # The checks read the log and the write joins it, so all of it runs under
+    # one RunLogLock: two concurrent writers of the same tuple cannot both
+    # pass the duplicate check, and neither append overwrites the other.
+    with RunLogLock(args.log):
+        return check_and_append(args, fields, fail)
+
+
+def check_and_append(args, fields, fail):
+    """The read-then-append half of main; the caller holds RunLogLock."""
     # Duplicate is checked FIRST, and before the write: it decides whether
     # this record should exist at all, where the inversion check below judges
     # the content of a record that should. A re-wake writes nothing.
@@ -707,7 +892,7 @@ def main(argv):
     if problem:
         record["tier_inversion_reason"] = args.allow_tier_inversion.strip()
     try:
-        append_record(args.log, record)
+        write_record(args.log, record)
     except RecordError as exc:
         return fail(str(exc))
 
@@ -907,15 +1092,14 @@ def run_self_test():
                       "--tokens-unavailable", "test harness: not under test"]),
                 2)
 
-        # ---- --model is optional for a delegation record -----------------
-        def test_delegation_without_model_is_exit_0(self):
+        # ---- --model is mandatory for a delegation record ----------------
+        def test_delegation_without_model_is_exit_2_and_writes_nothing(self):
+            """The measured decay: a null tier is a decision nobody made."""
             self.assertEqual(
                 main(["--log", str(self.log), "--pipeline", "bgpdd-build",
                       "--phase", "Phase 1", "--event", "delegation",
-                      "--agent", "mason",
-                      "--tokens-unavailable", "test harness: not under test"]), 0)
-            self.assertEqual(self._lines()[0]["model"], "inherit")
-            self.assertIsNone(self._lines()[0]["tier"])
+                      "--agent", "mason"]), 2)
+            self.assertFalse(self.log.exists())
 
         def test_delegation_with_model_is_exit_0(self):
             self.assertEqual(
@@ -1010,29 +1194,43 @@ def run_self_test():
             self.assertEqual(self._delegate("nova", "haiku"), 0)
             self.assertEqual(self._delegate("luna", "sonnet"), 0)
 
-        # ---- unresolvable / non-Claude model records tier null ------------
+        # ---- model_unknown (audit3 F8) --------------------------------
 
-        def test_an_unresolvable_model_is_exit_0_and_records_tier_null(self):
+        def test_an_unresolvable_model_is_exit_2_and_records_nothing(self):
+            """A typo used to record tier: null and delete the check."""
             for model in ("gpt-4o", "o3-mini", "sonnet-or-opus",
                           "some-unnamed-model", "  "):
-                self.setUp()
-                self.assertEqual(self._delegate("mason", model), 0, model)
-                self.assertIsNone(self._lines()[0]["tier"])
+                self.assertEqual(self._delegate("mason", model), 2, model)
+            self.assertFalse(self.log.exists(),
+                             "a refused delegation wrote a record")
 
-        def test_unresolvable_model_records_verbatim(self):
-            code = main(["--log", str(self.log), "--pipeline",
-                         "bgpdd-build", "--phase", "Phase 1", "--event",
-                         "delegation", "--agent", "mason", "--model",
-                         "gpt-4o", "--unit", "M1",
-                         "--tokens-unavailable", "test harness"])
-            self.assertEqual(code, 0)
-            rec = self._lines()[0]
-            self.assertEqual(rec["model"], "gpt-4o")
-            self.assertIsNone(rec["tier"])
+        def test_the_model_unknown_error_names_the_problem_and_the_tiers(self):
+            import contextlib
+            import io
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = main(["--log", str(self.log), "--pipeline",
+                             "bgpdd-build", "--phase", "Phase 1", "--event",
+                             "delegation", "--agent", "mason", "--model",
+                             "gpt-4o", "--unit", "M1"])
+            self.assertEqual(code, 2)
+            data = json.loads(buf.getvalue())
+            self.assertEqual(data["problem"], "model_unknown")
+            self.assertIs(data["recorded"], False)
+            for tier in ("haiku", "sonnet", "opus"):
+                self.assertIn(tier, data["error"])
 
-        def test_explicit_tier_checks_inversion(self):
+        def test_a_typo_can_no_longer_disable_the_inversion_check(self):
+            """audit3 F8, end to end: opus producer, then a mistyped verifier.
+
+            The later Luna calls carry --rounds so each is its own delegation
+            rather than a duplicate of the first (see ONE DELEGATION, ONE
+            RECORD); the point under test is the tier, not the tuple.
+            """
             self.assertEqual(self._delegate("mason", "claude-opus-4-1"), 0)
             self.assertEqual(self._delegate("luna", "opus-4.1"), 0)  # resolves
+            self.assertEqual(self._delegate("luna", "gpt-4o",
+                                            extra=["--rounds", "2"]), 2)
             self.assertEqual(self._delegate("luna", "haiku",
                                             extra=["--rounds", "2"]), 1)
 
@@ -1194,14 +1392,29 @@ def run_self_test():
 
         # ---- --tier: explicit tier for non-Claude models ------------------
 
-        def test_non_claude_model_without_tier_records_tier_null(self):
+        def test_non_claude_model_without_tier_is_still_model_unknown(self):
             self.assertEqual(main([
                 "--log", str(self.log), "--pipeline", "bgpdd-build",
                 "--phase", "Phase 1", "--event", "delegation",
-                "--agent", "mason", "--model", "gemini-3.8-flash"]), 0)
-            rec = self._lines()[0]
-            self.assertEqual(rec["model"], "gemini-3.8-flash")
-            self.assertIsNone(rec["tier"])
+                "--agent", "mason", "--model", "gemini-3.8-flash",
+                "--tokens-unavailable",
+                "antigravity: no usage payload exposed"]), 2)
+            self.assertFalse(self.log.exists())
+
+        def test_model_unknown_error_mentions_the_tier_flag(self):
+            import contextlib
+            import io
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = main([
+                    "--log", str(self.log), "--pipeline", "bgpdd-build",
+                    "--phase", "Phase 1", "--event", "delegation",
+                    "--agent", "mason", "--model", "gemini-3.8-flash",
+                    "--tokens-unavailable", "n/a"])
+            self.assertEqual(code, 2)
+            data = json.loads(buf.getvalue())
+            self.assertEqual(data["problem"], "model_unknown")
+            self.assertIn("--tier", data["error"])
 
         def test_non_claude_model_with_tier_records_model_verbatim(self):
             self.assertEqual(main([
@@ -1257,41 +1470,48 @@ def run_self_test():
                 "antigravity: no usage payload exposed"]), 0)
             self.assertEqual(self._delegate("luna", "sonnet"), 1)
 
-        # ---- --model inherit is accepted ----------------------------------
+        # ---- --model inherit is refused ------------------------------------
 
-        def test_model_inherit_is_accepted_case_insensitively(self):
+        def test_model_inherit_is_refused_case_insensitively(self):
             for value in ("inherit", "Inherit", "INHERIT", "  inherit  "):
-                self.setUp()
                 code = main([
                     "--log", str(self.log), "--pipeline", "bgpdd-build",
                     "--phase", "Phase 1", "--event", "delegation",
-                    "--agent", "mason", "--model", value])
-                self.assertEqual(code, 0, value)
-                self.assertEqual(self._lines()[0]["model"], value)
-                self.assertIsNone(self._lines()[0]["tier"])
+                    "--agent", "mason", "--model", value,
+                    "--tokens-unavailable", "n/a"])
+                self.assertEqual(code, 2, value)
+            self.assertFalse(self.log.exists())
 
-        # ---- tokens and models are optional on a delegation record ---------
+        def test_model_inherit_error_names_the_problem(self):
+            import contextlib
+            import io
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = main([
+                    "--log", str(self.log), "--pipeline", "bgpdd-build",
+                    "--phase", "Phase 1", "--event", "delegation",
+                    "--agent", "mason", "--model", "inherit",
+                    "--tokens-unavailable", "n/a"])
+            self.assertEqual(code, 2)
+            data = json.loads(buf.getvalue())
+            self.assertEqual(data["problem"], "model_inherit")
+            self.assertIs(data["recorded"], False)
 
-        def test_delegation_without_any_token_form_records_null_tokens(self):
-            code = main(["--log", str(self.log), "--pipeline",
-                         "bgpdd-build", "--phase", "Phase 1", "--event",
-                         "delegation", "--agent", "mason", "--model",
-                         "opus"])
-            self.assertEqual(code, 0)
-            rec = self._lines()[0]
-            self.assertIsNone(rec["tokens_total"])
-            self.assertIsNone(rec["tokens_in"])
-            self.assertIsNone(rec["tokens_out"])
-            self.assertIsNone(rec["tokens_unavailable"])
+        # ---- tokens are mandatory on a delegation record -------------------
 
-        def test_delegation_without_model_succeeds(self):
-            code = main(["--log", str(self.log), "--pipeline",
-                         "bgpdd-build", "--phase", "Phase 1", "--event",
-                         "delegation", "--agent", "mason"])
-            self.assertEqual(code, 0)
-            rec = self._lines()[0]
-            self.assertEqual(rec["model"], "inherit")
-            self.assertIsNone(rec["tier"])
+        def test_delegation_without_any_token_form_is_tokens_missing(self):
+            import contextlib
+            import io
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = main(["--log", str(self.log), "--pipeline",
+                             "bgpdd-build", "--phase", "Phase 1", "--event",
+                             "delegation", "--agent", "mason", "--model",
+                             "opus"])
+            self.assertEqual(code, 2)
+            data = json.loads(buf.getvalue())
+            self.assertEqual(data["problem"], "tokens_missing")
+            self.assertFalse(self.log.exists())
 
         def test_tokens_total_alone_satisfies_the_requirement(self):
             self.assertEqual(main(self._base("--tokens-total", "500")), 0)
@@ -1302,9 +1522,9 @@ def run_self_test():
                 main(self._base("--tokens-in", "10", "--tokens-out", "5")), 0)
             self.assertEqual(self._lines()[0]["tokens_total"], 15)
 
-        def test_tokens_in_alone_is_recorded(self):
-            self.assertEqual(main(self._base("--tokens-in", "10")), 0)
-            self.assertEqual(self._lines()[0]["tokens_in"], 10)
+        def test_tokens_in_alone_is_not_enough(self):
+            self.assertEqual(main(self._base("--tokens-in", "10")), 2)
+            self.assertFalse(self.log.exists())
 
         def test_from_json_tokens_satisfy_the_requirement(self):
             payload = self.dir / "completion.json"
@@ -1327,10 +1547,10 @@ def run_self_test():
             self.assertEqual(rec["tokens_unavailable"],
                              "antigravity: usage payload exposes no token counts")
 
-        def test_blank_tokens_unavailable_records_null(self):
+        def test_blank_tokens_unavailable_does_not_satisfy_the_requirement(self):
             self.assertEqual(
-                main(self._base("--tokens-unavailable", "   ")), 0)
-            self.assertIsNone(self._lines()[0]["tokens_unavailable"])
+                main(self._base("--tokens-unavailable", "   ")), 2)
+            self.assertFalse(self.log.exists())
 
         def test_tokens_unavailable_alone_still_passes(self):
             """Red-team follow-up: the alone case must keep working once the
@@ -1391,15 +1611,74 @@ def run_self_test():
             self.assertEqual(main([
                 "--log", str(self.log), "--pipeline", "bgpdd-build",
                 "--phase", "Phase 1", "--event", "note",
-                "--runtime", "cursor"]), 0)
-            self.assertEqual(self._lines()[0]["runtime"], "cursor")
+                "--runtime", "claude-code"]), 0)
+            self.assertEqual(self._lines()[0]["runtime"], "claude-code")
 
         def test_runtime_is_optional_and_defaults_to_null(self):
             self.assertEqual(main(self._base(
                 "--tokens-unavailable", "test harness: not under test")), 0)
             self.assertIsNone(self._lines()[0]["runtime"])
 
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(RecordRunTests)
+        # ---- concurrent appenders (RunLogLock) ---------------------------
+        def _race(self, procs, argv_tail, per_proc):
+            """Start `procs` workers, release them together, return exits."""
+            import subprocess
+            import time
+            go = self.dir / "go"
+            workers = []
+            for n in range(procs):
+                ready = self.dir / "ready{0}".format(n)
+                workers.append((ready, subprocess.Popen(
+                    [sys.executable, "-c", CONCURRENT_WORKER,
+                     str(Path(__file__).resolve().parent), str(ready),
+                     str(go), str(per_proc), str(self.log)] + argv_tail,
+                    stdout=subprocess.DEVNULL)))
+            deadline = time.monotonic() + 120
+            while (not all(r.exists() for r, _ in workers)
+                   and time.monotonic() < deadline):
+                time.sleep(0.01)
+            go.touch()
+            return [w.wait(timeout=300) for _, w in workers]
+
+        def test_concurrent_appenders_lose_no_record(self):
+            """Unlocked, Windows appenders overwrite each other's lines."""
+            procs, per_proc = 5, 40
+            exits = self._race(procs, [
+                "--pipeline", "bgpdd-build", "--phase", "Phase 1",
+                "--event", "note", "--note", "x" * 200], per_proc)
+            self.assertEqual(exits, [0] * procs)
+            raw = self.log.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(raw), procs * per_proc)
+            self.assertEqual(len(self._lines()), procs * per_proc)
+
+        def test_concurrent_duplicate_delegations_record_once(self):
+            """The duplicate check and the append share one lock."""
+            procs = 5
+            exits = self._race(procs, [
+                "--pipeline", "bgpdd-build", "--phase", "Phase 1",
+                "--event", "delegation", "--unit", "M1", "--agent", "mason",
+                "--model", "opus", "--tokens-unavailable",
+                "test harness: not under test"], 1)
+            self.assertEqual(sorted(exits), [0] + [1] * (procs - 1))
+            self.assertEqual(len(self._lines()), 1)
+
+    CONCURRENT_WORKER = (
+        "import sys, time\n"
+        "from pathlib import Path\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "import record_run as rr\n"
+        "ready, go, n = sys.argv[2], sys.argv[3], int(sys.argv[4])\n"
+        "argv = ['--log'] + sys.argv[5:]\n"
+        "Path(ready).touch()\n"
+        "deadline = time.monotonic() + 120\n"
+        "while not Path(go).exists() and time.monotonic() < deadline:\n"
+        "    time.sleep(0.001)\n"
+        "code = 0\n"
+        "for _ in range(n):\n"
+        "    code = max(code, rr.main(argv))\n"
+        "sys.exit(code)\n")
+
+    suite =unittest.defaultTestLoader.loadTestsFromTestCase(RecordRunTests)
     result = unittest.TextTestRunner(verbosity=1).run(suite)
     return 0 if result.wasSuccessful() else 1
 

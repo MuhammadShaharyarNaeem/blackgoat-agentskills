@@ -16,14 +16,15 @@ The table is a constant in the script. A gate that re-derived it by parsing `age
 
 | Persona | Required beyond `<status>` / `<blockers>` | Source |
 |---|---|---|
-| mason, max | `<changed_files>` | Builder override |
-| dep, quinn, nova | `<changed_files>` **and** `<artifact>` | Hybrid write boundary |
+| mason, max | `<changed_files>` **and** `<changed_symbols>` | Builder override |
+| nova | `<changed_files>`, `<changed_symbols>` **and** `<artifact>` | Hybrid write boundary |
+| dep, quinn | `<changed_files>` **and** `<artifact>` | Hybrid write boundary |
 | forge | `<changed_skills>` | Meta override |
 | alex, aria, cipher, echo, iris, luna, rex, scout, vera | `<artifact>` | base-persona, unchanged |
 
 `<consumers>` is standing-but-optional for mason and nova only ("when the brief asks for it" — the `/bgpdd-bugfix` Phase 3 brief does). `--require consumers` promotes it for any persona, and warns when the persona named carries no standing consumers contract, because that is more often a caller slip than a real bar.
 
-`<fix_verification>` is required under `--fix-round`, per base-persona: "'Already complete' exempts nothing." The gate deliberately accepts `NOT VERIFIED — <what blocked you>` as a value; base-persona says a missing element is the defect, not an honest negative.
+`<fix_verification>` is required under `--fix-round`, per base-persona: "'Already complete' exempts nothing." The gate deliberately accepts `NOT VERIFIED — <what was observed instead>` (a weaker re-run; no `blocked_on:` line required on a `COMPLETE` handoff) and `BLOCKED — <what blocked you>` (never re-ran) as values; base-persona says a missing element is the defect, not an honest negative.
 
 ## The status enum
 
@@ -37,7 +38,7 @@ Where several unfenced blocks survive, the **last** is validated and a warning s
 
 ## `--since` and the diff subset
 
-Without `--since` the gate never asks git anything: it cannot know what window the handoff covers, and a clean tree after a legitimate commit would otherwise read as "the agent changed nothing". With `--since <ref>` it takes `git diff --name-only <ref>` (ref..working-tree, so committed-since *and* uncommitted edits both appear) plus `git ls-files --others --exclude-standard` (a brand-new source file is the commonest thing a builder names and diff never sees it), and requires `<changed_files>` to be a subset. **With more than one `--repo`, each path is diffed in the specific repo it resolved to, not the first one listed** — a milestone that touches two repos needs `<ref>` to be resolvable in both (e.g. a same-named tag placed in each at milestone start). A ref git cannot resolve in the repo a path resolved to is exit 2, never a pass — an unperformable check is not a satisfied one.
+Without `--since` the gate never asks git anything: it cannot know what window the handoff covers, and a clean tree after a legitimate commit would otherwise read as "the agent changed nothing". With `--since <ref>` it takes `git diff --name-only -z <ref>` (ref..working-tree, so committed-since *and* uncommitted edits both appear) plus `git ls-files -z --others --exclude-standard` (a brand-new source file is the commonest thing a builder names and diff never sees it), and requires `<changed_files>` to be a subset. `-z` is load-bearing: without it git C-quotes a non-ASCII or control-char path (`core.quotePath`), so a truthful `src/été.py` never matched and was refused as `changed_files_not_in_diff`. **With more than one `--repo`, each path is diffed in the specific repo it resolved to, not the first one listed** — a milestone that touches two repos needs `<ref>` to be resolvable in both (e.g. a same-named tag placed in each at milestone start). A ref git cannot resolve in the repo a path resolved to is exit 2, never a pass — an unperformable check is not a satisfied one.
 
 ## The honesty rules, and why they are narrow
 
@@ -233,3 +234,57 @@ On a `PARTIAL`/`BLOCKED` `<status>`, `<blockers>` must now carry at least one li
 This is the grammar `check_redelegation.py` reads to decide whether re-delegating the same agent on the same unit would just re-discover the same wall: `environment`/`credentials` halt outright, `dependency` halts unless explicitly waived, and `spec`/`defect` never halt on their own since those are squarely the agent's to keep working on.
 
 Self-test count: 57 → 67 — ten `blocked_on:` grammar cases: every known category, an unknown one, a missing line, the `COMPLETE` exemption, a bulleted/backtick-wrapped line, and the absent-`<blockers>`-is-only-`element_missing` non-duplication case.
+
+## `<changed_symbols>` (Unreleased)
+
+`<changed_files>` says which files a builder touched; it says nothing about what inside them changed, so a builder could name a function it never wrote and nothing mechanical would disagree. `<changed_symbols>` turns that claim into one checked against the diff.
+
+### The contract
+
+- **Who carries it.** Mason, Max and Nova must (`element_missing` otherwise). Every other persona may carry it without a warning.
+- **Entry grammar.** One `path::Name` per non-blank line; a list marker and backticks are stripped, and the line splits on its last `::`.
+  - `path` names exactly one file, read literally. Every git call on it runs with `--literal-pathspecs`, so `pages/users/[id].vue` is that file, and a glob-looking `src/*.py` or a leading-colon `:/` names only a file literally so called; with none, the claim is refused. A path that is a directory, or whose diff covers any file other than itself (a directory since deleted, even one that held a single file), is `changed_symbols_grammar`.
+  - `Name` is the bare identifier as source spells it. A `.` qualifier (`Store.load`) is `changed_symbols_grammar`: source rarely contains the dotted form, so every such honest claim would be refused. A hyphen stays legal, for PowerShell's `Verb-Noun`.
+  - `Name` is the innermost symbol edited: the method, not its enclosing class, unless the class declaration line itself changed. With method-scoped drivers an unchanged class line sits outside the hunk, so the class claim is refused.
+- **Files with no symbol.** A changed file with no code symbol (a doc, config or data file) is listed in `<changed_files>` only and omitted from `<changed_symbols>`. `path::none: ...` is not an entry and is `changed_symbols_grammar`.
+- **The `none:` form.** The only non-entry form is exactly one `none: <reason>` line with a non-empty reason, for a handoff with no code symbol at all. It is recorded in the ledger as `changed_symbols_none_reason` and never diff-checked.
+- **Under `--since`.** Each `Name` must appear as a whole word on an added, removed or context line inside a hunk of `git -c core.attributesFile=<temp> diff --no-color --no-ext-diff -M -W <ref> -- <path>`, never on the `---`/`+++` file headers, and on the `@@` header text only when it names an enclosing scope (below). Whole word, not substring, so `Get` cannot ride on `GetUser`.
+- **No cross-check with `<changed_files>`.** `<changed_symbols>` is not compared with `<changed_files>`, so a file left out of `<changed_symbols>` is never flagged.
+- **Problem codes.** `changed_symbols_grammar`: a line that is not `path::Name`, a qualified `Name`, a directory path (present or deleted), an empty `none:` reason, or `none:` mixed with entries. `symbol_not_in_diff`: a `Name` the diff does not show; the detail is the entry as written.
+
+### Why the diff rule is shaped this way
+
+A stricter rule, "+/- lines and `@@` headers only", rejected true claims about a change inside a multi-line constant whose name line was unchanged. Counting context lines inside the `-W` hunk widens it deliberately (convention #8): a name the diff's function context never shows is an invented or untouched claim, so the rule catches invention, not precise attribution. Two refinements of that widened rule, also deliberate (convention #8, refining this section's own rule):
+- **No `@@` header text.** Under `-W`, a hunk starts at the enclosing declaration, so git's header names the declaration *before* it, an untouched neighbour. The enclosing declaration is already a body line. One exception, a deliberate refinement of this header rule (convention #8): the header counts only while its scope is still open at the hunk's first changed line. Every non-blank line from the header's own line down to that first `+`/`-` line must be indented deeper than the header line, where deeper means the line's indent starts with the header's indent verbatim and is longer. A tab/space mix that differs from the header's is never deeper, the conservative reading, so no tab width is guessed. A change after a nested `def` starts the hunk at the nested def, so the outer function appears only in the header, and it counts. A sibling's scope closes at the next declaration's own line, so the sibling does not count, even when `-W`'s three leading context lines start the hunk in its tail and git's header names it. Git prints the header without its indentation, so the gate finds the line in the preimage blob (`--full-index` supplies its id): the nearest line above the hunk whose text starts with the header. A header line that cannot be found does not count. Preimage and diff lines are numbered as git numbers them, split on `\n` only. Known false refusals, all failing closed: a column-0 comment, or column-0 lines of a multi-line string, inside the enclosing function closes its scope; and with braces on their own line (C# Allman style) the enclosing method or class never gets header credit. Claim the innermost changed symbol instead.
+- **Built-in language drivers.** Git's default funcname heuristic matches only unindented lines, so `-W` widened an indented member (a C# method inside a class) to the whole file. A temporary `core.attributesFile` maps common extensions to drivers git ships (`csharp`, `python`, `java`, `golang`, `rust`, `ruby`, `php`, `kotlin`, `cpp`, `bash`, `perl`, `css`, `html`, `markdown`). The repository's own `.gitattributes` still wins. Git ships no JavaScript/TypeScript driver, so those files keep the default heuristic, and their residual is the enclosing unindented block.
+
+`--no-color --no-ext-diff --no-textconv` keep the caller's git config (`color.diff=always`, `diff.external`) and a repository's `diff.<driver>.textconv` from reshaping the output. An untracked file that cannot be read is exit 2, never a finding, and so is a failure to write the temporary attributes file. A failure to delete that file is ignored: a leaked temp file is harmless, but a cleanup error must never mask the verdict.
+
+Why no character ban on `path`: an earlier rule refused `*`, `?`, `[` and a leading `:`, which also refused real files such as Nuxt's `pages/users/[id].vue`. `--literal-pathspecs` already stops a path from widening the diff, so the ban only rejected valid input. A literal pathspec still prefix-matches every file under a directory, which is why an existing directory is refused before diffing and a deleted one when its diff names any file other than the path itself.
+
+**The untracked-file rule.** Builders never commit, so a symbol in a file they created is untracked and `git diff` shows nothing for it. An untracked file at `path` therefore counts as all-added lines, the same "diff plus untracked" rule `<changed_files>` already uses. A deleted file is still diffed (its removed lines count), and a renamed file is cited by its new path.
+
+Self-test count: 67 → 98 (the current total, which includes two later non-ASCII `--since` cases: a changed and an untracked non-ASCII path pass; an unchanged one is still refused).
+
+## `<changed_files>none:` for a capture-only run (2026-09-30)
+
+In `/bgpdd-bugfix`, Quinn's Phase 1 RED and Phase 4 GREEN change no repo file: they write only a capture and a report under the gitignored `.docs/` tree, and the lane passes `--since` on every return. Both honest spellings failed. `<changed_files>None</changed_files>` was read as a path (`path_missing`), and naming the capture was `changed_files_not_in_diff`, since git never lists an ignored file. The Orchestrator had to run the gate without `--since`, so the gate stopped checking anything.
+
+- **Grammar.** The element's entire content is one line, `none: <non-empty reason>`, matched case-insensitively after the list-marker and backtick stripping `<changed_symbols>` uses. It means "this handoff changed no repo file"; the real output is in `<artifact>`, which stays required and is checked exactly as before (existence, scaffolding sweep).
+- **Quinn only.** This is deliberately tighter than `<changed_symbols>`' `none:`, which any persona may write (convention #8). Quinn is the one persona whose runs legitimately produce only `.docs/` artifacts; every other persona's run exists to change files, so `none:` in its `<changed_files>` is a finding.
+- **Under `--since`.** The form claims the empty set, so the subset check passes trivially. It passes without `--since` too. The gate never checked for unclaimed edits, and this change does not add that check.
+- **Findings.** `changed_files_grammar`: `none:` from a persona other than Quinn, an empty reason, or `none:` mixed with paths (on its own line, or after a comma). The legacy bare `None` stays `path_missing`; `none: <reason>` is the only spelling.
+- **Ledger and JSON.** The reason is recorded as `changed_files_none_reason`, following `changed_symbols_none_reason`. The JSON report always carries the key (`null` unless the form passed), and the ledger record carries it only when set.
+
+Self-test count: 99 → 104. The new cases: Quinn's `none:` passes with and without `--since`, and its reason reaches the ledger; every other persona is refused; an empty reason fails; `none:` mixed with a path fails; bare `None` stays `path_missing`.
+
+## `--transcript`: the handoff came back from a delegation (Unreleased)
+
+Orchestrator Contract §1's "you MUST NOT roleplay a delegated agent's work yourself" was prose, and every artifact this gate reads could be authored by the Orchestrator: a handoff file, a report, and even `record_run.py`'s delegation record (its `--model` is typed by the same hand). The session transcript is the one artifact whose **roles** the runtime assigns, so `--transcript <session.jsonl>` checks the handoff block (all whitespace ignored — a runtime may re-wrap it) against the runtime's record:
+
+- **accepted** — the `tool_result` of a `Task`/`Agent`/`SendMessage` call (a foreground delegation; `delegation_source.via = delegation_result`, with the call's `subagent_type`), or a user-role text entry: a background agent's `<task-notification>` (mapped back to its `Agent` call through `<tool-use-id>`, `via = delegation_notification`) or a human paste (`via = user_message`);
+- **refused** — `handoff_not_delegated` when the block appears only in assistant text (the model wrote it), only in another tool's result (`cat handoff.md` returns what the model wrote), or only in a sidechain.
+
+Optional and backward compatible: without the flag nothing changes. The persona is reported (`subagent_type`), not enforced — a delegation to the wrong agent is still a delegation, and the roleplay this converts is the absence of one. Runtime scope is the Claude Code JSONL shape; a runtime with no transcript file simply does not pass the flag.
+
+Self-test count: 104 → 108 — a foreground delegation result passes (re-wrapped whitespace included), a background notification passes and maps to its call, assistant text / a `cat` of the file / a sidechain each fail `handoff_not_delegated`, and an unreadable transcript is exit 2.

@@ -8,7 +8,7 @@ date_added: "2026-06-26"
 
 # Agent Optimization Workflow (Forge Protocol)
 
-This workflow enables an agent (specifically the `forge` persona) to autonomously analyze a build cycle's output, diagnose failures, and formulate "Procedural Memories" (new rules) to inject into the `SKILL.md` files of other agents.
+This workflow enables an agent (specifically the `forge` persona) to analyze a build cycle's output, diagnose failures, and propose "Procedural Memories" (new rules) for the persona and `SKILL.md` files of other agents. Nothing is written to a destination file without the user's explicit approval of the exact text.
 
 ## Use this skill when
 - A build cycle has completed (successfully or unsuccessfully).
@@ -18,7 +18,7 @@ This workflow enables an agent (specifically the `forge` persona) to autonomousl
 
 ## Do not use this skill when
 - You are actively writing code or designing architecture.
-- The user has not provided explicit approval to edit `SKILL.md` files.
+- You would apply changes (Delegation 2) without the user's explicit approval of them. Delegation 1 runs before any approval — it only proposes.
 
 ## Worker Execution Contract
 
@@ -26,7 +26,7 @@ The protocol is a **two-delegation approval loop**: one delegation to analyze an
 
 ### Delegation 1 — Analyze & Propose
 
-1. **Parse telemetry, in evidence order — mechanical first.** (a) The **run-log summary and gate ledger**: `summarize_run.py --run-log <run-log.jsonl> --ledger <gates.jsonl>` (CLI contract: `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`), which gives per-agent and per-unit cost and the fired-versus-rubber-stamped classification of every gate; (b) the **game tape**; (c) the **durable reports** — `review-report.md`, `test-report.md`, `security-report.md`, `<handoff>` texts, error output, artifacts under `.docs/{project-name}/`, git history; (d) **filtered transcript greps**, last and only for what (a)–(c) left open. No statistical analyses. The order is the point: (a) was written by tools at the moment each thing happened, (b)–(c) by someone recalling it, and a diagnosis that starts from a narrative inherits that narrative's blind spots. (Deep dive: *Telemetry Parsing*, including the Claude Code transcript filtered-read rule.)
+1. **Parse telemetry, in evidence order — mechanical first.** (a) The **run-log summary and gate ledger**: `summarize_run.py --run-log <run-log.jsonl> --ledger <gates.jsonl>` (CLI contract: `summarize_run.py --help`), which gives per-agent and per-unit cost and the fired-versus-rubber-stamped classification of every gate; (b) the **game tape**; (c) the **durable reports** — `review-report.md`, `test-report.md`, `security-report.md`, `<handoff>` texts, error output, artifacts under `.docs/{project-name}/`, git history; (d) **filtered transcript greps**, last and only for what (a)–(c) left open. No statistical analyses. The order is the point: (a) was written by tools at the moment each thing happened, (b)–(c) by someone recalling it, and a diagnosis that starts from a narrative inherits that narrative's blind spots. (Deep dive: *Telemetry Parsing*, including the Claude Code transcript filtered-read rule.)
 2. **Diagnose root cause**: trace each failure up the chain of command — worker → manager → architect — and identify exactly which persona owns the root cause. (Deep dive: *Root Cause Diagnosis — The 5 Whys*.)
    - **Establish which version of the contract was in force at run time before attributing a deviation to an actor.** Compare the run's date against the destination files' own history — the plugin's git log and the target files' modification times — and diagnose against the text the actor actually executed. A rule added after the run cannot have been violated during it; a gap the current text already closes is a closed gap, not a lesson. Report a deviation caused by a contract that moved as version skew, name both versions, and propose nothing against the actor.
 3. **Formulate rules**: translate each root cause into a hard, generally-applicable rule — abstract away symptoms, file names, and project specifics. Before proposing, read the ENTIRE target file and apply the Pruning Protocol: never add a rule already covered, never append a rule that contradicts an existing one without proposing the old one's removal. (Deep dive: *Procedural Memory Formation*, with good/bad rule examples.)
@@ -43,7 +43,7 @@ Runs only when the Orchestrator re-invokes you with the User's approval of `agen
 2. **Never touch the YAML frontmatter** of any file. **Never delete or modify core persona descriptions.**
 3. **Vector A (runtime rules)**: in persona files (`agents/<name>.md`) and project rules files, edits are confined strictly to the `## Procedural Memories (Learned Lessons)` section at the very bottom — create it at the end if missing, and never create it empty. In methodology skills, an approved lesson lands as a contract-level rule inside the relevant rules list of the SKILL.md spine, NOT in a Procedural Memories section — skills carry contracts, not memories.
 4. **Vector B (approved structural surgery)**: changes from an approved `agent-audit` surgery plan may edit workflow steps, Methodology Dependencies tables, and persona body text — but ONLY the exact changes enumerated in the approved proposal.
-5. **Memory hygiene**: if a `## Procedural Memories` section exceeds 5 bullets, synthesize and compress (Compaction Rule); at 3+ entries, do not append — apply the Abstraction Rule (elevate → generalize → move) instead. (Deep dive: *Editing Details*, including the append format example.)
+5. **Memory hygiene — one threshold**: at 3 or more entries in a `## Procedural Memories` section, do not append — apply the Abstraction Rule (elevate → generalize → move, compressing what remains) instead. (Deep dive: *Editing Details*, including the append format example.)
 
 ## Deep Dive
 

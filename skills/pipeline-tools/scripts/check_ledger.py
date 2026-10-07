@@ -84,6 +84,99 @@ def ledger_prev_hash(ledger_path):
     return "genesis" if last is None else ledger_line_hash(last)
 
 
+class LedgerLock:
+    """Exclusive cross-process lock held around ONE ledger append.
+
+    Without it two concurrent appenders read the same last line and both
+    write the same `prev`: a chain break nobody forged (and, on Windows, a
+    record overwritten). The lock is taken on the ledger file itself, so
+    there is no sidecar file and no stale lock to clean up -- the OS drops
+    it if the holder dies: `fcntl.flock` on POSIX; on Windows a
+    `msvcrt.locking` byte far past EOF (mandatory there, so it sits where
+    no read or append ever reaches). Best-effort: a wait longer than
+    WAIT_SECONDS, or any lock error, warns on stderr and the append goes
+    ahead unlocked: it never raises, never skips its own append and never
+    changes an exit code, though an unlocked append may still collide
+    with a concurrent one.
+    """
+
+    WAIT_SECONDS = 10.0
+    POLL_SECONDS = 0.005
+    WINDOWS_LOCK_OFFSET = 1 << 62
+
+    def __init__(self, ledger_path):
+        self.ledger_path = ledger_path
+        self.fh = None
+
+    def _lock_call(self, unlock):
+        """One non-blocking lock (or unlock) attempt; OSError when busy."""
+        if sys.platform == "win32":
+            import msvcrt
+            import os
+            os.lseek(self.fh.fileno(), self.WINDOWS_LOCK_OFFSET, os.SEEK_SET)
+            msvcrt.locking(self.fh.fileno(),
+                           msvcrt.LK_UNLCK if unlock else msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN if unlock
+                        else fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _acquired(self):
+        """True once locked, False while another holder has it."""
+        import errno
+        try:
+            self._lock_call(unlock=False)
+            return True
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK):
+                return False
+            raise
+
+    def __enter__(self):
+        import time
+        deadline = time.monotonic() + self.WAIT_SECONDS
+        try:
+            self.fh = open(self.ledger_path, "ab")
+            while not self._acquired():
+                if time.monotonic() >= deadline:
+                    raise OSError("lock still held after {0}s".format(
+                        self.WAIT_SECONDS))
+                time.sleep(self.POLL_SECONDS)
+        except (OSError, ImportError, ValueError) as exc:
+            if self.fh is not None:
+                self.fh.close()
+                self.fh = None
+            print("Warning: appending to ledger {0} without a lock: "
+                  "{1}".format(self.ledger_path, exc), file=sys.stderr)
+        return self
+
+    def __exit__(self, *exc_info):
+        if self.fh is not None:
+            try:
+                self._lock_call(unlock=True)
+            except OSError as exc:
+                print("Warning: could not release the lock on ledger "
+                      "{0}: {1}".format(self.ledger_path, exc),
+                      file=sys.stderr)
+            self.fh.close()
+            self.fh = None
+        return False
+
+
+def ledger_append(p, record):
+    """Chain `record` onto ledger `p` and append it as one line, locked.
+
+    `prev` is read and the line written, closed and so flushed, inside one
+    LedgerLock. An OSError from the write itself propagates: each caller
+    keeps its own best-effort handling of a failed append.
+    """
+    with LedgerLock(p):
+        record["prev"] = ledger_prev_hash(p)
+        record["self"] = ledger_self_hash(record)
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+
+
 def ledger_self_hash(record):
     """sha256 of the record serialized canonically WITHOUT its `self` field."""
     body = {k: v for k, v in record.items() if k != "self"}
@@ -263,7 +356,7 @@ Exit codes:
   2  --ledger missing, or a ledger file that does not exist or is unreadable
 
 Self-test:
-  python check_ledger.py --self-test   (27 cases)
+  python check_ledger.py --self-test   (28 cases)
 """
 
 
@@ -315,11 +408,38 @@ def run_self_test():
         record = {"ts": "2026-09-07T00:00:00Z", "gate": gate, "argv": [],
                   "milestone": milestone, "inputs": {}, "verdict": verdict,
                   "exit": exit_code}
-        record["prev"] = ledger_prev_hash(ledger)
-        record["self"] = ledger_self_hash(record)
-        with open(ledger, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record) + "\n")
+        ledger_append(ledger, record)
         return record
+
+    def helper_span(src):
+        """(start, end) of the shared chain-helper block in a script's source."""
+        start = src.index("def ledger_line_hash(")
+        end = src.index("def ledger_self_hash(")
+        return start, src.index(chr(10) * 3, end) + 1
+
+    def outside_helper(src):
+        """The source with the shared helper block cut out, or unchanged."""
+        if "def ledger_line_hash(" not in src:
+            return src
+        start, end = helper_span(src)
+        return src[:start] + src[end:]
+
+    # A child process that appends N records through this file's own
+    # ledger_append -- byte-identical in every gate (drift guard below) --
+    # released together by a go-file so the appends genuinely overlap.
+    CONCURRENT_APPENDER = (
+        "import sys, time\n"
+        "from pathlib import Path\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "import check_ledger as c\n"
+        "ledger, ready, go, n = sys.argv[2], sys.argv[3], sys.argv[4], "
+        "int(sys.argv[5])\n"
+        "Path(ready).touch()\n"
+        "deadline = time.monotonic() + 120\n"
+        "while not Path(go).exists() and time.monotonic() < deadline:\n"
+        "    time.sleep(0.001)\n"
+        "for i in range(n):\n"
+        "    c.ledger_append(ledger, {'gate': 'concurrent', 'i': i})\n")
 
     def legacy(ledger, gate, verdict="PASS"):
         record = {"ts": "2026-09-01T00:00:00Z", "gate": gate, "argv": [],
@@ -566,7 +686,36 @@ def run_self_test():
             chained(self.ledger, "a.py", milestone="M3: Café — ünïcode")
             self.assertTrue(build_report(str(self.ledger))["pass"])
 
-        # ---- drift guard across the family's nineteen copies -----------
+        def test_concurrent_appenders_produce_an_intact_chain(self):
+            """Four processes appending at once still chain, and lose nothing.
+
+            Without LedgerLock two appenders read the same last line and
+            write the same `prev` -- the chain break two concurrent
+            run_quiet.py --capture calls produced for real.
+            """
+            import subprocess
+            import time
+            procs, per_proc = 4, 50
+            go = self.dir / "go"
+            workers = []
+            for n in range(procs):
+                ready = self.dir / "ready{0}".format(n)
+                workers.append((ready, subprocess.Popen(
+                    [sys.executable, "-c", CONCURRENT_APPENDER,
+                     str(Path(__file__).resolve().parent), str(self.ledger),
+                     str(ready), str(go), str(per_proc)])))
+            deadline = time.monotonic() + 120
+            while (not all(r.exists() for r, _ in workers)
+                   and time.monotonic() < deadline):
+                time.sleep(0.01)
+            go.touch()
+            for _, worker in workers:
+                self.assertEqual(worker.wait(timeout=300), 0)
+            report = build_report(str(self.ledger))
+            self.assertEqual(report["records"], procs * per_proc)
+            self.assertTrue(report["pass"], report["problem"])
+
+        # ---- drift guard across every copy of the chain helper ---------
 
         # Every gate that appends to a shared gates.jsonl. A missing comma
         # here is not a typo with no effect: `"update_state.py"` and
@@ -586,6 +735,7 @@ def run_self_test():
             "check_commit_gate.py",
             "check_coverage.py",
             "check_handoff.py",
+            "check_learn_approval.py",
             "check_openapi_diff.py",
             "check_quick_close.py",
             "check_red_green.py",
@@ -622,8 +772,13 @@ def run_self_test():
                 if script.name == "check_ledger.py":
                     continue
                 src = script.read_text(encoding="utf-8", errors="replace")
+                # The helper block itself now carries the append line, so
+                # look for an append OUTSIDE it: the locked call or a raw one.
+                rest = outside_helper(src)
                 if ("def append_ledger(" in src
-                        and 'with open(p, "a", encoding="utf-8") as fh:' in src):
+                        and ("ledger_append(p, record)" in rest
+                             or 'with open(p, "a", encoding="utf-8") as fh:'
+                             in rest)):
                     appending.append(script.name)
             self.assertEqual(
                 sorted(set(appending) - set(self.CHAINED_GATES)), [],
@@ -642,9 +797,7 @@ def run_self_test():
                 src = script.read_text(encoding="utf-8", errors="replace")
                 if "def ledger_line_hash(" not in src:
                     continue
-                start = src.index("def ledger_line_hash(")
-                end = src.index("def ledger_self_hash(")
-                end = src.index(chr(10) * 3, end) + 1
+                start, end = helper_span(src)
                 blocks.setdefault(src[start:end], []).append(script.name)
             self.assertGreaterEqual(len(blocks), 1)
             self.assertEqual(len(blocks), 1,
@@ -652,21 +805,29 @@ def run_self_test():
                                  [v for v in blocks.values()]))
 
         def test_every_chained_gate_actually_chains_its_append(self):
-            """The insertion, not just the helper: prev/self set before write."""
+            """The call site, not just the helper: every append goes through
+            the locked ledger_append, and none bypasses it with a raw write.
+            """
             here = Path(__file__).resolve().parent
-            unchained = []
+            unchained, unlocked = [], []
             for name in self.CHAINED_GATES:
                 script = here / name
                 if not script.is_file():
                     continue
-                src = script.read_text(encoding="utf-8", errors="replace")
-                if ('record["prev"] = ledger_prev_hash(p)' not in src
-                        or 'record["self"] = ledger_self_hash(record)' not in src):
+                rest = outside_helper(
+                    script.read_text(encoding="utf-8", errors="replace"))
+                if "ledger_append(p, record)" not in rest:
                     unchained.append(name)
+                if ('with open(p, "a", encoding="utf-8") as fh:' in rest
+                        or 'record["prev"] = ledger_prev_hash(p)' in rest):
+                    unlocked.append(name)
             self.assertEqual(unchained, [],
                              "these gates append to the shared ledger without "
                              "chaining; every record they write after a chained "
                              "one is `legacy-after-chained`")
+            self.assertEqual(unlocked, [],
+                             "these gates chain or append outside the locked "
+                             "ledger_append; concurrent runs break the chain")
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(CheckLedgerTests)
     result = unittest.TextTestRunner(verbosity=1).run(suite)

@@ -33,9 +33,9 @@ Scan the live conversation for user corrections, agent failures and retries, cir
      | `.docs/{project-name}/implementation/` (plan/lite/build/shipping/verify epic) | `run-log.jsonl` | `gates.jsonl` |
      | `.docs/{project-name}/implementation/bugs/<bug-slug>/` (bugfix, feature route) | `run-log.jsonl` | `gates.jsonl` |
      | `.docs/bugfix/<slug>/` (bugfix, standalone route) | `run-log.jsonl` | `gates.jsonl` |
-     | `.docs/quick/<date>-<slug>/` | **none** — the lane delegates to nobody (`bgpdd-quick` §1) | `gates.jsonl` |
+     | `.docs/quick/<date>-<slug>/` | `run-log.jsonl` — the one builder delegation (`bgpdd-quick` §1) | `gates.jsonl` |
      | `.docs/summary/` (discovery) | `run-log.jsonl` (`bgpdd-discovery` §1) | `gates.jsonl` |
-   - **A root with no run log gets the ledger alone**, and you say so in the brief rather than reporting an empty cost table: quick has no delegations to cost. A root whose files are simply absent is a lane that never ran here — skip it silently.
+   - **A root with no run log gets the ledger alone**, and you say so in the brief rather than reporting an empty cost table. A root whose files are simply absent is a lane that never ran here — skip it silently.
 2. **The game tapes** — `game-tape.md` under each root above that has one (quick's single bullet lives in its `note.md`; discovery and learn keep no tape, per the skeleton).
 3. **The durable reports** — `review-report.md`, `test-report.md`, `security-report.md`, handoffs relayed in-conversation, and recent `git log`.
 4. **Filtered transcript greps**, last and only for what the first three left open (never a full read — see Step 2).
@@ -54,13 +54,15 @@ State the hard filtered-read rule in the delegation: Forge NEVER full-reads a tr
 
 ### Step 3: PROPOSAL
 
-Forge does NOT write any proposal file. He returns the improvement plan inside his `<handoff>` — per lesson: the generalized rule, its destination file, and a one-line rationale for that layer. You read the plan from the handoff. **Validate it with `check_handoff.py --advisory`** (plus `--persona forge --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched him> --ledger <the lane's gate ledger>`): the brief declares no artifact, and `--advisory` is what lets a deliberately artifact-less handoff pass instead of failing `element_missing`. Without the flag this gate fails by design on every run of this step.
+Forge does NOT write any proposal file. He returns the improvement plan inside his `<handoff>` — per lesson: the generalized rule, its destination file on its own `- Destination: \`<path>\`` line, and a one-line rationale for that layer. **Save his returned handoff verbatim** to `.docs/learn/{YYYY-MM-DD}-{learn-slug}/forge-handoff.md` (`{learn-slug}` is a short kebab-case name for this run; the folder is the learn root, and its `gates.jsonl` is this lane's gate ledger) — byte-for-byte as he returned it, never re-typed or summarised: Step 4's approval gate hashes this file and Step 5's close gate checks it has not moved. **Validate it with `check_handoff.py --advisory`** (plus `--handoff <that file> --persona forge --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched him> --ledger <the learn root's gates.jsonl>`, and `--transcript <session transcript path>` when your runtime exposes one — Orchestrator Contract §1): the brief declares no artifact, and `--advisory` is what lets a deliberately artifact-less handoff pass instead of failing `element_missing`. Without the flag this gate fails by design on every run of this step.
 
-**One lesson, one destination, listed separately.** Reject a plan that groups several lessons under one destination line or leaves a lesson's destination implicit, and send it back for the pairing — this is what makes a later revert one file per lesson instead of an unpickable batch. A lesson that genuinely needs two files is two entries, not one.
+**One lesson, one destination, listed separately.** Reject a plan that groups several lessons under one destination line or leaves a lesson's destination implicit, and send it back for the pairing — this is what makes a later revert one file per lesson instead of an unpickable batch. A lesson that genuinely needs two files is two entries, not one. Mechanically: each lesson carries exactly one `- Destination: \`<path>\`` line — that line is what `check_learn_approval.py` reads, and a plan with none fails it (`plan_has_no_destinations`).
 
 ### Step 4: HALT & APPROVE
 
-Relay the plan from Forge's handoff to the user and halt. Never apply without explicit approval.
+Relay the plan from Forge's handoff to the user and halt — the relay names every lesson's destination path, since the gate below looks for an assistant message naming all of them. Never apply without explicit approval.
+
+**After the user answers**, run `python {PLUGIN_ROOT}/pipeline-tools/scripts/tool_registry.py for --lane bgpdd-learn --phase '-'` and execute the step-4 `check_learn_approval` line it prints (`--record`), with `--quote` set to the user's **whole** answer verbatim — a substring fails, and an answer carrying a negation word (`approval_negated`) fails even when quoted whole. Exit 1 = the runtime's record shows no plain approval — halt and ask again; never start Step 5 without this PASS. `--record` needs the session transcript: on a runtime that exposes none it exits 2, the prose rule above stands alone, and you say so in the relay. Guard rule 9 (`guard_action.py --explain`, problem code `learn_applies_only_what_was_approved`) denies a rule-layer write in a fresh learn run that this record has not approved, so a skipped `--record` is caught on a runtime that runs the hook.
 
 ### Step 5: APPLY
 
@@ -68,7 +70,7 @@ On approval, resume the same Forge instance if the runtime supports warm continu
 
 **Before applying**, optionally bracket the change with evals exactly as `bgpdd-shipping` Step 7 step 4 does: run `evals/weekly-check.ps1` (zero-token), relay the `run-evals.ps1` command it prints, and run the "before" leg only if the user asks for it.
 
-**After applying**, run the same post-apply guard `bgpdd-shipping` Step 7 step 6 specifies — `git diff --name-only`, HALT on any changed path that is `agents/blackgoat.md`, lies outside the plugin directory, or touches a frontmatter block, and leave the revert decision to the user. The rationale lives there; it is not restated here. It applies unchanged on this route: the apply is the same Forge doing the same edits, and a mid-epic run has *less* review around it than an end-of-epic one, not more.
+**After applying**, run the same post-apply guard `bgpdd-shipping` Step 7 step 6 specifies — `git diff --name-only`, HALT on any changed path that is `agents/blackgoat.md`, lies outside the plugin directory, or touches a frontmatter block, and leave the revert decision to the user. The rationale lives there; it is not restated here. It applies unchanged on this route: the apply is the same Forge doing the same edits, and a mid-epic run has *less* review around it than an end-of-epic one, not more. Then execute the step-5 `check_learn_approval` line (`--close`) from that same `tool_registry` listing: exit 1 = a watched file changed that no approved lesson named (or `agents/blackgoat.md`) — HALT and leave the revert to the user, as above. Its PASS is what disarms guard rule 9 for this learn root. Skipped only when Step 4's `--record` could not run (no transcript on this runtime), since `--close` requires that record.
 
 ### Escalate When
 
