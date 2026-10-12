@@ -25,6 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import agy_runtime  # noqa: E402
+import check_handoff  # noqa: E402  (its <changed_files> grammar, reused)
 
 PERSONAS = ("mason", "nova", "max")
 DEFAULT_MODEL = "gemini-3.8-flash-high"
@@ -42,7 +43,6 @@ BUILDER_RULES = (
 )
 
 HANDOFF_RE = re.compile(r"<handoff>.*?</handoff>", re.S)
-CHANGED_FILES_RE = re.compile(r"<changed_files>(.*?)</changed_files>", re.S)
 
 FINDING_ORDER = ("left_workspace", "head_moved", "timeout", "no_transcript", "no_handoff")
 
@@ -111,16 +111,14 @@ def extract_handoff(stdout):
 
 
 def listed_changed_files(handoff):
-    m = CHANGED_FILES_RE.search(handoff or "")
-    if not m:
-        return []
-    out = []
-    for line in m.group(1).splitlines():
-        item = line.strip()
-        item = re.sub(r"^[-*]\s+", "", item).strip().strip("`")
-        if item and not item.lower().startswith("none:"):
-            out.append(item.replace("\\", "/"))
-    return out
+    """`<changed_files>` paths read with check_handoff.py's own grammar
+    (`parse_elements` + `split_paths` + `normalize_path`: comma- or
+    newline-separated, bullets and backticks stripped), so this gate and
+    the handoff gate never disagree on what a builder listed. A `none:`
+    line lists nothing."""
+    values = check_handoff.parse_elements(handoff or "").get("changed_files") or []
+    return [check_handoff.normalize_path(p) for p in check_handoff.split_paths(values)
+            if not check_handoff.NONE_FORM_RE.match(p)]
 
 
 def build_prompt(workspace, brief_text):
@@ -351,7 +349,7 @@ Exit codes:
      the persona as a whole line), or agy reported a permission auto-deny
 
 Self-test:
-  python run_agy_builder.py --self-test   (14 cases; injected agy, temp git repos)
+  python run_agy_builder.py --self-test   (15 cases; injected agy, temp git repos)
 """
 
 
@@ -506,6 +504,22 @@ def run_self_test():
             code, rep = self.run_it(stdout=stdout)
             self.assertEqual(rep["changed_not_listed"], ["src/a.py"])
             self.assertEqual(rep["listed_not_changed"], ["src/b.py"])
+
+        def test_comma_separated_one_line_list(self):
+            stdout = GOOD_HANDOFF.replace("<changed_files>\nsrc/a.py\n</changed_files>",
+                                          "<changed_files>src/a.py, src/b.py</changed_files>")
+            orig = self.fake(stdout=stdout)
+
+            def invoke(argv, cwd, timeout_s):
+                (Path(cwd) / "src").mkdir(exist_ok=True)
+                (Path(cwd) / "src" / "b.py").write_text("x = 1\n", encoding="utf-8")
+                return orig(argv, cwd, timeout_s)
+            code, rep = run_builder("mason", self.ws, self.brief, self.out, timeout_s=600, invoke=invoke,
+                                    preflight=lambda p: (True, None), brain_root=self.brain,
+                                    cache_path=self.cache, installed_plugin_path=str(self.tmp / "plugin"))
+            self.assertEqual(code, 0, rep["findings"])
+            self.assertEqual(rep["changed_not_listed"], [])
+            self.assertEqual(rep["listed_not_changed"], [])
 
         def test_bad_persona_exits_2(self):
             with self.assertRaises(SystemExit) as cm:
