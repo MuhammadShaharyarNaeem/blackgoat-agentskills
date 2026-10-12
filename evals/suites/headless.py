@@ -23,7 +23,6 @@ import re
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 from . import common, contract, trigger, outcome
@@ -32,6 +31,39 @@ ANTIGRAVITY_DIR = common.EVALS_ROOT / "antigravity"
 if str(ANTIGRAVITY_DIR) not in sys.path:
     sys.path.insert(0, str(ANTIGRAVITY_DIR))
 import run as antigravity_run  # noqa: E402  (evals/antigravity/run.py)
+
+# The agy runtime pieces a lane also needs (invocation, scope preamble,
+# transcript attribution, escape tripwire, preflight) live in
+# skills/pipeline-tools/scripts/agy_runtime.py -- the installed plugin ships
+# no evals/, so the /bgpdd-build-agy lane could not import them from here.
+# Same sys.path route `evals/antigravity/transcript_tools.py` takes.
+PIPELINE_TOOLS_SCRIPTS = common.PLUGIN_ROOT / "skills" / "pipeline-tools" / "scripts"
+if str(PIPELINE_TOOLS_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(PIPELINE_TOOLS_SCRIPTS))
+import agy_runtime  # noqa: E402
+from agy_runtime import (  # noqa: E402,F401  (re-exported: the self-test reaches them as headless.<name>)
+    AGY_INFRA_RE,
+    DEFAULT_TIMEOUT_S,
+    HARD_KILL_GRACE_S,
+    ProcResult,
+    _ESCAPE_SEQ_RE,
+    _SCOPE_GUARD_NETWORK_TOOLS,
+    _SCOPE_GUARD_PATH_ARG_KEYS,
+    _SCOPE_GUARD_PATH_TOOLS,
+    _WINDOWS_ABS_PATH_RE,
+    _WINDOWS_ABS_PATH_TOKEN_RE,
+    _is_absolute_windows_path,
+    _is_evals_self_inspection,
+    _path_within_roots,
+    _scope_guard_mcp_argument,
+    _scope_guard_path_arg,
+    apply_scope_preamble,
+    build_argv_agy,
+    detect_workspace_escape,
+    scope_guard_allowed_roots,
+    scope_preamble,
+    to_go_duration,
+)
 
 # The plugin arm ONLY -- the baseline (plugin-disabled) arm needs the runtime's
 # OWN plugin toggled off (`claude plugin disable ...`), which is a decision
@@ -51,7 +83,6 @@ RESULTS_DIR = common.EVALS_ROOT / "results"
 # INFRA quarantine file sits next to it rather than in the shared dir.
 OUTCOME_RESULTS_DIR = common.OUTCOME_RESULTS_PATH.parent
 
-DEFAULT_TIMEOUT_S = 2700  # 45 minutes
 # Headless workspaces live OUTSIDE the plugin checkout by default. In-place
 # `start` puts them under cwd/eval-runs/ for the interactive skill, but a
 # headless worker that searches one directory upward from such a workspace
@@ -61,10 +92,12 @@ DEFAULT_TIMEOUT_S = 2700  # 45 minutes
 # allowed root, so a sibling-or-parent peek under it is harmless, exactly as
 # run-evals.ps1's temp working copies are.
 DEFAULT_RUN_ROOT = Path(tempfile.gettempdir()) / "bg-eval-runs"
-HARD_KILL_GRACE_S = 60
 
-AGY_CLI_BRAIN_ROOT = Path.home() / ".gemini" / "antigravity-cli" / "brain"
-AGY_LAST_CONVERSATIONS_PATH = Path.home() / ".gemini" / "antigravity-cli" / "cache" / "last_conversations.json"
+AGY_CLI_BRAIN_ROOT = agy_runtime.AGY_CLI_BRAIN_ROOT
+# Module-level seam: the self-test points it at a temp mapping file;
+# `resolve_agy_conversation_id`/`resolve_agy_transcripts` below read it at
+# call time and hand it to agy_runtime.
+AGY_LAST_CONVERSATIONS_PATH = agy_runtime.AGY_LAST_CONVERSATIONS_PATH
 
 # The three evals/antigravity/ cases judged off a transcript (invoke_subagent
 # counts, skill-read discipline, ...) rather than workspace artifacts alone --
@@ -73,7 +106,7 @@ AGY_LAST_CONVERSATIONS_PATH = Path.home() / ".gemini" / "antigravity-cli" / "cac
 CLAUDE_ANTIGRAVITY_TRANSCRIPT_CASES = {"quiet-runner-discipline", "round-bound", "skill-load-discipline"}
 
 INSTALLED_PLUGIN_PATHS = {
-    "agy": Path.home() / ".gemini" / "config" / "plugins" / "blackgoat-agentskills",
+    "agy": agy_runtime.AGY_INSTALLED_PLUGIN_PATH,
     "claude": Path.home() / ".claude" / "skills" / "blackgoat-agentskills",
 }
 
@@ -82,17 +115,6 @@ INSTALLED_PLUGIN_PATHS = {
 # process invocation seam
 # --------------------------------------------------------------------------
 
-class ProcResult:
-    """Uniform result of one CLI invocation -- what `RUNTIME_INVOKER` returns."""
-
-    def __init__(self, stdout="", stderr="", returncode=0, duration_s=0.0, timed_out=False):
-        self.stdout = stdout
-        self.stderr = stderr
-        self.returncode = returncode
-        self.duration_s = duration_s
-        self.timed_out = timed_out
-
-
 # Module-level so a self-test can shrink either for a fast, deterministic
 # heartbeat assertion without waiting on a real 30 s interval.
 HEARTBEAT_INTERVAL_S = 30
@@ -100,63 +122,11 @@ POLL_INTERVAL_S = 0.25
 
 
 def default_invoke(argv, cwd, timeout_s):
-    """Run `argv` with stdin closed (an empty file), capturing stdout/stderr.
-
-    Popen + a poll loop, not one blocking `subprocess.run` call: a live
-    `run --runtime agy/claude` prints nothing for however long the agent
-    takes, which was mistaken for a hang and Ctrl+C'd mid-run on a perfectly
-    healthy multi-minute call. This prints one heartbeat line to stderr
-    every `HEARTBEAT_INTERVAL_S` seconds instead, and still returns the same
-    `ProcResult` shape the rest of this module expects.
-
-    The CLI's OWN timeout flag (`--print-timeout` for agy) should fire well
-    before `timeout_s`; a Python-side hard kill fires `HARD_KILL_GRACE_S`
-    seconds after it as a backstop for a CLI that ignores its own flag or
-    hangs before it starts consuming its budget.
-    """
-    started = time.time()
-    fd, empty_stdin_path = tempfile.mkstemp(prefix="bg-headless-stdin-")
-    import os
-    os.close(fd)
-    runtime_name = argv[0] if argv else "?"
-    hard_deadline = started + timeout_s + HARD_KILL_GRACE_S
-    next_heartbeat = started + HEARTBEAT_INTERVAL_S
-    try:
-        with open(empty_stdin_path, "rb") as stdin_fh:
-            proc = subprocess.Popen(argv, cwd=str(cwd), stdin=stdin_fh,
-                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            timed_out = False
-            stdout = stderr = ""
-            while True:
-                try:
-                    stdout, stderr = proc.communicate(timeout=POLL_INTERVAL_S)
-                    break
-                except subprocess.TimeoutExpired:
-                    # Safe to retry communicate() after this -- it never
-                    # loses output already buffered (see the stdlib docs for
-                    # Popen.communicate's timeout parameter).
-                    now = time.time()
-                    if now >= hard_deadline:
-                        proc.kill()
-                        try:
-                            stdout, stderr = proc.communicate(timeout=HARD_KILL_GRACE_S)
-                        except subprocess.TimeoutExpired:
-                            stdout, stderr = stdout or "", stderr or ""
-                        timed_out = True
-                        break
-                    if now >= next_heartbeat:
-                        elapsed = int(now - started)
-                        print(f"  ... waiting on {runtime_name} (elapsed {elapsed}s, timeout {timeout_s}s)",
-                              file=sys.stderr)
-                        next_heartbeat = now + HEARTBEAT_INTERVAL_S
-            returncode = -1 if timed_out else proc.returncode
-            return ProcResult(stdout or "", stderr or "", returncode,
-                               time.time() - started, timed_out=timed_out)
-    finally:
-        try:
-            Path(empty_stdin_path).unlink()
-        except OSError:
-            pass
+    """`agy_runtime.default_invoke` with this module's own heartbeat/poll
+    intervals, read at call time so the self-test's overrides apply."""
+    return agy_runtime.default_invoke(argv, cwd, timeout_s,
+                                      heartbeat_interval_s=HEARTBEAT_INTERVAL_S,
+                                      poll_interval_s=POLL_INTERVAL_S)
 
 
 # Module-level seam -- the self-test replaces this with a fake so it never
@@ -164,28 +134,6 @@ def default_invoke(argv, cwd, timeout_s):
 # run a CLI goes through this name (never `subprocess` directly), so a test
 # double sees every invocation this module makes.
 RUNTIME_INVOKER = default_invoke
-
-
-# --------------------------------------------------------------------------
-# Go-duration formatting (agy's `--print-timeout`)
-# --------------------------------------------------------------------------
-
-def to_go_duration(total_seconds):
-    """`2700` -> `"45m"`, `90` -> `"1m30s"` -- the flag format `agy
-    --print-timeout` takes (a Go `time.Duration` literal)."""
-    total_seconds = int(round(total_seconds))
-    if total_seconds <= 0:
-        return "0s"
-    hours, rem = divmod(total_seconds, 3600)
-    minutes, secs = divmod(rem, 60)
-    parts = []
-    if hours:
-        parts.append(f"{hours}h")
-    if minutes:
-        parts.append(f"{minutes}m")
-    if secs or not parts:
-        parts.append(f"{secs}s")
-    return "".join(parts)
 
 
 # --------------------------------------------------------------------------
@@ -236,8 +184,6 @@ def print_installed_plugin_provenance(info):
 # --------------------------------------------------------------------------
 # INFRA classification
 # --------------------------------------------------------------------------
-
-AGY_INFRA_RE = re.compile(r"(?i)^jetski:|no output produced|auto-denied|headless mode cannot prompt")
 
 # Ported verbatim from run-evals.ps1's $InfraOutputPatterns.
 CLAUDE_INFRA_PATTERNS = [
@@ -291,37 +237,11 @@ def effective_output_for_infra(runtime, suite, handoff_to, workspace, stdout):
 # workspace-scope preamble (guard 1 -- the 2026-09-15 incident)
 # --------------------------------------------------------------------------
 
-def scope_preamble(workspace):
-    """Exact text prepended to every prompt this runner composes for a
-    headless CLI, naming `workspace` as the entire project and forbidding
-    any excursion outside it. Mirrors what the interactive path already does
-    (`skills/bg-eval/SKILL.md` Phase 2: "Your working copy is <workspace>.")
-    -- headless now says the same thing, just more explicitly, since there is
-    no human in the loop to notice a runaway.
-
-    NEVER applied to `build_claude_contract_command_text`'s output: that path
-    runs a case's own `## Command` block verbatim for parity with
-    `run-evals.ps1`, and that block IS the measurement -- altering it would
-    change what is being graded, not just what is being guarded."""
-    return (f"Your working copy is {workspace}. Treat it as the entire project: every "
-            "relative path resolves there. Do not read, search, or modify anything "
-            "outside it; do not look for other repositories or projects on this "
-            "machine; do not call external services, issue trackers, MCP tools, or "
-            "the network. Never open the plugin evals/ directory or any earlier "
-            "runs artifacts, results, or transcripts; they are not part of the project. If "
-            "something the task needs is not inside the working "
-            "copy, stop and say so. Repeat these restrictions, verbatim, at the top of every "
-            "briefing you write for a delegated worker; they bind the workers exactly as they "
-            "bind you. Delegation is blocking: invoke each worker synchronously, wait for "
-            "its return before doing anything else, and never end your turn while a worker "
-            "is outstanding; nobody is at the keyboard to resume you. Before you finish, "
-            "stop every background process you started "
-            "(servers, watchers); a process left running delays the run until its timeout.")
-
-
-def apply_scope_preamble(prompt, workspace):
-    """`scope_preamble(workspace)` + two newlines + `prompt` verbatim."""
-    return f"{scope_preamble(workspace)}\n\n{prompt}"
+# `scope_preamble`/`apply_scope_preamble` live in agy_runtime (imported
+# above): the exact text prepended to every prompt this runner composes for
+# a headless CLI. NEVER applied to `build_claude_contract_command_text`'s
+# output: that path runs a case's own `## Command` block verbatim for parity
+# with `run-evals.ps1`, and that block IS the measurement.
 
 
 def _record_prompt_scope(marker_path, prompt_scoped, prompt_sent_sha256):
@@ -342,22 +262,11 @@ def _record_prompt_scope(marker_path, prompt_scoped, prompt_sent_sha256):
 # argv builders
 # --------------------------------------------------------------------------
 
-def build_argv_agy(prompt, model=None, timeout_s=DEFAULT_TIMEOUT_S, skip_permissions=True,
-                    mode="accept-edits"):
-    """`agy -p "<prompt>" --mode <mode> [--model "<name>"]
-    --print-timeout <duration> [--dangerously-skip-permissions]` -- see the
-    module docstring for the source probe. `mode` defaults to
-    `"accept-edits"` for every suite except trigger under agy, which passes
-    `"plan"` (guard 2 -- parity with the claude trigger run's own
-    `--permission-mode plan`: a trigger case only needs to observe which
-    skill gets read, never to let the model actually edit or run anything)."""
-    argv = ["agy", "-p", prompt, "--mode", mode,
-            "--print-timeout", to_go_duration(timeout_s)]
-    if skip_permissions:
-        argv.append("--dangerously-skip-permissions")
-    if model:
-        argv += ["--model", model]
-    return argv
+# `build_argv_agy` lives in agy_runtime (imported above). Every suite passes
+# its default `mode="accept-edits"` except trigger under agy, which passes
+# `"plan"` (guard 2 -- parity with the claude trigger run's own
+# `--permission-mode plan`: a trigger case only needs to observe which skill
+# gets read, never to let the model actually edit or run anything).
 
 
 def build_argv_claude_trigger(prompt, model=None):
@@ -508,219 +417,29 @@ def claude_mentioned_only(stream_text, expected_skill, acceptable_alternatives):
 # --------------------------------------------------------------------------
 
 def resolve_agy_conversation_id(workspace, cache_path=None):
-    """The `agy` conversation id for `workspace`'s cwd, read from
-    `~/.gemini/antigravity-cli/cache/last_conversations.json` (absolute cwd
-    -> conversation id), or `None` if the CLI never ran there / the mapping
-    file is missing. Compared via `normalize_path` on both sides."""
-    cache_path = Path(cache_path) if cache_path else AGY_LAST_CONVERSATIONS_PATH
-    if not cache_path.is_file():
-        return None
-    try:
-        mapping = json.loads(cache_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    target = common.transcript_tools.normalize_path(str(workspace))
-    for cwd_key, conversation_id in (mapping or {}).items():
-        if common.transcript_tools.normalize_path(cwd_key) == target:
-            return conversation_id
-    return None
+    """`agy_runtime.resolve_agy_conversation_id`, defaulting the mapping file
+    to this module's `AGY_LAST_CONVERSATIONS_PATH` (read at call time -- the
+    self-test's seam)."""
+    return agy_runtime.resolve_agy_conversation_id(
+        workspace, cache_path=cache_path or AGY_LAST_CONVERSATIONS_PATH)
 
 
 def resolve_agy_transcripts(workspace, window_start, window_end, brain_root=None, cache_path=None):
-    """Attribute a headless `agy` run's conversation deterministically via
-    `last_conversations.json`; fall back to the window/workspace-mention
-    heuristic (`find_run_transcripts`) when the mapping has no entry."""
-    brain_root = brain_root or AGY_CLI_BRAIN_ROOT
-    conversation_id = resolve_agy_conversation_id(workspace, cache_path=cache_path)
-    if conversation_id:
-        transcripts = common.transcript_tools.transcripts_for_conversation(
-            conversation_id, window_start, window_end, brain_root)
-        if transcripts.get("parent"):
-            return transcripts
-    return common.transcript_tools.find_run_transcripts(
-        window_start, window_end, brain_root, workspace=str(workspace))
+    """`agy_runtime.resolve_agy_transcripts` with the same mapping-file
+    default as `resolve_agy_conversation_id` above."""
+    return agy_runtime.resolve_agy_transcripts(
+        workspace, window_start, window_end, brain_root=brain_root,
+        cache_path=cache_path or AGY_LAST_CONVERSATIONS_PATH)
 
 
 # --------------------------------------------------------------------------
 # workspace-scope tripwire (guard 3 -- the 2026-09-15 incident)
 # --------------------------------------------------------------------------
 
-# Antigravity/agy tool names whose path-like argument must resolve inside an
-# allowed root. Checked in this order against each call's own `args` dict --
-# whichever key is present wins (a call carries exactly one of these).
-_SCOPE_GUARD_PATH_TOOLS = ("view_file", "list_dir", "find_by_name", "grep_search",
-                           "write_to_file", "replace_file_content", "multi_replace_file_content")
-_SCOPE_GUARD_PATH_ARG_KEYS = ("AbsolutePath", "DirectoryPath", "SearchDirectory", "SearchPath", "TargetFile", "Path")
-
-# Any call to one of these is a flag regardless of its arguments -- the
-# incident's four `call_mcp_tool` calls to `linear` had no in-workspace
-# reading at all; the point is that a headless run must never reach an
-# external service, full stop.
-_SCOPE_GUARD_NETWORK_TOOLS = ("read_url_content", "search_web", "call_mcp_tool")
-
-_WINDOWS_ABS_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
-# A drive-letter token must not be preceded by a letter or digit: `http://` ends in
-# `p:/` and matched the unanchored form, flagging every `curl http://localhost:...`
-# reproduction command as an escape (bgpdd-bugfix-lane run 1, 2026-09-14 22:56Z).
-_ESCAPE_SEQ_RE = re.compile(r"\\[ntr]")  # a literal backslash-n/-t/-r left by double-encoded args
-_WINDOWS_ABS_PATH_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s\"']*")
-
-
-def _is_absolute_windows_path(path):
-    if not path:
-        return False
-    return bool(_WINDOWS_ABS_PATH_RE.match(path.strip().strip('"').strip("'")))
-
-
-def _is_evals_self_inspection(path, workspace):
-    """True when `path` points anywhere under an `evals/` directory that is
-    not the run's own workspace -- the harness's cases, graders, results and
-    archived transcripts, wherever they live (the checkout, the installed
-    plugin clone). Reading them is self-inspection, so it is an escape even
-    inside an otherwise allowed root: on 2026-09-15 00:03Z a Quinn worker
-    grep-searched the installed clone for its bug slug, found a committed
-    outcome-run transcript of the same case under
-    `evals/outcome/results/artifacts/`, and read it."""
-    norm = common.transcript_tools.normalize_path(path)
-    ws = common.transcript_tools.normalize_path(str(workspace)).rstrip("/") + "/"
-    return "/evals/" in norm and not norm.startswith(ws)
-
-
-def _path_within_roots(path, normalized_roots):
-    """True if `path`'s normalized segments start with one allowed root's
-    segments -- a prefix match on path SEGMENTS (`C:/Gorelo` must not match
-    an allowed root `C:/Go`), never a bare string prefix."""
-    norm = common.transcript_tools.normalize_path(path)
-    segs = [p for p in norm.split("/") if p]
-    for root in normalized_roots:
-        root_segs = [p for p in root.split("/") if p]
-        if root_segs and segs[:len(root_segs)] == root_segs:
-            return True
-    return False
-
-
-def scope_guard_allowed_roots(workspace, installed_plugin_path, brain_root=None):
-    """Every root a headless run's own tool calls may legitimately touch:
-    the workspace itself, the installed plugin tree, the Antigravity CLI's
-    own scratch/brain dirs (`~/.gemini/antigravity-cli/`, `~/.gemini/
-    antigravity/`), the resolved `brain_root` (when it differs), the system
-    temp dir, and the running interpreter's own installation dir(s) -- a
-    headless run legitimately shells out to `python`/`pip` from its
-    workspace, but `python`/its stdlib living outside the workspace is not
-    itself an escape."""
-    roots = [str(workspace)]
-    if installed_plugin_path:
-        roots.append(str(installed_plugin_path))
-    roots.append(str(Path.home() / ".gemini" / "antigravity-cli"))
-    roots.append(str(Path.home() / ".gemini" / "antigravity"))
-    if brain_root:
-        roots.append(str(brain_root))
-    roots.append(str(Path(tempfile.gettempdir())))
-    roots.append(str(Path(sys.exec_prefix)))
-    if sys.prefix != sys.exec_prefix:
-        roots.append(str(Path(sys.prefix)))
-    return [common.transcript_tools.normalize_path(r) for r in roots if r]
-
-
-def _scope_guard_path_arg(call):
-    args = call.get("args") or {}
-    for key in _SCOPE_GUARD_PATH_ARG_KEYS:
-        if key in args:
-            return common.transcript_tools.unwrap_arg(args.get(key))
-    return None
-
-
-def _scope_guard_mcp_argument(call):
-    """Best-effort human-readable label for a `call_mcp_tool` call -- the
-    exact arg-key names an installed MCP client uses aren't part of this
-    repo's documented transcript shape, so this reads whichever of the
-    plausible keys is present rather than assuming one."""
-    args = call.get("args") or {}
-    server = common.transcript_tools.unwrap_arg(
-        args.get("ServerName") or args.get("Server") or args.get("server"))
-    tool = common.transcript_tools.unwrap_arg(
-        args.get("ToolName") or args.get("Tool") or args.get("tool"))
-    if server or tool:
-        return " ".join(p for p in (server, tool) if p)
-    return "call_mcp_tool"
-
-
-def detect_workspace_escape(transcripts, workspace, installed_plugin_path, brain_root=None):
-    """Post-run tripwire for the 2026-09-15 incident: a headless run that
-    wanders outside its fixture workspace while permissions are skipped --
-    searching the machine for a "real" repository, grepping another project,
-    calling an issue tracker over MCP. Meaningful only for `agy`'s own
-    Antigravity-shaped transcripts (`view_file`/`run_command`/`call_mcp_tool`
-    are agy's tool vocabulary, not `claude`'s); a caller with no such
-    transcript should not call this at all -- see each `_run_*`'s
-    `left_workspace: null` handling for `runtime == "claude"`.
-
-    Walks every attributed conversation (`transcripts["all"]`, chronological
-    by `first_ts` -- the same "lives only in transcripts['all']" case
-    `trigger.py`'s module docstring rule 2 documents: a bare-prompt headless
-    run has no `"You are <Name>, the ..."` briefing opener, so it is neither
-    `parent` nor a `subagent`), and within each, its steps/tool calls in file
-    order. Flags:
-
-      - a path-arg tool (`view_file`, `list_dir`, `find_by_name`,
-        `grep_search`, `write_to_file`, `replace_file_content`,
-        `multi_replace_file_content`) whose path argument is an absolute
-        Windows path outside every allowed root;
-      - a `run_command` whose `Cwd` is an absolute path outside every
-        allowed root, OR whose `CommandLine` contains an absolute-path
-        token (`[A-Za-z]:\\` / `[A-Za-z]:/`) outside every allowed root --
-        `git -C C:\\Gorelo\\X grep ...` run from inside the workspace is
-        still an escape;
-      - any `call_mcp_tool` at all;
-      - any `read_url_content`/`search_web` call, or a tool whose name
-        contains "browser".
-
-    Returns `{"escaped": bool, "first": {"tool", "argument", "created_at",
-    "conversation_id"} | None, "count": int}` -- `first` is always the FIRST
-    escaping call encountered in the walk order above, never the worst or
-    the last."""
-    roots = scope_guard_allowed_roots(workspace, installed_plugin_path, brain_root)
-    convs = sorted((transcripts or {}).get("all") or [], key=lambda c: c.get("first_ts") or "")
-    first = None
-    count = 0
-    for conv in convs:
-        steps = common.transcript_tools.parse_transcript(conv["dir"])
-        for call in common.transcript_tools.iter_tool_calls(steps):
-            name = call.get("name")
-            argument = None
-            if name in _SCOPE_GUARD_PATH_TOOLS:
-                path = _scope_guard_path_arg(call)
-                if path and _is_absolute_windows_path(path) and (
-                        _is_evals_self_inspection(path, workspace) or not _path_within_roots(path, roots)):
-                    argument = path
-            elif name == "run_command":
-                args = call.get("args") or {}
-                cwd = common.transcript_tools.unwrap_arg(args.get("Cwd"))
-                cmdline = common.transcript_tools.unwrap_arg(args.get("CommandLine")) or ""
-                if cwd and _is_absolute_windows_path(cwd) and (
-                        _is_evals_self_inspection(cwd, workspace) or not _path_within_roots(cwd, roots)):
-                    argument = cmdline or cwd
-                else:
-                    # Transcript CommandLine values keep JSON escapes as two-char
-                    # sequences, so a multi-line python -c reads 'as f:' + backslash-n
-                    # as drive f: (nova-ui-contract, 2026-09-15 04:30Z, a false
-                    # left_workspace). Blank those escapes before scanning.
-                    for token in _WINDOWS_ABS_PATH_TOKEN_RE.findall(_ESCAPE_SEQ_RE.sub(" ", cmdline)):
-                        if _is_evals_self_inspection(token, workspace) or not _path_within_roots(token, roots):
-                            argument = cmdline
-                            break
-            elif name == "call_mcp_tool":
-                argument = _scope_guard_mcp_argument(call)
-            elif name in ("read_url_content", "search_web") or (name and "browser" in name.lower()):
-                argument = name
-            if argument is not None:
-                count += 1
-                if first is None:
-                    first = {"tool": name, "argument": argument,
-                             "created_at": call.get("created_at"),
-                             "conversation_id": conv.get("conversation_id")}
-    return {"escaped": first is not None, "first": first, "count": count}
-
+# `detect_workspace_escape` and its allowed-roots helpers live in
+# agy_runtime (imported above); a caller with no Antigravity-shaped
+# transcript (runtime claude) does not call it at all -- see each `_run_*`'s
+# `left_workspace: null` handling.
 
 def _report_workspace_escape(escape_result):
     first = escape_result["first"]
@@ -733,20 +452,9 @@ def _report_workspace_escape(escape_result):
 # --------------------------------------------------------------------------
 
 def preflight_agy(probe=False):
-    try:
-        proc = subprocess.run(["agy", "agents"], capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return False, f"could not run `agy agents`: {exc}"
-    out = proc.stdout or ""
-    if proc.returncode != 0 or "luna" not in out or "mason" not in out:
-        return False, (f"`agy agents` did not list both luna and mason -- is the plugin loaded "
-                        f"from {INSTALLED_PLUGIN_PATHS['agy']}?")
-    if probe:
-        result = RUNTIME_INVOKER(["agy", "-p", "reply with the word READY", "--print-timeout", "2m"],
-                                  Path.cwd(), 120)
-        if "READY" not in (result.stdout or ""):
-            return False, "agy preflight probe did not reply READY"
-    return True, None
+    """`agy_runtime.preflight_agy` through this module's `RUNTIME_INVOKER`
+    seam (read at call time)."""
+    return agy_runtime.preflight_agy(probe=probe, invoker=RUNTIME_INVOKER)
 
 
 def preflight_claude(probe=False):
