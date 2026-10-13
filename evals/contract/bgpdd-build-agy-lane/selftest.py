@@ -12,6 +12,11 @@ real `grade.ps1`, asserting the exact set of failed criteria:
   ungated       hand `git commit`, no commit-gate PASS in the ledger -> fails exactly {5}
   claude-mason  Mason ALSO delegated as a Claude subagent         -> fails exactly {1}
   untouched     the fixture after `base`, nothing ran             -> fails all eight, no crash
+  gate-mentions shell commands that only NAME source paths (gate flags, cat -n,
+                >/dev/null, 2>&1) + a run_agy_builder --help      -> no failure, no INFRA note
+  write-redirect `echo x > src/strings.js` by the main session    -> fails exactly {2}
+  write-sed     `sed -i ... ./src/strings.js` by the main session -> fails exactly {2}
+  agy-infra     a real gate call whose JSON result is ERROR       -> no failure, INFRA note printed
 
 Artifacts come from the real writers where one exists: the agy --out file is
 `run_agy_builder.write_out` over the real `git status`, run-log lines are real
@@ -213,6 +218,36 @@ def build(scenario):
     if scenario == "claude-mason":
         events.append(tool_use("t10", "Agent", {"subagent_type": "blackgoat-agentskills:mason", "model": "opus",
                                                 "description": "build", "prompt": "..."}))
+    if scenario == "gate-mentions":
+        # Reproduces run 20261013T071210Z's criterion-2 false positives: commands that
+        # only NAME source paths (gate flag values via a $S variable, cat -n, git
+        # diff) beside >/dev/null and 2>&1 redirects - plus the --help call whose
+        # text says "preflight" and "ERROR", which must not raise the INFRA note.
+        cd = f'cd "{ws.as_posix()}" && '
+        for i, cmd in enumerate([
+            cd + 'S=skills/pipeline-tools/scripts; L=.docs/slugkit/implementation/gates.jsonl; M="m"; '
+                 'python $S/review_package.py --repo . --base HEAD --head WORKTREE --changed-files src/strings.js '
+                 'tests/slugify.test.js --out .docs/slugkit/implementation/review/review-package.md --ledger $L',
+            cd + 'S=skills/pipeline-tools/scripts; python $S/record_run.py --log x --agent quinn >/dev/null; '
+                 'echo "record_exit=$?"; python $S/check_test_authenticity.py --repo . --changed-files '
+                 'src/strings.js tests/slugify.test.js --ledger $L 2>&1; echo "auth_exit=$?"',
+            cd + 'cat -n tests/slugify.test.js; git diff 1c5c34f -- src/strings.js | md5sum; '
+                 'sed -n \'15,17p\' tests/slugify.test.js; git status --short',
+            cd + 'for f in package.json src/strings.js tests/strings.test.js; do echo "=== $f"; cat "$f"; done',
+            cd + 'D=.docs/slugkit/implementation; cat > $D/review/union.txt <<EOF\nsrc/strings.js\ntests/slugify.test.js\nEOF',
+        ]):
+            events.append(tool_use(f"g{i}", "Bash", {"command": cmd}))
+        events.append(tool_use("gh", "Bash", {"command": cd + "python skills/pipeline-tools/scripts/run_agy_builder.py --help"}))
+        events.append(tool_result("gh", "2  usage or precondition (bad persona ...), agy missing or preflight failed\n"
+                                        "  infra, out, result (PASS|FINDING|ERROR),\n  error."))
+    if scenario == "write-redirect":
+        events.append(tool_use("w1", "Bash", {"command": f'cd "{ws.as_posix()}" && echo x > src/strings.js'}))
+    if scenario == "write-sed":
+        events.append(tool_use("w2", "Bash", {"command": "sed -i 's/slugify/slugIt/' ./src/strings.js && git status"}))
+    if scenario == "agy-infra":
+        events.append(tool_use("ai", "Bash", {"command": "python skills/pipeline-tools/scripts/run_agy_builder.py "
+                                                         "--persona mason --workspace . --brief-file b.md --out o.md"}))
+        events.append(tool_result("ai", '{"result": "ERROR", "error": "preflight failed: agy agents lists no mason"}'))
     events.append({"type": "result", "subtype": "success", "result": "done"})
     (ws / "transcript.jsonl").write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
     return ws
@@ -227,7 +262,15 @@ EXPECTED = {
     "ungated": {"5"},
     "claude-mason": {"1"},
     "untouched": {"1", "2", "3", "4", "5", "6", "7", "8"},
+    "gate-mentions": set(),
+    "write-redirect": {"2"},
+    "write-sed": {"2"},
+    "agy-infra": set(),
 }
+
+# Scenarios whose output MUST carry the `[0] NOTE:` agy-infra line; every other
+# scenario must not.
+EXPECT_INFRA_NOTE = {"agy-infra"}
 
 
 def grade(ws):
@@ -249,11 +292,13 @@ def run_self_test(verbose=True):
         try:
             proc, failed = grade(ws)
             want_exit = 0 if not expected else 1
-            passed = failed == expected and proc.returncode == want_exit
+            note = "agy infrastructure failure" in proc.stdout
+            want_note = scenario in EXPECT_INFRA_NOTE
+            passed = failed == expected and proc.returncode == want_exit and note == want_note
             ok = ok and passed
             if verbose or not passed:
-                print(f"{'ok  ' if passed else 'FAIL'} {scenario}: exit {proc.returncode}, failed {sorted(failed)} "
-                      f"(expected exit {want_exit}, failed {sorted(expected)})")
+                print(f"{'ok  ' if passed else 'FAIL'} {scenario}: exit {proc.returncode}, failed {sorted(failed)}, "
+                      f"infra note {note} (expected exit {want_exit}, failed {sorted(expected)}, note {want_note})")
             if not passed:
                 print(proc.stdout)
                 print(proc.stderr)

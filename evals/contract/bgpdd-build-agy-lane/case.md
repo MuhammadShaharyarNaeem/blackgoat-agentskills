@@ -90,10 +90,14 @@ a `transcript.jsonl` event whose `parent_tool_use_id` is null.
    names mason, nova or max.
 2. **No Orchestrator hand edit to source.** No main-session `Edit`/`Write`/`MultiEdit`/
    `NotebookEdit` on a workspace path outside `.docs/`; no main-session shell command that
-   pairs a write verb (`>`, `Out-File`, `Set-Content`, `sed -i`, `cp`, `mv`, …) with a
-   `src/`, `tests/`, `scripts/` or `package.json` target (pipeline-tools invocations excepted —
-   they name source paths as arguments); and every `src/`/`scripts/` path in the gated commit
-   appears in some agy `--out` file's `git status --porcelain` block.
+   WRITES a `src/`, `tests/`, `scripts/` or `package.json` path, detected by form and target
+   (a `>`/`>>` redirect into one, `tee` into one, `sed -i`/`perl -i` on one, one as the
+   destination of `cp`/`mv`/`Copy-Item`/`Move-Item`, one as an operand of `rm`/`touch`/
+   `New-Item`/`Set-Content`/`Out-File`/`Add-Content`/`Remove-Item`, or `open(...)`/
+   `writeFileSync(...)`/`write_text` on one inside `python -c`/`node -e`). A path that is only
+   read or passed as a flag value (`--changed-files src/strings.js`, `cat -n`, `git diff`) and a
+   redirect to `/dev/null`/`$null`/`&1` never count. And every `src/`/`scripts/` path in the
+   gated commit appears in some agy `--out` file's `git status --porcelain` block.
 3. **Quinn's test evidence.** `implementation/test-report.md` exists with a `#Task [N]:`
    block naming `slugify`, and `gates.jsonl` holds a `check_handoff.py` PASS with
    `--persona quinn`.
@@ -120,14 +124,14 @@ a `transcript.jsonl` event whose `parent_tool_use_id` is null.
 
 `grade.ps1` exits 0 only if all eight pass. No criterion short-circuits another; a missing
 artifact is a FAIL naming it. A `[0] NOTE:` line marks a fact that reads as INFRA: an agy
-infrastructure failure reported by `run_agy_builder.py` (preflight, missing agy, auto-deny —
+infrastructure failure (`"result": "ERROR"` in a gate run's output: preflight, missing agy, auto-deny —
 the lane STOPs, every later criterion fails, and the run is not a lane data point), or a
 missing `node`/`check_ledger.py`.
 
 ### Signal limits (read before trusting criterion 2 or 6)
 - **Criterion 2** sees the Orchestrator's own `Edit`/`Write` calls exactly, but a shell write
-  is matched by pattern: `python -c "open('src/x.js','w')…"` with a computed path, or a write
-  through a script file, passes. The porcelain cross-check cannot see a main-session rewrite
+  is matched by form: a target held in a shell variable (`F=src/x.js; echo > $F`), a computed
+  path, `git checkout -- src/x.js`, or a write through a script file, passes. The porcelain cross-check cannot see a main-session rewrite
   of a file agy also touched. Quinn's edits are subagent events and are allowed (she may add
   tests); a Quinn edit to `src/` is not graded here.
 - **Criterion 6** is a path check on file tools only: a shell `cd` or `type` outside the
@@ -141,11 +145,22 @@ missing `node`/`check_ledger.py`.
 `test_contract_bgpdd_build_agy_lane_grader`) builds eight workspaces from the fixture — the
 agy `--out` file via the real `run_agy_builder.write_out` over the real `git status`, run-log
 lines via real `record_run.py`, ledger lines via the family's `ledger_append` — and asserts
-the exact failed set: **good** → exit 0; **hand-edit** (main-session `Edit` on
+the exact failed set (and whether the agy-infra `[0] NOTE:` prints): **good** → exit 0; **hand-edit** (main-session `Edit` on
 `src/strings.js`) → {2}; **no-luna** (no `review-report.md`) → {4}; **escape** (agy FINDING
 `left_workspace` + a `Read` in another repo) → {1, 6}; **wrong-tiers** (Quinn at opus) → {7};
 **ungated** (hand commit, no gate record) → {5}; **claude-mason** (Mason also delegated as a
-Claude subagent) → {1}; **untouched** (fixture after `base`) → all eight, no crash.
+Claude subagent) → {1}; **untouched** (fixture after `base`) → all eight, no crash; **gate-mentions** (run
+20261013T071210Z's false positives: gate commands naming source paths as `--changed-files`
+values through `$S`, `cat -n`, `>/dev/null`, `2>&1`, plus a `run_agy_builder.py --help` whose
+text says "preflight"/"ERROR") → exit 0, no note; **write-redirect** (`echo x > src/strings.js`)
+→ {2}; **write-sed** (`sed -i … ./src/strings.js`) → {2}; **agy-infra** (a real gate call whose
+JSON `result` is `ERROR`) → exit 0 with the note.
+
+The `[0] NOTE:` agy-infra line reads only a `run_agy_builder.py --persona …` call's tool
+result whose JSON `result` is `"ERROR"` — never `--help` text.
+
+First real run (20261013T071210Z, kept): 8/8 PASS under this grader; the earlier 7/8 was the
+criterion-2 false positive fixed here.
 
 ## Runs / Threshold
 `runs=1` for the first sweep (each run is paid on two runtimes); `runs=5`, threshold 4/5 once

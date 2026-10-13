@@ -291,9 +291,13 @@ if ($commitGatePass) {
 }
 
 # Was there an agy infrastructure failure? (gate exit 2: agy missing / preflight / auto-deny)
+# Read ONLY from a real gate run's JSON `result`: a `--help` call's text names
+# "preflight" and "ERROR" as documentation, and is not a run.
 foreach ($u in $agyCalls) {
+    $cmd = "$($u.Input.command)"
+    if ($cmd -match '(?i)run_agy_builder\.py\s+(--help|-h)\b' -or $cmd -notmatch '--persona') { continue }
     $r = $toolResults["$($u.Id)"]
-    if ($r -and ($r -match 'preflight failed|agy missing|permission_denied|"result":\s*"ERROR"')) {
+    if ($r -and ($r -match '"result"\s*:\s*"ERROR"')) {
         Write-Output "[0] NOTE: a run_agy_builder.py call reported an agy infrastructure failure (preflight / missing agy / auto-deny) - read as INFRA, not as a lane finding"
         break
     }
@@ -325,8 +329,62 @@ else { Write-Output "[1] PASSED: $($agyHandoffs.Count) agy builder run(s); lates
 
 # --- [2] no Orchestrator hand edit to source -----------------------------------
 $p2 = New-Object System.Collections.Generic.List[string]
-$writeVerb = '(?i)(>>?|\bOut-File\b|\bSet-Content\b|\bAdd-Content\b|\btee\b|\bsed\s+-i\b|\bNew-Item\b|\bCopy-Item\b|\bMove-Item\b|\bcp\b|\bmv\b|\bWriteAllText\b|open\([^)]*[''"]w)'
-$sourceTarget = '(?i)(^|[\s''"=(/\\])(src|tests|scripts)[\\/]|package\.json'
+function Test-SourcePath {
+    param([string]$Token)
+    # A shell token naming src/, tests/, scripts/ or package.json in this workspace.
+    $t = "$Token".Trim().Trim('"', "'").TrimEnd(';', ')')
+    if ([string]::IsNullOrWhiteSpace($t)) { return $false }
+    $rel = Get-WorkspaceRelative $t
+    if ($null -eq $rel) { return $false }
+    return ($rel -match '^(src|tests|scripts)/' -or $rel -eq 'package.json')
+}
+
+function Get-ShellSourceWrites {
+    param([string]$Command)
+    # The source paths a shell command WRITES, by form - never a path that is only
+    # read or passed as a flag value (a gate's --changed-files, `cat -n`, `git diff`).
+    # Forms: a `>`/`>>` redirect target, `tee` targets, `sed -i`/`perl -i` operands,
+    # the destination of cp/mv/Copy-Item/Move-Item, any operand of rm/touch/
+    # New-Item/Set-Content/Out-File/Add-Content/Remove-Item, and the file named by
+    # `open(..., 'w'|'a')`/`writeFileSync(...)` inside `python -c`/`node -e`.
+    $hits = New-Object System.Collections.Generic.List[string]
+    $tokenRe = '"[^"]*"|''[^'']*''|[^\s]+'
+    foreach ($seg in ($Command -split '\r?\n|&&|\|\||;|\|')) {
+        foreach ($m in [regex]::Matches($seg, '(?<![<&>])\d?>>?\s*("[^"]*"|''[^'']*''|[^\s;|&<>]+)')) {
+            $target = $m.Groups[1].Value
+            if ($target -match '^(?i)(/dev/null|\$null|nul|&\d)$') { continue }
+            if (Test-SourcePath $target) { $hits.Add($target) }
+        }
+        $tokens = @([regex]::Matches($seg, $tokenRe) | ForEach-Object { $_.Value })
+        while ($tokens.Count -gt 0 -and @('do', 'then', 'else', '{', '(', '!') -contains $tokens[0]) {
+            $tokens = @($tokens | Select-Object -Skip 1)
+        }
+        if ($tokens.Count -eq 0) { continue }
+        $verb = $tokens[0].ToLowerInvariant()
+        $operands = @($tokens | Select-Object -Skip 1 | Where-Object { -not $_.StartsWith('-') -and $_ -notmatch '^\d?>' })
+        $isInPlace = (($verb -eq 'sed' -or $verb -eq 'perl') -and (@($tokens | Where-Object { $_ -match '^-i' }).Count -gt 0))
+        if ($verb -eq 'tee' -or $isInPlace -or
+            @('rm', 'touch', 'new-item', 'set-content', 'out-file', 'add-content', 'remove-item', 'ni', 'sc', 'ac') -contains $verb) {
+            foreach ($o in $operands) { if (Test-SourcePath $o) { $hits.Add($o) } }
+        } elseif (@('cp', 'mv', 'copy-item', 'move-item', 'copy', 'move') -contains $verb) {
+            $dest = $null
+            $destFlag = [regex]::Match($seg, '(?i)-Destination\s+("[^"]*"|''[^'']*''|\S+)')
+            if ($destFlag.Success) { $dest = $destFlag.Groups[1].Value }
+            elseif ($operands.Count -ge 2) { $dest = $operands[$operands.Count - 1] }
+            if ($dest -and (Test-SourcePath $dest)) { $hits.Add($dest) }
+        }
+    }
+    if ($Command -match '(?i)\b(python3?|py|node)\s+(-c|-e)\b') {
+        foreach ($m in [regex]::Matches($Command, '(?i)(?:open\(\s*|writeFileSync\(\s*|appendFileSync\(\s*|write_text\()\s*[''"]([^''"]+)[''"]')) {
+            if (Test-SourcePath $m.Groups[1].Value) { $hits.Add($m.Groups[1].Value) }
+        }
+        foreach ($m in [regex]::Matches($Command, '(?i)Path\(\s*[''"]([^''"]+)[''"]\s*\)\s*\.\s*write_(text|bytes)')) {
+            if (Test-SourcePath $m.Groups[1].Value) { $hits.Add($m.Groups[1].Value) }
+        }
+    }
+    return @($hits | Select-Object -Unique)
+}
+
 if (-not $transcriptOk) {
     $p2.Add('transcript.jsonl missing or unparseable - no evidence about the Orchestrator''s own tool calls')
 } else {
@@ -340,10 +398,10 @@ if (-not $transcriptOk) {
     }
     foreach ($u in @($mainUses | Where-Object { $shellNames -contains $_.Name })) {
         $cmd = "$($u.Input.command)"
-        if ($cmd -match 'pipeline-tools[\\/]scripts[\\/]') { continue }   # the gates name source paths as arguments
-        if (($cmd -match $writeVerb) -and ($cmd -match $sourceTarget)) {
+        $written = @(Get-ShellSourceWrites $cmd)
+        if ($written.Count -gt 0) {
             $short = $cmd; if ($short.Length -gt 160) { $short = $short.Substring(0, 160) + '...' }
-            $p2.Add("main-session $($u.Name) command that looks like a write to source: $short")
+            $p2.Add("main-session $($u.Name) command writes $($written -join ', '): $short")
         }
     }
 }
