@@ -280,6 +280,8 @@ A rehearsal you could not perform is `BLOCKED`, naming what was missing (no non-
 
 The table header, the closed `Type`/`Status` sets and every row rule are gated by `check_deploy_manifest.py` (`--phase plan` at plan time, `--phase build` at Phase 5); its `--help` is the contract of record.
 
+To verify a row's Dev state, Dep may use `query_db.py` (contract: `query_db.py --help`).
+
 ### Documenting the Ship Decision
 
 If running within the `bgpdd-build` or `bgpdd-shipping` pipelines, save your final Rollback Strategy and Launch Checklist to `.docs/{project-name}/implementation/ship-decision.md` with a final `GO` or `NO-GO` recommendation. A **launch** decision additionally carries the `Time to Rollback:` line from Rollback Rehearsal and the `## Baseline` section from Baseline Capture; a **prep** decision written at `bgpdd-build` Phase 5 legitimately carries neither, because neither has happened yet. **Put that verdict on a line beginning `Ship Decision`, `Verdict`, or `Recommendation`** (leading `#`, `>`, `-`, or `*` markers are tolerated), with the `GO` or `NO-GO` token on that same line, and state one verdict per section — a section asserting both is rejected as ambiguous. The pipelines read this line mechanically via `check_ship_decision.py`; the grammar authority is `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.

@@ -1165,6 +1165,25 @@
       "writes": []
     },
     {
+      "name": "query_db",
+      "script": "scripts/query_db.py",
+      "description": "Runs one validated read-only SELECT against a DEV SQL Server database whose connection string lives in Azure App Configuration.",
+      "kind": "detector",
+      "runner": "either",
+      "agents": [
+        "dep",
+        "mason"
+      ],
+      "reason": "database-migration-patterns (pre-read / read-back of a migration on Dev) and shipping-and-launch Deployment Manifest (Dep verifying a row's Dev state): the agent reads Dev state for its OWN work; the tool decides nothing and gates nothing.",
+      "lanes": [],
+      "reads": [
+        "<App Configuration key>",
+        "<Key Vault secret it references>",
+        "<--file path.sql>"
+      ],
+      "writes": []
+    },
+    {
       "name": "record_capture",
       "script": "scripts/record_capture.py",
       "description": "Records a PNG's provenance sidecar naming the URL the browser had open, so a mockup render stops looking real.",
