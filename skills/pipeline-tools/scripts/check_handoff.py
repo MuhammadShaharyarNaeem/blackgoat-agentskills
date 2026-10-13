@@ -632,6 +632,61 @@ def path_status(roots, raw):
     return "outside", rel, None, None
 
 
+# `deleted: <path>` in <changed_files> names a file the agent removed. It is
+# the one entry that must NOT exist, so git proves it instead: absent from
+# the working tree AND a blob at HEAD in the --repo it lies under. A file
+# that never existed, or one still present, is deletion_unverified.
+DELETED_FORM_RE = re.compile(r"(?i)^deleted:(?P<path>.*)$")
+
+
+def deleted_path(item):
+    """The path a `deleted: <path>` entry names ('' if none), else None."""
+    m = DELETED_FORM_RE.match(item)
+    return m.group("path").strip().strip("`").strip() if m else None
+
+
+def blob_at_head(root, rel):
+    """True when `rel` (relative to `root`) is a file in HEAD of root's repo.
+
+    `HEAD:./<rel>` resolves against `-C root`, so a --repo below the git
+    toplevel still works. Any git failure (no git, no HEAD) is False: the
+    deletion is then unverified, never assumed."""
+    try:
+        proc = subprocess.run(["git", "-C", str(root), "cat-file", "-t",
+                               "HEAD:./" + rel], capture_output=True,
+                              timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0 and proc.stdout.strip() == b"blob"
+
+
+def deletion_status(roots, raw):
+    """('ok'|'present'|'untracked'|'outside', rel, matched_root, resolved).
+
+    'present': the path still exists under some root. 'untracked': it lies
+    under a root but no such root's HEAD holds it. 'ok' sets matched_root
+    and the (absent) absolute path, as path_status does for a real file."""
+    rel = normalize_path(raw)
+    candidate = Path(rel)
+    under = []
+    for root in roots:
+        resolved = candidate if candidate.is_absolute() else Path(root) / rel
+        try:
+            resolved_abs = resolved.resolve()
+            sub = resolved_abs.relative_to(Path(root).resolve())
+        except (OSError, ValueError):
+            continue
+        if resolved_abs.exists():
+            return "present", rel, root, resolved_abs
+        under.append((root, resolved_abs, sub))
+    if not under:
+        return "outside", rel, None, None
+    for root, resolved_abs, sub in under:
+        if blob_at_head(root, sub.as_posix()):
+            return "ok", rel, root, resolved_abs
+    return "untracked", rel, None, None
+
+
 def git_changed_since(repo, ref):
     """Paths git reports as changed-or-committed since `ref`, plus untracked.
 
@@ -1121,6 +1176,7 @@ def build_report(text, persona, repo, since=None, fix_round=False,
         "status": None,
         "changed_files": [],
         "changed_files_none_reason": None,
+        "deleted_files": [],
         "changed_symbols": [],
         "changed_symbols_none_reason": None,
         "artifacts": [],
@@ -1223,6 +1279,28 @@ def build_report(text, persona, repo, since=None, fix_round=False,
                 elements[name], persona_key, report, finding):
             continue
         for raw in split_paths(elements[name]):
+            gone = deleted_path(raw) if name == "changed_files" else None
+            if gone is not None:
+                state, rel, matched_root, resolved_path = (
+                    deletion_status(roots, gone) if gone
+                    else ("empty", raw, None, None))
+                declared.setdefault(name, []).append(rel)
+                if state == "ok":
+                    report["deleted_files"].append(rel)
+                    changed_files_repo[rel] = (matched_root, resolved_path)
+                    continue
+                why = {"present": f"it still exists under {matched_root}",
+                       "untracked": "git holds no such file at HEAD in any "
+                                    f"searched root ({roots_label})",
+                       "outside": f"it lies outside every searched root "
+                                  f"({roots_label})",
+                       "empty": "it names no path"}[state]
+                finding("deletion_unverified",
+                        f"<changed_files> `deleted: {rel}` is not a verified "
+                        f"deletion: {why} -- name a removed file that HEAD "
+                        "still holds, or list a real path",
+                        element=name, path=rel)
+                continue
             state, rel, matched_root, resolved_path = path_status(roots, raw)
             declared.setdefault(name, []).append(rel)
             if state == "ok":
@@ -1454,13 +1532,60 @@ def transcript_messages(path):
     return out
 
 
-def delegation_source(messages, block):
+def transcript_handbacks(path):
+    """([(line_no, sender, text)], {agent_id: tool_use_id}) -- two entry
+    shapes `transcript_messages` (shared verbatim, so left alone) skips.
+
+    A subagent hand-back that lands while the main session is busy is a
+    top-level `"type": "attachment"` entry, attachment type
+    `queued_command`, with no `message`. A human's mid-turn message uses
+    the same attachment type, so text never decides: the runtime-written
+    `attachment.origin` does. A hand-back carries `kind: "peer"`,
+    `handback: true` and `senderTaskId`; a human's carries `kind: "human"`.
+    The map ties that sender to a launch: a background Task/Agent call's
+    tool_result entry records `toolUseResult.agentId`."""
+    try:
+        raw = Path(path).read_text(encoding="utf-8-sig", errors="replace")
+    except OSError as exc:
+        raise GateError(f"cannot read --transcript {path}: {exc}")
+    handbacks, launched = [], {}
+    for line_no, line in enumerate(raw.splitlines(), start=1):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict) or entry.get("isSidechain"):
+            continue
+        attachment = entry.get("attachment")
+        if entry.get("type") == "attachment" and isinstance(attachment, dict):
+            origin = attachment.get("origin")
+            if (attachment.get("type") == "queued_command"
+                    and isinstance(origin, dict)
+                    and origin.get("kind") == "peer"
+                    and origin.get("handback") is True
+                    and origin.get("senderTaskId")
+                    and isinstance(attachment.get("prompt"), str)):
+                handbacks.append((line_no, origin["senderTaskId"],
+                                  attachment["prompt"]))
+            continue
+        result = entry.get("toolUseResult")
+        message = entry.get("message")
+        if (isinstance(result, dict) and result.get("agentId")
+                and isinstance(message, dict)):
+            for kind, _text, extra in _content_parts(message.get("content")):
+                if kind == "tool_result" and extra.get("tool_use_id"):
+                    launched[result["agentId"]] = extra["tool_use_id"]
+    return handbacks, launched
+
+
+def delegation_source(messages, block, handbacks=(), launched=None):
     """Where the runtime recorded this handoff block, or None.
 
     Accepted: the tool_result of a Task/Agent call (a foreground delegation)
     or a user-role text entry (a background agent's completion notification,
-    or a human paste). Never assistant text, and never another tool's result
-    -- `cat handoff.md` would return text the model wrote itself."""
+    or a human paste), or a queued hand-back from a launched agent -- never a
+    human's queued mid-turn message. Never assistant text, and never another
+    tool's result -- `cat handoff.md` would return text the model wrote itself."""
     needle = collapse_ws(block)
     if not needle:
         return None
@@ -1484,6 +1609,16 @@ def delegation_source(messages, block):
                         "subagent_type": call["input"].get("subagent_type")}
             return {"line": line_no, "via": "user_message",
                     "tool": None, "subagent_type": None}
+    # A queued hand-back (see transcript_handbacks): accepted only when its
+    # sender is an agent a Task/Agent call in this transcript launched.
+    for line_no, sender, text in handbacks:
+        if needle not in collapse_ws(text):
+            continue
+        call = calls.get((launched or {}).get(sender))
+        if call and call.get("name") in DELEGATION_TOOL_NAMES:
+            return {"line": line_no, "via": "delegation_handback",
+                    "tool": call["name"],
+                    "subagent_type": call["input"].get("subagent_type")}
     return None
 
 
@@ -1527,6 +1662,7 @@ Reads:
       <consumers> lines in path::symbol grammar.
       <changed_files>  paths, or (quinn only, capture-only; convention #8)
                   one line none: <non-empty reason> = the empty set.
+                  deleted: <path> = removed: absent, in HEAD.
       <changed_symbols>  one path::Name per line, or one line none:
                   <non-empty reason>. path: one file, read literally, never
                   a directory. Name: the innermost edited symbol, bare (a
@@ -1546,15 +1682,17 @@ Reads:
     TODO-colon-pending, an HTML comment opening TODO/skeleton, and lines
     EXPLAINING markers. Inline code is no hit; a fence IS. PARTIAL/BLOCKED,
     <changed_files> exempt.
-  --transcript  a session JSONL (Claude Code shape, sidechains skipped). The
-    block, whitespace ignored, must sit in a Task/Agent tool_result or a
-    user-role text entry (a background agent's notification) -- never
-    assistant text or another tool's result.
+  --transcript  Claude Code session JSONL, sidechains skipped. The
+    block, whitespace ignored, must sit in a Task/Agent tool_result, a
+    user-role text entry or a launched agent's queued hand-back
+    (origin.handback) -- never a human's queued message, assistant text or
+    another tool's result.
 
 Problem codes:
   handoff_missing            no unfenced <handoff> block
   element_missing            required element absent or empty
   path_missing               cited path absent or outside every root
+  deletion_unverified        deleted: path exists or untracked
   changed_files_not_in_diff  --since: a file the diff lacks
   changed_files_grammar      none: outside quinn, empty or mixed
   status_invalid             <status> outside the enum
@@ -1569,13 +1707,13 @@ Problem codes:
 JSON keys:
   result, persona, since, fix_round, advisory, advisory_waived_elements,
   required_elements, present_elements, status, changed_files,
-  changed_files_none_reason, changed_symbols ([{path, name}]),
-  changed_symbols_none_reason, artifacts, changed_skills,
+  changed_files_none_reason, deleted_files, changed_symbols ([{path,
+  name}]), changed_symbols_none_reason, artifacts, changed_skills,
   scaffolding_scanned, allow_scaffolding, scaffolding_waived, findings
   ({code, detail, ...}; scaffolding adds path, line, marker, text),
   warnings, error; with --transcript, transcript and delegation_source
   ({line, via, tool, subagent_type} or null). Ledger extras: advisory;
-  both *_none_reason keys; allow_scaffolding_reason plus waived {path,
+  *_none_reason; allow_scaffolding_reason plus waived {path,
   line, marker}; delegation_source.
 
 Exit codes:
@@ -1587,7 +1725,7 @@ Exit codes:
      unreadable --transcript
 
 Self-test:
-  python check_handoff.py --self-test   (108 cases)
+  python check_handoff.py --self-test   (113 cases)
 """
 
 
@@ -1707,7 +1845,8 @@ def main(argv):
         block, _w = extract_handoff(text)
         try:
             source_entry = (delegation_source(
-                transcript_messages(args.transcript), block)
+                transcript_messages(args.transcript), block,
+                *transcript_handbacks(args.transcript))
                 if block is not None else None)
         except GateError as exc:
             print(json.dumps({"result": "ERROR", "error": str(exc)}))
@@ -1718,7 +1857,8 @@ def main(argv):
             report["findings"].append({
                 "code": "handoff_not_delegated",
                 "detail": "this <handoff> block appears in no Task/Agent "
-                          "result and no user-role entry of --transcript: "
+                          "result, no user-role entry and no queued "
+                          "subagent hand-back of --transcript: "
                           "the runtime never returned it from a delegation. "
                           "Delegate the named agent; never author its "
                           "handoff yourself"})
@@ -3040,6 +3180,109 @@ def run_self_test():
         def test_transcript_unreadable_is_exit_2(self):
             code, _out = self._gate(str(self.dir / "missing.jsonl"))
             self.assertEqual(code, 2)
+
+        # --- --transcript: a hand-back queued while the session was busy --
+        # Shapes copied from a real Claude Code transcript (2026-10-13),
+        # content sanitized: the launch's tool_result entry carries
+        # toolUseResult.agentId; the queued entry is a top-level attachment.
+        def _launch(self, tool_id, agent_id):
+            entry = self._result(tool_id, "Async agent launched successfully."
+                                          "\nagentId: " + agent_id)
+            entry["toolUseResult"] = {"agentId": agent_id, "isAsync": True,
+                                      "status": "async_launched"}
+            return entry
+
+        @staticmethod
+        def _queued(sender, origin):
+            body = "\n".join("  " + line for line in
+                             ("done.\n" + GOOD_MASON.replace("><", ">\n<"))
+                             .splitlines())
+            prompt = (f'<agent-message from="{sender}">\n[Subagent hand-back] '
+                      "The text below is the final report of a subagent "
+                      f"this session delegated to.\n{body}\n</agent-message>")
+            return {"type": "attachment", "isSidechain": False,
+                    "attachment": {"type": "queued_command", "prompt": prompt,
+                                   "commandMode": "prompt", "origin": origin,
+                                   "isMeta": True}}
+
+        @staticmethod
+        def _peer(sender, **extra):
+            origin = {"kind": "peer", "from": sender, "senderTaskId": sender,
+                      "name": "x:mason", "handback": True}
+            origin.update(extra)
+            return origin
+
+        def test_transcript_queued_handback_passes(self):
+            code, r = self._gate(self._transcript(
+                self._call("t5", "Agent", subagent_type="x:mason"),
+                self._launch("t5", "a1b2"),
+                self._queued("a1b2", self._peer("a1b2"))))
+            self.assertEqual(code, 0, r)
+            self.assertEqual(r["delegation_source"]["via"],
+                             "delegation_handback")
+            self.assertEqual(r["delegation_source"]["subagent_type"], "x:mason")
+
+        def test_transcript_queued_user_message_is_not_delegated(self):
+            launch = [self._call("t6", "Agent", subagent_type="x:mason"),
+                      self._launch("t6", "a1b2")]
+            for queued in (
+                    # a human's mid-turn message pasting the whole frame
+                    self._queued("a1b2", {"kind": "human"}),
+                    # a peer message that is not a hand-back
+                    self._queued("a1b2", self._peer("a1b2", handback=False)),
+                    # a hand-back from an agent this transcript never launched
+                    self._queued("zz99", self._peer("zz99")),
+                    # ...or one recorded on a sidechain
+                    dict(self._queued("a1b2", self._peer("a1b2")),
+                         isSidechain=True)):
+                code, r = self._gate(self._transcript(*launch, queued))
+                self.assertEqual(code, 1, r)
+                self.assertEqual(self.codes(r), ["handoff_not_delegated"])
+
+        # --- <changed_files> deleted: <path> -----------------------------
+        @staticmethod
+        def _deletion(changed):
+            return ("<handoff><status>COMPLETE</status>"
+                    f"<changed_files>{changed}</changed_files>"
+                    "<changed_symbols>none: a pure deletion</changed_symbols>"
+                    "<blockers>None</blockers></handoff>")
+
+        def test_deleted_tracked_file_passes(self):
+            ref = self.make_repo()
+            (self.dir / "src" / "b.py").unlink()
+            r = build_report(self._deletion("deleted: src/b.py"), "max",
+                             self.dir, since=ref)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertEqual(r["deleted_files"], ["src/b.py"])
+            self.assertEqual(r["changed_files"], ["src/b.py"])
+            (self.dir / "src" / "a.py").write_text("a2", encoding="utf-8")
+            r = build_report(self._deletion("src/a.py, `deleted: src/b.py`"),
+                             "mason", self.dir, since=ref)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            # the plain path is still a missing path
+            r = build_report(self._deletion("src/b.py"), "max", self.dir)
+            self.assertEqual(self.codes(r), ["path_missing"])
+
+        def test_deleted_path_that_still_exists_is_refused(self):
+            self.make_repo()
+            r = build_report(self._deletion("deleted: src/b.py"), "max",
+                             self.dir)
+            self.assertEqual(self.codes(r), ["deletion_unverified"])
+            self.assertIn("still exists", r["findings"][0]["detail"])
+            self.assertEqual(r["deleted_files"], [])
+
+        def test_deleted_path_never_tracked_is_refused(self):
+            # outside any git repo nothing can be verified
+            r = build_report(self._deletion("deleted: src/ghost.py"), "max",
+                             self.dir)
+            self.assertEqual(self.codes(r), ["deletion_unverified"])
+            self.make_repo()
+            for changed in ("deleted: src/ghost.py", "deleted:",
+                            "deleted: ../outside.py"):
+                r = build_report(self._deletion(changed), "max", self.dir)
+                self.assertEqual(self.codes(r), ["deletion_unverified"],
+                                 changed)
+                self.assertEqual(r["deleted_files"], [], changed)
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(HandoffTests)
     result = unittest.TextTestRunner(verbosity=1).run(suite)

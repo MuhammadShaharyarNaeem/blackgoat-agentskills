@@ -182,6 +182,13 @@ NOTE_LINE_RE = re.compile(
     r"(?:\*\*)?(what|where|how[^\S\n]+verified)(?:\*\*)?[^\S\n]*:[^\S\n]*(.*)$")
 
 
+# `- Deleted test: <path> -- <reason>`, one per deleted test file.
+DELETED_TEST_RE = re.compile(
+    r"(?im)^[^\S\n]*(?:[-*+][^\S\n]+)?(?:\*\*)?deleted[^\S\n]+test(?:\*\*)?"
+    r"[^\S\n]*:[^\S\n]*(?P<path>`[^`\n]+`|\S+)[^\S\n]+(?:--|\u2014|\u2013|-)"
+    r"(?P<reason>.*)$")
+
+
 class GateError(Exception):
     """Structural/usage/environment failure -- maps to exit 2."""
 
@@ -720,9 +727,33 @@ def run_git(args, repo):
 
 
 def perform_commit(changed_files, message, repo):
-    """Commit EXACTLY the declared files. Never `git add -A`."""
-    run_git(["add", "--"] + list(changed_files), repo)
+    """Commit EXACTLY the declared files. Never `git add -A`.
+
+    A declared file already gone is a verified deletion (step 8): it is
+    staged with `git rm --cached`, because `git add` refuses a path the
+    builder already removed from the index with `git rm`."""
+    present = [f for f in changed_files if resolve_changed_file(f, repo).exists()]
+    gone = [f for f in changed_files if f not in present]
+    if present:
+        run_git(["add", "--"] + present, repo)
+    if gone:
+        run_git(["rm", "-q", "--cached", "--ignore-unmatch", "--"] + gone, repo)
     run_git(["commit", "-m", message], repo)
+
+
+def blob_at_head(path, repo):
+    """True when a `--changed-files` entry is a file in HEAD -- what makes
+    an entry absent from disk a deletion rather than a typo. The same test
+    as check_handoff.py's `deleted: <path>` (duplicated per family
+    convention); any git failure is False."""
+    try:
+        rel = resolve_changed_file(path, repo).resolve().relative_to(
+            Path(repo).resolve()).as_posix()
+        proc = subprocess.run(["git", "cat-file", "-t", "HEAD:./" + rel],
+                              cwd=repo, capture_output=True, timeout=120)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0 and proc.stdout.strip() == b"blob"
 
 
 # --- worktree identity (shared verbatim with check_commit_gate.py and
@@ -1040,11 +1071,32 @@ def declared_test_files(changed_files, frozen, repo):
     so this gate is the only place that CAN require the reminder rather
     than merely print it.
     """
-    out = []
-    for f in changed_files:
-        norm = normalize_repo_path(f, repo)
-        if matches_any_frozen(norm, frozen, repo) or looks_like_test_file(norm):
-            out.append(f)
+    return [f for f in changed_files
+            if resolve_changed_file(f, repo).exists()  # deleted: see below
+            and is_test_path(f, frozen, repo)]
+
+
+def is_test_path(path, frozen, repo):
+    """The test classification both test terms share: a --frozen match or
+    check_test_authenticity.py's default test globs."""
+    norm = normalize_repo_path(path, repo)
+    return matches_any_frozen(norm, frozen, repo) or looks_like_test_file(norm)
+
+
+def deleted_test_reasons(note_path, repo):
+    """{normalized path: reason} from the note's `Deleted test: <path> --
+    <reason>` lines (also an em/en dash or ` - `), placeholder reasons
+    dropped. A deleted test has nothing left for check_test_authenticity.py
+    to read, so this stated reason is what stands in for it."""
+    p = Path(note_path)
+    if not p.is_file():
+        return {}
+    out = {}
+    for match in DELETED_TEST_RE.finditer(strip_fenced_blocks(read_text(p))):
+        path = match.group("path").strip("`")
+        reason = match.group("reason").strip()
+        if path and is_real_value(reason):
+            out[normalize_repo_path(path, repo)] = reason
     return out
 
 
@@ -1148,6 +1200,7 @@ def build_report(args):
         "note_where_paths": [],
         "changed_files": list(args.changed_files),
         "changed_file_count": len(args.changed_files),
+        "deleted_files": [],
         "max_changed_files": args.max_changed_files,
         "size_ok": None,
         "capture_sidecar": None,
@@ -1293,14 +1346,16 @@ def build_report(args):
             if isinstance(meta.get("finished"), str):
                 report["capture_finished"] = meta["finished"].strip()
 
-    # --- 8. every declared file exists ------------------------------------
-    missing_files = [f for f in args.changed_files
-                     if not resolve_changed_file(f, repo).exists()]
+    # --- 8. every declared file exists, or is a deletion of one HEAD holds -
+    absent = [f for f in args.changed_files
+              if not resolve_changed_file(f, repo).exists()]
+    report["deleted_files"] = [f for f in absent if blob_at_head(f, repo)]
+    missing_files = [f for f in absent if f not in report["deleted_files"]]
     if missing_files:
         fail("changed_file_missing",
-             "--changed-files names path(s) that do not exist on disk under "
-             "--repo ({0}), which would silently disable the freshness and "
-             "tree checks: {1}".format(
+             "--changed-files names path(s) that neither exist on disk under "
+             "--repo ({0}) nor are a file in HEAD (a deletion), which would "
+             "silently disable the freshness and tree checks: {1}".format(
                  repo, ", ".join(str(m) for m in missing_files)))
 
     # --- 7 (cont). freshness: the capture is newer than the edit -----------
@@ -1362,6 +1417,16 @@ def build_report(args):
     # --changed-files and so can only remind, never require) -------------
     test_files = declared_test_files(args.changed_files, args.frozen, repo)
     report["test_files"] = test_files
+    reasons = deleted_test_reasons(args.note, repo)
+    unjustified = [f for f in report["deleted_files"]
+                   if is_test_path(f, args.frozen, repo)
+                   and normalize_repo_path(f, repo) not in reasons]
+    if unjustified:
+        fail("deleted_test_unjustified",
+             "deleted test(s) {0} carry no `Deleted test: <path> -- <reason>` "
+             "line in the note: a deleted test has nothing left to "
+             "authenticate, so the note must say why it goes".format(
+                 ", ".join(unjustified)))
     required_gates = parse_gate_names(args.require_ledger_gates)
     if test_files and "check_test_authenticity.py" not in required_gates:
         required_gates.append("check_test_authenticity.py")
@@ -1417,39 +1482,39 @@ PURPOSE = ("Decides whether a quick-lane change was declared, checked after "
 
 EPILOG = """\
 Reads:
-  --note  the lane's note.md. Three labelled lines, case-insensitive, as list
+  --note  the lane's note.md. Three labelled lines, case-insensitive, list
     items or bare, outside fences:
       - What:
       - Where:
       - How verified:
-    A value of <...>, TODO, TBD, N/A, none, unknown, ??? or ... counts as
-    absent. The Where line's paths (comma- and/or whitespace-separated,
+    <...>, TODO, TBD, N/A, none, unknown, ??? or ... count as
+    absent. The Where line's paths (comma/space-separated,
     backticks stripped) must EQUAL the --changed-files set after
-    repo-relative normalization. How verified is ONE argv-runnable command
-    (backticks optional): no pipes, no redirects, no &&.
+    repo-relative normalization. How verified is ONE argv-runnable command:
+    no pipes, no redirects, no &&. A deleted test needs
+    Deleted test: <path> -- <reason>.
   --capture and <capture>.meta.json  a run_quiet.py --capture pair. The
     capture must hold "## Captured output"; its header region (above that
     heading, fences blanked) carries "- Exit code: <N>" and
     "- Captured: <ts>", agreeing with the sidecar's exit_code and finished.
     Its capture_sha256 must still match the capture's bytes, and
     exit_code must be 0. Its recorded child argv must equal How verified
-    as TOKEN LISTS under any of three tokenizations (module docstring).
-    Freshness: the sidecar's finished (whole seconds) must
+    as TOKEN LISTS under any of three tokenizations.
+    Freshness: the sidecar's finished must
     be >= each changed file's mtime floored to the second.
   --changed-files, --repo  a relative entry resolves against --repo, not
     cwd. git status porcelain supplies the undeclared-change and frozen
-    checks; frozen fires only on a status meaning an EXISTING TRACKED file
-    changed (M/D/R/C/U in either column), so adding a test passes and editing
-    one fails.
+    checks; frozen fires only on M/D/R/C/U (an EXISTING TRACKED file
+    changed), so adding a test passes and editing one fails.
   --frozen  a path or directory prefix, or a GLOB when the value carries
     *, ? or [. Segment semantics: "**/" is zero or more leading segments, a
     trailing "**" is the rest of the path, * and ? stop at /, [...] and [!...]
     are character classes; backslashes fold to / and the pattern is normcased.
-  --ledger  read for the required-gate lookups, and appended to. Recorded
+  --ledger  read for required-gate lookups and appended to. Recorded
     inputs: the note, the capture, ITS SIDECAR, every declared file.
 
 Problem codes:
-  In evaluation order; all are reported, none short-circuits.
+  All are reported, in evaluation order.
   worktree_mismatch               --note/--capture/--ledger sit in ANOTHER
                                   worktree of --repo's repository
   note_missing                    the --note file does not exist
@@ -1464,7 +1529,8 @@ Problem codes:
   capture_command_mismatch        the capture is not of the declared command
   capture_exit_nonzero            the declared check did not pass
   capture_stale                   a changed file is newer than the check
-  changed_file_missing            a declared file is not on disk
+  changed_file_missing            a declared file is not on disk nor in HEAD
+  deleted_test_unjustified        a deleted test lacks its note line
   undeclared_tree_changes         the tree carries changes the note omits
   frozen_path_modified            an existing frozen file was edited
   test_authenticity_gate_missing  no fresh scoped check_test_authenticity PASS
@@ -1478,7 +1544,8 @@ Problem codes:
 JSON keys:
   note, capture, repo, repo_toplevel,
   worktree_mismatches, milestone, note_fields, note_where_paths,
-  changed_files, changed_file_count, max_changed_files, size_ok,
+  changed_files, deleted_files, changed_file_count, max_changed_files,
+  size_ok,
   capture_sidecar, capture_body_agrees, capture_argv, capture_command_match,
   capture_exit_code, capture_finished,
   newest_changed_file, fresh, undeclared_changes, frozen, frozen_modified,
@@ -1488,12 +1555,11 @@ JSON keys:
 Exit codes:
   0  every term held (and committed, with --commit)
   1  any problem code
-  2  a missing required flag, --max-changed-files 0, --commit without
-     --message, --message without --commit, an unreadable artifact, or a git
-     failure
+  2  a missing required flag, --max-changed-files 0, --commit or --message
+     without the other, an unreadable artifact, or a git failure
 
 Self-test:
-  python check_quick_close.py --self-test   (65 cases)
+  python check_quick_close.py --self-test   (68 cases)
 """
 
 
@@ -2471,6 +2537,66 @@ def run_self_test():
             committed = self._git("show", "--name-only", "--pretty=format:",
                                   "HEAD").split()
             self.assertEqual(committed, ["src/a.py"])
+
+        def test_a_deleted_tracked_file_passes_and_commits(self):
+            """A deletion is declared by its plain path: absent from disk and
+            a file in HEAD. A deleted test needs its note line instead of an
+            authenticity record, and the commit stages a `git rm` and a
+            plain rm alike."""
+            changed = self._delete_test_and_b()
+            note = self._deleted_note(
+                changed, "- Deleted test: `tests/test_a.py` — covered "
+                         "by test_b")
+            r = self._run(note, self._capture(), changed,
+                          ["--commit", "--message", "quick: drop b"])
+            self.assertEqual(r["result"], "PASS", r["problems"])
+            self.assertEqual(r["deleted_files"], ["tests/test_a.py", "src/b.py"])
+            self.assertEqual(r["test_files"], [])
+            committed = self._git("show", "--name-status", "--pretty=format:",
+                                  "HEAD").split()
+            self.assertEqual(sorted(zip(committed[::2], committed[1::2])),
+                             [("D", "src/b.py"), ("D", "tests/test_a.py"),
+                              ("M", "src/a.py")])
+
+        def _delete_test_and_b(self):
+            (self.repo / "src" / "b.py").write_text("B = 1\n", encoding="utf-8")
+            self._git("add", "src/b.py")
+            self._git("commit", "-q", "-m", "b")
+            self._edit()
+            self._git("rm", "-q", "tests/test_a.py")
+            (self.repo / "src" / "b.py").unlink()
+            time.sleep(0.01)
+            return ["src/a.py", "tests/test_a.py", "src/b.py"]
+
+        def _deleted_note(self, changed, *extra):
+            return self._note(lines=[
+                "# Quick note", "", "- What: drop b",
+                "- Where: " + ", ".join(changed),
+                '- How verified: `python -c "import sys; sys.exit(0)"`']
+                + list(extra) + [""])
+
+        def test_a_deleted_test_without_a_reason_is_unjustified(self):
+            changed = self._delete_test_and_b()
+            for extra in ((), ("- Deleted test: tests/test_a.py --",),
+                          ("- Deleted test: tests/test_a.py -- TODO",),
+                          ("- Deleted test: tests/other.py -- obsolete",),
+                          ("- Deleted test: tests/test_a.py",)):
+                r = self._run(self._deleted_note(changed, *extra),
+                              self._capture(), changed)
+                self.assertEqual(r["problem_codes"],
+                                 ["deleted_test_unjustified"], extra)
+
+        def test_a_deleted_non_test_needs_no_reason(self):
+            (self.repo / "src" / "b.py").write_text("B = 1\n", encoding="utf-8")
+            self._git("add", "src/b.py")
+            self._git("commit", "-q", "-m", "b")
+            self._edit()
+            (self.repo / "src" / "b.py").unlink()
+            time.sleep(0.01)
+            changed = ["src/a.py", "src/b.py"]
+            r = self._run(self._deleted_note(changed), self._capture(), changed)
+            self.assertEqual(r["result"], "PASS", r["problems"])
+            self.assertEqual(r["deleted_files"], ["src/b.py"])
 
         # -- usage + ledger ---------------------------------------------
 

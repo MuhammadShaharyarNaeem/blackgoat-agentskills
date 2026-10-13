@@ -920,6 +920,10 @@ def resolve_changed_files(changed_files, repo):
     absolute path from a DIFFERENT repo (the original failure this fix
     guards) is a structural mistake, not something to reinterpret: run the
     gate once per repo instead.
+
+    An entry absent from disk is accepted only as a deletion: a file in HEAD
+    (`blob_at_head`). It stays in the result -- tree, Files-reviewed and
+    commit all need it -- and the mtime readers skip it.
     """
     repo_dir = Path(repo).resolve()
 
@@ -938,7 +942,7 @@ def resolve_changed_files(changed_files, repo):
             except ValueError:
                 outside.append(f)
                 continue
-            if not real.exists():
+            if not real.exists() and not blob_at_head(rel, repo):
                 missing.append(f)
                 continue
             resolved.append(rel)
@@ -946,6 +950,13 @@ def resolve_changed_files(changed_files, repo):
         repo_relative = Path(repo) / p
         if repo_relative.exists():
             resolved.append(to_repo_relative(repo_relative.resolve()))
+            continue
+        try:
+            deleted_rel = to_repo_relative(repo_relative.resolve())
+        except ValueError:
+            deleted_rel = None
+        if deleted_rel is not None and blob_at_head(deleted_rel, repo):
+            resolved.append(deleted_rel)
             continue
         cwd_relative = Path(f)
         if cwd_relative.exists():
@@ -969,7 +980,8 @@ def resolve_changed_files(changed_files, repo):
         raise GateError(
             "changed_file_missing: --changed-files names path(s) that do "
             f"not exist under --repo ({repo}) nor under the current "
-            "directory, which would silently disable the staleness and "
+            "directory and are no file in HEAD (a deletion), which would "
+            "silently disable the staleness and "
             "tree checks: " + ", ".join(str(m) for m in missing))
     return resolved
 
@@ -986,6 +998,8 @@ def check_staleness(review_report, resolved_changed_files, repo):
     review_mtime = Path(review_report).stat().st_mtime
     newest = None
     for rel in resolved_changed_files:
+        if not (Path(repo) / rel).exists():
+            continue  # a verified deletion has no mtime
         mt = (Path(repo) / rel).stat().st_mtime
         if newest is None or mt > newest:
             newest = mt
@@ -1135,8 +1149,28 @@ def declared_files_uncommitted(changed_files, repo):
 
 
 def perform_commit(changed_files, message, repo):
-    run_git(["add", "--"] + list(changed_files), repo)
+    """A verified deletion is staged with `git rm --cached`: `git add`
+    refuses a path the builder already removed from the index."""
+    present = [f for f in changed_files if (Path(repo) / f).exists()]
+    gone = [f for f in changed_files if f not in present]
+    if present:
+        run_git(["add", "--"] + present, repo)
+    if gone:
+        run_git(["rm", "-q", "--cached", "--ignore-unmatch", "--"] + gone, repo)
     run_git(["commit", "-m", message], repo)
+
+
+def blob_at_head(rel, repo):
+    """True when repo-relative `rel` is a file in HEAD -- what makes an
+    absent --changed-files entry a deletion rather than a typo. The same
+    test as check_handoff.py's `deleted: <path>` (duplicated per family
+    convention); any git failure is False."""
+    try:
+        proc = subprocess.run(["git", "cat-file", "-t", "HEAD:./" + rel],
+                              cwd=repo, capture_output=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0 and proc.stdout.strip() == b"blob"
 
 
 def parse_porcelain_line(line):
@@ -1590,8 +1624,10 @@ def run_runtime_gate(args, resolved_changed_files):
            "--report", args.runtime_report,
            "--milestone", args.milestone,
            "--repo", args.repo]
-    if resolved_changed_files:
-        cmd += ["--changed-files"] + [str(p) for p in resolved_changed_files]
+    present = [p for p in resolved_changed_files
+               if (Path(args.repo) / p).exists()]  # deletions have no mtime
+    if present:
+        cmd += ["--changed-files"] + [str(p) for p in present]
     if args.surface:
         cmd += ["--surface", args.surface]
     for key in args.require_key:
@@ -1920,14 +1956,15 @@ Reads:
     (b) --require-files-reviewed: a level 3-4 `Files reviewed` heading in
     that range, first backticked path per list item. Every resolved
     --changed-files path must appear (forward-slash, case-sensitive) --
-    presence only, not what the line says about it.
+    presence only.
   --state <path>  orchestrator-state.json; check_blockers.py's
     normalization and exact-equality scoping. Scoped AND unscoped block;
     --ignore-unscoped skips the unscoped; another milestone's never
-    blocks; Info never blocks (fixed floor).
+    blocks; Info never blocks.
   --changed-files <p>...  required. A relative path resolves against
     --repo then the cwd (accepted only if it then lies under --repo); an
-    absolute one must lie under --repo. --repo defaults to '.'; --docs-root
+    absolute one must lie under --repo. Absent = a deletion: a file in
+    HEAD. --repo defaults to '.'; --docs-root
     to the nearest '.docs' ancestor of --review-report or --state, else
     --repo/.docs.
   --repo's git top level is repo_toplevel; --review-report, --state,
@@ -1954,7 +1991,7 @@ Problem codes:
     run_log_model_missing
   rendered_evidence warnings, per cited .png under
     --require-rendered-evidence: sidecar_missing, sidecar_bad_origin
-    (non-http(s) url), sidecar_sha_mismatch (bytes changed),
+    (non-http(s) url), sidecar_sha_mismatch,
     sidecar_malformed
   exit-2: changed_file_missing, changed_file_outside_repo
 
@@ -1988,7 +2025,7 @@ Exit codes:
      delegated runtime-gate structural failure.
 
 Self-test:
-  python check_commit_gate.py --self-test   (134 cases)
+  python check_commit_gate.py --self-test   (135 cases)
 """
 
 
@@ -3763,6 +3800,35 @@ def run_self_test():
             self.assertTrue(r["committed"])
             log = run_git(["log", "--oneline"], str(self.dir))
             self.assertIn("M3: auth endpoints", log)
+
+        @unittest.skipUnless(shutil.which("git"), "git not on PATH")
+        def test_a_deleted_file_in_head_is_declared_and_committed(self):
+            """An absent --changed-files path is a deletion when HEAD holds
+            it: not changed_file_missing, no mtime read, and the commit
+            stages it whether removed by rm or by git rm."""
+            run_git(["init", "-q"], str(self.dir))
+            run_git(["config", "user.email", "gate@test"], str(self.dir))
+            run_git(["config", "user.name", "gate"], str(self.dir))
+            for name in ("old.py", "older.py"):
+                (self.dir / name).write_text("x\n")
+            run_git(["add", "--", str(self.changed), "old.py", "older.py"],
+                    str(self.dir))
+            run_git(["commit", "-q", "-m", "base"], str(self.dir))
+            self.changed.write_text("code v2\n")
+            run_git(["rm", "-q", "old.py"], str(self.dir))
+            (self.dir / "older.py").unlink()
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+            r = build_report(self._ns(
+                changed=[str(self.changed), "old.py", "older.py"],
+                commit=True, message="M3: drop old"))
+            self.assertEqual(r["result"], "PASS", r)
+            self.assertTrue(r["committed"])
+            status = run_git(["show", "--name-status", "--pretty=format:",
+                              "HEAD"], str(self.dir)).split()
+            self.assertEqual(sorted(zip(status[::2], status[1::2])),
+                             [("D", "old.py"), ("D", "older.py"),
+                              ("M", "src_file.py")])
 
         @unittest.skipUnless(shutil.which("git"), "git not on PATH")
         def test_commit_refused_when_fix_already_committed(self):
