@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Breaking / behaviour changes
+- **Every planned epic carries a deployment manifest.** Dep writes `.docs/{project-name}/deploy/manifest.md` (plus `scripts/` and `rollback/`) at `/bgpdd-plan` Phase 3.7 and `/bgpdd-lite` Phase 2.6, one ordered row per production change traced to its plan task; `sql` rows stay `pending-build` until build Phase 5 step 4b fills them from the reviewed migration diff, and step 5c gates the result. Shipping's staged rollout and rollback rehearsal execute the manifest's rows in order. Rules: `shipping-and-launch` § Deployment Manifest.
+- **Shipping's exit ticket requires the manifest gate**: every `check_ship_decision.py --require-ledger-gates` form now ends in `check_deploy_manifest.py`.
+
+### Added
+- **`check_deploy_manifest.py`** (`--phase plan` / `--phase build`): table header, closed `Type`/`Status` sets, plan-task traces, a rollback per row, no `sql` script before build, nothing left `pending-build` at build. `--phase build` requires `--state`: a missing manifest fails `manifest_missing` when `artifacts.deploy_manifest` is recorded, and the legacy pass (an epic planned before the manifest phase) needs that artifact unset.
+- **`query_db.py`** — SELECT-only queries against a Dev database, refusing non-Dev targets; every sqlcmd command line (`GO`, `!!`, `RESET`, `ED`, `EXIT`, `QUIT`, with or without a leading colon) and side-effect verbs are refused before anything runs.
+- `check_handoff.py`: `<changed_files>` may list `deleted: <path>` (verified gone from the tree and tracked at HEAD, else `deletion_unverified`); `--transcript` accepts a mid-turn peer hand-back; non-git roots are handled.
+- `/bgpdd-quick` note: a deleted test needs a `- Deleted test: <path> -- <reason>` line (`deleted_test_unjustified` without it).
+
+### Fixed
+- Deploy-manifest audit: Plan Phase 4 and lite Phase 3 record `artifacts.deploy_manifest`; build 5c passes `--state`; a `sql` row's rollback is the forward-fix or restore of `database-migration-patterns` § Rollback, never the down-migration; `backfill`/`other` rows may be `drafted` or `pending-build` at plan time; plan 3.7 and build 4b defer to the skill instead of restating it.
+- Dep's persona covers plan-time manifest authoring (phase, `depends-on`, a `§ Deployment Manifest only` load at plan/lite). Mason, Max, Nova, Quinn and Dep cite the `deleted: <path>` clause; `base-persona.md` says to close `</handoff>` before any narrative.
+- `bgpdd-lite` and `shipping-and-launch` descriptions name the deployment manifest.
+
 ## [2.10.0] — 2026-10-02
 
 The review wave: the Orchestrator stops coding and agents stop committing, every lane gets one escalation ratchet, the commit guard learns which worktree a commit targets, and three dead targets (Cursor, `github-pr-review`, `prompt-engineering`) are removed.

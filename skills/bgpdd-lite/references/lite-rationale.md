@@ -57,7 +57,8 @@ Documentation only — do not recreate by hand; `update_state.py` is the only sa
     "requirements": ".docs/{project-name}/requirements.md",
     "design": "{PLUGIN_ROOT}/dotnet-backend-patterns/SKILL.md",
     "plan": ".docs/{project-name}/implementation/plan.md",
-    "acceptance_matrix": null
+    "acceptance_matrix": null,
+    "deploy_manifest": ".docs/{project-name}/deploy/manifest.md"
   },
   "blockers": [],
   "updated": "<ISO-8601 timestamp>"

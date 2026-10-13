@@ -7,12 +7,13 @@ bundle of SQL / Azure / config scripts, each with a rollback and each traced
 to a plan task. Pure standard library.
 
 Usage:
-    python check_deploy_manifest.py --manifest <path> --plan <path> --phase plan|build [--ledger <gates.jsonl>]
+    python check_deploy_manifest.py --manifest <path> --plan <path> --phase plan|build [--state <orchestrator-state.json>] [--ledger <gates.jsonl>]
     python check_deploy_manifest.py --self-test
 """
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
 import tempfile
@@ -28,13 +29,21 @@ TYPES = ("sql", "azure", "appsetting", "secret", "flag", "backfill", "other")
 STATUSES = ("drafted", "pending-build", "final")
 PHASES = ("plan", "build")
 ARRAYS = ("bad_rows", "missing_rollback", "untraced", "missing_files",
-          "premature_sql", "pending", "empty_manifest", "manifest_missing")
+          "empty_files", "path_escape", "premature_sql", "pending",
+          "empty_manifest", "manifest_missing")
 
 FENCE_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
+HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
 SEPARATOR_RE = re.compile(r"^\s*\|[\s:|-]*\|?\s*$")
-EXEMPTION_RE = re.compile(r"^\s*No production changes:\s*\S", re.MULTILINE)
+EXEMPTION_RE = re.compile(r"^\s*No production changes:(.*)$", re.MULTILINE)
 NO_ROLLBACK_RE = re.compile(r"^\[no rollback:\s*(.*?)\s*\]$", re.IGNORECASE)
 NOT_A_PATH = ("", "-", "n/a", "na", "none", "tbd")
+# A reason stand-in. Same vocabulary as check_quick_close.py's
+# PLACEHOLDER_VALUE_RE (duplicated, not imported, per family convention).
+PLACEHOLDER_VALUE_RE = re.compile(
+    r"^(?:<[^>]*>|todo|tbd|fixme|n/?a|none|unknown|\?+|\.{3,}|xxx+)[.:]?$",
+    re.IGNORECASE)
+DRIVE_RE = re.compile(r"^[A-Za-z]:")
 
 
 class GateError(Exception):
@@ -59,6 +68,47 @@ def blank_fences(text):
     return "\n".join(out)
 
 
+def strip_html_comments(text):
+    """Blank HTML comments (multi-line; an unterminated one runs to EOF),
+    keeping line count: what the rendered manifest hides never counts."""
+    return HTML_COMMENT_RE.sub(lambda m: "\n" * m.group(0).count("\n"), text)
+
+
+def is_real_reason(value):
+    """A stated reason: not a placeholder and carrying a letter or digit."""
+    v = (value or "").strip().strip("`").strip()
+    return (bool(v) and not PLACEHOLDER_VALUE_RE.match(v)
+            and re.search(r"[^\W_]", v) is not None)
+
+
+def path_escapes(rel):
+    """True when a Script/Rollback path is absolute or leaves the manifest
+    directory (`..`); backslashes count as separators on every OS."""
+    norm = rel.replace("\\", "/")
+    if norm.startswith("/") or DRIVE_RE.match(norm):
+        return True
+    return ".." in norm.split("/")
+
+
+def is_blank_file(path):
+    """True when the file is zero bytes or only whitespace (BOM ignored)."""
+    try:
+        data = Path(path).read_bytes()
+    except OSError:
+        return False
+    if data.startswith(b"\xef\xbb\xbf"):
+        data = data[3:]
+    return not data.strip()
+
+
+def same_path(base, a, b):
+    """True when two manifest-relative paths name the same file."""
+    def norm(rel):
+        return os.path.normcase(os.path.normpath(
+            str(base / rel.replace("\\", "/"))))
+    return norm(a) == norm(b)
+
+
 def read_text(path, label):
     p = Path(path)
     if not p.is_file():
@@ -77,7 +127,7 @@ def cells(line):
 
 def parse_manifest(text):
     """Return (rows, exempt). rows = [(lineno, [7 cells])]. Raises GateError."""
-    lines = blank_fences(text).split("\n")
+    lines = strip_html_comments(blank_fences(text)).split("\n")
     start = None
     for index, line in enumerate(lines):
         if line.strip().startswith("|") and tuple(cells(line)) == HEADER:
@@ -99,14 +149,16 @@ def parse_manifest(text):
             raise GateError("manifest line %d has %d cells, expected %d"
                             % (index + 1, len(row), len(HEADER)))
         rows.append((index + 1, row))
-    return rows, bool(EXEMPTION_RE.search("\n".join(lines)))
+    exempt = any(is_real_reason(m.group(1))
+                 for m in EXEMPTION_RE.finditer("\n".join(lines)))
+    return rows, exempt
 
 
 def rollback_kind(value):
     """'path', 'exempt', or None (missing or an invalid exemption)."""
     match = NO_ROLLBACK_RE.match(value)
     if match:
-        return "exempt" if match.group(1) else None
+        return "exempt" if is_real_reason(match.group(1)) else None
     if value.lower() in NOT_A_PATH or value.startswith("["):
         return None
     return "path"
@@ -123,8 +175,9 @@ def empty_report(phase, manifest, plan):
 def build_report(manifest_path, plan_path, phase):
     report = empty_report(phase, manifest_path, plan_path)
     rows, exempt = parse_manifest(read_text(manifest_path, "manifest"))
+    # Fences blanked first: a `## Task N:` inside a fenced example is not a task.
     tasks = {number for number, _ in
-             split_task_blocks(read_text(plan_path, "plan"))}
+             split_task_blocks(blank_fences(read_text(plan_path, "plan")))}
     if not tasks:
         raise GateError("no task blocks (## Task N:) found in plan: %s" % plan_path)
     base = Path(manifest_path).resolve().parent
@@ -157,8 +210,15 @@ def build_report(manifest_path, plan_path, phase):
         if not script or script.lower() in NOT_A_PATH:
             bad(position, "Script", script, "empty")
         rb = rollback_kind(rollback)
+        script_is_path = bool(script) and script.lower() not in NOT_A_PATH
         if rb is None:
-            report["missing_rollback"].append(dict(ref, value=rollback))
+            report["missing_rollback"].append(dict(
+                ref, value=rollback,
+                detail="empty, n/a, or an exemption with no real reason"))
+        elif rb == "path" and script_is_path and same_path(base, script, rollback):
+            report["missing_rollback"].append(dict(
+                ref, value=rollback, detail="the same file as Script"))
+            rb = None
         tokens = [t.strip() for t in traces.split(",")] if traces else []
         if not tokens or any(not t for t in tokens):
             report["untraced"].append(dict(ref, value=traces,
@@ -179,14 +239,23 @@ def build_report(manifest_path, plan_path, phase):
         if phase == "build" and status == "pending-build":
             report["pending"].append(dict(ref, step=step))
 
+        paths = [("Script", script)] if script_is_path else []
+        if rb == "path":
+            paths.append(("Rollback", rollback))
+        inside = []
+        for field, rel in paths:
+            if path_escapes(rel):
+                report["path_escape"].append(dict(ref, field=field, path=rel))
+            else:
+                inside.append((field, rel))
         must_exist = phase == "build" or status in ("drafted", "final")
         if must_exist:
-            paths = [("Script", script)] if script and script.lower() not in NOT_A_PATH else []
-            if rb == "path":
-                paths.append(("Rollback", rollback))
-            for field, rel in paths:
-                if not (base / rel).is_file():
+            for field, rel in inside:
+                target = base / rel.replace("\\", "/")
+                if not target.is_file():
                     report["missing_files"].append(dict(ref, field=field, path=rel))
+                elif is_blank_file(target):
+                    report["empty_files"].append(dict(ref, field=field, path=rel))
 
     report["ok"] = not any(report[name] for name in ARRAYS)
     return report
@@ -400,6 +469,28 @@ def scan_ledger(ledger_path):
     return plan_recorded, coverage_recorded
 
 
+def state_declares_manifest(state_path):
+    """True when orchestrator-state.json's artifacts.deploy_manifest is set.
+
+    The plan lanes' state-persistence step records it, so a set value means
+    the epic was planned with the manifest phase. Raises GateError when the
+    file is missing, unreadable, or not a JSON object.
+    """
+    p = Path(state_path)
+    if not p.is_file():
+        raise GateError("state file not found: %s" % state_path)
+    try:
+        state = json.loads(p.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        raise GateError("state file not readable as JSON: %s (%s)"
+                        % (state_path, exc))
+    if not isinstance(state, dict):
+        raise GateError("state file is not a JSON object: %s" % state_path)
+    artifacts = state.get("artifacts")
+    value = artifacts.get("deploy_manifest") if isinstance(artifacts, dict) else None
+    return isinstance(value, str) and bool(value.strip())
+
+
 class PurposeFirstParser(argparse.ArgumentParser):
     """`--help` whose FIRST line is the one-line purpose, then usage/args/epilog.
 
@@ -426,75 +517,84 @@ Reads:
   --manifest  .docs/{project}/deploy/manifest.md. The FIRST table whose
   header is exactly
       | # | Type | Step | Script | Rollback | Traces | Status |
-  is the manifest (fenced blocks are blanked first; utf-8-sig). Per row:
+  is the manifest (fenced blocks and HTML comments, multi-line too, are
+  blanked first; utf-8-sig). Per row:
     #         1..N, contiguous, in order -- the execution order.
     Type      sql | azure | appsetting | secret | flag | backfill | other
     Step      non-empty description.
-    Script    path relative to the manifest's directory.
-    Rollback  a path relative to the manifest's directory, or
-              [no rollback: <non-empty reason>].
+    Script    path relative to the manifest's directory: no `..` segment,
+              not absolute.
+    Rollback  such a path, not the Script's own, or
+              [no rollback: <reason>].
     Traces    plan task numbers, comma-separated ("5, 6").
     Status    drafted | pending-build | final
   A header-only table passes only when the file carries a line
-  `No production changes: <reason>` (JSON `exempt: true`).
+  `No production changes: <reason>` (JSON `exempt: true`). A reason needs a
+  letter or digit and is no placeholder (TODO, TBD, N/A, none, <...>).
   --plan  .docs/{project}/implementation/plan.md; task numbers come from its
-  `## Task N:` headings via check_coverage.py's split_task_blocks.
-  Script/Rollback files, checked on disk per phase.
+  `## Task N:` headings outside fences, via check_coverage.py's
+  split_task_blocks.
+  --state  .docs/{project}/orchestrator-state.json, REQUIRED at --phase
+  build (not a recorded ledger input). The plan lanes'
+  state-persistence step sets artifacts.deploy_manifest.
   --ledger  .docs/{project}/implementation/gates.jsonl: one chained record
-  is appended per run, on every exit path (pipeline-tools SKILL.md, "Gate
-  ledger"), carrying the extra field `phase` (and `legacy: true` on a
+  is appended per run, on every exit path, carrying the extra field `phase` (and `legacy: true` on a
   legacy pass). At --phase build with no manifest file it is also READ.
 
-Epic planned before the manifest phase (--phase build, no manifest file):
-  A ledger record of this gate with phase `plan` (any verdict) -> exit 1,
-  `manifest_missing`. Otherwise the ledger must hold a check_coverage.py
-  record (the plan lanes' coverage gate writes one) -> exit 0,
-  `legacy: true`. A missing or unreadable ledger, or one with no
-  check_coverage.py record, -> exit 2 (likely a wrong --ledger path).
-  Without --ledger, or at --phase plan, a missing manifest stays exit 2.
+No manifest file at --phase build:
+  state's artifacts.deploy_manifest set -> exit 1, `manifest_missing` (the
+  epic was planned with the manifest phase). Otherwise, with --ledger, a
+  ledger record of this gate with phase `plan` (any verdict) -> exit 1,
+  `manifest_missing`; else the ledger must hold a check_coverage.py record
+  -> exit 0, `legacy: true` (an epic planned before the manifest phase). A
+  missing or unreadable ledger, or one with no check_coverage.py record,
+  -> exit 2 (likely a wrong --ledger path). Without --ledger, or at
+  --phase plan, a missing manifest stays exit 2.
 
 Phase rules:
-  both   the row checks above (bad_rows, missing_rollback, untraced).
+  both   the row checks above.
   plan   pending-build allowed; drafted/final rows need their Script and
-         path Rollback on disk; a sql row must be pending-build (SQL is
-         generated from the real migrations at build).
+         path Rollback on disk, non-blank; a sql row must be pending-build
+         (SQL comes from the real migrations at build).
   build  no row may be pending-build; every Script and path Rollback must
-         exist on disk.
+         exist on disk, non-blank.
 
 Problem codes:
   Each is a JSON array; any non-empty array is exit 1.
   bad_rows          {row, field, value, detail}: # out of order, Type or
                     Status outside its enum, empty Step/Script, Traces not
                     comma-separated numbers
-  missing_rollback  {row, line, value}: empty, n/a, or an exemption with no
-                    reason
+  missing_rollback  {row, line, value, detail}: empty, n/a, an exemption
+                    without a real reason, or the Script's own path
   untraced          {row, line, value, detail}: no trace, or a task number
                     plan.md does not have
   missing_files     {row, line, field, path}: a required file is absent
+  empty_files       {row, line, field, path}: a required file is zero bytes
+                    or whitespace only
+  path_escape       {row, line, field, path}: absolute, or a `..` segment
   premature_sql     {row, line, status}: a sql row not pending-build at plan
   pending           {row, line, step}: a pending-build row at build
-  empty_manifest    header-only table without the exemption line
-  manifest_missing  {path, detail}: no manifest at build, but the ledger
-                    records a plan-phase run of this gate
+  empty_manifest    header-only table without a real exemption line
+  manifest_missing  {path, detail}: no manifest at build, but the state or
+                    the ledger shows the manifest phase ran
   error             prose naming the exit-2 failure
 
 JSON keys:
-  Always printed on stdout (there is no --json flag):
+  Always on stdout (no --json flag):
   ok, phase, manifest, plan, rows, exempt, legacy, bad_rows,
-  missing_rollback, untraced, missing_files, premature_sql, pending,
-  empty_manifest, manifest_missing, error
+  missing_rollback, untraced, missing_files, empty_files, path_escape,
+  premature_sql, pending, empty_manifest, manifest_missing, error
 
 Exit codes:
   0  ok: every array empty (or an exempt empty manifest, or a legacy pass).
   1  at least one array is non-empty.
-  2  usage error, a missing/unreadable manifest or plan (outside the legacy
-     path), a missing, unreadable or coverage-less ledger on the legacy
-     path, no manifest table,
-     no separator row, a row with the wrong cell count, or a plan with no
-     `## Task N:` headings.
+  2  usage error (including no --state at build); a missing, unreadable
+     or non-object state; a missing/unreadable manifest or plan (outside the
+     legacy path); a bad ledger on the legacy path (see above); no manifest
+     table, no separator row, a wrong cell count, or no `## Task N:` heading.
 
 Self-test:
-  python check_deploy_manifest.py --self-test   (22 cases)
+  python check_deploy_manifest.py --self-test   (33 cases)
 """
 
 
@@ -511,6 +611,9 @@ def main(argv):
     parser.add_argument("--ledger",
                         help="append one chained JSON record per run to this "
                              "path; read for the legacy path at --phase build")
+    parser.add_argument("--state",
+                        help="orchestrator-state.json; required at --phase "
+                             "build, ignored at --phase plan")
     parser.add_argument("--self-test", action="store_true",
                         help="run the built-in tests and exit")
     args = parser.parse_args(argv)
@@ -521,6 +624,8 @@ def main(argv):
     def finish(report, code):
         """One exit point: EVERY return path prints and records a ledger line."""
         print(json.dumps(report, indent=2))
+        # --state is not a recorded input: it changes every phase, and
+        # shipping's --require-ledger-gates wants PASS over unchanged inputs.
         append_ledger(args.ledger, argv, [args.manifest, args.plan],
                       ("PASS", "FAIL", "ERROR")[code], code, args.phase,
                       report["legacy"])
@@ -534,9 +639,20 @@ def main(argv):
         report["error"] = "missing required argument(s): " + ", ".join(missing)
     elif args.phase not in PHASES:
         report["error"] = "--phase must be plan or build, not %r" % args.phase
+    elif args.phase == "build" and not args.state:
+        report["error"] = ("missing required argument: --state (required at "
+                           "--phase build)")
     if report["error"]:
         return finish(report, 2)
     try:
+        declared = (args.phase == "build"
+                    and state_declares_manifest(args.state))
+        if args.phase == "build" and not Path(args.manifest).is_file() and declared:
+            report["manifest_missing"].append({
+                "path": args.manifest,
+                "detail": "the state's artifacts.deploy_manifest is set: the "
+                          "epic was planned with the manifest phase"})
+            return finish(report, 1)
         if (args.phase == "build" and args.ledger
                 and not Path(args.manifest).is_file()):
             plan_recorded, coverage_recorded = scan_ledger(args.ledger)
@@ -582,21 +698,35 @@ def run_self_test():
             self.manifest.parent.mkdir()
             for rel in ("scripts/02.ps1", "rollback/02.ps1", "scripts/03.json"):
                 self.touch(rel)
+            # A pre-manifest-phase state: artifacts without deploy_manifest.
+            self.state = self.dir / "orchestrator-state.json"
+            self.write_state(None)
 
         def tearDown(self):
             shutil.rmtree(self.dir, ignore_errors=True)
 
-        def touch(self, rel):
+        def touch(self, rel, text="x"):
             p = self.manifest.parent / rel
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text("x", encoding="utf-8")
+            p.write_text(text, encoding="utf-8")
+
+        def write_state(self, deploy_manifest):
+            artifacts = {"plan": "plan.md"}
+            if deploy_manifest is not None:
+                artifacts["deploy_manifest"] = deploy_manifest
+            self.state.write_text(json.dumps({"artifacts": artifacts}),
+                                  encoding="utf-8")
+
+        def state_args(self, phase):
+            return ["--state", str(self.state)] if phase == "build" else []
 
         def run_gate(self, body, phase):
             self.manifest.write_text(body, encoding="utf-8")
             out = io.StringIO()
             with redirect_stdout(out):
                 code = main(["--manifest", str(self.manifest),
-                             "--plan", str(self.plan), "--phase", phase])
+                             "--plan", str(self.plan), "--phase", phase]
+                            + self.state_args(phase))
             report = json.loads(out.getvalue())
             self.assertEqual(report["ok"], code == 0)
             for key in ("phase", "rows") + ARRAYS:
@@ -708,13 +838,13 @@ def run_self_test():
             self.assertEqual(code, 0, out.getvalue())
 
         # --- ledger and the pre-manifest-epic (legacy) path ---------------
-        def run_ledgered(self, phase, *extra):
+        def run_ledgered(self, phase, *extra, state=True):
             self.ledger = self.dir / "implementation" / "gates.jsonl"
             out = io.StringIO()
             with redirect_stdout(out):
                 code = main(["--manifest", str(self.manifest),
                              "--plan", str(self.plan), "--phase", phase,
-                             *extra])
+                             *extra] + (self.state_args(phase) if state else []))
             report = json.loads(out.getvalue())
             self.assertEqual(report["ok"], code == 0)
             return code, report
@@ -785,6 +915,137 @@ def run_self_test():
             unreadable.mkdir()
             code, r = self.run_ledgered("build", "--ledger", str(unreadable))
             self.assertEqual(code, 2)
+
+        # --- skip detection: the state file ---------------------------------
+        def coverage_ledger(self):
+            ledger = self.dir / "implementation" / "gates.jsonl"
+            ledger.parent.mkdir(exist_ok=True)
+            ledger.write_text(json.dumps({"gate": "check_coverage.py"}) + "\n",
+                              encoding="utf-8")
+            return str(ledger)
+
+        def test_build_without_state_is_exit_2(self):
+            self.manifest.write_text(HEAD + SETTING.replace("| 3 |", "| 1 |"),
+                                     encoding="utf-8")
+            code, r = self.run_ledgered("build", state=False)
+            self.assertEqual(code, 2, r)
+            self.assertIn("--state", r["error"])
+            # ...and not at plan, where --state is not needed.
+            self.assertEqual(self.run_ledgered("plan", state=False)[0], 0)
+
+        def test_skipped_manifest_phase_with_artifact_set_blocks(self):
+            # Coverage-only ledger: before --state this read as a legacy pass.
+            self.write_state(".docs/x/deploy/manifest.md")
+            code, r = self.run_ledgered("build", "--ledger", self.coverage_ledger())
+            self.assertEqual(code, 1, r)
+            self.assertFalse(r["legacy"])
+            self.assertIn("deploy_manifest", r["manifest_missing"][0]["detail"])
+            code, r = self.run_ledgered("build")  # no ledger: still caught
+            self.assertEqual(code, 1, r)
+
+        def test_legacy_passes_when_state_has_no_deploy_manifest(self):
+            for value in (None, "", "   "):  # absent, or set to nothing
+                self.write_state(value)
+                code, r = self.run_ledgered("build", "--ledger",
+                                            self.coverage_ledger())
+                self.assertEqual(code, 0, (value, r))
+                self.assertTrue(r["legacy"])
+
+        def test_missing_or_bad_state_is_exit_2(self):
+            ledger = self.coverage_ledger()
+            self.state.unlink()
+            code, r = self.run_ledgered("build", "--ledger", ledger)
+            self.assertEqual(code, 2, r)
+            self.assertIn("state file not found", r["error"])
+            for body in ("{not json", "[1, 2]"):
+                self.state.write_text(body, encoding="utf-8")
+                code, r = self.run_ledgered("build", "--ledger", ledger)
+                self.assertEqual(code, 2, (body, r))
+
+        def test_state_is_not_a_recorded_ledger_input(self):
+            self.manifest.write_text(HEAD + SETTING.replace("| 3 |", "| 1 |"),
+                                     encoding="utf-8")
+            ledger = str(self.dir / "implementation" / "gates.jsonl")
+            self.assertEqual(self.run_ledgered("build", "--ledger", ledger)[0], 0)
+            self.assertNotIn(str(self.state), self.records()[-1]["inputs"])
+
+        # --- fabricated-input hardening ---------------------------------------
+        def test_path_escape_absolute_and_dotdot(self):
+            (self.dir / "outside.ps1").write_text("x", encoding="utf-8")
+            for script, rollback in (("../outside.ps1", "rollback/02.ps1"),
+                                     ("scripts/02.ps1", "..\\outside.ps1"),
+                                     (str(self.dir / "outside.ps1"), "rollback/02.ps1"),
+                                     ("/etc/passwd", "rollback/02.ps1"),
+                                     ("C:/x.ps1", "rollback/02.ps1")):
+                body = HEAD + "| 1 | azure | Q | %s | %s | 5 | drafted |\n" % (
+                    script, rollback)
+                for phase in PHASES:
+                    code, r = self.run_gate(body, phase)
+                    self.assertEqual(code, 1, (script, rollback, phase))
+                    self.assertEqual(len(r["path_escape"]), 1, r)
+                    self.assertEqual(r["missing_files"], [], r)
+
+        def test_blank_script_or_rollback_is_empty_files(self):
+            for text in ("", "  \n\t\n", "\ufeff\n"):
+                self.touch("scripts/02.ps1", text)
+                for phase in PHASES:
+                    code, r = self.run_gate(HEAD + AZURE.replace("| 2 |", "| 1 |"),
+                                            phase)
+                    self.assertEqual(code, 1, (repr(text), phase))
+                    self.assertEqual([(e["field"], e["path"]) for e in r["empty_files"]],
+                                     [("Script", "scripts/02.ps1")])
+            self.touch("scripts/02.ps1")
+            self.touch("rollback/02.ps1", "")
+            code, r = self.run_gate(HEAD + AZURE.replace("| 2 |", "| 1 |"), "build")
+            self.assertEqual(r["empty_files"][0]["field"], "Rollback")
+
+        def test_rollback_equal_to_script_is_missing_rollback(self):
+            for rollback in ("scripts/02.ps1", "./scripts/02.ps1",
+                             "scripts\\02.ps1"):
+                body = HEAD + "| 1 | azure | Q | scripts/02.ps1 | %s | 5 | drafted |\n" % rollback
+                code, r = self.run_gate(body, "build")
+                self.assertEqual(code, 1, rollback)
+                self.assertEqual(r["missing_rollback"][0]["detail"],
+                                 "the same file as Script")
+
+        def test_html_comments_hide_tables_and_exemptions(self):
+            # A commented-out exemption line does not exempt.
+            code, r = self.run_gate("<!-- No production changes: none here -->\n"
+                                    + HEAD, "build")
+            self.assertEqual(code, 1, r)
+            self.assertEqual(len(r["empty_manifest"]), 1)
+            code, r = self.run_gate("<!--\nNo production changes: hidden\n-->\n"
+                                    + HEAD, "plan")
+            self.assertEqual(code, 1, r)
+            # A commented-out table is not the manifest: no table at all -> 2.
+            code, r = self.run_gate("<!--\n" + HEAD + SETTING.replace("| 3 |", "| 1 |")
+                                    + "-->\n", "plan")
+            self.assertEqual(code, 2, r)
+            # A commented-out first table yields to the real one below it.
+            code, r = self.run_gate("<!--\n" + HEAD + "| 1 | bad |\n-->\n" + HEAD
+                                    + SETTING.replace("| 3 |", "| 1 |"), "plan")
+            self.assertEqual(code, 0, r)
+
+        def test_task_only_inside_a_plan_fence_does_not_trace(self):
+            self.plan.write_text(PLAN + "\n```\n## Task 9: example\n```\n",
+                                 encoding="utf-8")
+            body = HEAD + SETTING.replace("| 3 |", "| 1 |").replace("| 5 |", "| 9 |")
+            code, r = self.run_gate(body, "plan")
+            self.assertEqual(code, 1, r)
+            self.assertIn("9", r["untraced"][0]["detail"])
+
+        def test_punctuation_or_placeholder_reasons_are_refused(self):
+            for reason in (".", "-", "...", " -- ", "TODO", "TBD", "N/A",
+                           "none", "<reason>", "?"):
+                body = HEAD + ("| 1 | appsetting | Key | scripts/03.json | "
+                               "[no rollback: %s] | 5 | drafted |\n" % reason)
+                code, r = self.run_gate(body, "plan")
+                self.assertEqual(code, 1, reason)
+                self.assertEqual(len(r["missing_rollback"]), 1, reason)
+                code, r = self.run_gate(
+                    "No production changes: %s\n\n%s" % (reason, HEAD), "build")
+                self.assertEqual(code, 1, reason)
+                self.assertFalse(r["exempt"], reason)
 
     suite =unittest.defaultTestLoader.loadTestsFromTestCase(ManifestTests)
     result = unittest.TextTestRunner(verbosity=1).run(suite)

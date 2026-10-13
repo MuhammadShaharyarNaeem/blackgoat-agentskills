@@ -131,7 +131,12 @@ and the other repo's changed files always "missing". `--repo` is therefore
 REPEATABLE -- a `<changed_files>` path is accepted if it resolves (relative or
 absolute, either slash style, case-insensitive drive letters) under ANY listed
 repo, and `--since` runs `git diff --name-only <ref>` in the specific repo
-that path resolved to, not the first one.
+that path resolved to, not the first one. A listed root outside every git work
+tree (the workspace root itself, holding `.docs/`) has no diff: a path there
+is checked by mtime against the launch instant -- `--since` given as an
+ISO-8601 instant, else the `--transcript` delegation's timestamp -- and with
+neither the gate exits 2 rather than settle for existence. `verify_mode` in
+the JSON names the mode each root was verified by.
 
 `--docs-root` is also repeatable and OPTIONAL: `<artifact>` and
 `<changed_skills>` resolve under any `--repo` OR any `--docs-root`, but
@@ -707,6 +712,72 @@ def git_changed_since(repo, ref):
     return changed
 
 
+# A workspace root with no .git (a multi-repo discovery workspace writing
+# .docs/summary/) has no diff to consult, so --since verifies a
+# <changed_files> path resolved there by mtime against the launch instant.
+# Which mode applies is decided by the fact -- is the root inside a git work
+# tree -- never by a flag. The slack absorbs coarse filesystem timestamps
+# (FAT/exFAT round to 2 s); a file touched 2 s before launch passing is the
+# price, a fresh file failing would be worse.
+MTIME_SLACK_SECONDS = 2.0
+INSTANT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}")
+
+
+def parse_instant(text):
+    """An aware datetime when `text` is an ISO-8601 date-and-time, else None.
+
+    A trailing Z is UTC; no offset at all is local time, the clock file
+    mtimes on this machine are read against."""
+    s = (text or "").strip()
+    if not INSTANT_RE.match(s):
+        return None
+    if s[-1] in "Zz":
+        s = s[:-1] + "+00:00"
+    try:
+        value = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    return value if value.tzinfo else value.astimezone()
+
+
+def is_git_work_tree(root):
+    """True when `root` lies inside a git work tree. A missing git or a
+    timeout is a GateError: the gate cannot tell which mode applies."""
+    try:
+        proc = subprocess.run(["git", "-C", str(root), "rev-parse",
+                               "--is-inside-work-tree"],
+                              capture_output=True, timeout=120)
+    except FileNotFoundError:
+        raise GateError("git executable not found; --since cannot be checked")
+    except subprocess.TimeoutExpired:
+        raise GateError("git rev-parse timed out after 120s")
+    return proc.returncode == 0 and proc.stdout.strip() == b"true"
+
+
+def tool_use_timestamps(path):
+    """{tool_use_id: timestamp} for the main thread's assistant tool calls --
+    the runtime-written instant each delegation was launched."""
+    try:
+        raw = Path(path).read_text(encoding="utf-8-sig", errors="replace")
+    except OSError as exc:
+        raise GateError(f"cannot read --transcript {path}: {exc}")
+    stamps = {}
+    for line in raw.splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if (not isinstance(entry, dict) or entry.get("isSidechain")
+                or not isinstance(entry.get("timestamp"), str)
+                or not isinstance(entry.get("message"), dict)):
+            continue
+        for kind, _text, extra in _content_parts(
+                entry["message"].get("content")):
+            if kind == "tool_use" and extra.get("id"):
+                stamps[extra["id"]] = entry["timestamp"]
+    return stamps
+
+
 def run_git_checked(repo, args, config=(), literal_pathspecs=False):
     """stdout of `git [-c <config>...] -C <repo> <args>`, or GateError.
 
@@ -1134,7 +1205,9 @@ def _as_root_list(value):
 
 def build_report(text, persona, repo, since=None, fix_round=False,
                  require=(), source="<stdin>", advisory=False,
-                 allow_scaffolding=None, docs_root=None):
+                 allow_scaffolding=None, docs_root=None, launched_at=None):
+    """`launched_at`: the transcript's launch instant (an aware datetime),
+    the mtime reference for a non-git root when `since` is a git ref."""
     persona_key = (persona or "").strip().lower()
     if persona_key not in PERSONA_ELEMENTS:
         known = ", ".join(sorted(PERSONA_ELEMENTS))
@@ -1166,6 +1239,8 @@ def build_report(text, persona, repo, since=None, fix_round=False,
         "repo": [str(r) for r in repos],
         "docs_root": [str(d) for d in docs_roots],
         "since": since,
+        "verify_mode": {},
+        "mtime_reference": None,
         "fix_round": bool(fix_round),
         "advisory": bool(advisory),
         "advisory_waived_elements": waived,
@@ -1291,7 +1366,9 @@ def build_report(text, persona, repo, since=None, fix_round=False,
                     continue
                 why = {"present": f"it still exists under {matched_root}",
                        "untracked": "git holds no such file at HEAD in any "
-                                    f"searched root ({roots_label})",
+                                    f"searched root ({roots_label}); a root "
+                                    "outside every git work tree cannot "
+                                    "verify a deletion",
                        "outside": f"it lies outside every searched root "
                                   f"({roots_label})",
                        "empty": "it names no path"}[state]
@@ -1348,12 +1425,70 @@ def build_report(text, persona, repo, since=None, fix_round=False,
         # listed -- a milestone that touches two repos needs both checked
         # against their own history. A path that never resolved (already a
         # path_missing finding above) has nothing to diff and is skipped.
+        #
+        # A root outside every git work tree is verified by mtime instead:
+        # the file must have been modified at or after the launch instant
+        # (--since itself when it is an ISO-8601 instant, else the
+        # transcript's launch of this delegation). No instant = exit 2,
+        # never existence-only: the compliant handoff must not be the one
+        # that is checked less.
+        since_instant = parse_instant(since)
+        reference = ((since_instant, "since") if since_instant else
+                     (launched_at, "transcript") if launched_at else None)
         touched_cache = {}
+        git_roots = {}
+
+        def in_git(root):
+            key = str(Path(root).resolve())
+            if key not in git_roots:
+                git_roots[key] = is_git_work_tree(root)
+            return git_roots[key]
+
         for rel in report["changed_files"]:
             resolution = changed_files_repo.get(rel)
             if resolution is None:
                 continue
             matched_root, resolved_path = resolution
+            if not in_git(matched_root):
+                # A non-git workspace root listed first also holds every
+                # nested repo: prefer a git --repo that holds the file too.
+                for other in repos:
+                    try:
+                        resolved_path.relative_to(Path(other).resolve())
+                    except ValueError:
+                        continue
+                    if in_git(other):
+                        matched_root = other
+                        break
+            if not in_git(matched_root):
+                report["verify_mode"][str(matched_root)] = "mtime"
+                if reference is None:
+                    raise GateError(
+                        f"{matched_root} is not a git work tree, so its "
+                        f"<changed_files> are checked by mtime, and --since "
+                        f"{since} is a git ref with no launch instant to "
+                        "compare against: pass --transcript, or --since "
+                        "<ISO-8601 launch instant>")
+                instant, source = reference
+                report["mtime_reference"] = {"instant": instant.isoformat(),
+                                             "source": source}
+                mtime = resolved_path.stat().st_mtime
+                if mtime < instant.timestamp() - MTIME_SLACK_SECONDS:
+                    modified = datetime.fromtimestamp(
+                        mtime, timezone.utc).isoformat()
+                    finding("changed_files_not_in_diff",
+                            f"<changed_files> names {rel}, last modified "
+                            f"{modified}, before the launch instant "
+                            f"{instant.isoformat()} ({source}); "
+                            f"{matched_root} is not a git work tree, so "
+                            "mtime decides",
+                            path=rel, since=since, mode="mtime")
+                continue
+            if since_instant:
+                raise GateError(
+                    f"--since {since} is an instant, but {matched_root} is a "
+                    "git work tree: pass the sha HEAD held at launch")
+            report["verify_mode"][str(matched_root)] = "git"
             root_key = str(Path(matched_root).resolve())
             if root_key not in touched_cache:
                 touched_cache[root_key] = git_changed_since(matched_root, since)
@@ -1395,6 +1530,11 @@ def build_report(text, persona, repo, since=None, fix_round=False,
         if since:
             # Each entry is diffed in the repo its path resolves to; the
             # none: form has no entries and is never diff-checked.
+            if file_entries and parse_instant(since):
+                raise GateError(
+                    f"--since {since} is an instant, but <changed_symbols> "
+                    "are checked against git diff: pass the sha HEAD held "
+                    "at launch")
             lines_cache = {}
             for entry in file_entries:
                 cited = f"{entry['path']}::{entry['name']}"
@@ -1578,17 +1718,21 @@ def transcript_handbacks(path):
     return handbacks, launched
 
 
-def delegation_source(messages, block, handbacks=(), launched=None):
+def delegation_source(messages, block, handbacks=(), launched=None,
+                      stamps=None):
     """Where the runtime recorded this handoff block, or None.
 
     Accepted: the tool_result of a Task/Agent call (a foreground delegation)
     or a user-role text entry (a background agent's completion notification,
     or a human paste), or a queued hand-back from a launched agent -- never a
     human's queued mid-turn message. Never assistant text, and never another
-    tool's result -- `cat handoff.md` would return text the model wrote itself."""
+    tool's result -- `cat handoff.md` would return text the model wrote itself.
+    `launched_at` is the delegating call's transcript timestamp (from
+    `stamps`, see tool_use_timestamps), or None."""
     needle = collapse_ws(block)
     if not needle:
         return None
+    stamps = stamps or {}
     calls = {e["id"]: e for _l, r, k, _t, e in messages
              if r == "assistant" and k == "tool_use"}
     for line_no, role, kind, text, extra in messages:
@@ -1599,16 +1743,18 @@ def delegation_source(messages, block, handbacks=(), launched=None):
             if call and call.get("name") in DELEGATION_TOOL_NAMES:
                 return {"line": line_no, "via": "delegation_result",
                         "tool": call["name"],
-                        "subagent_type": call["input"].get("subagent_type")}
+                        "subagent_type": call["input"].get("subagent_type"),
+                        "launched_at": stamps.get(call["id"])}
         elif kind == "text":
             ids = NOTIFICATION_TOOL_ID_RE.findall(text)
             call = calls.get(ids[0]) if ids else None
             if call and call.get("name") in DELEGATION_TOOL_NAMES:
                 return {"line": line_no, "via": "delegation_notification",
                         "tool": call["name"],
-                        "subagent_type": call["input"].get("subagent_type")}
+                        "subagent_type": call["input"].get("subagent_type"),
+                        "launched_at": stamps.get(call["id"])}
             return {"line": line_no, "via": "user_message",
-                    "tool": None, "subagent_type": None}
+                    "tool": None, "subagent_type": None, "launched_at": None}
     # A queued hand-back (see transcript_handbacks): accepted only when its
     # sender is an agent a Task/Agent call in this transcript launched.
     for line_no, sender, text in handbacks:
@@ -1618,7 +1764,8 @@ def delegation_source(messages, block, handbacks=(), launched=None):
         if call and call.get("name") in DELEGATION_TOOL_NAMES:
             return {"line": line_no, "via": "delegation_handback",
                     "tool": call["name"],
-                    "subagent_type": call["input"].get("subagent_type")}
+                    "subagent_type": call["input"].get("subagent_type"),
+                    "launched_at": stamps.get(call["id"])}
     return None
 
 
@@ -1658,30 +1805,31 @@ Reads:
       <blockers>  on PARTIAL or BLOCKED, at least one line
                     blocked_on: <category> - <reason>
                   <category>: environment, credentials, dependency, spec,
-                  defect. COMPLETE is exempt; absent is element_missing only.
+                  defect. Absent is element_missing only.
       <consumers> lines in path::symbol grammar.
       <changed_files>  paths, or (quinn only, capture-only; convention #8)
                   one line none: <non-empty reason> = the empty set.
                   deleted: <path> = removed: absent, in HEAD.
       <changed_symbols>  one path::Name per line, or one line none:
                   <non-empty reason>. path: one file, read literally, never
-                  a directory. Name: the innermost edited symbol, bare (a
-                  method, not its unchanged class).
+                  a directory. Name: the innermost edited symbol, bare.
     Honesty: upper-case PASS/GREEN beside NOT VERIFIED/BLOCKED in the
     SAME element; BLOCKED beside <blockers>None</blockers>.
   Cited files  every <changed_files>/<artifact>/<changed_skills> path must
     exist inside a --repo; the latter two also under a --docs-root, its
     parent, the cwd.
   --since  <changed_files> must be a subset of git diff --name-only <ref>
-    plus untracked. Each <changed_symbols> Name must appear as a whole word
+    plus untracked. A root outside every git work tree is checked by mtime
+    instead: modified at or after (2 s slack) --since as an ISO-8601
+    instant, else the --transcript launch; neither is exit 2. A git root
+    needs a ref. Each <changed_symbols> Name must appear as a whole word
     on a +, - or context line (@@ text only for open scopes) of git diff -M -W
     <ref> -- <path> under git's built-in drivers (untracked = all-added;
     none: unchecked; convention #8); other names are invented.
-  Scaffolding sweep  on COMPLETE, TEXT files in <artifact>/<changed_skills>
-    are read for base-persona's placeholder (underscore joined to TODO),
-    TODO-colon-pending, an HTML comment opening TODO/skeleton, and lines
-    EXPLAINING markers. Inline code is no hit; a fence IS. PARTIAL/BLOCKED,
-    <changed_files> exempt.
+  Scaffolding sweep  COMPLETE text <artifact>/<changed_skills> files must
+    hold no base-persona placeholder (underscore joined to TODO),
+    TODO-colon-pending, HTML comment opening TODO/skeleton, or line
+    EXPLAINING markers; a fence counts, inline code does not.
   --transcript  Claude Code session JSONL, sidechains skipped. The
     block, whitespace ignored, must sit in a Task/Agent tool_result, a
     user-role text entry or a launched agent's queued hand-back
@@ -1692,7 +1840,7 @@ Problem codes:
   handoff_missing            no unfenced <handoff> block
   element_missing            required element absent or empty
   path_missing               cited path absent or outside every root
-  deletion_unverified        deleted: path exists or untracked
+  deletion_unverified        deleted: path exists, untracked, non-git
   changed_files_not_in_diff  --since: a file the diff lacks
   changed_files_grammar      none: outside quinn, empty or mixed
   status_invalid             <status> outside the enum
@@ -1705,27 +1853,29 @@ Problem codes:
   handoff_not_delegated      --transcript: no delegation returned it
 
 JSON keys:
-  result, persona, since, fix_round, advisory, advisory_waived_elements,
+  result, persona, since, verify_mode ({root: git|mtime}), mtime_reference
+  ({instant, source}), fix_round, advisory, advisory_waived_elements,
   required_elements, present_elements, status, changed_files,
   changed_files_none_reason, deleted_files, changed_symbols ([{path,
   name}]), changed_symbols_none_reason, artifacts, changed_skills,
   scaffolding_scanned, allow_scaffolding, scaffolding_waived, findings
-  ({code, detail, ...}; scaffolding adds path, line, marker, text),
+  ({code, detail, ...}),
   warnings, error; with --transcript, transcript and delegation_source
-  ({line, via, tool, subagent_type} or null). Ledger extras: advisory;
-  *_none_reason; allow_scaffolding_reason plus waived {path,
-  line, marker}; delegation_source.
+  ({line, via, tool, subagent_type, launched_at} or null). Ledger extras:
+  advisory; *_none_reason; allow_scaffolding_reason plus waived {path,
+  line, marker}; delegation_source; under mtime, verify_mode and
+  mtime_reference.
 
 Exit codes:
   0  PASS
   1  at least one finding
   2  usage; unreadable handoff or untracked file; unknown persona;
-     --repo/--docs-root not a directory; failing --since git call
-     (unresolvable ref) or temp file; blank --allow-scaffolding reason;
+     --repo/--docs-root not a directory; --since unverifiable (bad ref,
+     no instant) or temp file; blank --allow-scaffolding reason;
      unreadable --transcript
 
 Self-test:
-  python check_handoff.py --self-test   (113 cases)
+  python check_handoff.py --self-test   (121 cases)
 """
 
 
@@ -1740,21 +1890,17 @@ def main(argv):
                                           "(default: read stdin)")
     parser.add_argument("--persona", help="squad persona that produced it")
     parser.add_argument("--repo", action="append", default=None,
-                        help="repository root (repeatable; a path may resolve "
-                             "under any). Default '.'")
+                        help="repository root (repeatable). Default '.'")
     parser.add_argument("--docs-root", dest="docs_root", action="append",
                         default=None,
-                        help="shared artifact root (repeatable) for "
-                             "<artifact>/<changed_skills>; default: nearest "
+                        help="artifact root (repeatable); default: nearest "
                              "'.docs' ancestor of --handoff")
-    parser.add_argument("--since", help="git ref: <changed_files> must be a "
-                                        "subset of what git reports changed "
-                                        "since it. Optional here, REQUIRED by "
+    parser.add_argument("--since", help="git ref, or ISO-8601 launch "
+                                        "instant (see below). REQUIRED by "
                                         "every pipeline handoff step")
     parser.add_argument("--advisory", action="store_true",
-                        help="a recommendation brief: <artifact>/"
-                             "<changed_skills> optional; ledger records "
-                             "advisory: true")
+                        help="recommendation brief: <artifact>/"
+                             "<changed_skills> optional")
     parser.add_argument("--fix-round", action="store_true",
                         help="a remediation round: <fix_verification> is required")
     parser.add_argument("--require", action="append", choices=["consumers"],
@@ -1763,8 +1909,7 @@ def main(argv):
                         help="a reason waiving artifact_scaffolding_left only "
                              "(recorded; empty = exit 2)")
     parser.add_argument("--transcript",
-                        help="session transcript JSONL: the block must be a "
-                             "delegation's return there")
+                        help="session transcript JSONL (see below)")
     parser.add_argument("--milestone", help="recorded in the ledger line")
     parser.add_argument("--ledger", help="append one JSON record per run to this path")
     parser.add_argument("--self-test", action="store_true")
@@ -1828,29 +1973,36 @@ def main(argv):
         if auto is not None:
             docs_roots = [str(auto)]
 
+    source_entry = None
+    if args.transcript:
+        # Orchestrator Contract §1 "MUST NOT roleplay a delegated agent's
+        # work", converted (convention #9): the block must be on the
+        # runtime's record as a delegation's return, not just in a file.
+        # Read first: its launch instant is a non-git root's mtime reference.
+        block, _w = extract_handoff(text)
+        try:
+            source_entry = (delegation_source(
+                transcript_messages(args.transcript), block,
+                *transcript_handbacks(args.transcript),
+                stamps=tool_use_timestamps(args.transcript))
+                if block is not None else None)
+        except GateError as exc:
+            print(json.dumps({"result": "ERROR", "error": str(exc)}))
+            return finish(2, "ERROR")
+
     try:
         report = build_report(text, args.persona, repos, since=args.since,
                               fix_round=args.fix_round, require=args.require,
                               source=source, advisory=args.advisory,
                               allow_scaffolding=args.allow_scaffolding,
-                              docs_root=docs_roots)
+                              docs_root=docs_roots,
+                              launched_at=parse_instant(
+                                  (source_entry or {}).get("launched_at")))
     except GateError as exc:
         print(json.dumps({"result": "ERROR", "error": str(exc)}))
         return finish(2, "ERROR")
 
     if args.transcript:
-        # Orchestrator Contract §1 "MUST NOT roleplay a delegated agent's
-        # work", converted (convention #9): the block must be on the
-        # runtime's record as a delegation's return, not just in a file.
-        block, _w = extract_handoff(text)
-        try:
-            source_entry = (delegation_source(
-                transcript_messages(args.transcript), block,
-                *transcript_handbacks(args.transcript))
-                if block is not None else None)
-        except GateError as exc:
-            print(json.dumps({"result": "ERROR", "error": str(exc)}))
-            return finish(2, "ERROR")
         report["transcript"] = args.transcript
         report["delegation_source"] = source_entry
         if block is not None and source_entry is None:
@@ -1865,6 +2017,9 @@ def main(argv):
             report["result"] = "FAIL"
         extra["delegation_source"] = source_entry
 
+    if "mtime" in report["verify_mode"].values():
+        extra["verify_mode"] = report["verify_mode"]
+        extra["mtime_reference"] = report["mtime_reference"]
     if report.get("changed_files_none_reason"):
         extra["changed_files_none_reason"] = report["changed_files_none_reason"]
     if report.get("changed_symbols_none_reason"):
@@ -3283,6 +3438,157 @@ def run_self_test():
                 self.assertEqual(self.codes(r), ["deletion_unverified"],
                                  changed)
                 self.assertEqual(r["deleted_files"], [], changed)
+
+        # --- --since under a root outside every git work tree -------------
+        # A multi-repo discovery workspace: the root has no .git, Scout
+        # writes .docs/summary/ there and cites it in <changed_files>.
+        @staticmethod
+        def _scout(changed):
+            return ("<handoff><status>COMPLETE</status>"
+                    "<artifact>docs.md</artifact>"
+                    f"<changed_files>{changed}</changed_files>"
+                    "<blockers>None</blockers></handoff>")
+
+        @staticmethod
+        def _iso(offset_seconds=0):
+            return datetime.fromtimestamp(
+                datetime.now(timezone.utc).timestamp() + offset_seconds,
+                timezone.utc).isoformat()
+
+        def _age(self, rel, seconds):
+            path = self.dir / rel
+            t = path.stat().st_mtime - seconds
+            os.utime(path, (t, t))
+
+        def test_non_git_root_fresh_file_passes_by_mtime(self):
+            launch = self._iso(-60)
+            r = build_report(self._scout("docs.md"), "scout", self.dir,
+                             since=launch)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertEqual(r["verify_mode"], {str(self.dir): "mtime"})
+            self.assertEqual(r["mtime_reference"]["source"], "since")
+            # a trailing Z and a naive (local) instant parse; a ref does not
+            self.assertEqual(parse_instant(launch.replace("+00:00", "Z")),
+                             parse_instant(launch))
+            self.assertIsNotNone(parse_instant("2026-10-14T09:30:00"))
+            for ref in ("HEAD", "a1b2c3d", "2026-10-14", "v2.10.0"):
+                self.assertIsNone(parse_instant(ref), ref)
+
+        def test_non_git_root_stale_file_fails(self):
+            self._age("docs.md", 3600)
+            r = build_report(self._scout("docs.md"), "scout", self.dir,
+                             since=self._iso(-60))
+            self.assertEqual(self.codes(r), ["changed_files_not_in_diff"])
+            self.assertEqual(r["findings"][0]["mode"], "mtime")
+            self.assertEqual(r["verify_mode"], {str(self.dir): "mtime"})
+
+        def test_non_git_root_deletion_is_unverified(self):
+            r = build_report(self._scout("docs.md, deleted: src/gone.py"),
+                             "scout", self.dir, since=self._iso(-60))
+            self.assertEqual(self.codes(r), ["deletion_unverified"])
+            self.assertIn("git work tree", r["findings"][0]["detail"])
+
+        def test_non_git_root_with_a_ref_and_no_instant_is_an_error(self):
+            with self.assertRaises(GateError) as ctx:
+                build_report(self._scout("docs.md"), "scout", self.dir,
+                             since="HEAD")
+            self.assertIn("not a git work tree", str(ctx.exception))
+            # no --since at all: existence only, as before
+            r = build_report(self._scout("docs.md"), "scout", self.dir)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertEqual(r["verify_mode"], {})
+
+        def test_non_git_root_takes_the_transcript_launch_instant(self):
+            import contextlib
+            import io
+            handoff = self.dir / "h.md"
+            handoff.write_text(self._scout("docs.md"), encoding="utf-8")
+            call = self._call("t7", "Agent", subagent_type="x:scout")
+            call["timestamp"] = self._iso(-60).replace("+00:00", "Z")
+            transcript = self._transcript(
+                call, self._result("t7", self._scout("docs.md")))
+            argv = ["--handoff", str(handoff), "--persona", "scout",
+                    "--repo", str(self.dir), "--since", "HEAD",
+                    "--transcript", transcript]
+            for aged, want in ((0, 0), (3600, 1)):
+                self._age("docs.md", aged)
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    code = main(argv)
+                r = json.loads(buf.getvalue())
+                self.assertEqual(code, want, r)
+                self.assertEqual(r["verify_mode"], {str(self.dir): "mtime"})
+                self.assertEqual(r["mtime_reference"]["source"], "transcript")
+                self.assertEqual(r["delegation_source"]["launched_at"],
+                                 call["timestamp"])
+
+        def test_git_root_keeps_git_mode_and_refuses_an_instant(self):
+            ref = self.make_repo()
+            (self.dir / "src" / "a.py").write_text("a2", encoding="utf-8")
+            r = build_report(self._scout("src/a.py"), "scout", self.dir,
+                             since=ref)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertEqual(r["verify_mode"], {str(self.dir): "git"})
+            self.assertIsNone(r["mtime_reference"])
+            r = build_report(self._scout("src/b.py"), "scout", self.dir,
+                             since=ref)
+            self.assertEqual(self.codes(r), ["changed_files_not_in_diff"])
+            self.assertNotIn("mode", r["findings"][0])
+            with self.assertRaises(GateError):
+                build_report(self._scout("src/a.py"), "scout", self.dir,
+                             since=self._iso(-60))
+
+        def test_non_git_workspace_with_a_git_subrepo_mixes_modes(self):
+            sub = self.dir / "api"
+            sub.mkdir()
+            (sub / "x.cs").write_text("x", encoding="utf-8")
+            ref = self._init_repo(sub)
+            (sub / "x.cs").write_text("x2", encoding="utf-8")
+            (self.dir / ".docs" / "summary").mkdir(parents=True)
+            (self.dir / ".docs" / "summary" / "s.md").write_text(
+                "s", encoding="utf-8")
+            text = self._scout("api/x.cs, .docs/summary/s.md")
+            launch = parse_instant(self._iso(-60))
+            r = build_report(text, "scout", [self.dir, sub], since=ref,
+                             launched_at=launch)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertEqual(r["verify_mode"], {str(sub): "git",
+                                                str(self.dir): "mtime"})
+
+        def test_indented_handback_matches_both_handoff_forms(self):
+            # The real frame (2026-10-14 transcript, prose trimmed): the
+            # harness indents every report line by two spaces.
+            import contextlib
+            import io
+            lines = ("All done.\n\n" + GOOD_MASON.replace("><", ">\n<")
+                     ).splitlines()
+            indented = "\n".join("  " + line for line in lines)
+            prompt = ('<agent-message from="a7a6">\n[Subagent hand-back] The '
+                      "text below is the final report of a subagent this "
+                      "session delegated to. The harness indents every line "
+                      "of the report. The report follows:\n" + indented
+                      + "\n</agent-message>")
+            queued = {"type": "attachment", "isSidechain": False,
+                      "attachment": {"type": "queued_command",
+                                     "prompt": prompt, "commandMode": "prompt",
+                                     "origin": self._peer("a7a6"),
+                                     "isMeta": True}}
+            transcript = self._transcript(
+                self._call("t8", "Agent", subagent_type="x:mason"),
+                self._launch("t8", "a7a6"), queued)
+            for name, body in (("de-indented", GOOD_MASON),
+                               ("as-pasted", indented)):
+                handoff = self.dir / "h.md"
+                handoff.write_text(body, encoding="utf-8")
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    code = main(["--handoff", str(handoff), "--persona",
+                                 "mason", "--repo", str(self.dir),
+                                 "--transcript", transcript])
+                r = json.loads(buf.getvalue())
+                self.assertEqual(code, 0, (name, r))
+                self.assertEqual(r["delegation_source"]["via"],
+                                 "delegation_handback", name)
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(HandoffTests)
     result = unittest.TextTestRunner(verbosity=1).run(suite)

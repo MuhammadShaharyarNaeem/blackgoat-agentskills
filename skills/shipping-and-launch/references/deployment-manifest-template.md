@@ -11,7 +11,8 @@ Target: <environment(s), e.g. Azure prod — subscription/resource group by name
 <!-- Rows in the order production applies them. Type: sql | azure | appsetting | secret | flag | backfill | other.
      Status: drafted | pending-build | final. Script/Rollback paths are relative to this file's directory.
      Rollback with no script: [no rollback: <reason>]. Traces: plan task number(s), e.g. 3 or 3, 5.
-     sql rows stay pending-build, naming the Script/Rollback paths they will hold (not yet on disk), until build Phase 5 copies in the reviewed idempotent migration diff. -->
+     sql rows stay pending-build, naming the Script/Rollback paths they will hold (not yet on disk), until build Phase 5 copies in the reviewed idempotent migration diff.
+     backfill and other rows may be drafted (script on disk) or pending-build (paths named, written at build Phase 5 from the code as built). -->
 
 | # | Type | Step | Script | Rollback | Traces | Status |
 |---|------|------|--------|----------|--------|--------|

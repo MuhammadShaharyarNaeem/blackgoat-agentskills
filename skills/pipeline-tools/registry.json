@@ -377,9 +377,9 @@
         {
           "lane": "bgpdd-build",
           "phase": "5",
-          "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_deploy_manifest.py --manifest .docs/{project-name}/deploy/manifest.md --plan .docs/{project-name}/implementation/plan.md --phase build --ledger .docs/{project-name}/implementation/gates.jsonl",
-          "gate": "Exit 0 (including `legacy: true`, an epic planned before the manifest phase) = the prep GO may stand; exit 1 = a `pending` row, a `missing_files` entry or `manifest_missing` - route back to Dep; exit 2 = the manifest failed its structural contract, or (no manifest) the ledger is missing or holds no check_coverage record - check the --ledger path."
+          "step": "5c",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_deploy_manifest.py --manifest .docs/{project-name}/deploy/manifest.md --plan .docs/{project-name}/implementation/plan.md --phase build --state .docs/{project-name}/orchestrator-state.json --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 0 (including `legacy: true`, an epic planned before the manifest phase) = the prep GO may stand; exit 1 = a non-empty array (`pending`, `missing_files`, `empty_files`, `path_escape`, `manifest_missing`, ...) - route back to Dep; exit 2 = a missing or unreadable --state, the manifest failed its structural contract, or (no manifest) the ledger is missing or holds no check_coverage record - check the --state and --ledger paths."
         }
       ],
       "reads": [
@@ -453,14 +453,14 @@
           "lane": "bgpdd-lite",
           "phase": "2",
           "step": "4",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <alex|scout> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched the delegation> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <alex|scout|dep> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched the delegation> [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = his contract was not met - back to Alex under section 2's 2-round bound, not on to the coverage gate."
         },
         {
           "lane": "bgpdd-plan",
           "phase": "*",
           "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <rex|aria|alex> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched that delegation> --milestone \"<phase>\" [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_handoff.py --handoff <that file> --persona <rex|aria|alex|dep> --repo . [--repo <dir> ...] --since <the sha HEAD held when you launched that delegation> --milestone \"<phase>\" [--transcript <the session transcript, when your runtime exposes one>] --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "Exit 1 = the agent's contract was not met - return to that same agent, counting the round its own loop's bound counts; exit 2 = usage or an artifact defect - fix the invocation or the artifact, not the agent."
         },
         {
@@ -819,7 +819,7 @@
           "lane": "bgpdd-shipping",
           "phase": "step-3",
           "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_ship_decision.py --report .docs/{project-name}/implementation/ship-decision.md --require-go --require-rehearsal --require-baseline --repo . --ledger .docs/{project-name}/implementation/gates.jsonl --require-ledger-gates check_coverage.py,check_acceptance_suite.py,check_openapi_diff.py",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_ship_decision.py --report .docs/{project-name}/implementation/ship-decision.md --require-go --require-rehearsal --require-baseline --repo . --ledger .docs/{project-name}/implementation/gates.jsonl --require-ledger-gates check_coverage.py,check_acceptance_suite.py,check_openapi_diff.py,check_deploy_manifest.py",
           "gate": "Exit 1/2 = BLOCK; on a `rehearsal_*` or `baseline_*` problem code the route is back to Dep, because no re-wording of the decision document closes it."
         }
       ],
@@ -1600,7 +1600,7 @@
           "lane": "bgpdd-lite",
           "phase": "3",
           "step": "2",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --set-artifact design=<governing-stack-contract-skill-path|null> --set-artifact plan=.docs/{project-name}/implementation/plan.md",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --set-artifact design=<governing-stack-contract-skill-path|null> --set-artifact plan=.docs/{project-name}/implementation/plan.md --set-artifact deploy_manifest=.docs/{project-name}/deploy/manifest.md",
           "gate": "This updates the artifacts Alex produced without `--init`; a failure leaves `/bgpdd-build` hydrating a state whose `plan` is still null."
         },
         {
@@ -1621,7 +1621,7 @@
           "lane": "bgpdd-plan",
           "phase": "4",
           "step": "3",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --init --project-name \"{project-name}\" --set-pipeline bgpdd-plan --set-feature <feature|null> --set-artifact requirements=.docs/{project-name}/requirements.md --set-artifact design=.docs/{project-name}/design/detailed-design.md --set-artifact plan=.docs/{project-name}/implementation/plan.md --set-artifact acceptance_matrix=.docs/{project-name}/acceptance-matrix.md",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/update_state.py --state .docs/{project-name}/orchestrator-state.json --init --project-name \"{project-name}\" --set-pipeline bgpdd-plan --set-feature <feature|null> --set-artifact requirements=.docs/{project-name}/requirements.md --set-artifact design=.docs/{project-name}/design/detailed-design.md --set-artifact plan=.docs/{project-name}/implementation/plan.md --set-artifact acceptance_matrix=.docs/{project-name}/acceptance-matrix.md --set-artifact deploy_manifest=.docs/{project-name}/deploy/manifest.md",
           "gate": "If Python is unavailable, HALT and surface the missing interpreter - this JSON is never hand-written."
         },
         {

@@ -1,6 +1,6 @@
 ---
 name: shipping-and-launch
-description: Squad-internal execution contract for production launch preparation — pre-launch checklist, monitoring, staged rollout, and rollback strategy — loaded by agents via their Methodology Dependencies table; user-facing shipping and deployment triggers belong to the /bgpdd-shipping pipeline.
+description: Squad-internal execution contract for production launch preparation — pre-launch checklist, the deployment manifest, monitoring, staged rollout, and rollback strategy — loaded by agents via their Methodology Dependencies table; user-facing shipping and deployment triggers belong to the /bgpdd-shipping pipeline.
 ---
 
 # Shipping and Launch
@@ -273,14 +273,14 @@ A rehearsal you could not perform is `BLOCKED`, naming what was missing (no non-
 1. **Bundle**: `.docs/{project-name}/deploy/manifest.md`, scripts in `deploy/scripts/`, rollbacks in `deploy/rollback/`.
 2. **Enumerate from the plan and design, not from memory** — one row per production change: schema (`sql`), Azure resources (`azure`), app settings (`appsetting`), Key Vault secrets (`secret`), feature flags (`flag`), data backfills (`backfill`), anything else (`other`). Every row names the plan task number(s) it traces to; order rows in the sequence production must apply them (schema expand before the code that reads it; secret before the setting that references it).
 3. **Every row has a rollback** — a script path relative to the manifest directory, or `[no rollback: <reason>]`. An irreversible row is the Escalate When case below, not a silent exemption.
-4. **Plan time**: draft the `azure`, `appsetting`, `secret` and `flag` scripts now (`drafted`). Leave every `sql` row `pending-build`, naming the `scripts/`/`rollback/` paths it will hold but writing neither file — the SQL comes from the real migrations, not a guess at them.
-5. **Build Phase 5**: write each `pending-build` row's named script from the reviewed idempotent diff `database-migration-patterns` produced (`implementation/evidence/migration/<name>.sql`), copied into `deploy/scripts/` with its rollback, and mark the row `final`.
+4. **Plan time**: draft the `azure`, `appsetting`, `secret` and `flag` scripts now (`drafted`). Leave every `sql` row `pending-build`, naming the `scripts/`/`rollback/` paths it will hold but writing neither file — the SQL comes from the real migrations, not a guess at them. A `backfill` or `other` row may be either: `drafted` with its script on disk, or `pending-build` with its paths named when the script depends on code not yet written. Only `sql` is forced to `pending-build`.
+5. **Build Phase 5**: write each `pending-build` row's named script — a `sql` row's from the reviewed idempotent diff `database-migration-patterns` produced (`implementation/evidence/migration/<name>.sql`), a `backfill`/`other` row's from the code as built — with its rollback, and mark the row `final`. A `sql` row's rollback is the tested forward migration or verified restore of `database-migration-patterns` § Rollback, never the down-migration.
 6. **No secret values, ever** — a `secret` row's script names the Key Vault secret and how it is set; the value never lands in the bundle.
 7. **Nothing to deploy** still writes `manifest.md`: an empty table plus a `No production changes: <reason>` line.
 
 The table header, the closed `Type`/`Status` sets and every row rule are gated by `check_deploy_manifest.py` (`--phase plan` at plan time, `--phase build` at Phase 5); its `--help` is the contract of record.
 
-To verify a row's Dev state, Dep may use `query_db.py` (contract: `query_db.py --help`).
+To verify a row's Dev state, Dep may use `{PLUGIN_ROOT}/pipeline-tools/scripts/query_db.py`; its `--help` is the contract of record.
 
 ### Documenting the Ship Decision
 

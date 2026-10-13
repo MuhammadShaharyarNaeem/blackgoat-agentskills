@@ -49,7 +49,7 @@ Two fixture trees: `ship-decision-rehearsed/` (exit 0 bare and under both flags 
 
 Everything else is the same three checks in the same order: intact chain first (`ledger_chain_broken`), then the LATEST matching entry must be `PASS` (`ledger_missing` / `ledger_failed`), then every input it hashed must still hash (`ledger_stale`). The last one is what stops a coverage PASS taken before the final three commits from vouching for them.
 
-**The lite exemption is read, not inferred.** A lite-originated epic has `artifacts.acceptance_matrix: null` and no acceptance suite to have run; `bgpdd-shipping` Step 3 then names `check_coverage.py` alone. That decision comes off the state field, never off the absence of a file — an absent matrix and a matrix nobody ran look identical on disk.
+**The lite exemption is read, not inferred.** A lite-originated epic has `artifacts.acceptance_matrix: null` and no acceptance suite to have run; `bgpdd-shipping` Step 3 then names `check_coverage.py,check_deploy_manifest.py`, without the acceptance suite. That decision comes off the state field, never off the absence of a file — an absent matrix and a matrix nobody ran look identical on disk.
 
 ## From the retired spine
 
