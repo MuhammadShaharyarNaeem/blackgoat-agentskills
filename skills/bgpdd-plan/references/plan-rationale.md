@@ -98,7 +98,8 @@ Documentation only — do not recreate by hand; `update_state.py` is the only sa
     "design": ".docs/{project-name}/design/detailed-design.md",
     "plan": ".docs/{project-name}/implementation/plan.md",
     "acceptance_matrix": ".docs/{project-name}/acceptance-matrix.md",
-    "environment_manifest": "<the resolved manifest path — Tier-1 or Tier-2, written in Phase 3.6>"
+    "environment_manifest": "<the resolved manifest path — Tier-1 or Tier-2, written in Phase 3.6>",
+    "deploy_manifest": ".docs/{project-name}/deploy/manifest.md"
   },
   "blockers": [],
   "updated": "<ISO-8601 timestamp>"

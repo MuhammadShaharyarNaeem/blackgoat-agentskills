@@ -587,6 +587,20 @@ def strip_fenced_blocks(text):
     return "\n".join(out)
 
 
+HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
+
+
+def strip_html_comments(text):
+    """Blank HTML comments (multi-line; unterminated runs to EOF), keeping
+    line count: a justification hidden from the rendered note never counts."""
+    return HTML_COMMENT_RE.sub(lambda m: "\n" * m.group(0).count("\n"), text)
+
+
+def note_text(path):
+    """The note as the gate reads it: fences blanked, then HTML comments."""
+    return strip_html_comments(strip_fenced_blocks(read_text(path)))
+
+
 def is_real_value(value):
     v = (value or "").strip().strip("`").strip()
     return bool(v) and not PLACEHOLDER_VALUE_RE.match(v)
@@ -1085,17 +1099,18 @@ def is_test_path(path, frozen, repo):
 
 def deleted_test_reasons(note_path, repo):
     """{normalized path: reason} from the note's `Deleted test: <path> --
-    <reason>` lines (also an em/en dash or ` - `), placeholder reasons
-    dropped. A deleted test has nothing left for check_test_authenticity.py
+    <reason>` lines (also an em/en dash or ` - `), placeholder and
+    punctuation-only reasons dropped. A deleted test has nothing left for check_test_authenticity.py
     to read, so this stated reason is what stands in for it."""
     p = Path(note_path)
     if not p.is_file():
         return {}
     out = {}
-    for match in DELETED_TEST_RE.finditer(strip_fenced_blocks(read_text(p))):
+    for match in DELETED_TEST_RE.finditer(note_text(p)):
         path = match.group("path").strip("`")
         reason = match.group("reason").strip()
-        if path and is_real_value(reason):
+        # A reason with no letter or digit (".", "-", "...") says nothing.
+        if path and is_real_value(reason) and re.search(r"[^\W_]", reason):
             out[normalize_repo_path(path, repo)] = reason
     return out
 
@@ -1164,7 +1179,7 @@ def parse_note(path):
                          "no such note file: {0} -- the quick lane's Phase 0 "
                          "artifact is what declares the change before it is "
                          "made".format(path))]
-    text = strip_fenced_blocks(read_text(p))
+    text = note_text(p)
     for match in NOTE_LINE_RE.finditer(text):
         label = re.sub(r"\s+", " ", match.group(1).strip().lower())
         value = match.group(2).strip()
@@ -1483,7 +1498,7 @@ PURPOSE = ("Decides whether a quick-lane change was declared, checked after "
 EPILOG = """\
 Reads:
   --note  the lane's note.md. Three labelled lines, case-insensitive, list
-    items or bare, outside fences:
+    items or bare, outside fences and HTML comments:
       - What:
       - Where:
       - How verified:
@@ -1492,16 +1507,16 @@ Reads:
     backticks stripped) must EQUAL the --changed-files set after
     repo-relative normalization. How verified is ONE argv-runnable command:
     no pipes, no redirects, no &&. A deleted test needs
-    Deleted test: <path> -- <reason>.
+    Deleted test: <path> -- <reason> (letters or digits required).
   --capture and <capture>.meta.json  a run_quiet.py --capture pair. The
     capture must hold "## Captured output"; its header region (above that
     heading, fences blanked) carries "- Exit code: <N>" and
     "- Captured: <ts>", agreeing with the sidecar's exit_code and finished.
-    Its capture_sha256 must still match the capture's bytes, and
-    exit_code must be 0. Its recorded child argv must equal How verified
+    Its capture_sha256 must match the capture's bytes; exit_code
+    must be 0. Its recorded child argv must equal How verified
     as TOKEN LISTS under any of three tokenizations.
-    Freshness: the sidecar's finished must
-    be >= each changed file's mtime floored to the second.
+    Freshness: the sidecar's finished >= each changed file's mtime,
+    floored to the second.
   --changed-files, --repo  a relative entry resolves against --repo, not
     cwd. git status porcelain supplies the undeclared-change and frozen
     checks; frozen fires only on M/D/R/C/U (an EXISTING TRACKED file
@@ -1514,7 +1529,7 @@ Reads:
     inputs: the note, the capture, ITS SIDECAR, every declared file.
 
 Problem codes:
-  All are reported, in evaluation order.
+  All, in evaluation order.
   worktree_mismatch               --note/--capture/--ledger sit in ANOTHER
                                   worktree of --repo's repository
   note_missing                    the --note file does not exist
@@ -1559,7 +1574,7 @@ Exit codes:
      without the other, an unreadable artifact, or a git failure
 
 Self-test:
-  python check_quick_close.py --self-test   (68 cases)
+  python check_quick_close.py --self-test   (70 cases)
 """
 
 
@@ -2585,6 +2600,35 @@ def run_self_test():
                               self._capture(), changed)
                 self.assertEqual(r["problem_codes"],
                                  ["deleted_test_unjustified"], extra)
+
+        def test_a_punctuation_only_deletion_reason_is_unjustified(self):
+            changed = self._delete_test_and_b()
+            for reason in (".", "-", "...", "?!", "--"):
+                r = self._run(self._deleted_note(
+                    changed, "- Deleted test: tests/test_a.py -- " + reason),
+                    self._capture(), changed)
+                self.assertEqual(r["problem_codes"],
+                                 ["deleted_test_unjustified"], reason)
+
+        def test_a_justification_inside_an_html_comment_does_not_count(self):
+            changed = self._delete_test_and_b()
+            for hidden in (("<!-- - Deleted test: tests/test_a.py -- gone -->",),
+                           ("<!--", "- Deleted test: tests/test_a.py -- gone",
+                            "-->"),
+                           ("<!-- unterminated",
+                            "- Deleted test: tests/test_a.py -- gone")):
+                r = self._run(self._deleted_note(changed, *hidden),
+                              self._capture(), changed)
+                self.assertEqual(r["problem_codes"],
+                                 ["deleted_test_unjustified"], hidden)
+            # The note's own lines hidden in a comment read as absent too.
+            note = self._note(lines=[
+                "# Quick note", "<!--", "- What: drop b", "-->",
+                "- Where: " + ", ".join(changed),
+                '- How verified: `python -c "import sys; sys.exit(0)"`',
+                "- Deleted test: tests/test_a.py -- covered by test_b", ""])
+            r = self._run(note, self._capture(), changed)
+            self.assertIn("note_incomplete", r["problem_codes"])
 
         def test_a_deleted_non_test_needs_no_reason(self):
             (self.repo / "src" / "b.py").write_text("B = 1\n", encoding="utf-8")
