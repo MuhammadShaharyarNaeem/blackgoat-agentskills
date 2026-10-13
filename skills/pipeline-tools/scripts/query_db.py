@@ -36,11 +36,16 @@ DENY = frozenset("""
 INSERT UPDATE DELETE MERGE TRUNCATE DROP ALTER CREATE GRANT REVOKE DENY EXEC
 EXECUTE INTO DECLARE SET USE BEGIN COMMIT ROLLBACK SAVE BACKUP RESTORE DBCC
 KILL SHUTDOWN RECONFIGURE WAITFOR BULK OPENROWSET OPENQUERY OPENDATASOURCE
-OPENXML WRITETEXT UPDATETEXT READTEXT
+OPENXML WRITETEXT UPDATETEXT READTEXT RAISERROR THROW DISABLE ENABLE RECEIVE
+SEND CHECKPOINT SETUSER ADD MOVE GET
 """.split())
 STATEMENT_VERBS = frozenset(("SELECT", "INSERT", "UPDATE", "DELETE", "MERGE"))
 WORD_CHARS = re.compile(r"[A-Za-z0-9_@#$]")
-GO_LINE = re.compile(r"^\s*GO(\s+\d+)?\s*$", re.IGNORECASE)
+# sqlcmd commands it honours at a line start with OR without ':' (osql
+# compatibility): ':anything', '!!cmd' (OS shell), GO [n], RESET, ED, EXIT[(..)],
+# QUIT. The command word must end at a non-word char, so 'GoLive' passes.
+SQLCMD_LINE = re.compile(
+    r"^\s*(:|!!|(?:GO|RESET|ED|EXIT|QUIT)(?![A-Za-z0-9_@#$]))", re.IGNORECASE)
 
 
 class Refused(Exception):
@@ -115,11 +120,17 @@ def tokenize(sql):
 
 
 def check_lines(text):
+    """Refuse a line sqlcmd would read as a command. Run on the RAW text too:
+    sqlcmd scans physical lines before T-SQL parsing, so a command line inside
+    a multi-line '...' literal or /* */ comment still executes."""
     for line in text.splitlines():
-        if GO_LINE.match(line):
-            raise Refused("a GO batch-separator line")
-        if line.lstrip().startswith(":"):
+        m = SQLCMD_LINE.match(line)
+        if not m:
+            continue
+        if m.group(1) == ":":
             raise Refused("a line starting with ':' (sqlcmd command)")
+        raise Refused("a line starting with sqlcmd command %s"
+                      % m.group(1).upper())
 
 
 def validate(sql):
@@ -430,20 +441,25 @@ Writes:
 
 Guards (checked BEFORE any az or sqlcmd call; failure = exit 1, refused):
   comments stripped and '..' N'..' ".." [..] treated as opaque (unterminated
-  = refused); one statement, at most one trailing ';'; no GO line, no line
-  starting ':', no '$('; first keyword SELECT, or WITH ending in a top-level
-  SELECT; denied words outside literals: INSERT UPDATE DELETE MERGE TRUNCATE
-  DROP ALTER CREATE GRANT REVOKE DENY EXEC EXECUTE INTO DECLARE SET USE BEGIN
-  COMMIT ROLLBACK SAVE BACKUP RESTORE DBCC KILL SHUTDOWN RECONFIGURE WAITFOR
-  BULK OPENROWSET OPENQUERY OPENDATASOURCE OPENXML WRITETEXT UPDATETEXT
-  READTEXT, NEXT VALUE FOR, any sp_/xp_ identifier. FOR JSON/XML are allowed.
-  Bracket an identifier that collides with a denied word ([Update]).
+  = refused); one statement, at most one trailing ';'; no '$('; no line,
+  raw or comment-stripped, even inside a literal, whose first token is a
+  sqlcmd command with or without ':' -- ':', '!!', GO, RESET, ED, EXIT, QUIT
+  (case-insensitive; 'GoLive' passes); first keyword SELECT, or WITH ending
+  in a top-level SELECT; denied words outside literals: INSERT UPDATE DELETE
+  MERGE TRUNCATE DROP ALTER CREATE GRANT REVOKE DENY EXEC EXECUTE INTO
+  DECLARE SET USE BEGIN COMMIT ROLLBACK SAVE BACKUP RESTORE DBCC KILL
+  SHUTDOWN RECONFIGURE WAITFOR BULK OPENROWSET OPENQUERY OPENDATASOURCE
+  OPENXML WRITETEXT UPDATETEXT READTEXT RAISERROR THROW DISABLE ENABLE
+  RECEIVE SEND CHECKPOINT SETUSER ADD MOVE GET, NEXT VALUE FOR, any sp_/xp_
+  identifier. FOR JSON/XML are allowed. Bracket an identifier that collides
+  with a denied word ([Update]); move a line-leading alias like 'ed.' or
+  'go,' onto the previous line.
   DEV only, no override: the server host or database name must contain
   'dev'. Execution wraps the query in SET NOCOUNT ON, SET ROWCOUNT
   <max-rows>, READ COMMITTED, BEGIN TRAN ... ROLLBACK TRAN, with sqlcmd
   -x -K ReadOnly -N -b. No -X: it disables SQLCMDPASSWORD, the only
-  secret-safe password channel, so the ':'-line refusal above is the ONLY
-  guard against sqlcmd commands. These are SCRIPT-LEVEL guards: the only
+  secret-safe password channel, so the command-line refusal above is the
+  ONLY guard against sqlcmd commands. These are SCRIPT-LEVEL guards: the only
   hard guarantee is a read-only database login.
 
 Output:
@@ -612,8 +628,14 @@ def run_self_test():
                     "SELECT 1 -- trailing comment; DROP\n",
                     "SELECT a /* outer /* nested */ still */ FROM t",
                     "SELECT [a]]b] FROM t",
-                    "SELECT DATEADD(day, -1, GETDATE()) AS d"):
-                self.ok(sql)
+                    "SELECT DATEADD(day, -1, GETDATE()) AS d",
+                    "SELECT [Send] FROM t",
+                    "SELECT 'checkpoint' AS x",
+                    "SELECT * FROM t WHERE note = 'exit'",
+                    "SELECT id,\n  GoLive,\n  EDate, Quitter FROM t",
+                    "SELECT 1 AS a\n  WHERE 1 != 2"):
+                with self.subTest(sql=sql):
+                    self.ok(sql)
 
         def test_comments_removed_in_executed_text(self):
             self.assertEqual(self.ok("SELECT 1 /* x */ -- y\n;"), "SELECT 1")
@@ -648,6 +670,27 @@ def run_self_test():
                 "VALUES (1)": "first keyword",
                 "": "empty",
                 "SELECT 1\n/**/GO\n": "GO",
+                # sqlcmd commands honoured without ':' (osql compatibility)
+                "SELECT 1\n!! whoami": "!!",
+                "SELECT 1\nRESET\nDISABLE TRIGGER trg ON dbo.t": "RESET",
+                "SELECT 1\nQUIT": "QUIT",
+                "SELECT 1\nEXIT(SELECT 1)": "EXIT",
+                "SELECT 1\ngo 5": "GO",
+                "SELECT 1\n  Go": "GO",
+                "SELECT 1\n!!dir": "!!",
+                "SELECT 1\n:!!": "':'",
+                "SELECT 1\nexit": "EXIT",
+                "SELECT 1\n\tED": "ED",
+                "SELECT 'a\n!! whoami\n' AS s": "!!",  # raw line in a literal
+                "SELECT 1 /*\nQUIT\n*/": "QUIT",
+                # side-effecting keywords
+                "SELECT 1\nRAISERROR('x', 10, 1) WITH LOG": "RAISERROR",
+                "DISABLE TRIGGER ALL ON DATABASE": "DISABLE",
+                "RECEIVE TOP(1) * FROM q": "RECEIVE",
+                "CHECKPOINT": "CHECKPOINT",
+                "SETUSER": "SETUSER",
+                "ADD SENSITIVITY CLASSIFICATION TO dbo.t.c WITH "
+                "(LABEL = 'x')": "ADD",
             }
             for sql, fragment in cases.items():
                 with self.subTest(sql=sql):
