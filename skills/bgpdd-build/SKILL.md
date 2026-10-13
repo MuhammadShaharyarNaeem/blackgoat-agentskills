@@ -79,6 +79,7 @@ This is **Tier 2** — the per-enhancement work dir (`.docs/{project-name}/`): t
 
 ```text
 .docs/{project-name}/
+├── deploy/                # Production deploy bundle: manifest.md, scripts/, rollback/ (plan Phase 3.7; SQL rows finalised by Dep, Phase 5)
 └── implementation/        # Checklists, reviews, and release plans
     ├── plan.md            # Dependency-mapped task list (REQUIRED INPUT)
     ├── environment-manifest.md # Services, repointing map, forbidden hosts, capabilities (Phase 0, user-supplied)
@@ -169,8 +170,11 @@ The four evidence paths under `implementation/evidence/` — `preflight/`, `buil
   2.5. **Acceptance Suite Gate** — Quinn executes the resolved matrix, then `check_acceptance_suite.py`: exit 0 proceed to Dep; exit 1 **BLOCK**, failures → Phases 1–3; exit 2 **HALT**, artifact defect. A matrix expected but absent is a planning defect — **HALT**, back through Alex (delegation contract: `references/build-replan.md`); a JSON `null` matrix is a lite epic with legitimately none.
   3. Epic 100% complete, every Must-Have `FR`/`NFR` covered, acceptance suite green → delegate **Dep**.
   4. Dep scans the epic for deployment risks and credentials and formulates a mandatory **Rollback Plan**.
+  4b. **Finalise the deployment manifest — before `ship-decision.md`.** For every `pending-build` `sql` row in `.docs/{project-name}/deploy/manifest.md`, Dep writes the paths the row already names: the reviewed idempotent SQL diff (`.docs/{project-name}/implementation/evidence/migration/<name>.sql`, per `database-migration-patterns`) copied to its `deploy/scripts/` path and its rollback to its `deploy/rollback/` path, then marks the row `final`. Format authority: `shipping-and-launch` § Deployment Manifest.
   5. **CRITICAL PATHING — prep ship-decision (ownership split)**: Dep generates `.docs/{project-name}/implementation/ship-decision.md` with a prep `GO`/`NO-GO`. This is **build's entry ticket for `/bgpdd-shipping` Step 0**; Dep does **not** deploy here. Shipping's Stage 2 Dep later refreshes the same file for launch, and that refreshed GO is shipping Step 3's exit ticket.
   5b. **Record the delegation** as Phase 1 step 7 does, with `--phase "Phase 5" --event delegation --agent dep --model <tier>` and no `--unit` (this delegation is epic-scoped, not milestone-scoped).
+  5c. **Deployment manifest gate (convention #9)** — `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_deploy_manifest.py --manifest .docs/{project-name}/deploy/manifest.md --plan .docs/{project-name}/implementation/plan.md --phase build --ledger .docs/{project-name}/implementation/gates.jsonl` (CLI contract: its `--help`). A prep `GO` stands only on exit 0; exit 1/2 back to Dep, under the Orchestrator Contract's 2-round autonomous-rejection bound.
+     - On exit 0 with `legacy: true` (no manifest, and the ledger records no plan-phase run of this gate), Dep records `Deployment manifest: not applicable — epic planned before the manifest phase` in `ship-decision.md`, and the prep `GO` may stand — deliberately looser than `shipping-and-launch` § Deployment Manifest rule 7 (every epic writes `manifest.md`), because that epic never ran the plan phase that writes it (convention #8).
   6. **Ship-decision shape gate** — `check_ship_decision.py`, no `--require-go`: exit 0 proceed; exit 1/2 back to Dep.
   7. **Doubt-Driven Check**: YOU (the Orchestrator) run the Doubt-Driven Development cycle on Dep's prep plan before presenting it to the user.
   8. On explicit user confirmation, instruct the User to trigger `/bgpdd-shipping` to orchestrate the final Launch Squad. If Dep's prep verdict is `NO-GO`, say so plainly — shipping's Step 0.4 entry ticket will refuse to start until that verdict is resolved and rewritten to `GO`.

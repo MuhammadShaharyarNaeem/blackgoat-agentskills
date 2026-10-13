@@ -266,6 +266,20 @@ Every deployment needs a rollback plan before it happens:
 
 A rehearsal you could not perform is `BLOCKED`, naming what was missing (no non-production environment, no revert path, an irreversible migration) — see Escalate When. It is never a `PASS`, and a plan alone is never a rehearsal.
 
+### Deployment Manifest
+
+**Dep-owned. Written at plan time, finalised at build Phase 5, executed at shipping.** One ordered bundle of every production change, so the deploy is executed from a list rather than reconstructed from the diff. Fillable template: `references/deployment-manifest-template.md`.
+
+1. **Bundle**: `.docs/{project-name}/deploy/manifest.md`, scripts in `deploy/scripts/`, rollbacks in `deploy/rollback/`.
+2. **Enumerate from the plan and design, not from memory** — one row per production change: schema (`sql`), Azure resources (`azure`), app settings (`appsetting`), Key Vault secrets (`secret`), feature flags (`flag`), data backfills (`backfill`), anything else (`other`). Every row names the plan task number(s) it traces to; order rows in the sequence production must apply them (schema expand before the code that reads it; secret before the setting that references it).
+3. **Every row has a rollback** — a script path relative to the manifest directory, or `[no rollback: <reason>]`. An irreversible row is the Escalate When case below, not a silent exemption.
+4. **Plan time**: draft the `azure`, `appsetting`, `secret` and `flag` scripts now (`drafted`). Leave every `sql` row `pending-build`, naming the `scripts/`/`rollback/` paths it will hold but writing neither file — the SQL comes from the real migrations, not a guess at them.
+5. **Build Phase 5**: write each `pending-build` row's named script from the reviewed idempotent diff `database-migration-patterns` produced (`implementation/evidence/migration/<name>.sql`), copied into `deploy/scripts/` with its rollback, and mark the row `final`.
+6. **No secret values, ever** — a `secret` row's script names the Key Vault secret and how it is set; the value never lands in the bundle.
+7. **Nothing to deploy** still writes `manifest.md`: an empty table plus a `No production changes: <reason>` line.
+
+The table header, the closed `Type`/`Status` sets and every row rule are gated by `check_deploy_manifest.py` (`--phase plan` at plan time, `--phase build` at Phase 5); its `--help` is the contract of record.
+
 ### Documenting the Ship Decision
 
 If running within the `bgpdd-build` or `bgpdd-shipping` pipelines, save your final Rollback Strategy and Launch Checklist to `.docs/{project-name}/implementation/ship-decision.md` with a final `GO` or `NO-GO` recommendation. A **launch** decision additionally carries the `Time to Rollback:` line from Rollback Rehearsal and the `## Baseline` section from Baseline Capture; a **prep** decision written at `bgpdd-build` Phase 5 legitimately carries neither, because neither has happened yet. **Put that verdict on a line beginning `Ship Decision`, `Verdict`, or `Recommendation`** (leading `#`, `>`, `-`, or `*` markers are tolerated), with the `GO` or `NO-GO` token on that same line, and state one verdict per section — a section asserting both is rejected as ambiguous. The pipelines read this line mechanically via `check_ship_decision.py`; the grammar authority is `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
@@ -314,4 +328,5 @@ After deploying:
 
 Read on demand — not needed to execute the contract above:
 
+- [Deployment manifest template](references/deployment-manifest-template.md) — the fillable `manifest.md` skeleton for Deployment Manifest.
 - [Shipping deep dive](references/shipping-deep-dive.md) — feature-flag and error-reporting code samples (React ErrorBoundary, Express error handler), when to use this skill, the Common Rationalizations table, and red flags.

@@ -24,10 +24,10 @@ Rationale, worked examples and the illustrative state shape: `references/lite-ra
 
 The sections below carry ONLY this pipeline's refinements on top of that contract.
 
-- **Strict Delegation — this pipeline's agents**: Alex (Phase 2), and optionally Scout for bounded research. For non-interactive phases you MUST NOT roleplay the agent's work yourself.
+- **Strict Delegation — this pipeline's agents**: Alex (Phase 2), Dep (Phase 2.6), and optionally Scout for bounded research. For non-interactive phases you MUST NOT roleplay the agent's work yourself.
   - **EXCEPTION — Phase 1 (Mini-Requirements)**: Requirements drafting in lite is interactive (with the user, in the main session). There is no delegated Rex — see Phase 1 below.
 - **Mechanical gates**: the missing-interpreter HALT and the never-simulate-a-pass rule are the Orchestrator Contract §1's; the gates below neither restate nor soften them.
-- **Run log** (Contract §4's obligation, bound here; CLI contract: `record_run.py --help`). Per delegation return — each Scout (Phase 2 research), Alex (Phase 2 and each coverage-fix round): run `python {PLUGIN_ROOT}/pipeline-tools/scripts/tool_registry.py for --lane bgpdd-lite --phase '*'` and execute the `record_run` line it prints (`--model` is mandatory on a delegation record — exit 2 without it; name the tier the delegation actually ran at, not the one recommended; a non-Claude runtime id also needs `--tier <haiku|sonnet|opus|fable>`). Add `--rounds <this artifact's round number>` on a re-delegation, plus a token measurement — `--tokens-in`/`--tokens-out` (or `--from-json <the completion payload>`) from the runtime's completion notification, or `--tokens-unavailable "<runtime>: <reason>"` when it exposes none — which is now equally mandatory, and `--status` from the handoff. Into Phase 3's game tape: the `summarize_run` line from that same listing.
+- **Run log** (Contract §4's obligation, bound here; CLI contract: `record_run.py --help`). Per delegation return — each Scout (Phase 2 research), Alex (Phase 2 and each coverage-fix round), Dep (Phase 2.6 and each manifest-fix round): run `python {PLUGIN_ROOT}/pipeline-tools/scripts/tool_registry.py for --lane bgpdd-lite --phase '*'` and execute the `record_run` line it prints (`--model` is mandatory on a delegation record — exit 2 without it; name the tier the delegation actually ran at, not the one recommended; a non-Claude runtime id also needs `--tier <haiku|sonnet|opus|fable>`). Add `--rounds <this artifact's round number>` on a re-delegation, plus a token measurement — `--tokens-in`/`--tokens-out` (or `--from-json <the completion payload>`) from the runtime's completion notification, or `--tokens-unavailable "<runtime>: <reason>"` when it exposes none — which is now equally mandatory, and `--status` from the handoff. Into Phase 3's game tape: the `summarize_run` line from that same listing.
 - **Upgraded Chain-of-Thought**: Before transitioning between phases, you MUST explicitly verify that the required artifact exists AND satisfies its content contract — existence and non-emptiness alone are not sufficient. Content contracts:
   - `requirements.md`: has at least one Must-Have requirement carrying an `FR` ID and a Given/When/Then acceptance criterion.
   - `plan.md`: every task cites the requirement ID(s) it satisfies (a "Requirements covered:" field), and every task carries a verification step.
@@ -38,7 +38,7 @@ The sections below carry ONLY this pipeline's refinements on top of that contrac
 
 ## 2. Global Error Recovery
 
-This pipeline's only refinement on the skeleton's Error Recovery section: the artifacts subject to the 2-round bound are `requirements.md` and `plan.md`; checkpoint your own state to `.docs/{project-name}/orchestrator-state.json` via `update_state.py` (initialized at Phase 1 step 5, updated at Phase 3) — never hand-edit.
+This pipeline's only refinement on the skeleton's Error Recovery section: the artifacts subject to the 2-round bound are `requirements.md`, `plan.md`, and `deploy/manifest.md`; checkpoint your own state to `.docs/{project-name}/orchestrator-state.json` via `update_state.py` (initialized at Phase 1 step 5, updated at Phase 3) — never hand-edit.
 
 ---
 
@@ -96,7 +96,11 @@ This pipeline's only refinement on the skeleton's Error Recovery section: the ar
      CLI contract (JSON shape, exit codes, parsing rules): `check_coverage.py --help`.
   2. Read the JSON object from stdout. Exit 0 = every Must-Have `FR`/`NFR` covered and no lint failed — report `warnings` and `uncovered_should` as non-blocking notes, then proceed. Exit 1 = one of the **two gating arrays** is non-empty, `uncovered` and/or `lint_failures` (a clean-coverage plan with a lint failure still exits 1). Exit 2 = the artifact failed its structural contract — a defect in the artifact, not the tool.
   3. On exit 1 or 2, re-delegate to **Alex** (a fresh delegation) quoting the exact `uncovered` IDs **and** the `lint_failures` entries, plus `warnings` (or the `error` message) — subject to the 2-round auto-fix bound in Global Error Recovery (§2). Validate his return with Phase 2 step 4's `check_handoff.py` command, with `--fix-round`, as that step already directs, before re-running step 1. If unresolved after 2 rounds, halt and surface to the user.
-  4. Once coverage is confirmed, proceed to Phase 3.
+  4. Once coverage is confirmed, proceed to Phase 2.6.
+
+### Phase 2.6: Deployment Manifest (Dep)
+- **Delegated Agent**: **Dep** (DevOps). `/bgpdd-plan` Phase 3.7 owns the step — bundle paths, row rules, gate and exit routing — and this lane runs it unchanged with two input substitutions: `requirements.md` plus the governing stack contract stand in for `detailed-design.md`, and there is no environment manifest to pass (§1).
+- **Workflow**: delegate Dep per that phase; validate his return with Phase 2 step 4's `check_handoff` command; run the same gate, `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_deploy_manifest.py --manifest .docs/{project-name}/deploy/manifest.md --plan .docs/{project-name}/implementation/plan.md --phase plan --ledger .docs/{project-name}/implementation/gates.jsonl`; on exit 1 or 2 re-delegate to Dep under §2's 2-round bound. Exit 0 → proceed to Phase 3.
 
 ### Phase 3: Handoff to Build (Orchestrator)
 - **Delegated Agent**: None — the Orchestrator performs this phase directly. No delegation, no halt.

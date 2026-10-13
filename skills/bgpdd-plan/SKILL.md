@@ -1,12 +1,12 @@
 ---
 name: bgpdd-plan
-description: Phase 1 of the Prompt-Driven Development SOP (Design & Architecture). Refines ideas, conducts research, and creates an implementation plan using Rex, Aria, and Alex.
+description: Phase 1 of the Prompt-Driven Development SOP (Design & Architecture). Refines ideas, conducts research, and creates an implementation plan using Rex, Aria, Alex, and Dep (deployment manifest).
 trigger: /bgpdd-plan
 ---
 
 # End-to-End Multi-Agent PDD: Planning Phase (bgPDD-Plan)
 
-This Standard Operating Procedure (SOP) coordinates the planning squad (Rex, Aria, Alex) to take a rough idea through requirements gathering, technical research, architecture design, and task breakdown.
+This Standard Operating Procedure (SOP) coordinates the planning squad (Rex, Aria, Alex, and Dep for the Phase 3.7 deployment manifest) to take a rough idea through requirements gathering, technical research, architecture design, task breakdown, and the production deploy bundle.
 
 ---
 
@@ -20,7 +20,7 @@ This Standard Operating Procedure (SOP) coordinates the planning squad (Rex, Ari
 
 The sections below carry ONLY this pipeline's refinements on top of that contract.
 
-- **Strict Delegation — this pipeline's agents**: Rex (Phase 1 Step B), Aria (Phase 2), Alex (Phase 3), and optionally Scout (Phase 2 research split). Phase 2.5 (Adversarial Design Review) is Orchestrator-run — no delegated agent. For non-interactive phases you MUST NOT roleplay the agent's work yourself.
+- **Strict Delegation — this pipeline's agents**: Rex (Phase 1 Step B), Aria (Phase 2), Alex (Phase 3), Dep (Phase 3.7), and optionally Scout (Phase 2 research split). Phase 2.5 (Adversarial Design Review) is Orchestrator-run — no delegated agent. For non-interactive phases you MUST NOT roleplay the agent's work yourself.
   - **EXCEPTION — Phase 1 (Honing)**: Requirements honing is interactive (turn-by-turn Q&A with the user). A delegated agent cannot pause to ask the user and resume, so **you (the main session) run Phase 1 yourself** following Rex's persona as the behavioral spec. See Phase 1 below.
 - **Upgraded Chain-of-Thought**: Before transitioning between phases, you MUST explicitly verify that the required artifact exists AND satisfies its content contract — existence and non-emptiness alone are not sufficient. Content contracts:
   - `requirements.md`: has at least one Must-Have requirement carrying an `FR` ID and a Given/When/Then acceptance criterion.
@@ -28,20 +28,20 @@ The sections below carry ONLY this pipeline's refinements on top of that contrac
   - `plan.md`: every task cites the requirement ID(s) it satisfies (a "Requirements covered:" field), and every task carries a verification step.
   - *Format*: "Thinking: Phase X requires Y. Checking `.docs/{project-name}/Y`... File exists and satisfies its content contract [state which check(s) passed]. Proceeding."
 - **Mechanical gates**: the missing-interpreter HALT and the never-simulate-a-pass rule are the Orchestrator Contract §1's; the gates below neither restate nor soften them. Every gate invocation carries `--ledger .docs/{project-name}/implementation/gates.jsonl` (Orchestrator Contract §4).
-- **Handoff validation, bound to this pipeline's returns.** Contract §1 requires every returned `<handoff>` to be validated before you act on it. Save each to a file, then run `python {PLUGIN_ROOT}/pipeline-tools/scripts/tool_registry.py for --lane bgpdd-plan --phase '*'` and execute the `check_handoff` line it prints, on all of them: Rex (Phase 1 Step B, and each re-delegation round of its loop), Aria (Phase 2, and her Phase 2.5 revision round), Alex (Phase 3, and each Phase 3.5 re-delegation round). **`--since` is always passed**; add `--fix-round` on a remediation return. Exit 0 = proceed. Exit 1 = the agent's contract was not met — return to that same agent, counting the round its own loop's bound counts. Exit 2 = usage or an artifact defect — fix the invocation or the artifact, not the agent, before re-running.
-- **Run log** (Contract §4's obligation, bound here; CLI contract: `record_run.py --help`). Per delegation return — Rex (Phase 1 Step B), each Scout (Phase 2 split), Aria (Phase 2 and her one revision round), Alex (Phase 3 and each coverage-fix round): run `record_run` (same phase `*` listing as above) (`--model` is mandatory on a delegation record — exit 2 without it; name the tier the delegation actually ran at, not the one recommended; a non-Claude runtime id also needs `--tier <haiku|sonnet|opus|fable>`). Add `--rounds <this artifact's round number>` on a re-delegation, plus a token measurement — `--tokens-in`/`--tokens-out` (or `--from-json <the completion payload>`) from the runtime's completion notification, or `--tokens-unavailable "<runtime>: <reason>"` when it exposes none — which is now equally mandatory, and `--status` from the handoff. Into Phase 4's game tape: `summarize_run` (same phase `*` listing).
+- **Handoff validation, bound to this pipeline's returns.** Contract §1 requires every returned `<handoff>` to be validated before you act on it. Save each to a file, then run `python {PLUGIN_ROOT}/pipeline-tools/scripts/tool_registry.py for --lane bgpdd-plan --phase '*'` and execute the `check_handoff` line it prints, on all of them: Rex (Phase 1 Step B, and each re-delegation round of its loop), Aria (Phase 2, and her Phase 2.5 revision round), Alex (Phase 3, and each Phase 3.5 re-delegation round), Dep (Phase 3.7, and each re-delegation round). **`--since` is always passed**; add `--fix-round` on a remediation return. Exit 0 = proceed. Exit 1 = the agent's contract was not met — return to that same agent, counting the round its own loop's bound counts. Exit 2 = usage or an artifact defect — fix the invocation or the artifact, not the agent, before re-running.
+- **Run log** (Contract §4's obligation, bound here; CLI contract: `record_run.py --help`). Per delegation return — Rex (Phase 1 Step B), each Scout (Phase 2 split), Aria (Phase 2 and her one revision round), Alex (Phase 3 and each coverage-fix round), Dep (Phase 3.7 and each manifest-fix round): run `record_run` (same phase `*` listing as above) (`--model` is mandatory on a delegation record — exit 2 without it; name the tier the delegation actually ran at, not the one recommended; a non-Claude runtime id also needs `--tier <haiku|sonnet|opus|fable>`). Add `--rounds <this artifact's round number>` on a re-delegation, plus a token measurement — `--tokens-in`/`--tokens-out` (or `--from-json <the completion payload>`) from the runtime's completion notification, or `--tokens-unavailable "<runtime>: <reason>"` when it exposes none — which is now equally mandatory, and `--status` from the handoff. Into Phase 4's game tape: `summarize_run` (same phase `*` listing).
 - **File Artifacts**: All artifacts must use standard GitHub markdown and be saved under `.docs/{project-name}/`. This folder is the project's persistent **Semantic Memory**.
 
 ## 2. Global Error Recovery
 
-This pipeline's refinements on the skeleton's Error Recovery section: the artifacts subject to the 2-round bound are `requirements.md`, `detailed-design.md`, and `plan.md` — track the round count per artifact, and after 2 rounds surface the flaw and both attempts to the user rather than re-delegating a third time. Phase 2.5 is tighter still: the design gets exactly **one** doubt-driven revision round (deliberately below DDD's own 3-cycle bound), then escalate. Note: `requirements.md` is legitimately mutated in Phase 2 by Aria — supersession annotations only.
+This pipeline's refinements on the skeleton's Error Recovery section: the artifacts subject to the 2-round bound are `requirements.md`, `detailed-design.md`, `plan.md`, and `deploy/manifest.md` — track the round count per artifact, and after 2 rounds surface the flaw and both attempts to the user rather than re-delegating a third time. Phase 2.5 is tighter still: the design gets exactly **one** doubt-driven revision round (deliberately below DDD's own 3-cycle bound), then escalate. Note: `requirements.md` is legitimately mutated in Phase 2 by Aria — supersession annotations only.
 
 ## 3. Folder Structure (Semantic Memory) — TWO TIERS
 
 This pipeline uses two distinct memory scopes. Do not conflate them.
 
 - **Tier 1 — global project knowledge base** (`.docs/summary/`): built by **`/bgpdd-discovery`** (Iris, Scout, Echo) at **project scope** and **persisted across enhancement cycles**, indexed by durable feature id (`{feature}`, e.g. `slide`). This pipeline **consumes** it and **never writes it** — run `/bgpdd-discovery` first for brownfield work (see the Pre-Flight Check).
-- **Tier 2 — per-enhancement work dir** (`.docs/{project-name}/`): the isolated artifacts for **this** piece of work, produced by Rex/Aria/Alex and scoped to this cycle.
+- **Tier 2 — per-enhancement work dir** (`.docs/{project-name}/`): the isolated artifacts for **this** piece of work, produced by Rex/Aria/Alex/Dep and scoped to this cycle.
 
 The illustrative file-by-file trees for both tiers, and the phase-transition handoff example, live in `references/plan-rationale.md`.
 
@@ -146,7 +146,15 @@ The illustrative file-by-file trees for both tiers, and the phase-transition han
   - **Capability-only, deliberately narrower than `/bgpdd-build` Phase 0's check (convention #8).** No service is started here: greenfield ones do not exist yet, brownfield ones are build's to start.
 - **Persist it so `/bgpdd-build` Phase 0 resolves it instead of re-authoring it**: execute the `update_state` line for **step `-`** in the same phase `3.6` listing — the Tier-1 recipe's path on the brownfield route, the Tier-2 file's on the greenfield one. Append this write's game-tape checkpoint too (per the divergence above) — even on the no-blocker path, this command still persists state.
   - **`--init` and `--set-pipeline bgpdd-plan` are BOTH mandatory on BOTH commands.** This phase is the first writer of `orchestrator-state.json`, so without `--init` each command exits 2 (`state file not found`) on a fresh run; and `--init` alone writes `pipeline: ""`, which `/bgpdd-build`'s hydration whitelist rejects with no named route. Either omission hands build an unenterable state file if the run is interrupted before Phase 4. Both are idempotent no-ops on a file that already exists. Full semantics: `references/plan-rationale.md` § Phase 3.6's state writes.
-- Once the manifest is confirmed, proceed to Phase 4 — with any capability blocker recorded and requested, not resolved.
+- Once the manifest is confirmed, proceed to Phase 3.7 — with any capability blocker recorded and requested, not resolved.
+
+### Phase 3.7: Deployment Manifest (Dep)
+- **Delegated Agent**: **Dep** (DevOps). Format authority: the **Deployment Manifest** section of `{PLUGIN_ROOT}/shipping-and-launch/SKILL.md`.
+- **Workflow**:
+  1. Delegate to the **Dep** agent. Pass the paths to `.docs/{project-name}/implementation/plan.md`, `.docs/{project-name}/design/detailed-design.md`, and the environment manifest Phase 3.6 resolved (Tier-1 recipe or Tier-2 file).
+  2. **CRITICAL PATHING**: Instruct Dep to write the bundle under `.docs/{project-name}/deploy/` — `manifest.md`, `scripts/`, `rollback/` — one row per production change, each tracing to its plan task(s). Azure, app-setting, secret and flag scripts are drafted now; every `sql` row stays `pending-build`, naming its script and rollback paths without writing them (build Phase 5 fills them from the reviewed migration diff). A plan with no production change still gets a `manifest.md`, carrying its `No production changes: <reason>` line.
+  3. Read Dep's returned handoff (validated per §1).
+  4. **Gate (convention #9)**: run `python {PLUGIN_ROOT}/pipeline-tools/scripts/check_deploy_manifest.py --manifest .docs/{project-name}/deploy/manifest.md --plan .docs/{project-name}/implementation/plan.md --phase plan --ledger .docs/{project-name}/implementation/gates.jsonl`. CLI contract: `check_deploy_manifest.py --help`. Exit 0 = proceed to Phase 4. Exit 1 or 2 = re-delegate to **Dep** quoting the JSON's non-empty arrays (or its `error`), under the same 2-round bound as Phase 3.5 step 3 — **before round ≥ 2, run `check_redelegation.py` on Dep's returning handoff** (`--ledger .docs/{project-name}/implementation/gates.jsonl`). If unresolved after 2 rounds, halt and surface to the user. After each fix, re-run this step.
 
 ### Phase 4: Game Tape Checkpoint (Orchestrator)
 - **Delegated Agent**: None — the Orchestrator performs this phase directly. No delegation, no halt.

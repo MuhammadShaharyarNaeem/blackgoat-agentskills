@@ -353,6 +353,46 @@
       ]
     },
     {
+      "name": "check_deploy_manifest",
+      "script": "scripts/check_deploy_manifest.py",
+      "description": "Decides whether a deployment manifest is an ordered, rolled-back, plan-traced bundle ready for its phase: plan or build.",
+      "kind": "gate",
+      "runner": "orchestrator",
+      "agents": [],
+      "lanes": [
+        {
+          "lane": "bgpdd-plan",
+          "phase": "3.7",
+          "step": "4",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_deploy_manifest.py --manifest .docs/{project-name}/deploy/manifest.md --plan .docs/{project-name}/implementation/plan.md --phase plan --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 0 = proceed to Phase 4; exit 1 or 2 = re-delegate to Dep quoting the JSON's non-empty arrays (or its `error`), under the 2-round bound."
+        },
+        {
+          "lane": "bgpdd-lite",
+          "phase": "2.6",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_deploy_manifest.py --manifest .docs/{project-name}/deploy/manifest.md --plan .docs/{project-name}/implementation/plan.md --phase plan --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 0 = proceed to Phase 3; exit 1 or 2 = re-delegate to Dep under the 2-round bound."
+        },
+        {
+          "lane": "bgpdd-build",
+          "phase": "5",
+          "step": "-",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_deploy_manifest.py --manifest .docs/{project-name}/deploy/manifest.md --plan .docs/{project-name}/implementation/plan.md --phase build --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 0 (including `legacy: true`, an epic planned before the manifest phase) = the prep GO may stand; exit 1 = a `pending` row, a `missing_files` entry or `manifest_missing` - route back to Dep; exit 2 = the manifest failed its structural contract."
+        }
+      ],
+      "reads": [
+        "deploy/manifest.md",
+        "plan.md",
+        "deploy/scripts/*",
+        "deploy/rollback/*"
+      ],
+      "writes": [
+        "gates.jsonl"
+      ]
+    },
+    {
       "name": "check_dependency_tables",
       "script": "scripts/check_dependency_tables.py",
       "description": "Decides whether every agent's Methodology Dependencies table resolves to real files, carries the guard wording, and fills each When cell.",

@@ -734,6 +734,7 @@ def run_self_test():
             "check_bugfix_intake.py",
             "check_commit_gate.py",
             "check_coverage.py",
+            "check_deploy_manifest.py",
             "check_handoff.py",
             "check_learn_approval.py",
             "check_openapi_diff.py",
