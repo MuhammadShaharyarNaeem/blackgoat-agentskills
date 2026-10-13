@@ -363,32 +363,41 @@ def append_ledger(ledger_path, argv, inputs, verdict, exit_code, phase, legacy):
               file=sys.stderr)
 
 
-def plan_phase_recorded(ledger_path):
-    """True when the ledger holds any earlier --phase plan run of this gate.
+def scan_ledger(ledger_path):
+    """(plan_recorded, coverage_recorded) for the legacy path at --phase build.
 
-    Any verdict counts: a plan-phase run at all means the epic was planned
-    after the manifest phase existed. A ledger file that does not exist yet
-    holds no records. Unparseable lines are skipped -- chain integrity is
-    check_ledger.py's job. Raises GateError when the path exists but cannot
-    be read.
+    plan_recorded: an earlier --phase plan run of this gate, any verdict -- a
+    plan-phase run at all means the epic was planned after the manifest
+    phase existed. coverage_recorded: any check_coverage.py record, which
+    every real epic ledger holds by build (bgpdd-plan Phase 3.5 and
+    bgpdd-lite Phase 2.5 run it with --ledger). Unparseable lines are
+    skipped -- chain integrity is check_ledger.py's job. Raises GateError
+    when the ledger is missing or unreadable: a mistyped --ledger must not
+    read as "no plan-phase record".
     """
     p = Path(ledger_path)
-    if not p.exists():
-        return False
+    if not p.is_file():
+        raise GateError("ledger not found: %s -- likely a wrong --ledger path; "
+                        "the legacy path needs the epic's real gates.jsonl"
+                        % ledger_path)
     try:
         lines = p.read_text(encoding="utf-8-sig", errors="replace").splitlines()
     except OSError as exc:
         raise GateError("ledger not readable: %s (%s)" % (ledger_path, exc))
+    plan_recorded = coverage_recorded = False
     for line in lines:
         try:
             record = json.loads(line)
         except ValueError:
             continue
-        if (isinstance(record, dict)
-                and record.get("gate") == Path(__file__).name
+        if not isinstance(record, dict):
+            continue
+        if (record.get("gate") == Path(__file__).name
                 and record.get("phase") == "plan"):
-            return True
-    return False
+            plan_recorded = True
+        elif record.get("gate") == "check_coverage.py":
+            coverage_recorded = True
+    return plan_recorded, coverage_recorded
 
 
 class PurposeFirstParser(argparse.ArgumentParser):
@@ -437,11 +446,12 @@ Reads:
   legacy pass). At --phase build with no manifest file it is also READ.
 
 Epic planned before the manifest phase (--phase build, no manifest file):
-  No earlier ledger record of this gate with phase `plan` (any verdict; a
-  ledger file not yet created holds none) -> exit 0, `legacy: true`. Such a
-  record present -> exit 1, `manifest_missing`. An existing but unreadable
-  ledger -> exit 2. Without --ledger, or at --phase plan, a missing
-  manifest stays exit 2.
+  A ledger record of this gate with phase `plan` (any verdict) -> exit 1,
+  `manifest_missing`. Otherwise the ledger must hold a check_coverage.py
+  record (the plan lanes' coverage gate writes one) -> exit 0,
+  `legacy: true`. A missing or unreadable ledger, or one with no
+  check_coverage.py record, -> exit 2 (likely a wrong --ledger path).
+  Without --ledger, or at --phase plan, a missing manifest stays exit 2.
 
 Phase rules:
   both   the row checks above (bad_rows, missing_rollback, untraced).
@@ -478,12 +488,13 @@ Exit codes:
   0  ok: every array empty (or an exempt empty manifest, or a legacy pass).
   1  at least one array is non-empty.
   2  usage error, a missing/unreadable manifest or plan (outside the legacy
-     path), an unreadable ledger on the legacy path, no manifest table,
+     path), a missing, unreadable or coverage-less ledger on the legacy
+     path, no manifest table,
      no separator row, a row with the wrong cell count, or a plan with no
      `## Task N:` headings.
 
 Self-test:
-  python check_deploy_manifest.py --self-test   (21 cases)
+  python check_deploy_manifest.py --self-test   (22 cases)
 """
 
 
@@ -528,12 +539,18 @@ def main(argv):
     try:
         if (args.phase == "build" and args.ledger
                 and not Path(args.manifest).is_file()):
-            if plan_phase_recorded(args.ledger):
+            plan_recorded, coverage_recorded = scan_ledger(args.ledger)
+            if plan_recorded:
                 report["manifest_missing"].append({
                     "path": args.manifest,
                     "detail": "the ledger records a plan-phase run of this "
                               "gate, so this epic owes a manifest"})
                 return finish(report, 1)
+            if not coverage_recorded:
+                raise GateError(
+                    "ledger %s holds no check_coverage.py record, so it is not "
+                    "this epic's plan-lane ledger -- likely a wrong --ledger "
+                    "path" % args.ledger)
             report["legacy"] = report["ok"] = True
             return finish(report, 0)
         report = build_report(args.manifest, args.plan, args.phase)
@@ -731,11 +748,21 @@ def run_self_test():
             self.assertTrue(r["legacy"])
             self.assertTrue(self.records()[-1]["legacy"])
 
-        def test_build_no_manifest_absent_ledger_is_legacy_pass(self):
+        def test_build_no_manifest_absent_ledger_is_exit_2(self):
             code, r = self.run_ledgered(
                 "build", "--ledger", str(self.dir / "implementation" / "gates.jsonl"))
-            self.assertEqual(code, 0, r)
-            self.assertTrue(r["legacy"])
+            self.assertEqual(code, 2, r)
+            self.assertFalse(r["legacy"])
+            self.assertIn("wrong --ledger path", r["error"])
+
+        def test_build_no_manifest_ledger_without_coverage_is_exit_2(self):
+            ledger = self.dir / "implementation" / "gates.jsonl"
+            ledger.parent.mkdir()
+            ledger.write_text(json.dumps({"gate": "check_handoff.py"}) + "\n",
+                              encoding="utf-8")
+            code, r = self.run_ledgered("build", "--ledger", str(ledger))
+            self.assertEqual(code, 2, r)
+            self.assertIn("no check_coverage.py record", r["error"])
 
         def test_build_no_manifest_after_plan_record_blocks(self):
             ledger = str(self.dir / "implementation" / "gates.jsonl")

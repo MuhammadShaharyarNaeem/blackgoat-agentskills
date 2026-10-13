@@ -379,7 +379,7 @@
           "phase": "5",
           "step": "-",
           "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_deploy_manifest.py --manifest .docs/{project-name}/deploy/manifest.md --plan .docs/{project-name}/implementation/plan.md --phase build --ledger .docs/{project-name}/implementation/gates.jsonl",
-          "gate": "Exit 0 (including `legacy: true`, an epic planned before the manifest phase) = the prep GO may stand; exit 1 = a `pending` row, a `missing_files` entry or `manifest_missing` - route back to Dep; exit 2 = the manifest failed its structural contract."
+          "gate": "Exit 0 (including `legacy: true`, an epic planned before the manifest phase) = the prep GO may stand; exit 1 = a `pending` row, a `missing_files` entry or `manifest_missing` - route back to Dep; exit 2 = the manifest failed its structural contract, or (no manifest) the ledger is missing or holds no check_coverage record - check the --ledger path."
         }
       ],
       "reads": [
