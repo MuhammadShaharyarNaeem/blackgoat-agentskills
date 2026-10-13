@@ -13,6 +13,7 @@ import contextlib
 import io
 import json
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -293,6 +294,13 @@ class SelfTest(unittest.TestCase):
         })
         row = contract.grade_one(marker, brain_root=self._empty_brain(), case_dir=case_dir)
         self.assertEqual(row["outcome"], "INFRA")
+
+    def test_contract_bgpdd_build_agy_lane_grader(self):
+        # The lane case's own zero-LLM grader self-test: synthetic good/bad
+        # workspaces through the real grade.ps1, exact failed-criterion sets.
+        script = contract.CONTRACT_ROOT / "bgpdd-build-agy-lane" / "selftest.py"
+        proc = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=600)
+        self.assertEqual(proc.returncode, 0, f"stdout={proc.stdout}\nstderr={proc.stderr}")
 
     # -- trigger: judging over synthetic transcripts --------------------------
 
