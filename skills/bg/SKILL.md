@@ -22,6 +22,7 @@ Check the **state rows** first; if none matches, answer the three questions in o
 
 | The ask | Lane | What it costs |
 |---|---|---|
+| the build row below, **and** the user asks for the builders on agy / Gemini — opt-in, never inferred | `bgpdd-build-agy` | As `bgpdd-build`, but Mason/Nova/Max run headless in agy on Gemini; Quinn mid tier, Luna top tier. |
 | "execute the plan" / "carry on with the build" — a `.docs/<project>/implementation/plan.md` exists with unchecked milestones | `bgpdd-build` | Mason or Nova per milestone tag, plus Quinn, Luna, Dep; the coverage and commit gates. |
 | "map this codebase" / "how does this repo work" — or the ask needs today's behaviour and there is no `.docs/summary/` | `bgpdd-discovery` | Iris, Scout and Echo write the Tier-1 knowledge base. |
 | "it's built — ship it" | `bgpdd-shipping` | Launch Squad — Vera, Cipher, Dep — plus the ship-decision gate. |

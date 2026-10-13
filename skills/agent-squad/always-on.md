@@ -16,6 +16,7 @@ Pick one and invoke it. Each line summarises that lane's `description` frontmatt
 | `/bgpdd-plan` | Phase 1, Design & Architecture: refines the idea, researches, produces an implementation plan (Rex, Aria, Alex). |
 | `/bgpdd-discovery` | Phase 0, Global Context Discovery: Iris, Scout and Echo map stacks, APIs and the legacy QA baseline. |
 | `/bgpdd-build` | Phase 2, Execution: takes an existing plan and executes it (Mason, Nova, Quinn, Luna, Dep, Cipher). |
+| `/bgpdd-build-agy` | Opt-in `/bgpdd-build` with Mason, Nova and Max run headless in agy on Gemini; Quinn and Luna stay delegated. |
 | `/bgpdd-verify` | Standalone verification of an already-discovered feature: acceptance matrix, executed specs, gated on runtime evidence. |
 | `/bgpdd-secure` | Standalone security assessment of an existing application: lint-gated attack matrix, safe read-only probes, privacy rows to Ward, runtime-evidence gate. |
 | `/bgpdd-shipping` | Phase 3, Verification & Deployment: the Launch Squad runs the pre-launch checklist, hardening and rollout. |

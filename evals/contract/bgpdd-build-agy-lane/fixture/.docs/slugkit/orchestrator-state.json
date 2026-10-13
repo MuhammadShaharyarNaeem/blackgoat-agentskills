@@ -1,0 +1,16 @@
+{
+  "schema": "1",
+  "project_name": "slugkit",
+  "feature": null,
+  "pipeline": "bgpdd-lite",
+  "branch": null,
+  "milestone_cursor": null,
+  "artifacts": {
+    "requirements": ".docs/slugkit/requirements.md",
+    "design": null,
+    "plan": ".docs/slugkit/implementation/plan.md",
+    "acceptance_matrix": null
+  },
+  "blockers": [],
+  "updated": "2026-10-13T06:56:53Z"
+}

@@ -1,0 +1,9 @@
+{
+  "name": "slugkit",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Small zero-dependency string helpers.",
+  "scripts": {
+    "test": "node --test"
+  }
+}

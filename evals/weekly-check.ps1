@@ -241,6 +241,14 @@ foreach ($f in $changedFiles) {
         # the reason one worktree per bug works at all).
         [void]$affectedEvals.Add('contract:bugfix-batch-two-bugs')
     }
+    if ($f -match 'skills/bgpdd-build-agy/' -or $f -match 'scripts/(run_agy_builder|agy_runtime)\.py$') {
+        # bgpdd-build-agy-lane runs /bgpdd-build-agy over one [API] [vs:none]
+        # milestone: the builder through run_agy_builder.py (whose --out file and
+        # tripwire it grades), Quinn at sonnet, Luna at opus, the commit gate.
+        # skills/bgpdd-build/ is deliberately not named: every /bgpdd-build change
+        # would flag a paid run that also needs agy installed.
+        [void]$affectedEvals.Add('contract:bgpdd-build-agy-lane')
+    }
     if ($f -match 'skills/bgpdd-quick/' -or $f -match 'scripts/(check_quick_close|run_quiet)\.py$' -or $f -match 'skills/agent-squad/always-on\.md$') {
         # pressure-quick-skip-gate asks for a two-file rename with the capture and
         # the close gate explicitly waived off. check_quick_close.py IS that lane's

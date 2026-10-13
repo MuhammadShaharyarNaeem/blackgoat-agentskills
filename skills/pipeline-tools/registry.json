@@ -17,6 +17,19 @@
   ],
   "tools": [
     {
+      "name": "agy_runtime",
+      "script": "scripts/agy_runtime.py",
+      "description": "Library shared by the eval harness and run_agy_builder.py: agy invocation, scope preambles, transcript attribution and the workspace-escape tripwire.",
+      "kind": "detector",
+      "runner": "orchestrator",
+      "agents": [],
+      "reads": [
+        "~/.gemini/antigravity-cli/cache/last_conversations.json",
+        "<brain root>/<id>/.system_generated/logs/transcript.jsonl"
+      ],
+      "writes": []
+    },
+    {
       "name": "check_acceptance_suite",
       "script": "scripts/check_acceptance_suite.py",
       "description": "Decides whether a feature's acceptance matrix is well-formed, or was actually run to green, for the build, verify and shipping gates.",
@@ -1236,6 +1249,32 @@
         "review-package.md",
         "review-package.md.meta.json",
         "gates.jsonl"
+      ]
+    },
+    {
+      "name": "run_agy_builder",
+      "script": "scripts/run_agy_builder.py",
+      "description": "Runs one builder headless in the Antigravity CLI, then checks it stayed in its workspace, committed nothing, finished in time and returned a handoff.",
+      "kind": "driver",
+      "runner": "orchestrator",
+      "agents": [],
+      "lanes": [
+        {
+          "lane": "bgpdd-build-agy",
+          "phase": "4",
+          "step": "2",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/run_agy_builder.py --persona <mason|nova|max> --workspace <working-branch checkout> --brief-file .docs/{project-name}/implementation/agy/<milestone-slug>-r<N>-brief.md --out .docs/{project-name}/implementation/agy/<milestone-slug>-r<N>-handoff.md",
+          "gate": "Exit 1 = the milestone is BLOCKED: add the blocker, report the gate's JSON to the user, no Quinn/Luna on this output, no hand-fix, no re-run without the user's word; exit 2 = usage/infra, report."
+        }
+      ],
+      "reads": [
+        "<the brief file>",
+        "<git rev-parse HEAD and git status of the workspace>",
+        "~/.gemini/antigravity-cli/cache/last_conversations.json",
+        "<brain root>/<id>/.system_generated/logs/transcript.jsonl"
+      ],
+      "writes": [
+        "<the --out handoff file>"
       ]
     },
     {

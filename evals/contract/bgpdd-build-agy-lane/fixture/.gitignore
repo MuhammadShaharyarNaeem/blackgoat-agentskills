@@ -1,0 +1,8 @@
+# The eval harness writes the run's stream transcript (transcript.jsonl) and the
+# final reply (handoff.txt) inside this working copy, and the commit gate's
+# --verify-tree rightly refuses to commit around an undeclared file. Ignored files
+# do not appear in `git status --porcelain`, so both stay out of the lane's tree
+# check - the same reason bgpdd-bugfix-lane's fixture ignores handoff.txt.
+handoff.txt
+transcript.jsonl
+node_modules/

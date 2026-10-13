@@ -36,6 +36,7 @@ The plugin is designed with a deliberate adoption gradient. Each step gives you 
 | New feature, brownfield codebase | `/bgpdd-discovery` then `/bgpdd-plan` | Spawns agents (Iris/Scout/Echo, then Rex/Aria/Alex) |
 | Well-specified small feature (known pattern/contract) | `/bgpdd-lite` | Main session (mini-requirements) + spawns Alex |
 | Execute an existing plan | `/bgpdd-build [auto]` | Spawns agents (Mason/Nova, Quinn, Luna, Dep, Cipher) |
+| Execute an existing plan with the builders on Gemini (opt-in) | `/bgpdd-build-agy [auto]` | As `/bgpdd-build`, but Mason/Nova/Max run headless in the Antigravity CLI (Gemini 3.8 Flash High) via `run_agy_builder.py`; Quinn (mid tier) and Luna (top tier) still spawned |
 | Ship a green epic | `/bgpdd-shipping` | Spawns agents (Vera, Cipher, Dep, Forge) |
 | Fix a bug | `/bgpdd-bugfix` | Main session (intake, RCA, route) + spawns agents (Quinn RED, Mason/Nova fix, Quinn GREEN, Luna) |
 | Fix two to five independent bugs in one session | `/bgpdd-bugfix-batch` | Main session (intake, merges) + the bugfix squad per bug, in waves, one git worktree each |
@@ -384,6 +385,7 @@ When lessons shouldn't wait for the epic to ship — or when there is no epic at
 - **bgpdd-plan** — design & architecture (Rex, Aria, Alex)
 - **bgpdd-lite** — mid-weight planning for well-specified work (Orchestrator mini-requirements + Alex; hands off to bgpdd-build)
 - **bgpdd-build** — execution (Mason or Nova, routed by the milestone's [API]/[UI] domain tag; Quinn, Luna, Dep)
+- **bgpdd-build-agy** — opt-in choreography over bgpdd-build that swaps only the builder step: Mason/Nova/Max run headless in the Antigravity CLI on Gemini 3.8 Flash High through the `run_agy_builder.py` gate (workspace-escape tripwire, HEAD-unchanged check; exit 1 blocks the milestone), Quinn on the mid tier and Luna on the top tier as delegated subagents. Restates no build rule; commits through build's commit gate
 - **bgpdd-shipping** — verification & Launch Squad (Vera, Cipher, Dep, Forge)
 - **bgpdd-bugfix** — evidence-gated bugfix lane: lint-gated intake → Quinn's RED capture → RCA and mechanical FAST/FULL/PLAN route (main session) → fix (Mason and/or Nova) → same-command GREEN + red/green gate → fresh Luna → bounded commit gate → Tier-1 prevent write-back
 - **bgpdd-bugfix-batch** — thin choreography over the lane above for two to five independent bugs in one session: a git worktree and a `fix/{bug-slug}` branch per bug, the bugfix contract run per bug in waves (parallel REDs, per-route builders, per-bug GREEN and a fresh Luna), each bug closing through its own commit gate, then one merge at a time ordered by surface overlap and gated on that bug's ledger chain. It restates no bugfix rule; a `PLAN` route drops that bug to `/bgpdd-plan`
