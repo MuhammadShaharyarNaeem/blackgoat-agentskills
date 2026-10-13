@@ -412,7 +412,7 @@ fields; exit 0. She runs the full suite through `run_quiet.py` and writes
 **Phase 5.** A fresh Luna reviews the 2-file diff against the `<consumers>` list
 and writes `## Review: coupon-500` / `**Verdict:** Approve`. The commit gate runs
 with `--verify-tree --max-changed-files 5 --waiver rca.md --require-ledger-gates
-check_bugfix_intake.py,check_red_green.py,check_runtime_evidence.py` and commits
+check_bugfix_intake.py,next_bugfix_route.py,check_red_green.py,check_runtime_evidence.py` and commits
 (2 files ≤ 5, so the waiver is never consulted). The Orchestrator states the fix,
 finds no `.docs/summary/coupons/` base, so writes nothing to Tier 1 and says so,
 and names `/bgpdd-shipping` as the re-entry.

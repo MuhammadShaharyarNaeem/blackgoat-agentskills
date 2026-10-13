@@ -49,6 +49,10 @@ The illustrative file-by-file trees for both tiers, and the phase-transition han
 
 ## 4. Detailed Pipeline Phases
 
+### Pre-Flight: Terminal-State Check
+- **Delegated Agent**: None — the Orchestrator reads the file directly. Always runs, greenfield or brownfield, before any artifact is written.
+- The writer-side half of `bgpdd-verify` Phase 4 step 5 and `bgpdd-secure` Phase 4 step 6. Once the `{project-name}` slug is known: if `.docs/{project-name}/orchestrator-state.json` already exists, read its `pipeline`. `bgpdd-verify` or `bgpdd-secure` → **HALT**: that state is terminal, and Phase 3.6/Phase 4's `--set-pipeline bgpdd-plan` and `--set-artifact` writes would overwrite it — and Alex would write over `acceptance-matrix.md`, which verify owns. Have the user pick a different `{project-name}` slug.
+
 ### Pre-Flight Check: Global Context Verification (Brownfield only)
 - **Delegated Agent**: None — the Orchestrator performs this check directly.
 - **Purpose**: verify Tier-1 discovery has already run before planning against an existing system (§3 owns the never-produces rule).
@@ -161,6 +165,6 @@ The illustrative file-by-file trees for both tiers, and the phase-transition han
 - **Workflow**:
   1. Write this run's game-tape checkpoint at the skeleton's default cadence and cap — at most 10 bullets, heading `## bgpdd-plan — [date]`. This is the run's *second* checkpoint, not its only one — see Phase 3.6's game-tape note: the skeleton's every-state-persistence default, applied at each of this lane's two persistences.
   2. This evidence feeds the SINGLE end-of-epic Forge run in `bgpdd-shipping` Step 7 — do NOT delegate Forge here. If this run went badly enough that lessons should not wait for the epic to ship, offer the user an on-demand `/bgpdd-learn` run now instead.
-  3. **State Persistence**: Before concluding, write orchestrator state via `update_state` — never hand-edit JSON. Run `python {PLUGIN_ROOT}/pipeline-tools/scripts/tool_registry.py for --lane bgpdd-plan --phase 4` and execute the `update_state` line it prints. Schema authority is `update_state` (schema version string `"1"`). Its `--init` may already be a no-op here (Phase 3.6 writes the state file first when it records a manifest or a capability blocker) — the warning is expected, and the entries Phase 3.6 wrote are preserved. If Python is unavailable: HALT and surface the missing interpreter.
+  3. **State Persistence**: Before concluding, write orchestrator state via `update_state` — never hand-edit JSON. Run `python {PLUGIN_ROOT}/pipeline-tools/scripts/tool_registry.py for --lane bgpdd-plan --phase 4` and execute the `update_state` line it prints. Schema authority is `update_state.py --help` (schema version string `"1"`). Its `--init` may already be a no-op here (Phase 3.6 writes the state file first when it records a manifest or a capability blocker) — the warning is expected, and the entries Phase 3.6 wrote are preserved. If Python is unavailable: HALT and surface the missing interpreter.
      Field notes: `feature` is the Tier-1 durable feature id from `.docs/summary/{feature}/` (`null` for greenfield). `pipeline` is the last pipeline that wrote the state. `milestone_cursor` and `branch` stay `null` until `bgpdd-build` owns them. The resulting state shape is documented in `references/plan-rationale.md` § The `orchestrator-state.json` shape — documentation only; never hand-write that JSON.
   4. Prompt the user to open a new chat session and trigger `/bgpdd-build` to execute the code.
