@@ -5,17 +5,17 @@ description: Squad-internal execution contract for production launch preparation
 
 # Shipping and Launch
 
-Ship with confidence. The goal is not just to deploy — it's to deploy safely, with monitoring in place, a rollback plan ready, and a clear understanding of what success looks like. Every launch should be reversible, observable, and incremental.
+Every launch is reversible, observable, and incremental: monitoring in place, a rollback plan rehearsed, and success defined before the deploy.
 
 ## Worker Execution Contract
 
-This is the operational spine. Follow it as written. Pipelines delegate the checklist sections below by name — do not rename or drop them.
+This is the operational spine. Follow it as written. Pipelines delegate the checklist sections below by name — do not rename or drop them. Rationale for every rule below: [deep dive](references/shipping-deep-dive.md) (§ Contract Rationale).
 
 ### The Pre-Launch Checklist
 
 The Security, Performance, and Accessibility sections below are the delegation subset — the root `{PLUGIN_ROOT}/../references/` checklists (see "See Also") are authoritative; update those first.
 
-**The sections below are a floor, not the whole checklist.** Where the project has a numbered requirements set, every Must-Have FR and NFR additionally gets its own row, cited by ID, each carrying the evidence that verified it. A requirement with no row is not a pass — it is an unperformed check, and the recommendation is `NO-GO` until it has one. Enumerate from the requirements document, never from the built feature list: requirements expressed as *qualities* rather than features (accessibility, contrast, performance, theming, responsiveness) are exactly the ones a feature-shaped review cannot see and a generic template silently omits.
+**The sections below are a floor, not the whole checklist.** Where the project has a numbered requirements set, every Must-Have FR and NFR additionally gets its own row, cited by ID, each carrying the evidence that verified it. A requirement with no row is an unperformed check, and the recommendation is `NO-GO` until it has one. Enumerate from the requirements document, never from the built feature list — quality requirements (accessibility, contrast, performance, theming, responsiveness) are the ones a feature-shaped review omits.
 
 #### Code Quality
 
@@ -36,9 +36,9 @@ The Security, Performance, and Accessibility sections below are the delegation s
 - [ ] The contract surface (OpenAPI/Swagger) is reachable, wherever the stack exposes one
 - [ ] In a multi-service estate, every service's configuration is repointed at local URLs, and the manifest records which service was reached at which URL
 
-The tier ladder, the out-of-process probe, the capture artifact and the `**Runtime evidence:**` citation that carries it are owned by `{PLUGIN_ROOT}/runtime-evidence/SKILL.md` — read it before running this section; none of it is restated here. An item whose precondition is absent (the app will not start, the environment cannot be repointed, the transport is unavailable) is `BLOCKED` naming what was missing, never `PASS`.
+The tier ladder, the out-of-process probe, the capture artifact and the `**Runtime evidence:**` citation are owned by `{PLUGIN_ROOT}/runtime-evidence/SKILL.md` — read it before running this section; none of it is restated here. An item whose precondition is absent (the app will not start, the environment cannot be repointed, the transport is unavailable) is `BLOCKED` naming what was missing, never `PASS`.
 
-**Deliberate divergence (convention #8) from the deployment-time health checks in this same file.** Those are Dep's, they run against a deployed environment, and this section neither replaces nor duplicates them: Infrastructure's *"Health check endpoint exists and responds"*; Staged Rollout step 1's *"Full test suite in staging environment"* and *"Manual smoke test of critical flows"* and step 2's *"Verify deployment succeeded (health check)"*; Post-Launch Verification's *"Check health endpoint returns 200"* and *"Test the critical user flow manually"*; and the after-deploying Verification items *"Health check returns 200"* and *"Critical user flow works"*. Every one of those presupposes a deployed artifact and answers **did the deploy land**. This section answers a different question, earlier and cheaper: **does the change work at all when a person runs it** — the question a green in-process test suite cannot answer, and the one that went unasked before merge.
+**Deliberate divergence (convention #8) from the deployment-time health checks in this same file** (Infrastructure, Staged Rollout steps 1–2, Post-Launch Verification, the after-deploying Verification items). Those are Dep's and answer *did the deploy land*; this section answers *does the change work at all when a person runs it*, earlier and locally. It neither replaces nor duplicates them.
 
 #### Security
 
@@ -87,7 +87,7 @@ The tier ladder, the out-of-process probe, the capture artifact and the `**Runti
 
 ### Feature Flag Strategy
 
-Ship behind feature flags to decouple deployment from release. **The flag contract itself — declaration fields, owner, `expiry`/`review`, the removal task, default-off, fail-to-safe, config-as-code, both branches tested, no nesting — is owned by `{PLUGIN_ROOT}/feature-flag-patterns/SKILL.md`. Read it there; the rules are deliberately not restated here.** This section owns only the **rollout staging** and what this checklist runs at ship time.
+Ship behind feature flags to decouple deployment from release. **The flag contract itself — declaration fields, owner, `expiry`/`review`, the removal task, default-off, fail-to-safe, config-as-code, both branches tested, no nesting — is owned by `{PLUGIN_ROOT}/feature-flag-patterns/SKILL.md`; it is deliberately not restated here.** This section owns only the **rollout staging** and what this checklist runs at ship time.
 
 **Rollout staging (this skill's half):**
 
@@ -118,7 +118,7 @@ python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py \
 
 ### Baseline Capture
 
-**Dep-owned. Before the first rollout step, not during it.** Read the current production values of three metrics from the project's monitoring source and capture each reading through the wrapper, so it carries the provenance sidecar `check_ship_decision.py --require-baseline` now demands — a `touch`ed or hand-typed file at the cited path no longer satisfies it:
+**Dep-owned. Before the first rollout step, not during it.** Read the current production values of three metrics from the project's monitoring source and capture each reading through the wrapper, so it carries the provenance sidecar `check_ship_decision.py --require-baseline` demands — a `touch`ed or hand-typed file does not satisfy it:
 
 ```bash
 python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py \
@@ -131,9 +131,9 @@ python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py \
 2. **P95 latency** — on the endpoint or flow this release touches
 3. **One business metric** — the one this release is meant to move or must not harm (conversion, sign-ups, session length, messages sent)
 
-Then list all three under a `## Baseline` heading in `.docs/{project-name}/implementation/ship-decision.md`, one per line, in the form `- <metric>: <value> — evidence: <path under evidence/baseline/>`. State the source and the window in each artifact; a number with no window is not a baseline, because "0.4%" over an hour and over a week are different claims.
+Then list all three under a `## Baseline` heading in `.docs/{project-name}/implementation/ship-decision.md`, one per line, in the form `- <metric>: <value> — evidence: <path under evidence/baseline/>`. State the source and the window in each artifact; a number with no window is not a baseline.
 
-A metric you cannot read is `BLOCKED`, named — never a remembered value and never an estimate from the last release. Where the project exposes no monitoring source at all, that is an Infrastructure gap to escalate before rollout, not a blank to fill: the Rollout Decision Thresholds table above cannot be applied without these three readings, and a canary run against no baseline is a canary that cannot fail.
+A metric you cannot read is `BLOCKED`, named — never a remembered value and never an estimate from the last release. A project with no monitoring source at all is an Infrastructure gap to escalate before rollout, not a blank to fill: the Rollout Decision Thresholds table cannot be applied without these three readings.
 
 ### Staged Rollout
 
@@ -176,7 +176,7 @@ A metric you cannot read is `BLOCKED`, named — never a remembered value and ne
 | Client JS errors | No new error types | New errors at <0.1% of sessions | New errors at >0.1% of sessions |
 | Business metrics | Neutral or positive | Decline <5% (may be noise) | Decline >5% |
 
-**Every cell of that table is a delta against a baseline, so the table is unusable until the baseline exists.** "Within 10% of baseline" and ">2x baseline" are not thresholds on their own; read at canary time with no recorded baseline, each one resolves to whatever the person watching the dashboard remembers normal looking like, which is how a regression gets waved through as "about the same". Capture the baseline first — see Baseline Capture below — and cite it in the ship decision.
+**Every cell is a delta against a baseline, so the table is unusable until the baseline exists.** Capture it first (§ Baseline Capture) and cite it in the ship decision; never grade against what "normal" is remembered to look like.
 
 **When to Roll Back** — roll back immediately if:
 - Error rate increases by more than 2x baseline
@@ -204,15 +204,15 @@ A metric you cannot read is `BLOCKED`, named — never a remembered value and ne
 6. Compare each Baseline metric against the Rollout Decision Thresholds table
 ```
 
-**Owner and artifact — this checklist is Dep's, it runs against the *deployed* environment, and it produces a report.** Until it named an owner and a destination it was a list nobody executed: the pipeline's last gate was the ship decision, which is taken *before* the deploy, so nothing downstream ever asked whether the deployed thing worked.
+**Owner and artifact — this checklist is Dep's, it runs against the *deployed* environment, and it produces a report.**
 
-- **Who**: Dep, freshly delegated after the deploy or merge lands — not the Dep who wrote the ship decision, whose context already recorded these items as expected-green.
+- **Who**: Dep, freshly delegated after the deploy or merge lands — not the Dep who wrote the ship decision.
 - **Where**: the deployed environment (production, or whichever environment the user named at deploy time). Every runtime probe is captured out-of-process via `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/runtime/<name>.md --ledger .docs/{project-name}/implementation/gates.jsonl -- <the probe>`, per `{PLUGIN_ROOT}/runtime-evidence/SKILL.md`, and cited by path in the line it backs.
 - **What**: `.docs/{project-name}/implementation/post-deploy-report.md`, one line per numbered item above, in the check-line grammar the pipelines parse:
 
   `- <check>: PASS|FAIL|BLOCKED|NOT RUN — exit <N> — <detail> — capture: evidence/runtime/<file>.md`
 
-  ending in a single `**Verdict:** Pass` or `**Verdict:** Fail` line. A `PASS` or `FAIL` line cites its exit code **and** the `run_quiet.py --capture` artifact whose sidecar recorded that same exit code — an uncited executed line is refused (`check_uncaptured`), because everything else on it is text a delegate types; a `BLOCKED` or `NOT RUN` line gives a reason and cites nothing. The grammar authority is `{PLUGIN_ROOT}/pipeline-tools/SKILL.md` (`check_agent_report.py`) — it is the same grammar as the Security and Verification reports, deliberately, so one parser reads all three.
+  ending in a single `**Verdict:** Pass` or `**Verdict:** Fail` line. A `PASS` or `FAIL` line cites its exit code **and** the `run_quiet.py --capture` artifact whose sidecar recorded that same exit code — an uncited executed line is refused (`check_uncaptured`); a `BLOCKED` or `NOT RUN` line gives a reason and cites nothing. The grammar authority is `{PLUGIN_ROOT}/pipeline-tools/SKILL.md` (`check_agent_report.py`) — the same grammar as the Security and Verification reports, deliberately, so one parser reads all three.
 - **Item 6 is graded, not eyeballed**: each Baseline metric captured before rollout is re-read from the same monitoring source and compared against the Rollout Decision Thresholds table. Red on any row is a `FAIL`, and a `FAIL` verdict is a live production defect: stop taking further deploy actions, present the Rollback Steps and the rehearsed Time to Rollback to the Orchestrator in the `<handoff>` (blockers: Critical), and **HALT** — executing a production rollback is the user's to authorize via the Orchestrator, never the delegated agent's (Orchestrator Contract §1 — irreversible actions need explicit user confirmation; `bgpdd-shipping` Step 5.5).
 
 ### Rollback Strategy
@@ -250,29 +250,45 @@ Every deployment needs a rollback plan before it happens:
 
 ### Rollback Rehearsal
 
-**Dep-owned. Before the GO, not after the incident.** A written rollback plan is a plan; it is not evidence that anything reverts. Perform the revert **and** the health check that proves the revert landed, timed, on a non-production environment, and record what it actually took.
+**Dep-owned. Before the GO, not after the incident.** A written rollback plan is not evidence that anything reverts. Perform the revert **and** the health check that proves it landed, timed, on a non-production environment, and record what it actually took.
 
-1. **Run it end to end on a non-production environment** — the same steps the Rollback Steps above name, one command per step, with the health check as the last step so a revert that leaves the service down cannot record as a success.
-2. **Capture each step separately**, so the timing and the outcome are recorded by the tool rather than remembered by you. `run_quiet.py` runs its argv with no shell (`run_quiet.py --help`), so `&&`, `|` or `;` inside one capture reach the program as literal arguments — one `run_quiet.py --capture` call per step (the revert, the push or redeploy, the health check):
+1. **Run it end to end on a non-production environment** — the Rollback Steps above, one command per step, with the health check last so a revert that leaves the service down cannot record as a success.
+2. **Capture each step separately** — `run_quiet.py` runs its argv with no shell (`run_quiet.py --help`), so `&&`, `|` or `;` reach the program as literal arguments; one `run_quiet.py --capture` call per step (the revert, the push or redeploy, the health check):
    `python {PLUGIN_ROOT}/pipeline-tools/scripts/run_quiet.py --capture .docs/{project-name}/implementation/evidence/rollback/<date>-rehearsal-<NN>-<step>.md --ledger .docs/{project-name}/implementation/gates.jsonl -- <that one step's command>`
-3. **Record the result in `ship-decision.md`** on one line, in exactly this grammar — `<N>` is the **sum** of every step capture's `Duration:`, and `evidence:` cites the health-check capture (the last step, the one that proves the revert landed):
+3. **Record the result in `ship-decision.md`** on one line, in exactly this grammar — `<N>` is the **sum** of every step capture's `Duration:`, and `evidence:` cites the health-check capture (the last step):
 
    `Time to Rollback: <N><unit> — rehearsed <YYYY-MM-DD> on <env> — evidence: <path under evidence/rollback/>`
 
-   `<unit>` is `s`/`sec`/`seconds` or `m`/`min`/`minutes`; either separator may be an em dash, en dash, or hyphen; `<env>` names where you ran it. The pipelines read this line mechanically via `check_ship_decision.py --require-rehearsal`; the grammar authority is `check_ship_decision.py --help`.
-4. **The recorded time must fit the Time to Rollback ladder above for the rollback type this release uses** — a feature-flag rollback that measured 6 minutes did not meet the `< 1 minute` rung, and the honest response is to fix the rollback path or re-classify the release's rollback type, never to record the ladder's number instead of the measured one.
+   `<unit>` is `s`/`sec`/`seconds` or `m`/`min`/`minutes`; either separator may be an em dash, en dash, or hyphen; `<env>` names where you ran it. The pipelines read this line via `check_ship_decision.py --require-rehearsal`; the grammar authority is `check_ship_decision.py --help`.
+4. **The recorded time must fit the Time to Rollback ladder above for the rollback type this release uses** — if it does not, fix the rollback path or re-classify the release's rollback type; never record the ladder's number instead of the measured one.
 
-**Deliberate refinement of the Time to Rollback ladder (convention #8).** That ladder is a planning estimate — the expected cost of each rollback type. This section makes the *measured* value binding: where the two disagree, the rehearsal wins, because the ladder describes rollbacks in general and the rehearsal describes this one.
+**Deliberate refinement of the Time to Rollback ladder (convention #8).** The ladder is a planning estimate; the *measured* value is binding. Where the two disagree, the rehearsal wins.
 
 A rehearsal you could not perform is `BLOCKED`, naming what was missing (no non-production environment, no revert path, an irreversible migration) — see Escalate When. It is never a `PASS`, and a plan alone is never a rehearsal.
 
+### Deployment Manifest
+
+**Dep-owned. Written at plan time, finalised at build Phase 5, executed at shipping.** One ordered bundle of every production change, so the deploy is executed from a list rather than reconstructed from the diff. Fillable template: `references/deployment-manifest-template.md`.
+
+1. **Bundle**: `.docs/{project-name}/deploy/manifest.md`, scripts in `deploy/scripts/`, rollbacks in `deploy/rollback/`.
+2. **Enumerate from the plan and design, not from memory** — one row per production change: schema (`sql`), Azure resources (`azure`), app settings (`appsetting`), Key Vault secrets (`secret`), feature flags (`flag`), data backfills (`backfill`), anything else (`other`). Every row names the plan task number(s) it traces to; order rows in the sequence production must apply them (schema expand before the code that reads it; secret before the setting that references it).
+3. **Every row has a rollback** — a script path relative to the manifest directory, or `[no rollback: <reason>]`. An irreversible row is the Escalate When case below, not a silent exemption.
+4. **Plan time**: draft the `azure`, `appsetting`, `secret` and `flag` scripts now (`drafted`). Leave every `sql` row `pending-build`, naming the `scripts/`/`rollback/` paths it will hold but writing neither file — the SQL comes from the real migrations, not a guess at them.
+5. **Build Phase 5**: write each `pending-build` row's named script from the reviewed idempotent diff `database-migration-patterns` produced (`implementation/evidence/migration/<name>.sql`), copied into `deploy/scripts/` with its rollback, and mark the row `final`.
+6. **No secret values, ever** — a `secret` row's script names the Key Vault secret and how it is set; the value never lands in the bundle.
+7. **Nothing to deploy** still writes `manifest.md`: an empty table plus a `No production changes: <reason>` line.
+
+The table header, the closed `Type`/`Status` sets and every row rule are gated by `check_deploy_manifest.py` (`--phase plan` at plan time, `--phase build` at Phase 5); its `--help` is the contract of record.
+
+To verify a row's Dev state, Dep may use `query_db.py` (contract: `query_db.py --help`).
+
 ### Documenting the Ship Decision
 
-If running within the `bgpdd-build` or `bgpdd-shipping` pipelines, save your final Rollback Strategy and Launch Checklist to `.docs/{project-name}/implementation/ship-decision.md` with a final `GO` or `NO-GO` recommendation. A **launch** decision additionally carries the `Time to Rollback:` line from Rollback Rehearsal and the `## Baseline` section from Baseline Capture; a **prep** decision written at `bgpdd-build` Phase 5 legitimately carries neither, because neither has happened yet. **Put that verdict on a line beginning `Ship Decision`, `Verdict`, or `Recommendation`** (leading `#`, `>`, `-`, or `*` markers are tolerated), with the `GO` or `NO-GO` token on that same line, and state one verdict per section — a section asserting both is rejected as ambiguous. The pipelines read this line mechanically via `check_ship_decision.py`; the grammar authority is `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
+If running within the `bgpdd-build` or `bgpdd-shipping` pipelines, save your final Rollback Strategy and Launch Checklist to `.docs/{project-name}/implementation/ship-decision.md` with a final `GO` or `NO-GO` recommendation. A **launch** decision additionally carries the `Time to Rollback:` line from Rollback Rehearsal and the `## Baseline` section from Baseline Capture; a **prep** decision written at `bgpdd-build` Phase 5 legitimately carries neither. **Put that verdict on a line beginning `Ship Decision`, `Verdict`, or `Recommendation`** (leading `#`, `>`, `-`, or `*` markers are tolerated), with the `GO` or `NO-GO` token on that same line, and state one verdict per section — a section asserting both is rejected as ambiguous. The pipelines read this line via `check_ship_decision.py`; the grammar authority is `{PLUGIN_ROOT}/pipeline-tools/SKILL.md`.
 
-The decision certifies **one exact tree state**: record the commit SHA it was taken against and confirm the working tree is clean at the moment of the verdict. Uncommitted changes at verdict time are a `NO-GO`, not a footnote. Any change landing afterward invalidates the artifact — reissue the decision against the new SHA rather than leaving a document that certifies a tree no longer on disk.
+The decision certifies **one exact tree state**: record the commit SHA it was taken against and confirm the working tree is clean at the moment of the verdict. Uncommitted changes at verdict time are a `NO-GO`. Any change landing afterward invalidates the artifact — reissue the decision against the new SHA.
 
-**Reconcile against the ledger before you write the verdict, and reproduce it.** The pipeline's persisted state file (`.docs/{project-name}/orchestrator-state.json` or its equivalent) carries the run's open blocker entries; read it and copy **every open entry verbatim** into the decision document. An open entry forces `NO-GO` unless the user has explicitly waived that specific entry, and a waiver is recorded beside the entry it waives — never inferred from silence, an elapsed phase, or another agent's confidence that the item is minor. Writing `blockers: None` asserts that you read the ledger and found it empty; it is never a default value, never a summary of your own view of the build, and never a statement about the blockers *you personally* encountered. The same holds for the checklist beside it: **a verification the checklist never performed is an unperformed check, not a pass** — no aggregate phrasing ("all features, NFRs, and gates complete") converts an absent row into a satisfied one, and a summary sentence that outruns the rows above it is the defect this section exists to prevent.
+**Reconcile against the ledger before you write the verdict, and reproduce it.** Read the pipeline's persisted state file (`.docs/{project-name}/orchestrator-state.json` or its equivalent) and copy **every open blocker entry verbatim** into the decision document. An open entry forces `NO-GO` unless the user has explicitly waived that specific entry, recorded beside it — never inferred from silence, an elapsed phase, or another agent's confidence. `blockers: None` asserts you read the ledger and found it empty; it is never a default. **A verification the checklist never performed is an unperformed check, not a pass** — no aggregate phrasing converts an absent row into a satisfied one.
 
 ### See Also
 
@@ -287,8 +303,8 @@ Before deploying:
 - [ ] Pre-launch checklist completed (all sections green)
 - [ ] Feature flag configured (if applicable)
 - [ ] Rollback plan documented
-- [ ] Rollback **rehearsed** — performed and timed on a non-production environment, its capture written under `evidence/rollback/`, and its `Time to Rollback:` line recorded in `ship-decision.md` (see Rollback Rehearsal)
-- [ ] Baseline captured — three metrics read from the monitoring source into `evidence/baseline/` and listed under `## Baseline` in `ship-decision.md` (see Baseline Capture)
+- [ ] Rollback **rehearsed** and its `Time to Rollback:` line recorded in `ship-decision.md` (§ Rollback Rehearsal)
+- [ ] Baseline captured and listed under `## Baseline` in `ship-decision.md` (§ Baseline Capture)
 - [ ] Monitoring dashboards set up
 - [ ] Team notified of deployment
 
@@ -307,11 +323,12 @@ After deploying:
 - A rollout metric crosses a red threshold and rollback fails or its outcome is unclear → halt and escalate to the Orchestrator immediately.
 - No viable rollback plan exists (e.g. an irreversible migration) → escalate to the Orchestrator before deploying, not after.
 - The rollback cannot be rehearsed (no non-production environment, no revert path) or the rehearsal fails → report the rehearsal `BLOCKED`/`FAIL` with a `NO-GO`; do not record a ladder estimate as a measured time.
-- No monitoring source exposes one of the three Baseline metrics → escalate as an Infrastructure gap before rollout; the threshold table cannot grade a canary without it.
-- The Post-Launch Verification report's verdict is `Fail` → this is a live production defect: stop further deploy actions, present the Rollback Steps and the rehearsed Time to Rollback to the Orchestrator in the `<handoff>` (blockers: Critical), and **HALT** — do not execute the rollback yourself; authorization belongs to the user via the Orchestrator (Orchestrator Contract §1 — irreversible actions need explicit user confirmation; `bgpdd-shipping` Step 5.5).
+- No monitoring source exposes one of the three Baseline metrics → escalate as an Infrastructure gap before rollout.
+- The Post-Launch Verification report's verdict is `Fail` → **HALT** as Owner and artifact item 6 states: present the Rollback Steps and the rehearsed Time to Rollback in the `<handoff>` (blockers: Critical); never execute the rollback yourself.
 
 ## Deep Dive
 
 Read on demand — not needed to execute the contract above:
 
-- [Shipping deep dive](references/shipping-deep-dive.md) — feature-flag and error-reporting code samples (React ErrorBoundary, Express error handler), when to use this skill, the Common Rationalizations table, and red flags.
+- [Deployment manifest template](references/deployment-manifest-template.md) — the fillable `manifest.md` skeleton for Deployment Manifest.
+- [Shipping deep dive](references/shipping-deep-dive.md) — the rationale behind each contract rule (§ Contract Rationale), feature-flag and error-reporting code samples (React ErrorBoundary, Express error handler), when to use this skill, the Common Rationalizations table, and red flags.

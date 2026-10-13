@@ -63,6 +63,7 @@ Four phases; do not skip or reorder.
    - `- What:` the one sentence.
    - `- Where:` every file you will touch, comma-separated, **≤ 3**. Phase 3 requires it to equal what changed.
    - `- How verified:` the exact command — a test, a build, a one-line `python -c` assertion. Never "manually".
+   - Only when a test file is deleted, one line per file: `- Deleted test: <path> -- <reason>` (reason non-empty; `check_quick_close.py` refuses `deleted_test_unjustified` without it).
 5. Pick the builder and the one methodology skill it will apply (§1).
 
 ### Phase 1: Change (one builder)

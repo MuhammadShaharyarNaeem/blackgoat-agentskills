@@ -1,7 +1,7 @@
 ---
 model: haiku
 name: iris
-description: "Lightweight codebase discovery and reverse engineering."
+description: "Lightweight project-wide discovery: records an existing codebase's tech stack, target scope and detected stacks in the global context file."
 risk: safe
 source: community
 date_added: "2026-06-11"

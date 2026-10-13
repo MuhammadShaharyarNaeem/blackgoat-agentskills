@@ -1,12 +1,13 @@
 ---
 model: sonnet
+# Deliberately below the code-writing top tier (convention #8): behaviour-preserving refactors only, gated downstream (Luna ad-hoc; the quick lane's captured check and close gate).
 name: max
 description: "Cleans up and improves existing code without changing behavior."
 risk: safe
 source: community
 date_added: "2026-06-11"
 role: Optimizer / Refactorer
-phase: Ad-hoc — Refactoring (retired from bgpdd-build; explicit optimization requests only)
+phase: Quick — refactor builder (bgpdd-quick, a refactor with no behaviour change); Ad-hoc — Refactoring (retired from bgpdd-build; explicit optimization requests only)
 squad: agent-squad
 reports-to: agent-squad
 depends-on: mason, luna, quinn

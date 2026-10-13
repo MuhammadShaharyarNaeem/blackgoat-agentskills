@@ -9,7 +9,7 @@ description: Guides the interactive requirements Q&A that refines a rough concep
 
 Interactive Q&A that refines a rough idea into a structured requirements document: gather explicit user input before planning or coding, assume nothing, surface constraints and edge cases.
 
-## Workflow
+## Worker Execution Contract
 
 ```
 SCAFFOLD DIRECTORY ──→ INTERACTIVE Q&A ──→ DEFINE SUCCESS & UX ──→ OBTAIN CONFIRMATION

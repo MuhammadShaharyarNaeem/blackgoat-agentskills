@@ -73,6 +73,29 @@ def _git(args):
     return proc.stdout.strip()
 
 
+_CLAUDE_VERSION_CACHE = []
+
+
+def claude_version():
+    """Trimmed `claude --version` output, or None when the CLI is absent.
+
+    Free (no model call). Cached per process. The harness-4 writers in this
+    file dropped the key entirely (audit 2.10.0, E1); every record shape now
+    carries it, null when the CLI cannot be read.
+    """
+    if not _CLAUDE_VERSION_CACHE:
+        value = None
+        try:
+            proc = subprocess.run(["claude", "--version"], capture_output=True,
+                                  text=True, timeout=20, shell=(os.name == "nt"))
+            if proc.returncode == 0 and proc.stdout.strip():
+                value = proc.stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            pass
+        _CLAUDE_VERSION_CACHE.append(value)
+    return _CLAUDE_VERSION_CACHE[0]
+
+
 def plugin_sha():
     return _git(["rev-parse", "HEAD"]) or None
 
@@ -135,6 +158,7 @@ def append_script_record(case, passed, failed_criterion=None, duration_s=None,
         "duration_s": duration_s,
         "plugin_sha": plugin_sha(),
         "plugin_dirty": plugin_dirty(),
+        "claude_version": claude_version(),
         "case_sha256": case_sha256(case, case_path),
         "judge": "script",
         "harness_version": harness_version(),
@@ -194,6 +218,7 @@ def append_antigravity_record(case, run_index, passed, runtime="antigravity",
         "model": model,
         "plugin_sha": plugin_sha(),
         "plugin_dirty": plugin_dirty(),
+        "claude_version": claude_version(),
         "case_sha256": _antigravity_case_sha256(case, case_path),
         "judge": "harness",
         "harness_version": harness_version(),
@@ -358,3 +383,28 @@ def _antigravity_case_sha256(case, case_path=None):
         print(f"warning: could not hash the case definition {path}; "
               "recording case_sha256=null", file=sys.stderr)
         return None
+
+
+def _self_test():
+    """Every record shape carries `claude_version` (key present, even if null)."""
+    import tempfile
+    tmp = Path(tempfile.mkdtemp()) / "results.jsonl"
+    import contextlib
+    with contextlib.redirect_stdout(io.StringIO()):
+        append_script_record("mechanical-pipeline", True, results_path=tmp)
+        append_antigravity_record("round-bound", 1, True, results_path=tmp)
+        append_runtime_contract_record("mechanical-pipeline", 1, True, "GRADED",
+                                       results_path=tmp)
+        append_runtime_trigger_record("trigger-1", 1, "ROUTED_OK", "x", ["x"], [], False,
+                                      results_path=tmp)
+    rows = [json.loads(l) for l in tmp.read_text(encoding="utf-8").splitlines()]
+    bad = [r.get("judge") for r in rows if "claude_version" not in r]
+    if len(rows) != 4 or bad:
+        print(f"FAIL: {len(rows)} rows, missing claude_version on judges {bad}")
+        return 1
+    print("PASS: eval_record self-test (claude_version present on all 4 writers)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(_self_test() if "--self-test" in sys.argv[1:] else 0)

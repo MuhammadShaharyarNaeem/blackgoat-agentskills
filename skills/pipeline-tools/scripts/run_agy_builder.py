@@ -39,7 +39,7 @@ BUILDER_RULES = (
     "Do not run any git command that writes: no git commit, merge, rebase, reset, stash, "
     "checkout, or push. Leave every change uncommitted in the working tree.\n"
     "Finish by printing one <handoff> block, outside any code fence, whose <changed_files> "
-    "lists every file you created or modified."
+    "lists every file you created or modified, and each file you deleted as `deleted: <path>`."
 )
 
 HANDOFF_RE = re.compile(r"<handoff>.*?</handoff>", re.S)
@@ -115,10 +115,16 @@ def listed_changed_files(handoff):
     (`parse_elements` + `split_paths` + `normalize_path`: comma- or
     newline-separated, bullets and backticks stripped), so this gate and
     the handoff gate never disagree on what a builder listed. A `none:`
-    line lists nothing."""
+    line lists nothing; a `deleted: <path>` entry lists its path, which
+    porcelain reports as ` D <path>`."""
     values = check_handoff.parse_elements(handoff or "").get("changed_files") or []
-    return [check_handoff.normalize_path(p) for p in check_handoff.split_paths(values)
-            if not check_handoff.NONE_FORM_RE.match(p)]
+    listed = []
+    for p in check_handoff.split_paths(values):
+        if check_handoff.NONE_FORM_RE.match(p):
+            continue
+        gone = check_handoff.deleted_path(p)
+        listed.append(check_handoff.normalize_path(p if gone is None else gone))
+    return listed
 
 
 def build_prompt(workspace, brief_text):
@@ -520,6 +526,30 @@ def run_self_test():
             self.assertEqual(code, 0, rep["findings"])
             self.assertEqual(rep["changed_not_listed"], [])
             self.assertEqual(rep["listed_not_changed"], [])
+
+        def test_deleted_entry_matches_a_porcelain_deletion(self):
+            (self.ws / "old.py").write_text("x\n", encoding="utf-8")
+            git(self.ws, "add", "old.py")
+            git(self.ws, "commit", "-q", "-m", "old")
+            base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(self.ws), capture_output=True,
+                                  text=True).stdout.strip()
+            stdout = GOOD_HANDOFF.replace("src/a.py\n</changed_files>",
+                                          "src/a.py\ndeleted: old.py\n</changed_files>")
+            orig = self.fake(stdout=stdout)
+
+            def invoke(argv, cwd, timeout_s):
+                (Path(cwd) / "old.py").unlink()
+                return orig(argv, cwd, timeout_s)
+            code, rep = run_builder("mason", self.ws, self.brief, self.out, timeout_s=600, invoke=invoke,
+                                    preflight=lambda p: (True, None), brain_root=self.brain,
+                                    cache_path=self.cache, installed_plugin_path=str(self.tmp / "plugin"))
+            self.assertEqual(code, 0, rep["findings"])
+            self.assertEqual((rep["changed_not_listed"], rep["listed_not_changed"]), ([], []))
+            checker = Path(__file__).resolve().parent / "check_handoff.py"
+            proc = subprocess.run([sys.executable, str(checker), "--handoff", str(self.out),
+                                   "--persona", "mason", "--repo", str(self.ws), "--since", base],
+                                  capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
         def test_bad_persona_exits_2(self):
             with self.assertRaises(SystemExit) as cm:

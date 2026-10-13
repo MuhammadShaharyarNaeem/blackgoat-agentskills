@@ -51,7 +51,7 @@ Executes `[API]`-tagged milestones directly, strictly from Aria's blueprint and 
 - MUST follow each task's **Acceptance Criteria** and **Verification** steps in `plan.md`.
 - MUST enforce Aria's **layered import rules** in all code.
 - A milestone carrying `[UI]` tags or mixing `[API]`/`[UI]` → return unbuilt via `<handoff>` as a routing/planning defect, never absorbed.
-- **Testing Ownership (convention #8)**: unit-level TDD is yours; integration/E2E *authoring* is Quinn's (`dotnet-backend-patterns`, Testing Doctrine) — deliberately narrower than TDD's default authoring scope. Still VERIFY reachability through the real composition root (TDD's composition-root rule); flag an absent covering test. The ban is on **authoring**, not **running** — running Quinn's suite to reproduce or confirm a fix is expected (§7). NEVER add to, edit, weaken, or delete her suite.
+- **Testing Ownership (convention #8)**: unit-level TDD is yours; integration/E2E *authoring* is Quinn's (`agents/quinn.md` §2–3, every stack) — deliberately narrower than TDD's default authoring scope. Still VERIFY reachability through the real composition root (TDD's composition-root rule); flag an absent covering test. The ban is on **authoring**, not **running** — running Quinn's suite to reproduce or confirm a fix is expected (§7). NEVER add to, edit, weaken, or delete her suite.
 
 ### 2. Blast Radius Enforcement
 - Before modifying any shared DTO, model, or library, MUST check the structural boundaries with your tools.

@@ -1,6 +1,6 @@
 ---
 name: security-and-hardening
-description: "Hardens code against vulnerabilities. Use when handling user input, authentication, data storage, or external integrations. Use when building any feature that accepts untrusted data, manages user sessions, or interacts with third-party services. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself."
+description: "Provides the security-hardening execution contract: threat model at the trust boundary, input validation, parameterized queries, output encoding, server-side authorization, secrets handling, and the Coverage & Provability table that says which categories an agent can prove. Applies to code that handles untrusted input, authentication, sessions, data storage, or third-party integrations. Squad-internal execution contract loaded by agents via their Methodology Dependencies table. Also directly invocable: when a user asks for this on named files outside a pipeline, the Orchestrator delegates to the skill's owning persona — the agent whose Methodology Dependencies table loads it — and never applies the Worker Execution Contract itself."
 ---
 
 # Security and Hardening
@@ -157,7 +157,7 @@ The checklist below is a **condensation of the root `{PLUGIN_ROOT}/../references
 - [ ] Users can only access their own resources
 - [ ] Admin actions require admin role verification
 - [ ] Roles/tenancy resolved server-side — no client-supplied role or tenant claim is trusted
-- [ ] IDOR checks proven with two accounts in different tenants/privilege levels — a code read alone is BLOCKED, not PASS
+- [ ] IDOR checks proven with two accounts in different tenants/privilege levels — a code read alone is `NOT VERIFIED — source read only`, not PASS
 
 ### Input
 - [ ] All user input validated at the boundary

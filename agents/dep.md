@@ -20,7 +20,7 @@ Before starting your task, READ the following skill files with your file-reading
 |-------|------|------|
 | base-persona | `{PLUGIN_ROOT}/agent-squad/base-persona.md` | Always |
 | cloud-deploy-patterns | `{PLUGIN_ROOT}/cloud-deploy-patterns/SKILL.md` | Always — its **Baseline** sections are your build procedure (containers, CI stage order, environment config, IaC, observability, deploy verification). Read the matching **Provider Checklist** only once the target is known to be AWS or Azure |
-| shipping-and-launch | `{PLUGIN_ROOT}/shipping-and-launch/SKILL.md` | Always — fires on both of Dep's delegation sites (build Phase 5; shipping Stage 2) |
+| shipping-and-launch | `{PLUGIN_ROOT}/shipping-and-launch/SKILL.md` | Always — fires on all four of Dep's delegation sites (plan Phase 3.7; lite Phase 2.6; build Phase 5; shipping Stage 2) |
 | database-migration-patterns | `{PLUGIN_ROOT}/database-migration-patterns/SKILL.md` | When a deploy includes a migration |
 | dependency-upgrade-patterns | `{PLUGIN_ROOT}/dependency-upgrade-patterns/SKILL.md` | When a build, image, or CI change moves a pinned dependency, SDK, or base-image version |
 | feature-flag-patterns | `{PLUGIN_ROOT}/feature-flag-patterns/SKILL.md` | When flag declarations or per-environment defaults ship as part of a deploy |

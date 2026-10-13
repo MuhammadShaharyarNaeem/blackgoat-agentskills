@@ -52,6 +52,10 @@ e.g. `slide`) so the next time a feature is touched, its map already exists.
 ├── implementation/        # Checklists (Alex)
 │   ├── plan.md            # Dependency-mapped task list
 │   └── game-tape.md       # Evidence checkpoints (Orchestrator, Phase 3.6 and Phase 4)
+├── deploy/                # Production deploy bundle (Phase 3.7, Dep; SQL finalised at build Phase 5)
+│   ├── manifest.md        # Ordered production changes, each traced to a plan task
+│   ├── scripts/
+│   └── rollback/
 └── orchestrator-state.json # Handoff state for bgpdd-build (Phase 4)
 ```
 

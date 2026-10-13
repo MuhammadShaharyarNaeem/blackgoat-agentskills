@@ -83,6 +83,8 @@ Before marking migration work complete:
 - [ ] Rollback (forward migration or restore) rehearsed on non-prod and its measured duration recorded
 - [ ] Backfill re-run from the start on non-prod produces an unchanged result
 
+A pre-read or read-back of a migration on Dev may use `{PLUGIN_ROOT}/pipeline-tools/scripts/query_db.py`; its `--help` is the contract of record.
+
 ### Escalate When
 
 - A required change has no non-destructive expand/contract decomposition (an irreversible migration) → escalate to the Orchestrator **before** deploying, matching `shipping-and-launch`'s "no viable rollback plan" escalation.
