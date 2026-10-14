@@ -1710,6 +1710,19 @@ def transcript_handbacks(path):
             continue
         result = entry.get("toolUseResult")
         message = entry.get("message")
+        # Claude Code 2.1.295+ writes the hand-back as a `"type": "user"`
+        # entry with the same `origin` at the entry's top level and the
+        # report as `message.content`.
+        origin = entry.get("origin")
+        if (entry.get("type") == "user" and isinstance(origin, dict)
+                and origin.get("kind") == "peer"
+                and origin.get("handback") is True
+                and origin.get("senderTaskId")
+                and isinstance(message, dict)):
+            text = "\n".join(t for _k, t, _e in
+                             _content_parts(message.get("content")) if t)
+            handbacks.append((line_no, origin["senderTaskId"], text))
+            continue
         if (isinstance(result, dict) and result.get("agentId")
                 and isinstance(message, dict)):
             for kind, _text, extra in _content_parts(message.get("content")):
@@ -1735,8 +1748,12 @@ def delegation_source(messages, block, handbacks=(), launched=None,
     stamps = stamps or {}
     calls = {e["id"]: e for _l, r, k, _t, e in messages
              if r == "assistant" and k == "tool_use"}
+    # A user-role hand-back entry is judged only by the hand-back loop below,
+    # never accepted here as a human paste.
+    handback_lines = {line_no for line_no, _s, _t in handbacks}
     for line_no, role, kind, text, extra in messages:
-        if role != "user" or needle not in collapse_ws(text):
+        if (role != "user" or line_no in handback_lines
+                or needle not in collapse_ws(text)):
             continue
         if kind == "tool_result":
             call = calls.get(extra.get("tool_use_id"))
@@ -3393,6 +3410,35 @@ def run_self_test():
                 code, r = self._gate(self._transcript(*launch, queued))
                 self.assertEqual(code, 1, r)
                 self.assertEqual(self.codes(r), ["handoff_not_delegated"])
+
+        # Claude Code 2.1.295 (transcript of 2026-10-14): the hand-back is a
+        # top-level user entry, origin beside `message`, no attachment.
+        @classmethod
+        def _user_handback(cls, sender, origin):
+            prompt = cls._queued(sender, origin)["attachment"]["prompt"]
+            return {"type": "user", "isMeta": True, "isSidechain": False,
+                    "message": {"role": "user", "content": prompt},
+                    "origin": origin, "promptSource": "system",
+                    "turnOrigin": "peer"}
+
+        def test_transcript_user_entry_handback_passes(self):
+            code, r = self._gate(self._transcript(
+                self._call("t7", "Agent", subagent_type="x:mason"),
+                self._launch("t7", "a1b2"),
+                self._user_handback("a1b2", self._peer("a1b2"))))
+            self.assertEqual(code, 0, r)
+            self.assertEqual(r["delegation_source"]["via"],
+                             "delegation_handback")
+            self.assertEqual(r["delegation_source"]["subagent_type"], "x:mason")
+
+        def test_transcript_user_entry_handback_unlaunched_is_not_delegated(self):
+            # a peer hand-back is never accepted as a human paste
+            code, r = self._gate(self._transcript(
+                self._call("t8", "Agent", subagent_type="x:mason"),
+                self._launch("t8", "a1b2"),
+                self._user_handback("zz99", self._peer("zz99"))))
+            self.assertEqual(code, 1, r)
+            self.assertEqual(self.codes(r), ["handoff_not_delegated"])
 
         # --- <changed_files> deleted: <path> -----------------------------
         @staticmethod
