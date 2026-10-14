@@ -5,6 +5,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.11.0] — 2026-10-14
+
+The deployment manifest: every planned epic carries an ordered, rollback-backed list of its production changes, gated at plan and build and executed by shipping; plus `query_db.py` and `check_handoff` hand-back fixes.
+
 ### Breaking / behaviour changes
 - **Every planned epic carries a deployment manifest.** Dep writes `.docs/{project-name}/deploy/manifest.md` (plus `scripts/` and `rollback/`) at `/bgpdd-plan` Phase 3.7 and `/bgpdd-lite` Phase 2.6, one ordered row per production change traced to its plan task; `sql` rows stay `pending-build` until build Phase 5 step 4b fills them from the reviewed migration diff, and step 5c gates the result. Shipping's staged rollout and rollback rehearsal execute the manifest's rows in order. Rules: `shipping-and-launch` § Deployment Manifest.
 - **Shipping's exit ticket requires the manifest gate**: every `check_ship_decision.py --require-ledger-gates` form now ends in `check_deploy_manifest.py`.
@@ -19,6 +23,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - Deploy-manifest audit: Plan Phase 4 and lite Phase 3 record `artifacts.deploy_manifest`; build 5c passes `--state`; a `sql` row's rollback is the forward-fix or restore of `database-migration-patterns` § Rollback, never the down-migration; `backfill`/`other` rows may be `drafted` or `pending-build` at plan time; plan 3.7 and build 4b defer to the skill instead of restating it.
 - Dep's persona covers plan-time manifest authoring (phase, `depends-on`, a `§ Deployment Manifest only` load at plan/lite). Mason, Max, Nova, Quinn and Dep cite the `deleted: <path>` clause; `base-persona.md` says to close `</handoff>` before any narrative.
 - `bgpdd-lite` and `shipping-and-launch` descriptions name the deployment manifest.
+- `check_handoff.py --transcript` recognises the Claude Code 2.1.295 hand-back (a `type:"user"` entry with the peer `origin` at top level) as `delegation_handback` with its launch instant, instead of a `user_message` with none — which had made mixed git/non-git `--repo` handoffs exit 2.
 
 ## [2.10.0] — 2026-10-02
 
