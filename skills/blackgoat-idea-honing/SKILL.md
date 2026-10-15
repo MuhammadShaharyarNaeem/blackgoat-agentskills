@@ -46,6 +46,7 @@ Iteratively refine the initial concept into a detailed specification.
 - [ ] **Check-then-act gates on counted or summed state**: for every rule of the form "at most N", "only if the total is under X", or "only while capacity remains" — quota, balance, rate, seat, credit — ask explicitly what happens when two requests arrive at once. Ask it for **every** such gate in the domain, not just the first one you find.
 - [ ] **Externally-supplied amounts that move money**: for every number arriving from outside the trust boundary — webhook payload, callback, redirect parameter, client-submitted total — that moves money or changes a balance, ask what it is validated against internally. "The provider signs it" answers authenticity, not correctness.
 - [ ] **MoSCoW tiers must discriminate**: ask the cut question on every Must candidate — *"if this one thing were missing, would you still ship?"* — and record the answer; a requirement the user would ship without is not a Must. Nearly everything landing in Must-Have means the tiering has failed, not that the list is critical.
+- [ ] **Complexity budget**: once the Must-Haves are settled, ask — one question at a time — for the simple version first (the smallest design that meets the Must-Haves, in the user's words), then the cap on new tables, then the named mechanisms (outbox, retry queue, sweeper, cache, …) the user accepts. Record each answer verbatim; Rex turns them into the `## Complexity Budget` block. Never fill a cap or a mechanism in for the user.
 
 ### Step 3: Iteration & Completion Checkpoint
 

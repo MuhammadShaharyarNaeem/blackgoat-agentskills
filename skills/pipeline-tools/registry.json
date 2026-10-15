@@ -315,6 +315,13 @@
       "lanes": [
         {
           "lane": "bgpdd-lite",
+          "phase": "1",
+          "step": "3b",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --budget --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = `budget-missing` / `budget-malformed` in `lint_failures`: fix the `## Complexity Budget` block with the user and re-run; exit 2 = fix the invocation or the file."
+        },
+        {
+          "lane": "bgpdd-lite",
           "phase": "2.5",
           "step": "1",
           "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --plan .docs/{project-name}/implementation/plan.md --ledger .docs/{project-name}/implementation/gates.jsonl",
@@ -322,10 +329,24 @@
         },
         {
           "lane": "bgpdd-plan",
+          "phase": "1",
+          "step": "7b",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --budget --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = `budget-missing` / `budget-malformed` in `lint_failures`: back to Rex quoting the entries, a round of step 7's 2-round loop; exit 2 = fix the invocation or the file."
+        },
+        {
+          "lane": "bgpdd-plan",
           "phase": "2.5",
           "step": "1",
           "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --design .docs/{project-name}/design/detailed-design.md --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "This is the supersession-annotation lint, not full FR-to-design coverage: fix every reported `lint_failures` entry before the adversarial pass."
+        },
+        {
+          "lane": "bgpdd-plan",
+          "phase": "2.6",
+          "step": "1",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --design .docs/{project-name}/design/detailed-design.md --require-budget --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 0 = proceed to Phase 3; exit 1 = show the user the design-vs-budget table from `budget` and `lint_failures`, then waiver (user's word only) or ONE send-back to Aria; exit 2 = fix the invocation or the artifact. Alex never starts on a failing gate."
         },
         {
           "lane": "bgpdd-plan",

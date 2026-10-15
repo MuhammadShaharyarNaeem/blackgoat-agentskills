@@ -105,11 +105,19 @@ One-paragraph summary of what this project does and why.
 - EC-1 (FR-3): {edge case}
 - EC-2 (FR-1): {edge case}
 
+## Complexity Budget
+- **Simple version:** {one paragraph: the smallest design meeting the Must-Haves}
+- **Max tables:** {non-negative integer}
+- **Mechanisms:** {comma-separated kebab-case names, or none}
+- **Waivers:** none
+
 ## Open Questions
 - {Any unresolved questions from the honing session}
 ```
 
 **ID rules.** FRs are numbered `FR-1`, `FR-2`, `FR-3`, … in one continuous sequence across Must/Should/Could — NEVER restart numbering per section. NFRs are numbered `NFR-1`, `NFR-2`, … . Mark each NFR with its MoSCoW tier (Must/Should/Could) the same way as FRs, so downstream coverage gates can filter Must-Have NFRs. Once assigned, an ID NEVER changes — Aria's `detailed-design.md` references these `FR` IDs to show which requirements a design covers, and Alex's `plan.md` tasks cite the `FR` IDs each task satisfies.
+
+**Complexity Budget.** Exactly this heading, these four bold labels, this order — `check_coverage.py --budget` parses it. Fill it only from the transcript's budget answers; a cap or mechanism the user never stated is an open question, not a value. Rex always writes `Waivers: none` — only the Orchestrator writes a waiver, after the user approves it at plan Phase 2.6.
 
 **FR granularity — one scenario, one FR.** An `FR` is one independently valuable behavioral outcome, expressed as a single Given/When/Then scenario — not one step of that scenario. NEVER atomize the sequential steps of a single user flow (log in → fill form → submit → see result) into separate FRs; that is ONE FR whose acceptance criterion carries multiple Given/When/Then clauses — per-step IDs inflate the requirement count and cascade into inflated task and milestone counts downstream. Split into multiple FRs only when the steps are independently valuable, independently testable, and could ship or fail separately.
 

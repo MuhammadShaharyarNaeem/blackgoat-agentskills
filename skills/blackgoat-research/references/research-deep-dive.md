@@ -51,3 +51,11 @@ Also observed on the Travel-Goat v8 run, and self-flagged in that run's own bloc
 The ledger's own conclusion was that the assertion set "has never been walked against itself as a whole." That is the gap the rule closes. Checking each assertion against the design is pairwise review; checking the assertion set against itself is set review, and only the latter catches mutual unsatisfiability or a member that references nothing.
 
 `bgpdd-plan` Phase 2.5's attack item 5 now carries the set-walk explicitly, so the same check exists at gate time as well as here. The division of labour is deliberate: the gate is the backstop, this rule is the obligation, and satisfying it at authoring time is far cheaper than discovering the contradiction in a review round that is bounded to one revision pass.
+
+## The budget is a constraint
+
+A design answers requirements, and each answer tends to be a mechanism: a queue for the slow call, an outbox for the publish, a sweeper for the crash window, a cache for the hot read. Each one is locally justified, so a design reviewed only for gaps grows monotonically — an observed run reached 17 tables and 71 tasks for a feature of about five steps. The `## Complexity Budget` in `requirements.md` is the user's cap, set at honing before any design existed; reading it first (step 1) is what makes it shape the design rather than audit it afterwards.
+
+The Mechanism Register makes the design's size countable. Each row carries a cost and the requirement or measured risk that would fail without it, so the Phase 2.5 removal pass can ask of every row whether anything breaks if it goes. A row whose trace is "it seemed safer" is the row that pass deletes; `risk:` traces must name a measured risk for the same reason.
+
+Over budget has exactly three exits, and none of them is editing the budget: Defer the mechanism (it stays visible in the register and counts against nothing), remove it, or keep it traced and ask for a waiver in `## Risks & Open Questions`. The waiver is the user's decision at Phase 2.6, written by the Orchestrator — an architect who can raise her own cap has no cap.

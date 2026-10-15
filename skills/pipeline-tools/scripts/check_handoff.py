@@ -277,12 +277,14 @@ CONSUMERS_LINE_RE = re.compile(r"^(?P<path>\S.*?)::(?P<symbol>[^\s:/\\]+)$")
 # for CHANGED_FILES_NONE_PERSONAS: `none: <reason>`.
 NONE_FORM_RE = re.compile(r"(?i)^none:(?P<reason>.*)$")
 # Personas whose `<changed_files>` may be `none: <reason>` -- a run that
-# changed no repo file and whose output is its <artifact> (Quinn's
-# capture-only RED/GREEN under the gitignored .docs/ tree). Deliberately
+# changed no repo file and whose output is its <artifact>: the hybrid
+# write boundaries whose run can legitimately be docs-only (Quinn's
+# capture-only RED/GREEN under the gitignored .docs/ tree; Dep's .docs/-only
+# deployment manifest, rollback plan or shipping decision). Deliberately
 # tighter than `<changed_symbols>`' none:, which any persona may use
-# (convention #8): every other persona's run exists to change files, so an
-# empty claim there is a finding, changed_files_grammar.
-CHANGED_FILES_NONE_PERSONAS = ("quinn",)
+# (convention #8): a builder's (mason/max/nova) run exists to change files,
+# so an empty claim there is a finding, changed_files_grammar.
+CHANGED_FILES_NONE_PERSONAS = ("dep", "quinn")
 # Extension -> diff driver, for the `<changed_symbols>` diff's temporary
 # core.attributesFile. Every driver named here is one git ships built in
 # (gitattributes(5), "Defining a custom hunk-header"); git has no JavaScript
@@ -1844,8 +1846,9 @@ Reads:
                   <category>: environment, credentials, dependency, spec,
                   defect. Absent is element_missing only.
       <consumers> lines in path::symbol grammar.
-      <changed_files>  paths, or (quinn only, capture-only; convention #8)
-                  one line none: <non-empty reason> = the empty set.
+      <changed_files>  paths, or (dep/quinn only, docs-only run;
+                  convention #8) one line none: <non-empty reason> = the
+                  empty set.
                   deleted: <path> = removed: absent, in HEAD.
       <changed_symbols>  one path::Name per line, or one line none:
                   <non-empty reason>. path: one file, read literally, never
@@ -1879,7 +1882,7 @@ Problem codes:
   path_missing               cited path absent or outside every root
   deletion_unverified        deleted: path exists, untracked, non-git
   changed_files_not_in_diff  --since: a file the diff lacks
-  changed_files_grammar      none: outside quinn, empty or mixed
+  changed_files_grammar      none: outside dep/quinn, empty or mixed
   status_invalid             <status> outside the enum
   consumers_grammar          <consumers> line not path::symbol
   changed_symbols_grammar    bad path::Name, empty or mixed none:
@@ -1912,7 +1915,7 @@ Exit codes:
      unreadable --transcript
 
 Self-test:
-  python check_handoff.py --self-test   (121 cases)
+  python check_handoff.py --self-test   (127 cases)
 """
 
 
@@ -3298,8 +3301,30 @@ def run_self_test():
             self.assertEqual(r["changed_files"], [])
             self.assertEqual(r["changed_files_none_reason"], "capture-only RED")
 
+        def test_dep_docs_only_none_passes(self):
+            r = build_report(self._files_none("none: manifest draft only"),
+                             "dep", self.dir)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertEqual(r["changed_files"], [])
+            self.assertEqual(r["changed_files_none_reason"],
+                             "manifest draft only")
+
+        def test_dep_none_with_a_blank_reason_fails(self):
+            r = build_report(self._files_none("none:   "), "dep", self.dir)
+            self.assertEqual(self.codes(r), ["changed_files_grammar"])
+            self.assertIsNone(r["changed_files_none_reason"])
+
+        def test_none_personas_are_exactly_the_hybrids_minus_builders(self):
+            """Every persona carrying <changed_files> but no
+            <changed_symbols> (a non-builder) may claim none:."""
+            hybrids = {p for p, els in PERSONA_ELEMENTS.items()
+                       if "changed_files" in els
+                       and "changed_symbols" not in els}
+            self.assertEqual(set(CHANGED_FILES_NONE_PERSONAS), hybrids)
+
         def test_changed_files_none_is_refused_for_every_other_persona(self):
-            for persona in sorted(set(PERSONA_ELEMENTS) - {"quinn"}):
+            for persona in sorted(set(PERSONA_ELEMENTS)
+                                  - set(CHANGED_FILES_NONE_PERSONAS)):
                 r = build_report(self._files_none("none: nothing changed"),
                                  persona, self.dir)
                 self.assertIn("changed_files_grammar", self.codes(r), persona)
@@ -3307,7 +3332,8 @@ def run_self_test():
             r = build_report(self._files_none("none: nothing changed"),
                              "mason", self.dir)
             self.assertEqual(self.codes(r), ["changed_files_grammar"])
-            self.assertIn("sanctioned only for quinn", r["findings"][0]["detail"])
+            self.assertIn("sanctioned only for dep/quinn",
+                          r["findings"][0]["detail"])
 
         def test_changed_files_none_with_a_blank_reason_fails(self):
             r = build_report(self._files_none("none:   "), "quinn", self.dir)

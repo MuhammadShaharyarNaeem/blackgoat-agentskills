@@ -119,3 +119,11 @@ Without `overview.md`, `code-workflow.md` and `manual-testing.md`, Alex plans fr
 ## § Plan versus matrix — two artifacts, two scopes
 
 Milestone evidence proves each brick; only the feature-scoped matrix proves the wall stands. That is why the matrix is derived from `requirements.md` and never from the task list Alex just wrote — a matrix derived from the plan can only confirm the plan, not the feature.
+
+## § Why a simplicity gate
+
+An observed run turned a roughly five-step feature into 17 tables and 71 tasks. Nothing went wrong in any single step: Aria's design answers each requirement with a mechanism, and the Phase 2.5 attack list answers each attack with another (a sweeper for the crash window, a lock for the race, a reconciliation for the amount). Every step adds; before this gate, no step in the pipeline subtracted, and nothing bounded the total.
+
+The fix has three parts, each placed where its input first exists. The budget is set with the user at honing, before any design exists, so it is fitted to the problem rather than to the design. The Phase 2.5 removal pass (attack item 7) is the one review question that can delete — it asks what fails without each mechanism. Phase 2.6 is the mechanical comparison: the Mechanism Register against the budget, by `check_coverage.py`, not by eye (convention #9). It sits after the review, not inside it, because the review legitimately adds mechanisms and the count only means something once the design has stopped moving.
+
+The way through an over-budget design is the user's explicit waiver or a send-back to Aria — never the Orchestrator deciding the extra mechanism is obviously needed. A waiver is written verbatim with its date so the decision stays auditable in `requirements.md`. The send-back is one round, matching Phase 2.5's bound, because a design that fails the budget twice is a scope conversation with the user, not a drafting problem.
