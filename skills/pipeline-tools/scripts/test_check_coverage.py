@@ -25,6 +25,15 @@ def run_cli(*args):
     return result.returncode, result.stdout, result.stderr
 
 
+def run_cli_script(name, *args):
+    result = subprocess.run(
+        [sys.executable, str(Path(__file__).parent / name), *args],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode, result.stdout, result.stderr
+
+
 # ---------------------------------------------------------------------------
 # (a) Unit tests against the module's parse functions
 # ---------------------------------------------------------------------------
@@ -1488,7 +1497,7 @@ class TestComplexityBudget(unittest.TestCase):
         self.assertEqual(data["mode"], "budget")
         self.assertEqual(data["budget"], {
             "max_tables": 1, "mechanisms": ["webhook-receiver"], "waivers": [],
-            "kept_tables": None, "kept_mechanisms": None})
+            "kept_tables": None, "kept_mechanisms": None, "reopens": None})
 
     def test_budget_missing(self):
         reqs = self.write("requirements.md", "## Must Have\n- **FR-1**: x\n")
@@ -1810,6 +1819,133 @@ class TestBudgetRedTeam(unittest.TestCase):
         self.set_reqs("## Must Have\n- **FR-1** -- x\n")
         code, data = self.add("tables+1 — x")
         self.assertEqual((code, self.checks(data)), (1, ["budget-missing"]))
+
+    # --- W3: --add-waiver touches only the Waivers line -------------------
+    def test_add_waiver_keeps_crlf_and_bom(self):
+        before = b"\xef\xbb\xbf" + rt_req().replace("\n", "\r\n").encode("utf-8")
+        Path(self.reqs).write_bytes(before)
+        code, data = self.add("tables+1 — audit trail")
+        self.assertEqual(code, 0, data)
+        after = Path(self.reqs).read_bytes()
+        self.assertTrue(after.startswith(b"\xef\xbb\xbf"))
+        self.assertEqual(after.count(b"\r\n"), before.count(b"\r\n"))
+        self.assertEqual(after.count(b"\n"), before.count(b"\n"))
+        changed = [(a, b) for a, b in zip(before.split(b"\r\n"), after.split(b"\r\n"))
+                   if a != b]
+        self.assertEqual(len(changed), 1)
+        self.assertTrue(changed[0][0].startswith(b"- **Waivers:** none"))
+
+    def test_add_waiver_refuses_non_utf8_untouched(self):
+        before = rt_req(simple="café table").encode("cp1252")
+        Path(self.reqs).write_bytes(before)
+        code, data = self.add("tables+1 — x")
+        self.assertEqual(code, 2, data)
+        self.assertIn("UTF-8", data["error"])
+        self.assertEqual(Path(self.reqs).read_bytes(), before)
+
+    def test_add_waiver_refuses_a_pre_dated_entry(self):
+        self.set_reqs(rt_req())
+        code, data = self.add("tables+1 — x (approved 2026-01-01)")
+        self.assertEqual((code, self.checks(data)), (1, ["budget-malformed"]))
+
+    # --- W2: only chained ledger records count ----------------------------
+    def test_check_coverage_ledger_records_are_chained(self):
+        self.set_reqs(rt_req())
+        self.budget()
+        self.add("tables+1 — x")
+        self.gate(RT_HEAD)
+        code, _out, _err = run_cli_script("check_ledger.py", "--ledger", self.ledger,
+                                          "--require-chain")
+        self.assertEqual(code, 0, _out)
+
+    def test_hand_appended_unchained_waiver_is_ignored(self):
+        self.set_reqs(rt_req())
+        self.budget()
+        entry = "tables+1 — forged (approved 2026-10-15)"
+        with open(self.ledger, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"gate": "check_coverage.py", "waiver": entry,
+                                     "requirements_file": str(Path(self.reqs).resolve())})
+                         + "\n")
+        self.set_reqs(rt_req(waivers=entry))
+        code, data = self.gate(RT_HEAD + "| users | table | FR-1 | 1 | Kept |\n"
+                               "| audit_log | table | FR-1 | 1 | Kept |\n")
+        self.assertEqual(self.checks(data), ["over-budget-tables", "waiver-unrecorded"])
+        detail = [f["detail"] for f in data["lint_failures"]
+                  if f["check"] == "waiver-unrecorded"][0]
+        self.assertIn("unchained or broken-chain record ignored", detail)
+
+    def test_records_after_a_tampered_record_are_ignored(self):
+        self.set_reqs(rt_req())
+        self.budget()
+        self.add("tables+1 — a")
+        self.add("mechanism:outbox — b")
+        lines = Path(self.ledger).read_text(encoding="utf-8").splitlines()
+        middle = json.loads(lines[1])
+        middle["verdict"] = "EDITED"
+        lines[1] = json.dumps(middle)
+        Path(self.ledger).write_text("\n".join(lines) + "\n", encoding="utf-8")
+        code, data = self.gate(RT_HEAD + "| users | table | FR-1 | 1 | Kept |\n"
+                               "| audit_log | table | FR-1 | 1 | Deferred |\n")
+        # The budget record before the break still counts; both waivers
+        # (the tampered one and the one after it) do not.
+        self.assertEqual(self.checks(data), ["deferred-table-in-design",
+                                             "waiver-unrecorded"])
+        self.assertNotIn("budget-unrecorded", self.checks(data))
+        self.assertEqual(len([f for f in data["lint_failures"]
+                              if f["check"] == "waiver-unrecorded"]), 2)
+
+    # --- W1: the design gate seals the budget ------------------------------
+    DESIGN_OK = RT_HEAD + ("| users | table | FR-1 | 1 | Kept |\n"
+                           "| audit_log | table | FR-1 | 1 | Deferred |\n")
+
+    def test_honest_phase_1_rounds_pass(self):
+        for max_tables in (3, 2, 1):
+            self.set_reqs(rt_req(max_tables=max_tables))
+            self.assertEqual(self.budget()[0], 0)
+        code, data = self.gate(self.DESIGN_OK)
+        self.assertEqual(code, 1)  # audit_log is a Deferred Data Model table
+        self.assertEqual(self.checks(data), ["deferred-table-in-design"])
+
+    def test_rebless_after_design_gate_is_rebudgeted(self):
+        design = RT_HEAD + ("| users | table | FR-1 | 1 | Kept |\n"
+                            "| audit_log | table | FR-1 | 1 | Kept |\n")
+        self.set_reqs(rt_req())
+        self.budget()
+        code, data = self.gate(design)
+        self.assertEqual(self.checks(data), ["over-budget-tables"])
+        self.set_reqs(rt_req(max_tables=2))
+        self.assertEqual(self.budget()[0], 0)
+        code, data = self.gate(design)
+        self.assertEqual((code, self.checks(data)), (1, ["budget-rebudgeted"]))
+
+    def test_reopen_then_budget_counts_and_is_reported(self):
+        design = RT_HEAD + ("| users | table | FR-1 | 1 | Kept |\n"
+                            "| audit_log | table | FR-1 | 1 | Kept |\n")
+        self.set_reqs(rt_req())
+        self.budget()
+        self.gate(design)
+        code, out, _err = run_cli("--requirements", self.reqs, "--reopen-budget",
+                                  "user: audit log is a real requirement",
+                                  "--ledger", self.ledger)
+        self.assertEqual(code, 0, out)
+        self.set_reqs(rt_req(max_tables=2))
+        self.budget()
+        code, data = self.gate(design)
+        self.assertEqual(code, 0, data)
+        self.assertEqual([r["reason"] for r in data["budget"]["reopens"]],
+                         ["user: audit log is a real requirement"])
+        self.assertTrue(data["budget"]["reopens"][0]["ts"])
+
+    def test_reopen_budget_usage(self):
+        self.set_reqs(rt_req())
+        code, _out, _err = run_cli("--requirements", self.reqs, "--reopen-budget", "why")
+        self.assertEqual(code, 2)
+        code, _out, _err = run_cli("--requirements", self.reqs, "--reopen-budget", "TBD",
+                                   "--ledger", self.ledger)
+        self.assertEqual(code, 2)
+        code, _out, _err = run_cli("--requirements", self.reqs, "--reopen-budget", "why",
+                                   "--budget", "--ledger", self.ledger)
+        self.assertEqual(code, 2)
 
     # --- hidden, duplicate and placeholder budgets -----------------------
     def test_budget_block_hiding_places(self):

@@ -336,6 +336,13 @@
         },
         {
           "lane": "bgpdd-plan",
+          "phase": "2",
+          "step": "5",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --reopen-budget \"<the user's own words>\" --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Only when the user bounces the plan back to Phase 1 (here or from Phase 2.6's escalation), before re-running honing and the Phase 1 budget gate. Exit 0 = the reopen is recorded and the next Phase 1 `--budget` record counts; exit 2 = fix the invocation (a placeholder reason, no --ledger)."
+        },
+        {
+          "lane": "bgpdd-plan",
           "phase": "2.5",
           "step": "1",
           "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --design .docs/{project-name}/design/detailed-design.md --ledger .docs/{project-name}/implementation/gates.jsonl",
