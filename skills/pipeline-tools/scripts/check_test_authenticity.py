@@ -28,7 +28,8 @@ each a tier of the same evasion (`../references/check_test_authenticity.md`):
 
   * `test_no_production_import` -- the file touches NEITHER production code
     (an import that resolves under a src root) NOR a running surface (a
-    `page.goto`, an HTTP request, a `WebApplicationFactory`). Whatever it
+    `page.goto`, an HTTP request, a `WebApplicationFactory`, a database
+    client fed a production script: `sqlcmd -i <prod .sql>`). Whatever it
     proves, it does not prove anything about the product. Doing EITHER passes
     this check: a pure unit test imports, an end-to-end spec navigates.
   * `test_inline_reimplementation` -- the file defines a function/class/arrow
@@ -1167,6 +1168,66 @@ def touches_running_surface(masked, literals):
     return False, None
 
 
+# A shell/PowerShell runner that feeds a script file to a database client.
+DB_CLIENT_RE = re.compile(r"\b(?:sqlcmd|Invoke-Sqlcmd|psql|mysql|sqlite3)\b",
+                          re.I)
+DB_INPUT_RE = re.compile(
+    # case-sensitive: sqlcmd's `-I` (quoted identifiers) is not `-i`
+    r"""(?:(?:^|\s)(?:-i|-f|--file|(?i:-InputFile))(?:\s+|=)|<\s*)"""
+    r"""(?:"([^"\n]+)"|'([^'\n]+)'|([^\s;|&<>'"]+))""", re.M)
+SH_ASSIGN_RE = re.compile(
+    r"""(?:^|[;\s])\$?([A-Za-z_]\w*)\s*=\s*"""
+    r"""(?:"([^"\n]*)"|'([^'\n]*)'|([^\s;'"]*))""", re.M)
+SH_VAR_RE = re.compile(r"\$\{?([A-Za-z_]\w*)\}?")
+
+
+def _resolve_db_input(raw, test_file, repo):
+    """The existing file inside `repo` that `raw` names, or None."""
+    m = re.match(r"^/([A-Za-z])/(.*)$", raw)  # MSYS /c/... on Windows
+    candidates = [Path(raw)]
+    if m and os.name == "nt":
+        candidates.append(Path("{0}:/{1}".format(m.group(1), m.group(2))))
+    if not Path(raw).is_absolute():
+        candidates += [repo / raw, Path(test_file).parent / raw]
+    for p in candidates:
+        if p.is_file() and _is_under(p, repo):
+            return p.resolve()
+    return None
+
+
+def db_runner_inputs(text, test_file, repo, test_globs):
+    """([production rel paths], [test rel paths]) a database client is fed.
+
+    `sqlcmd -i "$ADD"` executes the production artifact itself against a
+    running database -- a real surface, invisible to import resolution.
+    Shell variables are expanded from the file's own simple assignments; a
+    path that does not resolve to an existing file in the repo counts for
+    nothing, so a client call alone never makes a test authentic.
+    """
+    live = "\n".join(line for line in text.splitlines()
+                     if not line.lstrip().startswith("#"))
+    if not DB_CLIENT_RE.search(live):
+        return [], []
+    env = {}
+    for m in SH_ASSIGN_RE.finditer(live):
+        env[m.group(1)] = next(g for g in m.groups()[1:] if g is not None)
+    prod, tests = [], []
+    for m in DB_INPUT_RE.finditer(live):
+        raw = next(g for g in m.groups() if g)
+        for _ in range(5):
+            expanded = SH_VAR_RE.sub(
+                lambda v: env.get(v.group(1), v.group(0)), raw)
+            if expanded == raw:
+                break
+            raw = expanded
+        p = _resolve_db_input(raw, test_file, Path(repo))
+        if p is None:
+            continue
+        rel = rel_posix(p, repo)
+        (tests if is_test_path(rel, test_globs) else prod).append(rel)
+    return prod, tests
+
+
 def import_literal_offsets(text):
     """Quote offsets of every `import`/`require`/`from` specifier literal.
 
@@ -1269,15 +1330,17 @@ def judge_file(test_file, repo, src_roots, src_index, test_globs, ns_roots,
     prod_imports = production_imports(path, text, literals, language, repo,
                                       src_roots, ns_roots, project_stems)
     runs, run_offset = touches_running_surface(masked, literals)
+    db_prod, _db_tests = db_runner_inputs(text, path, repo, test_globs)
 
     # --- 1. test_no_production_import --------------------------------------
-    if not prod_imports and not runs:
+    if not prod_imports and not runs and not db_prod:
         entry = TEST_ENTRY_RE.search(text)
         add("test_no_production_import",
             entry.start() if entry else 0,
-            "no import resolves to a file under {0}, and the file never "
+            "no import resolves to a file under {0}, the file never "
             "navigates to a running application (no page.goto / "
-            "browser_navigate / HTTP client). Whatever this asserts, it is "
+            "browser_navigate / HTTP client), and it feeds no production "
+            "script to a database client. Whatever this asserts, it is "
             "not the product.".format(
                 " / ".join(rel_posix(r, repo) for r in src_roots) or "a src root"))
 
@@ -1370,9 +1433,25 @@ def build_report(repo, files, src_roots=None, test_globs=None, waivers=None):
         waiver_map[key(rel_posix(Path(repo_path) / wf if not Path(wf).is_absolute()
                                  else wf, repo_path))] = reason
 
-    src_index = build_src_index(roots, globs, repo_path)
+    # The definition index only serves test files in an indexed language;
+    # walking a large backend for a .sh/.sql change set is pure cost.
+    src_index = (build_src_index(roots, globs, repo_path)
+                 if any(Path(f).suffix.lower() in CODE_SUFFIXES for f in files)
+                 else {})
     ns_roots = namespace_roots(roots)
     project_stems = csproj_stems(repo_path)
+
+    # A changed test file a changed runner feeds to a database client, next
+    # to a production script, is exercised against the product's own schema.
+    db_executed = set()
+    for raw in files:
+        p = Path(raw) if Path(raw).is_absolute() else repo_path / raw
+        if p.is_file() and is_test_path(rel_posix(p, repo_path), globs):
+            prod, tests = db_runner_inputs(
+                p.read_text(encoding=READ_ENCODING, errors="replace"),
+                p, repo_path, globs)
+            if prod:
+                db_executed.update(key(t) for t in tests)
 
     judged, ignored, warnings = [], [], []
     seen = set()
@@ -1392,6 +1471,9 @@ def build_report(repo, files, src_roots=None, test_globs=None, waivers=None):
             continue
         problems = judge_file(p, repo_path, roots, src_index, globs, ns_roots,
                               project_stems)
+        if key(rel) in db_executed:
+            problems = [pr for pr in problems
+                        if pr["code"] != "test_no_production_import"]
         waived_by = waiver_map.get(key(rel))
         if problems:
             verdict = "ALLOWED" if waived_by else "FAIL"
@@ -1756,6 +1838,49 @@ def run_self_test():
         def test_a_spec_that_only_navigates_passes(self):
             self.write("tests/e2e.spec.ts", REAL_E2E_SPEC)
             self.assertEqual(self.codes("tests/e2e.spec.ts"), [])
+
+        # -- a runner feeding a production script to a database client -----
+        # Shape from a real migration QA runner (2026-10-15): variables,
+        # and the client named in a helper, not on the `-i` line.
+        DB_RUNNER = (
+            '#!/usr/bin/env bash\n'
+            'ROOT="{root}"\n'
+            'T="$ROOT/tests/m1"\n'
+            'ADD="$ROOT/db/AddColumns.sql"\n'
+            'step() {{ shift; sqlcmd -S "$SRV" "$@"; }}\n'
+            'step add 0 -- -d $DB -b -I -i "$ADD"\n'
+            'step assert 0 -- -d $DB -b -I -i "$T/02-assert.sql"\n')
+
+        def _db_fixture(self, runner):
+            self.write("db/AddColumns.sql", "ALTER TABLE t ADD c int;")
+            self.write("tests/m1/02-assert.sql", "IF COL_LENGTH('t','c') IS NULL THROW 50000, 'x', 1;")
+            self.write("tests/m1/run.sh",
+                       runner.format(root=self.repo.as_posix()))
+
+        def test_a_db_runner_of_a_production_script_passes_with_its_asserts(self):
+            self._db_fixture(self.DB_RUNNER)
+            rep = self.report("tests/m1/run.sh", "tests/m1/02-assert.sql",
+                              "db/AddColumns.sql")
+            self.assertEqual(rep["result"], "PASS", rep)
+
+        def test_a_db_runner_of_only_test_scripts_still_fails(self):
+            self._db_fixture(self.DB_RUNNER.replace('"$ADD"', '"$T/02-assert.sql"'))
+            rep = self.report("tests/m1/run.sh", "tests/m1/02-assert.sql")
+            self.assertEqual(self.codes_for(rep, "tests/m1/run.sh"),
+                             ["test_no_production_import"])
+            self.assertEqual(self.codes_for(rep, "tests/m1/02-assert.sql"),
+                             ["test_no_production_import"])
+
+        def test_an_assert_file_without_its_runner_still_fails(self):
+            self._db_fixture(self.DB_RUNNER)
+            self.assertEqual(self.codes("tests/m1/02-assert.sql"),
+                             ["test_no_production_import"])
+
+        def test_a_commented_out_db_call_does_not_count(self):
+            self._db_fixture(self.DB_RUNNER.replace(
+                'step add 0', '# step add 0'))
+            self.assertEqual(self.codes("tests/m1/run.sh"),
+                             ["test_no_production_import"])
 
         def test_an_e2e_spec_with_page_driving_helpers_passes(self):
             """The regression that made the driver-token rule load-bearing."""

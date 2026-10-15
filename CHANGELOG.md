@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.11.1] — 2026-10-15
+
+### Fixed
+- **`check_test_authenticity.py` recognises database runners.** A shell/PowerShell runner that feeds a production script to `sqlcmd`/`Invoke-Sqlcmd`/`psql`/`mysql`/`sqlite3` (`-i`/`-f`/`--file`/`-InputFile`/`<`, shell variables expanded) now touches production, and an assert/fixture `.sql` that runner feeds passes `test_no_production_import` when the runner is in the same changed set. A client call with no resolvable production file, or an assert file graded without its runner, still fires. Authentic SQL migration tests had failed `test_no_production_import` across the board.
+- `check_test_authenticity.py` skips the source-definition index when no changed file is in an indexed language: a `.sh`/`.sql` change set with `--src-roots` on a large backend went from over 100 s to seconds.
+
 ## [2.11.0] — 2026-10-14
 
 The deployment manifest: every planned epic carries an ordered, rollback-backed list of its production changes, gated at plan and build and executed by shipping; plus `query_db.py` and `check_handoff` hand-back fixes.
