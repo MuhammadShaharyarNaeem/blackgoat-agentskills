@@ -60,7 +60,7 @@ Redaction rule: personal data in a dead-lettered payload follows `{PLUGIN_ROOT}/
 
 A handler that changes state **and** publishes an event must not do both against two systems in one step. Either the write commits and the publish is lost, or the publish escapes and the write rolls back; no ordering of the two calls removes the window.
 
-Prefer a design with no publish-alongside-a-write — publish after commit where a lost event is tolerable, or let the consumer read the table — over introducing an outbox; an outbox is a mechanism and needs a traced `## Mechanism Register` row (`blackgoat-research` step 5).
+Prefer a design with no publish-alongside-a-write over introducing an outbox: where a lost event is tolerable, publish after commit or let the consumer read the table — the outbox rule below does not apply there (deliberate, convention #8). Otherwise the outbox rule holds, and an outbox is a mechanism that needs a traced `## Mechanism Register` row (`blackgoat-research` step 5).
 
 Write the event to an **outbox table in the same transaction as the state change**, and let a separate relay publish it and mark it sent. The relay is at-least-once by construction, which is why consumers must be idempotent — the two rules are one design. The outbox table is a schema change: plan it under `{PLUGIN_ROOT}/database-migration-patterns/SKILL.md`.
 

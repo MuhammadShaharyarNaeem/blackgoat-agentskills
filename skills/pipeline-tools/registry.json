@@ -346,7 +346,14 @@
           "phase": "2.6",
           "step": "1",
           "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --design .docs/{project-name}/design/detailed-design.md --require-budget --ledger .docs/{project-name}/implementation/gates.jsonl",
-          "gate": "Exit 0 = proceed to Phase 3; exit 1 = show the user the design-vs-budget table from `budget` and `lint_failures`, then waiver (user's word only) or ONE send-back to Aria; exit 2 = fix the invocation or the artifact. Alex never starts on a failing gate."
+          "gate": "Exit 0 = Iteration Checkpoint (Phase 2 step 5), then Phase 3; exit 1 = show the user the design-vs-budget table from `budget` and `lint_failures`, then waiver (user's word only, via the step-2 `--add-waiver` line) or ONE send-back to Aria; exit 2 = fix the invocation or the artifact. Alex never starts on a failing gate."
+        },
+        {
+          "lane": "bgpdd-plan",
+          "phase": "2.6",
+          "step": "2",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --add-waiver \"<target> — <reason>\" --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Only on the user's explicit word. Exit 0 = the dated entry and its ledger record are written: re-run step 1; exit 1 = the target grammar was rejected (`tables+N` or `mechanism:<name>`, no `;` in the reason); exit 2 = fix the invocation or the file. Never hand-edit the Waivers bullet."
         },
         {
           "lane": "bgpdd-plan",

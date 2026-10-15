@@ -725,6 +725,24 @@ MTIME_SLACK_SECONDS = 2.0
 INSTANT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}")
 
 
+def files_modified_since(root, threshold):
+    """Root-relative posix paths of files under a non-git `root` whose mtime
+    is at or after `threshold` -- the mtime stand-in for a diff, used only to
+    test a <changed_files>none: claim. `.git` directories are skipped."""
+    base = Path(root).resolve()
+    found = set()
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+        for name in filenames:
+            path = Path(dirpath) / name
+            try:
+                if path.stat().st_mtime >= threshold:
+                    found.add(normalize_path(str(path.relative_to(base))))
+            except OSError:
+                continue
+    return found
+
+
 def parse_instant(text):
     """An aware datetime when `text` is an ISO-8601 date-and-time, else None.
 
@@ -1522,6 +1540,35 @@ def build_report(text, persona, repo, since=None, fix_round=False,
                         f"report as changed or committed since {since} in "
                         f"{matched_root}",
                         path=rel, since=since)
+        if report["changed_files_none_reason"] is not None:
+            # none: claims the empty set; the diff must agree outside the
+            # docs root, or the "docs-only run" is a builder run that hid
+            # its paths.
+            for root in repos:
+                if in_git(root):
+                    if since_instant:
+                        raise GateError(
+                            f"--since {since} is an instant, but {root} is a "
+                            "git work tree: pass the sha HEAD held at launch")
+                    root_key = str(Path(root).resolve())
+                    if root_key not in touched_cache:
+                        touched_cache[root_key] = git_changed_since(root, since)
+                    touched = touched_cache[root_key]
+                else:
+                    if reference is None:
+                        raise GateError(
+                            f"{root} is not a git work tree, so a <changed_files>"
+                            f"none: claim is checked by mtime, and --since "
+                            f"{since} is a git ref with no launch instant: pass "
+                            "--transcript, or --since <ISO-8601 launch instant>")
+                    touched = files_modified_since(
+                        root, reference[0].timestamp() - MTIME_SLACK_SECONDS)
+                for path in sorted(p for p in touched
+                                   if not p.startswith(".docs/")):
+                    finding("changed_files_none_contradicted",
+                            f"<changed_files> claims none: but {path} changed "
+                            f"since {since} in {root}, outside .docs/",
+                            path=path, since=since)
         report["git_changed_count"] = sum(len(v) for v in touched_cache.values())
 
     if "consumers" in elements:
@@ -1866,15 +1913,14 @@ Reads:
     on a +, - or context line (or an open enclosing line) of git diff -M -W
     <ref> -- <path> under git's built-in drivers (untracked = all-added;
     none: unchecked; convention #8); other names are invented.
-  Scaffolding sweep  COMPLETE text <artifact>/<changed_skills> files must
-    hold no base-persona placeholder (underscore joined to TODO),
+  Scaffolding sweep  COMPLETE text <artifact>/<changed_skills> files: no
+    base-persona placeholder (underscore joined to TODO),
     TODO-colon-pending, HTML comment opening TODO/skeleton, or line
-    EXPLAINING markers; a fence counts, inline code does not.
+    EXPLAINING markers; fences count, inline code not.
   --transcript  Claude Code session JSONL, sidechains skipped. The
     block, whitespace ignored, must sit in a Task/Agent tool_result, a
     user-role text entry or a launched agent's queued hand-back
-    (origin.handback) -- never a human's queued message, assistant text or
-    another tool's result.
+    (origin.handback) -- never a human's queued message or assistant text.
 
 Problem codes:
   handoff_missing            no unfenced <handoff> block
@@ -1883,6 +1929,7 @@ Problem codes:
   deletion_unverified        deleted: path exists, untracked, non-git
   changed_files_not_in_diff  --since: a file the diff lacks
   changed_files_grammar      none: outside dep/quinn, empty or mixed
+  changed_files_none_contradicted  --since: none:, yet a non-.docs/ change
   status_invalid             <status> outside the enum
   consumers_grammar          <consumers> line not path::symbol
   changed_symbols_grammar    bad path::Name, empty or mixed none:
@@ -1915,7 +1962,7 @@ Exit codes:
      unreadable --transcript
 
 Self-test:
-  python check_handoff.py --self-test   (127 cases)
+  python check_handoff.py --self-test   (129 cases)
 """
 
 
@@ -3284,8 +3331,11 @@ def run_self_test():
 
         def test_quinn_capture_only_none_passes_with_and_without_since(self):
             ref = self.make_repo()
-            ledger = self.dir / "gates.jsonl"
-            handoff = self.dir / "h.md"
+            # A capture-only run writes only under .docs/, so the none:
+            # claim's diff check finds nothing outside it.
+            (self.dir / ".docs").mkdir()
+            ledger = self.dir / ".docs" / "gates.jsonl"
+            handoff = self.dir / ".docs" / "h.md"
             handoff.write_text(self._files_none("none: capture-only RED"),
                                encoding="utf-8")
             base = ["--handoff", str(handoff), "--persona", "quinn",
@@ -3308,6 +3358,32 @@ def run_self_test():
             self.assertEqual(r["changed_files"], [])
             self.assertEqual(r["changed_files_none_reason"],
                              "manifest draft only")
+
+        def test_none_contradicted_by_a_git_diff_outside_docs(self):
+            ref = self.make_repo()
+            (self.dir / ".docs").mkdir()
+            (self.dir / ".docs" / "manifest.md").write_text("m", encoding="utf-8")
+            r = build_report(self._files_none("none: docs-only run"),
+                             "dep", self.dir, since=ref)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            (self.dir / "src" / "a.py").write_text("edited", encoding="utf-8")
+            r = build_report(self._files_none("none: docs-only run"),
+                             "dep", self.dir, since=ref)
+            self.assertEqual(self.codes(r), ["changed_files_none_contradicted"])
+            self.assertEqual(r["findings"][0]["path"], "src/a.py")
+
+        def test_none_contradicted_by_mtime_in_a_non_git_root(self):
+            """Red-team h_none: Dep edits deploy/Dockerfile, claims none:."""
+            launch = datetime.now(timezone.utc).isoformat()
+            os.utime(self.dir / "docs.md", (0, 0))
+            for name in ("a.py", "b.py"):
+                os.utime(self.dir / "src" / name, (0, 0))
+            (self.dir / "deploy").mkdir()
+            (self.dir / "deploy" / "Dockerfile").write_text("FROM x", encoding="utf-8")
+            r = build_report(self._files_none("none: docs-only run"),
+                             "dep", self.dir, since=launch)
+            self.assertEqual(self.codes(r), ["changed_files_none_contradicted"])
+            self.assertEqual(r["findings"][0]["path"], "deploy/Dockerfile")
 
         def test_dep_none_with_a_blank_reason_fails(self):
             r = build_report(self._files_none("none:   "), "dep", self.dir)
