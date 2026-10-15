@@ -63,6 +63,7 @@ Pure standard library. See ../SKILL.md for the full contract.
 import argparse
 import hashlib
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -666,6 +667,25 @@ def command_token_candidates(command):
     return candidates
 
 
+# The skills/ directory this script runs from: what `{PLUGIN_ROOT}` names in
+# a plan's command (base-persona path resolution).
+PLUGIN_ROOT = Path(__file__).resolve().parents[2]
+
+
+def argv_key(argv):
+    """A comparison key for one argv: `{PLUGIN_ROOT}` expanded, and a token
+    naming an existing path compared by normcase(normpath), so separators
+    and Windows letter case never decide a match. Every other token --
+    flags, query text, arguments -- stays exact."""
+    out = []
+    for token in argv:
+        token = token.replace("{PLUGIN_ROOT}", str(PLUGIN_ROOT))
+        if os.path.exists(token):
+            token = os.path.normcase(os.path.normpath(os.path.abspath(token)))
+        out.append(token)
+    return out
+
+
 def check_exit_captures(ledger_path, criteria, milestone):
     """Each declared criterion's LATEST ledgered capture for this milestone
     must have run THAT command and exited 0."""
@@ -692,8 +712,9 @@ def check_exit_captures(ledger_path, criteria, milestone):
                 "detail": f"{raw!r} names no backticked `run `<command>`` "
                           "-- the grammar is planning-and-task-breakdown's"})
             continue
-        tokens = [t for _l, t in command_token_candidates(command)]
-        matching = [r for r in captures if r["command_argv"] in tokens]
+        keys = [argv_key(t) for _l, t in command_token_candidates(command)]
+        matching = [r for r in captures
+                    if argv_key(r["command_argv"]) in keys]
         if not matching:
             problems.append({
                 "problem": "exit_criterion_not_run",
@@ -1716,6 +1737,27 @@ def run_self_test():
             self.assertEqual(r["result"], "PASS", r["problems"])
             self.assertEqual(r["exit_criteria"],
                              ["npm test -- --grep orders"])
+
+        def test_exit_capture_expands_plugin_root_in_any_path_form(self):
+            """2026-10-16: a plan names the script as `{PLUGIN_ROOT}/...`;
+            the capture ran the real path, in any slash or case form."""
+            self.EXIT_PLAN = self.EXIT_PLAN.replace(
+                "npm test -- --grep orders",
+                'python {PLUGIN_ROOT}/pipeline-tools/scripts/mark_milestone.py'
+                ' --key "A:B" --query "x LIKE \'H%\'"')
+            real = str(PLUGIN_ROOT / "pipeline-tools" / "scripts"
+                       / "mark_milestone.py")
+            tail = ["--key", "A:B", "--query", "x LIKE 'H%'"]
+            for path in (real.replace("\\", "/"), real.replace("/", "\\"),
+                         real.replace("/", "\\").upper() if os.name == "nt"
+                         else real):
+                self.ledger.unlink(missing_ok=True)
+                self._capture(["python", path] + tail)
+                r = self._exit()
+                self.assertEqual(r["result"], "PASS", (path, r["problems"]))
+            self.ledger.unlink(missing_ok=True)
+            self._capture(["python", real] + tail[:-1] + ["x LIKE 'Z%'"])
+            self.assertIn("exit_criterion_not_run", self._codes(self._exit()))
 
         def test_exit_capture_missing_or_other_command_refuses(self):
             self.assertIn("exit_criterion_not_run", self._codes(self._exit()))

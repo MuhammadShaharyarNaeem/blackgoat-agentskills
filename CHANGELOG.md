@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.12.1] — 2026-10-16
+
+### Fixed
+- **`mark_milestone.py --require-exit-capture` expands `{PLUGIN_ROOT}`.** A plan's exit criterion naming a plugin script as `{PLUGIN_ROOT}/pipeline-tools/...` was compared literally, so no runnable capture could ever match (`exit_criterion_not_run`). The placeholder now expands to the running plugin's `skills/` directory, and path tokens compare by normalized path (slash direction and Windows case); every other token stays exact.
+
 ## [2.12.0] — 2026-10-15
 
 ### Added

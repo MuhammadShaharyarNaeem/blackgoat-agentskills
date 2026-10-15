@@ -113,7 +113,11 @@ exactly the moment the Orchestrator most wants to mark the milestone done
 
 `--require-exit-capture` joins them: each declared command needs a CAPTURED
 record scoped to this milestone whose argv token-matches it (the three
-tokenizations `check_quick_close.py` uses), and the **latest** such record must
+tokenizations `check_quick_close.py` uses; before comparing, `{PLUGIN_ROOT}` in
+the plan's command expands to the skills directory this script runs from, and a
+token naming an existing path compares by normalized path, so slash direction
+and Windows letter case never decide a match — every other token stays exact),
+and the **latest** such record must
 exit 0 — a later failing run supersedes an earlier pass. A block that declares
 no criterion is `no_exit_criterion`, because the contract says that absence *is*
 the defect.
