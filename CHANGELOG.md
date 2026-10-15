@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.11.2] — 2026-10-15
+
+### Fixed
+- **`check_handoff.py` credits the enclosing member of a change.** Git's built-in `csharp` funcname matches a LINQ `on a equals b into c` clause, so `-W` started the hunk there and a C# method changed below it never showed its own signature (`symbol_not_in_diff` on a true `Handle` claim). Every preimage line still open above a hunk's first change now counts, replacing the open-`@@`-header rule (convention #8 refinement); brace-only lines are skipped, siblings never count, and type/namespace declarations still never count (review F11).
+- **`check_test_authenticity.py`: Vite-SSR harness specs.** `ssrLoadModule('/src/x.ts')` counts as an import call, and a root-relative path resolves from the test's nearest `package.json` directory before the repo root, so a spec that loads production modules at runtime no longer needs a dummy `import type`.
+- **`check_test_authenticity.py`: database runners**, follow-up to 2.11.1. `${VAR:-default}` / `${VAR-default}` / `${VAR:=default}` resolve to the default, and a `$(…)`/backtick reassignment (`ADD=$(cygpath -w "$ADD")`) no longer overwrites the static path.
+- `check_test_authenticity.py` indexes only `.py` for a Python test and `.cs` for a C# test (JS/TS/Vue tests keep the full index), so a Python meta-check beside a C# backend no longer walks the backend (> 100 s to 2 s).
+
 ## [2.11.1] — 2026-10-15
 
 ### Fixed

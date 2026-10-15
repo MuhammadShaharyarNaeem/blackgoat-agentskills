@@ -666,7 +666,8 @@ def excerpt_at(text, offset, limit=140):
 # Imports
 # ---------------------------------------------------------------------------
 IMPORT_SPEC_RE = re.compile(
-    r"""(?:\bfrom\s*|\bimport\s*|\brequire\s*\(\s*|\bimport\s*\(\s*)"""
+    r"""(?:\bfrom\s*|\bimport\s*|\brequire\s*\(\s*|\bimport\s*\(\s*|"""
+    r"""\bssrLoadModule\s*\(\s*)"""
     r"""(['"])([^'"\n]+)\1""")
 PY_IMPORT_RE = re.compile(
     r"(?m)^\s*(?:from\s+([\w\.]+)\s+import\b|import\s+([\w\.]+))")
@@ -702,7 +703,16 @@ def resolve_specifier(spec, test_file, repo, src_roots):
     if spec.startswith("./") or spec.startswith("../") or spec == "." or spec == "..":
         candidates.append(base / spec)
     elif spec.startswith("/"):
-        candidates.append(Path(repo) / spec.lstrip("/"))
+        # Root-relative, as Vite resolves it (`ssrLoadModule('/src/x.ts')`):
+        # from the test's nearest package.json directory first, then the repo.
+        repo_abs = Path(repo).resolve()
+        for d in [base, *base.parents]:
+            if not _is_under(d, repo_abs):
+                break
+            if (d / "package.json").is_file():
+                candidates.append(d / spec.lstrip("/"))
+                break
+        candidates.append(repo_abs / spec.lstrip("/"))
     elif spec.startswith("@/") or spec.startswith("~/"):
         for root in src_roots:
             candidates.append(root / spec[2:])
@@ -1092,7 +1102,24 @@ SRC_CS_RE = re.compile(
     r"|[\w<>\[\],\.\?]+[ \t]+(\w+)[ \t]*[\(\{])")
 
 
-def build_src_index(src_roots, test_globs, repo):
+def index_suffixes(suffixes):
+    """The CODE_SUFFIXES a set of test-file suffixes can transcribe from.
+
+    A Python test is judged against Python definitions and a C# test
+    against C#, so a .py meta-check beside a C# backend does not read the
+    backend. A JS/TS/Vue test keeps the full index: an end-to-end spec
+    re-implementing a backend C# rule is a transcription this index exists
+    to catch.
+    """
+    families = {".py": (".py",), ".cs": (".cs",)}
+    out = set()
+    for s in suffixes:
+        if s in CODE_SUFFIXES:
+            out.update(families.get(s, CODE_SUFFIXES))
+    return tuple(sorted(out))
+
+
+def build_src_index(src_roots, test_globs, repo, suffixes=CODE_SUFFIXES):
     """{name.casefold(): "rel/path.ts:LINE"} for symbols defined under src.
 
     Definitions, not only exports: the pattern this gate was built from is a
@@ -1108,7 +1135,7 @@ def build_src_index(src_roots, test_globs, repo):
             dirnames[:] = [d for d in dirnames
                            if d not in NOISE_DIRS and not d.startswith(".")]
             for fn in sorted(filenames):
-                if Path(fn).suffix.lower() not in CODE_SUFFIXES:
+                if Path(fn).suffix.lower() not in suffixes:
                     continue
                 full = Path(dirpath) / fn
                 rel = rel_posix(full, repo)
@@ -1179,6 +1206,9 @@ SH_ASSIGN_RE = re.compile(
     r"""(?:^|[;\s])\$?([A-Za-z_]\w*)\s*=\s*"""
     r"""(?:"([^"\n]*)"|'([^'\n]*)'|([^\s;'"]*))""", re.M)
 SH_VAR_RE = re.compile(r"\$\{?([A-Za-z_]\w*)\}?")
+# `${VAR:-default}` / `${VAR-default}` / `${VAR:=default}`: an environment
+# override cannot be known statically, so the default is what resolves.
+SH_DEFAULT_RE = re.compile(r"\$\{([A-Za-z_]\w*):?[-=]([^}]*)\}")
 
 
 def _resolve_db_input(raw, test_file, repo):
@@ -1210,13 +1240,20 @@ def db_runner_inputs(text, test_file, repo, test_globs):
         return [], []
     env = {}
     for m in SH_ASSIGN_RE.finditer(live):
-        env[m.group(1)] = next(g for g in m.groups()[1:] if g is not None)
+        value = next(g for g in m.groups()[1:] if g is not None)
+        # `ADD=$(cygpath -w "$ADD")` reshapes a value the gate cannot run;
+        # the earlier, static assignment stays the one that resolves.
+        if value.startswith(("$(", "`")):
+            continue
+        env[m.group(1)] = value
     prod, tests = [], []
     for m in DB_INPUT_RE.finditer(live):
         raw = next(g for g in m.groups() if g)
         for _ in range(5):
+            expanded = SH_DEFAULT_RE.sub(
+                lambda v: env.get(v.group(1)) or v.group(2), raw)
             expanded = SH_VAR_RE.sub(
-                lambda v: env.get(v.group(1), v.group(0)), raw)
+                lambda v: env.get(v.group(1), v.group(0)), expanded)
             if expanded == raw:
                 break
             raw = expanded
@@ -1433,11 +1470,14 @@ def build_report(repo, files, src_roots=None, test_globs=None, waivers=None):
         waiver_map[key(rel_posix(Path(repo_path) / wf if not Path(wf).is_absolute()
                                  else wf, repo_path))] = reason
 
-    # The definition index only serves test files in an indexed language;
-    # walking a large backend for a .sh/.sql change set is pure cost.
-    src_index = (build_src_index(roots, globs, repo_path)
-                 if any(Path(f).suffix.lower() in CODE_SUFFIXES for f in files)
-                 else {})
+    # The definition index only serves test files in an indexed language,
+    # and only that language's family: walking a large backend for a
+    # .sh/.sql change set, or a C# one for a .py test, is pure cost.
+    wanted = index_suffixes(
+        {Path(f).suffix.lower() for f in files
+         if is_test_path(rel_posix(Path(f) if Path(f).is_absolute()
+                                   else repo_path / f, repo_path), globs)})
+    src_index = build_src_index(roots, globs, repo_path, wanted) if wanted else {}
     ns_roots = namespace_roots(roots)
     project_stems = csproj_stems(repo_path)
 
@@ -1874,6 +1914,45 @@ def run_self_test():
         def test_an_assert_file_without_its_runner_still_fails(self):
             self._db_fixture(self.DB_RUNNER)
             self.assertEqual(self.codes("tests/m1/02-assert.sql"),
+                             ["test_no_production_import"])
+
+        def test_a_db_runner_with_default_expansion_and_cygpath_passes(self):
+            # Shape from the rewritten m1 runner (2026-10-15).
+            self._db_fixture(self.DB_RUNNER.replace(
+                'ADD="$ROOT/db/AddColumns.sql"\n',
+                'ADD="${{M1_ADD:-$ROOT/db/AddColumns.sql}}"\n'
+                'command -v cygpath >/dev/null && {{ ADD=$(cygpath -w "$ADD"); }}\n'))
+            rep = self.report("tests/m1/run.sh", "tests/m1/02-assert.sql")
+            self.assertEqual(rep["result"], "PASS", rep)
+
+        def test_index_suffixes_narrow_py_and_cs_only(self):
+            self.assertEqual(index_suffixes({".py", ".sh"}), (".py",))
+            self.assertEqual(index_suffixes({".cs"}), (".cs",))
+            self.assertEqual(index_suffixes({".sql"}), ())
+            self.assertIn(".cs", index_suffixes({".ts"}))
+
+        def test_a_vite_ssr_load_of_a_src_module_is_a_production_import(self):
+            # Shape from a Vite-SSR harness spec (2026-10-15): the Vite root
+            # is the package.json directory, not the repo root.
+            self.write("web/package.json", '{"name":"web"}')
+            self.write("web/src/helper/source.ts",
+                       "export function sourceLabel() { }")
+            self.write("web/tests/labels.spec.ts",
+                       "import { test, expect } from '@playwright/test';\n"
+                       "test('labels', async () => {\n"
+                       "  const m = await vite.ssrLoadModule("
+                       "'/src/helper/source.ts');\n"
+                       "  expect(m.sourceLabel()).toBe('x');\n});\n")
+            self.assertEqual(self.codes("web/tests/labels.spec.ts"), [])
+
+        def test_a_vite_ssr_load_of_a_missing_non_src_path_still_fires(self):
+            self.write("web/package.json", '{"name":"web"}')
+            self.write("web/tests/fake.spec.ts",
+                       "import { test, expect } from '@playwright/test';\n"
+                       "test('x', async () => {\n"
+                       "  await vite.ssrLoadModule('/fixtures/stub.ts');\n"
+                       "  expect(1).toBe(1);\n});\n")
+            self.assertEqual(self.codes("web/tests/fake.spec.ts"),
                              ["test_no_production_import"])
 
         def test_a_commented_out_db_call_does_not_count(self):

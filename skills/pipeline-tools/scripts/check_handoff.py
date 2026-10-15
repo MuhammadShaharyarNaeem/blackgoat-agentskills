@@ -1013,33 +1013,53 @@ def indented_under(line, prefix):
     return not line.strip() or (own.startswith(prefix) and len(own) > len(prefix))
 
 
-def header_encloses(repo, blob, preimages, header, old_start, context,
-                    first_change):
-    """True when a hunk's `@@` header names a scope still OPEN at its change.
+BRACKET_ONLY_RE = re.compile(r"^[\s{}()\[\];,]*$")
+# A type or namespace is never the innermost symbol (review F11).
+TYPE_DECL_RE = re.compile(
+    r"^\s*(?:[\w\s]*\s)?(?:class|struct|interface|record|enum|namespace"
+    r"|module|trait|impl)\b")
+
+
+def enclosing_lines(repo, blob, preimages, old_start, context, first_change):
+    """The preimage lines whose scope is still OPEN at a hunk's first change.
 
     Convention #8 refinement of the header rule (Orchestrator ruling, review
-    F19): under `-W` a hunk inside a nested def starts at the nested def, so
-    the outer function appears only in the header. The header counts only
-    while its scope is open: every non-blank line from the header's own line
-    down to the hunk's first changed line (the `context` preimage lines
-    after `old_start`, then `first_change`) is indented deeper than the
-    header line (`indented_under`). A sibling closes the scope with its own
-    declaration line, so it never counts, even when -W's three leading
-    context lines start the hunk in its tail. Git prints the header without
-    its indentation, so the line is found in the preimage blob (git takes
-    the header from the preimage): the nearest line above `old_start` whose
-    text starts with the header. Not found -> False.
+    F19), widened from the `@@` header alone to every enclosing line
+    (deliberate, 2026-10-15): git's built-in csharp funcname matches a LINQ
+    `on a equals b into c` clause, so `-W` stopped there and a C# method
+    changed below it never showed its own signature. Walking up the
+    preimage from the first change, a line is open when it is indented
+    strictly shallower (`indented_under`) than every non-blank line between
+    it and the change; brace/bracket-only lines are skipped, so an Allman
+    `{` neither opens nor closes. A sibling is never open -- its own
+    declaration is no shallower than the enclosing member's -- so the
+    untouched-neighbour rule holds. A type or namespace line is walked past
+    but never returned: name the innermost symbol (review F11). An
+    enclosing statement line (`var q = from ...`) does count: the rule
+    catches invention, not attribution.
     """
     if blob not in preimages:
         preimages[blob] = git_lines(run_git_checked(
             repo, ["cat-file", "blob", blob]))
     lines = preimages[blob]
-    for index in range(min(old_start - 1, len(lines)) - 1, -1, -1):
-        if lines[index].strip().startswith(header):
-            prefix = indent_prefix(lines[index])
-            scope = lines[index + 1:old_start - 1 + context] + [first_change]
-            return all(indented_under(line, prefix) for line in scope)
-    return False
+    position = min(old_start - 1 + context, len(lines))
+    floor = first_change
+    if not floor.strip():
+        floor = lines[position] if position < len(lines) else ""
+    if not floor.strip():
+        return []
+    found = []
+    for index in range(position - 1, -1, -1):
+        line = lines[index]
+        if BRACKET_ONLY_RE.match(line):
+            continue
+        if indented_under(floor, indent_prefix(line)):
+            if not TYPE_DECL_RE.match(line):
+                found.append(line)
+            floor = line
+            if not indent_prefix(line):
+                break
+    return found
 
 
 def git_symbol_lines(repo, ref, rel):
@@ -1055,9 +1075,10 @@ def git_symbol_lines(repo, ref, rel):
     Two refinements of that widened rule, also deliberate (convention #8,
     remediation cycle 1): the `@@` header text does NOT count, because under
     `-W` it names the declaration BEFORE the changed one (an untouched
-    neighbour; the enclosing declaration is already a body line) -- unless
-    `header_encloses` shows it is an outer scope (a further convention #8
-    refinement of this header rule, Orchestrator ruling); and git's
+    neighbour; the enclosing declaration is already a body line) -- instead
+    every preimage line still open at the hunk's first change counts
+    (`enclosing_lines`, a further convention #8 refinement of this header
+    rule); and git's
     built-in language drivers scope `-W` through a temporary
     core.attributesFile, because the default funcname heuristic matches only
     unindented lines and would widen an indented member (a C# method) to the
@@ -1103,17 +1124,16 @@ def git_symbol_lines(repo, ref, rel):
             old_blob = sha if sha.strip("0") else None
         elif header:
             in_hunk = True
-            text = header.group("text").strip()
-            # [header text, preimage start, context lines before 1st change]
-            pending = [text, int(header.group("start")), 0] if text else None
+            # [preimage start, context lines before 1st change]
+            pending = [int(header.group("start")), 0]
         elif in_hunk and line[:1] in ("+", "-", " "):
             searchable.append(line[1:])
             if pending and line[:1] == " ":
-                pending[2] += 1
+                pending[1] += 1
             elif pending:
-                if old_blob and header_encloses(repo, old_blob, preimages,
-                                                *pending, line[1:]):
-                    searchable.append(pending[0])
+                if old_blob:
+                    searchable.extend(enclosing_lines(
+                        repo, old_blob, preimages, *pending, line[1:]))
                 pending = None
     untracked = run_git_checked(
         repo, ["ls-files", "--others", "--exclude-standard", "--", repo_rel],
@@ -1840,7 +1860,7 @@ Reads:
     instead: modified at or after (2 s slack) --since as an ISO-8601
     instant, else the --transcript launch; neither is exit 2. A git root
     needs a ref. Each <changed_symbols> Name must appear as a whole word
-    on a +, - or context line (@@ text only for open scopes) of git diff -M -W
+    on a +, - or context line (or an open enclosing line) of git diff -M -W
     <ref> -- <path> under git's built-in drivers (untracked = all-added;
     none: unchecked; convention #8); other names are invented.
   Scaffolding sweep  COMPLETE text <artifact>/<changed_skills> files must
@@ -3099,6 +3119,40 @@ def run_self_test():
             self.assertEqual(r["result"], "PASS", r["findings"])
             r, bad = self.symbol_codes("src/Invoice.cs::Alpha", ref)
             self.assertEqual(self.codes(r), ["symbol_not_in_diff"])
+
+        def test_a_csharp_method_below_a_linq_join_names_itself(self):
+            """2026-10-15: the csharp funcname matches a LINQ `on a equals b
+            into c` clause, so -W starts there and the method's signature is
+            outside the hunk; the open enclosing line still counts, and an
+            untouched sibling and the class still do not."""
+            pad = "".join(f"            var v{i} = {i};\n" for i in range(12))
+            handle = (
+                "        public async Task<int> Handle(Query request)\n"
+                "        {\n" + pad +
+                "            var rows = from a in xs\n"
+                "                       join b in ys\n"
+                "                           on a.Id equals b.Id into bs\n"
+                "                       select a;\n" + pad +
+                "            return OLD;\n        }\n")
+            body = ("namespace Billing\n{\n    public class Handler\n    {\n"
+                    "        public int Sibling()\n        {\n"
+                    "            return 1;\n        }\n\n" + handle +
+                    "    }\n}\n")
+            (self.dir / "src" / "H.cs").write_text(body, encoding="utf-8")
+            ref = self.make_repo()
+            (self.dir / "src" / "H.cs").write_text(
+                body.replace("return OLD;", "return NEW;"), encoding="utf-8")
+            (self.dir / "src" / "a.py").write_text("edited", encoding="utf-8")
+            attrs = Path(tempfile.mkdtemp()) / "attributes"
+            attrs.write_text("*.cs diff=csharp\n", encoding="utf-8")
+            diff = self.run_git("-c", f"core.attributesFile={attrs.as_posix()}",
+                                "diff", "-W", ref, "--", "src/H.cs").stdout
+            self.assertNotIn("Handle(", diff)   # the misfire is reproduced
+            r, bad = self.symbol_codes("src/H.cs::Handle", ref)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            for name in ("Sibling", "Handler"):
+                r, bad = self.symbol_codes(f"src/H.cs::{name}", ref)
+                self.assertEqual(self.codes(r), ["symbol_not_in_diff"], name)
 
         def test_an_enclosing_class_is_not_the_innermost_symbol(self):
             """Review F11: the contract says name the innermost symbol; the
