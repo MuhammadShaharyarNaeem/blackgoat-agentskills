@@ -315,6 +315,13 @@
       "lanes": [
         {
           "lane": "bgpdd-lite",
+          "phase": "1",
+          "step": "3b",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --budget --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = `budget-missing` / `budget-malformed` in `lint_failures`: fix the `## Complexity Budget` block with the user and re-run; exit 2 = fix the invocation or the file."
+        },
+        {
+          "lane": "bgpdd-lite",
           "phase": "2.5",
           "step": "1",
           "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --plan .docs/{project-name}/implementation/plan.md --ledger .docs/{project-name}/implementation/gates.jsonl",
@@ -322,10 +329,38 @@
         },
         {
           "lane": "bgpdd-plan",
+          "phase": "1",
+          "step": "7b",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --budget --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 1 = `budget-missing` / `budget-malformed` in `lint_failures`: back to Rex quoting the entries, a round of step 7's 2-round loop; exit 2 = fix the invocation or the file."
+        },
+        {
+          "lane": "bgpdd-plan",
+          "phase": "2",
+          "step": "5",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --reopen-budget \"<the user's own words>\" --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Only when the user bounces the plan back to Phase 1 (here or from Phase 2.6's escalation), before re-running honing and the Phase 1 budget gate. Exit 0 = the reopen is recorded and the next Phase 1 `--budget` record counts; exit 2 = fix the invocation (a placeholder reason, no --ledger)."
+        },
+        {
+          "lane": "bgpdd-plan",
           "phase": "2.5",
           "step": "1",
           "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --design .docs/{project-name}/design/detailed-design.md --ledger .docs/{project-name}/implementation/gates.jsonl",
           "gate": "This is the supersession-annotation lint, not full FR-to-design coverage: fix every reported `lint_failures` entry before the adversarial pass."
+        },
+        {
+          "lane": "bgpdd-plan",
+          "phase": "2.6",
+          "step": "1",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --design .docs/{project-name}/design/detailed-design.md --require-budget --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Exit 0 = Iteration Checkpoint (Phase 2 step 5), then Phase 3; exit 1 = show the user the design-vs-budget table from `budget` and `lint_failures`, then waiver (user's word only, via the step-2 `--add-waiver` line) or ONE send-back to Aria; exit 2 = fix the invocation or the artifact. Alex never starts on a failing gate."
+        },
+        {
+          "lane": "bgpdd-plan",
+          "phase": "2.6",
+          "step": "2",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_coverage.py --requirements .docs/{project-name}/requirements.md --add-waiver \"<target> — <reason>\" --ledger .docs/{project-name}/implementation/gates.jsonl",
+          "gate": "Only on the user's explicit word. Exit 0 = the dated entry and its ledger record are written: re-run step 1; exit 1 = the target grammar was rejected (`tables+N` or `mechanism:<name>`, no `;` in the reason); exit 2 = fix the invocation or the file. Never hand-edit the Waivers bullet."
         },
         {
           "lane": "bgpdd-plan",

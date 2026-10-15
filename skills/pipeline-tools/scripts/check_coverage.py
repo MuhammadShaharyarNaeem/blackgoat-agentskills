@@ -7,7 +7,10 @@ plan.md tasks (plan mode) or by passing tests in test-report.md (test mode).
 Usage:
     python check_coverage.py --requirements <path> --plan <path>
     python check_coverage.py --requirements <path> --test-report <path> [--repo <path>] [--strict-evidence]
-    python check_coverage.py --requirements <path> --design <path>
+    python check_coverage.py --requirements <path> --design <path> [--require-budget --ledger <path>]
+    python check_coverage.py --requirements <path> --budget [--ledger <path>]
+    python check_coverage.py --requirements <path> --add-waiver "<target> — <reason>" --ledger <path>
+    python check_coverage.py --requirements <path> --reopen-budget "<the user's words>" --ledger <path>
     python check_coverage.py --self-test
 
 Test mode, a PASS ledger line's evidence half (agents/quinn.md §6 grammar):
@@ -206,6 +209,38 @@ SUBJECT_CELL_COUNT = 2
 # routing link.
 ADR_TOKEN_RE = re.compile(r"\bADR-\d+\b", re.IGNORECASE)
 ADR_PATH_RE = re.compile(r"\badr/\d+-", re.IGNORECASE)
+
+# --- complexity-budget vocabulary (plan-simplicity gate) ------------------
+# Grammar authority: Rex's requirements template (`## Complexity Budget`, four
+# bold-labelled bullets in a fixed order) and blackgoat-research's
+# `## Mechanism Register` table. The budget is the user's accepted ceiling;
+# the register is the design's own inventory, counted against it.
+BUDGET_HEADING_RE = re.compile(r"^##\s*Complexity\s+Budget\s*$", re.IGNORECASE)
+BUDGET_LABELS = ("Simple version", "Max tables", "Mechanisms", "Waivers")
+BUDGET_BULLET_RE = re.compile(r"^\s*[-*+]\s+\*\*([^*]+?):\*\*\s*(.*)$")
+KEBAB_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+WAIVER_RE = re.compile(
+    r"^(tables\+(\d+)|mechanism:([a-z0-9]+(?:-[a-z0-9]+)*))\s+—\s+(\S.*?)"
+    r"\s+\(approved\s+(\d{4}-\d{2}-\d{2})\)$"
+)
+MECH_REGISTER_HEADING_RE = re.compile(
+    r"^#{2,4}\s*(?:[\d.]+\s+)?Mechanism\s+Register\s*$", re.IGNORECASE)
+DATA_MODEL_HEADING_RE = re.compile(
+    r"^#{2,4}\s*(?:[\d.]+\s+)?Data\s+Model\s*$", re.IGNORECASE)
+MECH_REGISTER_COLUMNS = ("mechanism", "kind", "traces to", "cost", "status")
+MECH_KINDS = ("table", "mechanism")
+MECH_STATUSES = ("kept", "deferred")
+RISK_TRACE_RE = re.compile(r"^risk:\s*(\S.*)?$", re.IGNORECASE)
+LEADING_NUMBER_RE = re.compile(r"^[\d.]+\s+")
+# A value that only stands in for one: no letter or digit at all, or a
+# conventional "fill this in later" token.
+PLACEHOLDER_VALUES = {"tbd", "todo", "n/a", "na", "none", "-", "?"}
+HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+STRUCK_SPAN_RE = re.compile(r"~~.*?~~")
+# --add-waiver's argument: the entry minus its `(approved <date>)`, which the
+# script stamps itself so no author can backdate or pre-date one.
+ADD_WAIVER_RE = re.compile(
+    r"^(tables\+\d+|mechanism:[a-z0-9]+(?:-[a-z0-9]+)*)\s+—\s+([^;]*\S)\s*$")
 
 FILE_URI_RE = re.compile(r"file:///\S*[^\s`'\"()\[\],;.]")
 WINDOWS_ABS_PATH_RE = re.compile(r"(?<![\w:/\\])[A-Za-z]:[\\/][^\s`'\"()\[\],;]*")
@@ -1114,6 +1149,580 @@ def lint_adr_citation(design_text, known_ids):
 
 
 # ---------------------------------------------------------------------------
+# Complexity budget + Mechanism Register (plan-simplicity gate)
+# ---------------------------------------------------------------------------
+
+
+def strip_noise(text):
+    """Blank out fenced blocks and HTML comments, preserving the line count.
+
+    A budget or register pasted inside a fence or a comment is an example or
+    a hidden draft, never the artifact's own claim; line positions survive so
+    --add-waiver can write back to the real line.
+    """
+    text = strip_fenced_blocks(text)
+    return HTML_COMMENT_RE.sub(lambda m: "\n" * m.group(0).count("\n"), text)
+
+
+def _sections(lines, heading_re):
+    """[(heading_index, level, end_index)] for EVERY heading matching
+    `heading_re`. Same extent rule as extract_register_section(): a section
+    closes at the next heading of the same-or-higher level."""
+    found = []
+    for index, line in enumerate(lines):
+        level = heading_level(line)
+        if level is None or not heading_re.match(line):
+            continue
+        end = len(lines)
+        for follow in range(index + 1, len(lines)):
+            other = heading_level(lines[follow])
+            if other is not None and other <= level:
+                end = follow
+                break
+        found.append((index, level, end))
+    return found
+
+
+def _section_lines(text, heading_re):
+    """Lines under the first heading matching `heading_re`, plus its level;
+    (None, None) if absent."""
+    lines = text.split("\n")
+    found = _sections(lines, heading_re)
+    if not found:
+        return None, None
+    index, level, end = found[0]
+    return lines[index + 1:end], level
+
+
+def _clean_cell(cell):
+    """A table cell with bold/backtick/strike markup and extra spaces removed."""
+    return " ".join(ROW_LABEL_CLEAN_RE.sub(" ", cell).split())
+
+
+def is_placeholder(value):
+    """True for an empty, punctuation-only or TBD-style stand-in value."""
+    value = value.strip()
+    return not re.search(r"[^\W_]", value) or value.lower() in PLACEHOLDER_VALUES
+
+
+def budget_hash(block_lines):
+    """sha256 of the budget block minus its Waivers bullet, whitespace
+    normalized -- what `--budget --ledger` records and --require-budget
+    compares, so only the Orchestrator's --add-waiver may change it."""
+    kept = []
+    for line in block_lines:
+        match = BUDGET_BULLET_RE.match(line)
+        if match and match.group(1).strip().lower() == "waivers":
+            continue
+        kept.append(line)
+    normalized = " ".join(" ".join(kept).split())
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def parse_budget(text):
+    """Parse requirements.md's `## Complexity Budget` block.
+
+    Returns (budget, failures). `budget` is {max_tables, mechanisms, waivers,
+    waiver_entries, hash, waivers_line} (waivers: [{target, reason,
+    approved}]; waiver_entries: each entry's exact text; waivers_line: the
+    Waivers bullet's line index) only when the block is present and
+    well-formed; otherwise None, so no counting lint ever runs against a
+    half-parsed ceiling. Fences and HTML comments are stripped first. Every
+    failure is `budget-missing` or `budget-malformed`, task "budget".
+    """
+    lines = strip_noise(text).split("\n")
+    found = _sections(lines, BUDGET_HEADING_RE)
+    if not found:
+        return None, [_failure(
+            "budget-missing", "budget",
+            "requirements.md has no '## Complexity Budget' heading outside "
+            "fences and comments; Rex's template emits it with four bullets: "
+            + ", ".join(BUDGET_LABELS))]
+
+    def malformed(detail):
+        return _failure("budget-malformed", "budget", detail)
+
+    if len(found) > 1:
+        return None, [malformed(
+            f"duplicate: {len(found)} '## Complexity Budget' headings; "
+            f"exactly one block is the budget")]
+
+    start, _level, end = found[0]
+    bullets = []
+    for index in range(start + 1, end):
+        match = BUDGET_BULLET_RE.match(lines[index])
+        if match:
+            bullets.append((match.group(1).strip(), match.group(2).strip(), index))
+
+    labels = [label.lower() for label, _value, _index in bullets]
+    if labels != [label.lower() for label in BUDGET_LABELS]:
+        labels_found = ", ".join(label for label, _v, _i in bullets) or "none"
+        return None, [malformed(
+            f"budget bullets are [{labels_found}]; expected exactly "
+            f"[{', '.join(BUDGET_LABELS)}], each '- **<Label>:** <value>', "
+            f"in this order")]
+
+    values = dict(zip(BUDGET_LABELS, (value for _label, value, _i in bullets)))
+    failures = []
+
+    if is_placeholder(values["Simple version"]):
+        failures.append(malformed(
+            f"Simple version '{values['Simple version']}' is empty or a "
+            f"placeholder: one paragraph naming the smallest design meeting "
+            f"the Must-Haves"))
+
+    max_raw = values["Max tables"]
+    if not re.fullmatch(r"\d+", max_raw):
+        failures.append(malformed(f"Max tables '{max_raw}' is not a "
+                                  f"non-negative integer"))
+
+    mechanisms = []
+    mech_raw = values["Mechanisms"]
+    if mech_raw.lower() != "none":
+        for name in (part.strip() for part in mech_raw.split(",")):
+            if KEBAB_RE.match(name):
+                mechanisms.append(name)
+            else:
+                failures.append(malformed(
+                    f"mechanism name '{name}' is not kebab-case "
+                    f"(lower-case words joined by '-'); the list is "
+                    f"comma-separated names, or 'none'"))
+
+    waivers, waiver_entries = [], []
+    waiver_raw = values["Waivers"]
+    if waiver_raw.lower() != "none":
+        for entry in (part.strip() for part in waiver_raw.split(";")):
+            match = WAIVER_RE.match(entry)
+            approved_ok = False
+            if match:
+                try:
+                    datetime.strptime(match.group(5), "%Y-%m-%d")
+                    approved_ok = True
+                except ValueError:
+                    pass
+            if not approved_ok:
+                failures.append(malformed(
+                    f"waiver '{entry}' is not '<target> — <reason> "
+                    f"(approved YYYY-MM-DD)' with target 'tables+N' or "
+                    f"'mechanism:<name>'"))
+                continue
+            waivers.append({"target": match.group(1),
+                            "reason": match.group(4),
+                            "approved": match.group(5)})
+            waiver_entries.append(entry)
+
+    if failures:
+        return None, failures
+    return {"max_tables": int(max_raw), "mechanisms": mechanisms,
+            "waivers": waivers, "waiver_entries": waiver_entries,
+            "hash": budget_hash(lines[start:end]),
+            "waivers_line": bullets[3][2]}, []
+
+
+def parse_mechanism_register(design_text):
+    """Parse detailed-design.md's `## Mechanism Register` table.
+
+    Returns (rows, failures). `rows` holds every well-formed data row as
+    {name, kind, traces, cost, status} with kind/status lower-cased. A
+    missing section or table, a duplicate section (the first is parsed), a
+    header lacking any of the five columns, and a row with a bad
+    Kind/Status, an empty name or an empty/placeholder Cost are each
+    `register-missing`; a malformed row is excluded from every count. Fences
+    and HTML comments are stripped first. `traces_raw` keeps the cell's
+    markup so a struck-through ID can be told apart.
+    """
+    lines = strip_noise(design_text).split("\n")
+    found = _sections(lines, MECH_REGISTER_HEADING_RE)
+    if not found:
+        return [], [_failure(
+            "register-missing", "budget",
+            "detailed-design.md has no '## Mechanism Register' section outside "
+            "fences and comments")]
+
+    failures = []
+    if len(found) > 1:
+        failures.append(_failure(
+            "register-missing", "budget",
+            f"duplicate: {len(found)} '## Mechanism Register' headings; "
+            f"exactly one register is counted"))
+    start, _level, end = found[0]
+    table = [line for line in lines[start + 1:end]
+             if TABLE_ROW_RE.match(line) and not TABLE_SEPARATOR_RE.match(line)]
+    if not table:
+        return [], failures + [_failure(
+            "register-missing", "budget",
+            "'## Mechanism Register' carries no table")]
+
+    header = [_clean_cell(c).lower() for c in table[0].strip().strip("|").split("|")]
+    if any(column not in header for column in MECH_REGISTER_COLUMNS):
+        return [], failures + [_failure(
+            "register-missing", "budget",
+            f"Mechanism Register header is [{', '.join(header)}]; expected "
+            f"columns Mechanism | Kind | Traces to | Cost | Status")]
+    index = {column: header.index(column) for column in MECH_REGISTER_COLUMNS}
+
+    rows = []
+    for number, line in enumerate(table[1:], start=1):
+        raw_cells = line.strip().strip("|").split("|")
+        raw_cells += [""] * (len(header) - len(raw_cells))
+        cells = [_clean_cell(c) for c in raw_cells]
+        row = {column: cells[index[column]] for column in MECH_REGISTER_COLUMNS}
+        name = row["mechanism"] or f"register row {number}"
+        problems = []
+        if not row["mechanism"]:
+            problems.append("an empty Mechanism name")
+        if row["kind"].lower() not in MECH_KINDS:
+            problems.append(f"Kind '{row['kind']}' (table | mechanism)")
+        if row["status"].lower() not in MECH_STATUSES:
+            problems.append(f"Status '{row['status']}' (Kept | Deferred)")
+        if is_placeholder(row["cost"]):
+            problems.append(f"an empty or placeholder Cost '{row['cost']}'")
+        if problems:
+            failures.append(_failure(
+                "register-missing", name,
+                "Mechanism Register row has " + "; ".join(problems)))
+            continue
+        rows.append({"name": row["mechanism"], "kind": row["kind"].lower(),
+                     "traces": row["traces to"],
+                     "traces_raw": raw_cells[index["traces to"]],
+                     "cost": row["cost"], "status": row["status"].lower()})
+    return rows, failures
+
+
+def traceable_ids(requirements_text, tier_by_id):
+    """IDs a register row may trace to: declared outside Won't Have (the
+    tier_by_id keys) and not struck through in requirements.md."""
+    struck = {m.group(1).upper() for m in STRUCK_ID_RE.finditer(requirements_text)}
+    return set(tier_by_id) - struck
+
+
+def lint_untraced_mechanisms(rows, valid_ids):
+    """Every Kept row traces to live FR/NFR IDs or to `risk: <text>`.
+
+    An ID counts only when it is in `valid_ids` (traceable_ids()) and is not
+    struck through in the cell itself; every cited ID must count. `risk:`
+    text that is empty or a placeholder is no trace.
+    """
+    failures = []
+    for row in rows:
+        if row["status"] != "kept":
+            continue
+        cell = _clean_cell(STRUCK_SPAN_RE.sub(" ", row["traces_raw"]))
+        risk = RISK_TRACE_RE.match(cell)
+        if risk and not is_placeholder(risk.group(1) or ""):
+            continue
+        ids = [token.upper() for token in ID_TOKEN_RE.findall(cell)]
+        dead = [req_id for req_id in ids if req_id not in valid_ids]
+        if ids and not dead and not risk:
+            continue
+        why = (f"cites {', '.join(dead)}, which requirements.md never "
+               f"declares, strikes through, or lists under Won't Have"
+               if dead else
+               f"Traces to '{row['traces']}' names no live FR/NFR ID and no "
+               f"'risk: <measured risk>'")
+        failures.append(_failure(
+            "untraced-mechanism", row["name"],
+            f"Kept register row {why}; trace it, Defer it, or remove it"))
+    return failures
+
+
+def lint_data_model(design_text, rows):
+    """Every `### <Entity>` under `## Data Model` has a Kept Kind=table row.
+
+    `unregistered-table`: no Kind=table row at all. `deferred-table-in-design`:
+    its only Kind=table rows are Deferred -- a table the design still models
+    is not deferred. `data-model-unstructured`: the section has content but
+    no `###` entity heading, so nothing could be counted. Names compare
+    case-insensitively with backticks and leading section numbering
+    stripped; fences and HTML comments are stripped first. No Data Model
+    section yields nothing.
+    """
+    section, level = _section_lines(strip_noise(design_text), DATA_MODEL_HEADING_RE)
+    if section is None:
+        return []
+    table_status = {}
+    for row in rows:
+        if row["kind"] == "table":
+            table_status.setdefault(row["name"].lower(), set()).add(row["status"])
+    failures = []
+    entities = 0
+    for line in section:
+        if heading_level(line) != level + 1:
+            continue
+        entity = _clean_cell(HEADING_TEXT_RE.sub("", line))
+        entity = LEADING_NUMBER_RE.sub("", entity).strip()
+        if not entity:
+            continue
+        entities += 1
+        statuses = table_status.get(entity.lower())
+        if statuses is None:
+            failures.append(_failure(
+                "unregistered-table", entity,
+                f"Data Model entity '{entity}' has no Mechanism Register row "
+                f"with Kind=table and Mechanism '{entity}'"))
+        elif "kept" not in statuses:
+            failures.append(_failure(
+                "deferred-table-in-design", entity,
+                f"Data Model entity '{entity}' is registered only as a Deferred "
+                f"table; drop it from the Data Model or mark it Kept"))
+    if not entities and any(line.strip() for line in section):
+        failures.append(_failure(
+            "data-model-unstructured", "budget",
+            "'## Data Model' has content but no '### <Entity>' heading; give "
+            "each table its own heading so it can be counted"))
+    return failures
+
+
+def _chained_ledger_records(ledger_path):
+    """(records, ignored): the ledger's CHAINED records before any break.
+
+    The chain walk is check_ledger.py's verify_ledger_chain(), imported, not
+    forked. A record counts only if it carries `prev`/`self` and sits before
+    the first broken link; an unchained (hand-appended or legacy) record and
+    every record at or after a break land in `ignored` (the parseable ones,
+    as dicts). A missing ledger is ([], []).
+    """
+    scripts_dir = str(Path(__file__).resolve().parent)
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    from check_ledger import verify_ledger_chain
+
+    try:
+        data = Path(ledger_path).read_bytes()
+    except OSError:
+        return [], []
+    ok, problem = verify_ledger_chain(ledger_path)
+    limit = float("inf") if ok else problem["line"]
+    records, ignored = [], []
+    for lineno, raw in enumerate(data.splitlines(), start=1):
+        if not raw.strip():
+            continue
+        try:
+            record = json.loads(raw.decode("utf-8-sig", errors="replace"))
+        except ValueError:
+            record = None
+        if (lineno < limit and isinstance(record, dict)
+                and "prev" in record and "self" in record):
+            records.append(record)
+        elif isinstance(record, dict):
+            ignored.append(record)
+    return records, ignored
+
+
+def requirements_key(requirements_path):
+    """How a ledger record names its requirements file: the resolved path."""
+    return str(Path(requirements_path).resolve())
+
+
+def _is_design_gate_record(record):
+    """A `--require-budget` run's record (every such run writes one)."""
+    return "--require-budget" in (record.get("argv") or [])
+
+
+def budget_ledger_state(ledger_path, requirements_path):
+    """Walk this file's chained records under the sealing rule.
+
+    The counting budget is the latest `--budget` record written before the
+    first `--require-budget` record after it (the design gate seals it). A
+    later `--budget` record counts only when a `--reopen-budget` record sits
+    between the sealing design run and it; otherwise its hash is
+    `rebudgeted`. Returns {counting, rebudgeted, waivers, reopens, ignored}.
+    """
+    key = requirements_key(requirements_path)
+    chained, ignored = _chained_ledger_records(ledger_path)
+    gate = Path(__file__).name
+    mine = [r for r in chained
+            if r.get("gate") == gate and r.get("requirements_file") == key]
+    state = {"counting": None, "rebudgeted": set(), "waivers": set(),
+             "reopens": [], "ignored": sum(1 for r in ignored
+                                           if r.get("requirements_file") == key)}
+    sealed = reopened = False
+    for record in mine:
+        if record.get("budget_hash"):
+            if not sealed or reopened:
+                state["counting"] = record["budget_hash"]
+                sealed = reopened = False
+            else:
+                state["rebudgeted"].add(record["budget_hash"])
+        elif record.get("reopen"):
+            state["reopens"].append({"reason": record["reopen"],
+                                     "ts": record.get("ts")})
+            reopened = reopened or sealed
+        elif record.get("waiver"):
+            state["waivers"].add(record["waiver"])
+        elif _is_design_gate_record(record) and state["counting"] is not None:
+            sealed, reopened = True, False
+    return state
+
+
+def lint_budget_provenance(budget, state):
+    """The budget and every waiver must have come through this script.
+
+    Returns failures over budget_ledger_state()'s `state`.
+    `budget-unrecorded`: no counting `--budget` record for this file.
+    `budget-rebudgeted`: the block matches only a `--budget` record written
+    after the design gate sealed the budget, with no reopen between.
+    `budget-changed`: the block's hash (Waivers excluded) matches neither.
+    `waiver-unrecorded`: an entry with no identical `--add-waiver` record.
+    Only chained records before any break count (_chained_ledger_records).
+    """
+    note = ("; unchained or broken-chain record ignored"
+            if state["ignored"] else "")
+    failures = []
+    if budget["hash"] == state["counting"]:
+        pass
+    elif budget["hash"] in state["rebudgeted"]:
+        failures.append(_failure(
+            "budget-rebudgeted", "budget",
+            "the Complexity Budget block matches only a '--budget' record "
+            "written after the design gate sealed the budget, with no "
+            "'--reopen-budget' between; only the user reopens a budget" + note))
+    elif state["counting"] is None:
+        failures.append(_failure(
+            "budget-unrecorded", "budget",
+            "ledger has no counting '--budget' record for this requirements "
+            "file; the budget must pass the Phase 1 gate before a design is "
+            "counted" + note))
+    else:
+        failures.append(_failure(
+            "budget-changed", "budget",
+            "the Complexity Budget block (Waivers excluded) differs from the "
+            "one the counting '--budget' run recorded; only the user changes "
+            "the budget, through Phase 1" + note))
+    for entry in budget["waiver_entries"]:
+        if entry not in state["waivers"]:
+            failures.append(_failure(
+                "waiver-unrecorded", "budget",
+                f"waiver '{entry}' has no identical chained '--add-waiver' "
+                f"ledger record; only the Orchestrator's --add-waiver writes "
+                f"one" + note))
+    return failures
+
+
+def lint_budget_counts(budget, rows, recorded=None):
+    """Kept tables within Max tables + waivers; Kept mechanisms named or waived.
+
+    When `recorded` is given, only waivers whose entry text it holds count:
+    an unrecorded waiver never lifts the ceiling.
+    """
+    waivers = [w for w, entry in zip(budget["waivers"], budget["waiver_entries"])
+               if recorded is None or entry in recorded]
+    kept_tables = [r["name"] for r in rows if r["status"] == "kept" and r["kind"] == "table"]
+    extra = sum(int(w["target"].split("+", 1)[1]) for w in waivers
+                if w["target"].startswith("tables+"))
+    allowed = budget["max_tables"] + extra
+    failures = []
+    if len(kept_tables) > allowed:
+        failures.append(_failure(
+            "over-budget-tables", "budget",
+            f"{len(kept_tables)} Kept tables ({', '.join(kept_tables)}) exceed "
+            f"the budget of {allowed} (Max tables {budget['max_tables']} + "
+            f"{extra} waived); Defer or remove one, or request a waiver"))
+
+    named = {name.lower() for name in budget["mechanisms"]}
+    waived = {w["target"].split(":", 1)[1] for w in waivers
+              if w["target"].startswith("mechanism:")}
+    for row in rows:
+        if row["status"] != "kept" or row["kind"] != "mechanism":
+            continue
+        if row["name"].lower() in named | waived:
+            continue
+        failures.append(_failure(
+            "mechanism-not-in-budget", row["name"],
+            f"Kept mechanism '{row['name']}' (cost: {row['cost']}) is not in "
+            f"the budget's Mechanisms list and has no 'mechanism:"
+            f"{row['name'].lower()}' waiver"))
+    return failures
+
+
+def budget_json(budget, rows=None, reopens=None):
+    """The report's `budget` object; kept_* and reopens are None when no
+    design gate read them (budget mode)."""
+    if budget is None:
+        return None
+    kept = None if rows is None else [r for r in rows if r["status"] == "kept"]
+    return {
+        "max_tables": budget["max_tables"],
+        "mechanisms": budget["mechanisms"],
+        "waivers": budget["waivers"],
+        "kept_tables": None if kept is None else
+        [r["name"] for r in kept if r["kind"] == "table"],
+        "kept_mechanisms": None if kept is None else
+        [r["name"] for r in kept if r["kind"] == "mechanism"],
+        "reopens": reopens,
+    }
+
+
+def run_budget_lints(requirements_text, design_text, valid_ids, ledger_path,
+                     requirements_path):
+    """Every `--require-budget` lint. Returns (failures, budget_json)."""
+    budget, failures = parse_budget(requirements_text)
+    rows, register_failures = parse_mechanism_register(design_text)
+    failures = (failures + register_failures
+                + lint_untraced_mechanisms(rows, valid_ids)
+                + lint_data_model(design_text, rows))
+    if budget is None:
+        return failures, None
+    state = budget_ledger_state(ledger_path, requirements_path)
+    failures += (lint_budget_provenance(budget, state)
+                 + lint_budget_counts(budget, rows, state["waivers"]))
+    return failures, budget_json(budget, rows, state["reopens"])
+
+
+def add_waiver(requirements_path, waiver_text, today):
+    """Append one dated waiver to the Waivers bullet and write the file.
+
+    Returns (entry, failures, error): `entry` is the exact text written;
+    `failures` (exit 1) a rejected grammar or a missing/malformed budget;
+    `error` (exit 2) an unreadable, non-UTF-8 or unwritable file.
+
+    Only the Waivers line changes: the file is read and written as bytes,
+    so every other line's ending and a UTF-8 BOM survive byte-for-byte; the
+    changed line takes the file's dominant line ending.
+    """
+    match = ADD_WAIVER_RE.match(waiver_text.strip())
+    if not match or "(approved " in waiver_text:
+        return None, [_failure(
+            "budget-malformed", "budget",
+            f"waiver '{waiver_text}' is not '<target> — <reason>' with target "
+            f"'tables+N' or 'mechanism:<name>' and no ';' or '(approved ' in "
+            f"the reason; the script stamps '(approved <today>)' itself")], None
+    entry = f"{match.group(1)} — {match.group(2)} (approved {today})"
+
+    try:
+        data = Path(requirements_path).read_bytes()
+    except OSError as exc:
+        return None, [], f"cannot read requirements file '{requirements_path}': {exc}"
+    bom = b"\xef\xbb\xbf" if data.startswith(b"\xef\xbb\xbf") else b""
+    try:
+        text = data[len(bom):].decode("utf-8")
+    except UnicodeDecodeError as exc:
+        return None, [], (f"requirements file '{requirements_path}' is not valid "
+                          f"UTF-8 ({exc}); left untouched")
+    budget, failures = parse_budget(text)
+    if budget is None:
+        return None, failures, None
+
+    lines = text.split("\n")  # a CRLF line keeps its "\r" here
+    crlf = text.count("\r\n")
+    dominant_crlf = crlf > text.count("\n") - crlf
+    index = budget["waivers_line"]
+    line = lines[index]
+    bullet = BUDGET_BULLET_RE.match(line.rstrip("\r"))
+    current = bullet.group(2).strip() if bullet else "none"
+    value = entry if current.lower() == "none" else f"{current}; {entry}"
+    prefix = line[:bullet.start(2)] if bullet else "- **Waivers:** "
+    is_last = index == len(lines) - 1  # no line ending to choose
+    ending = "\r" if (line.endswith("\r") if is_last else dominant_crlf) else ""
+    lines[index] = prefix + value + ending
+    try:
+        Path(requirements_path).write_bytes(bom + "\n".join(lines).encode("utf-8"))
+    except OSError as exc:
+        return None, [], f"cannot write requirements file '{requirements_path}': {exc}"
+    return entry, [], None
+
+
+# ---------------------------------------------------------------------------
 # test-report.md parsing
 # ---------------------------------------------------------------------------
 
@@ -1317,17 +1926,28 @@ def _base_report(mode, requirements_path, target_path):
         "unevidenced": [],
         "warnings": [],
         "lint_failures": [],
+        "budget": None,
         "result": "ERROR",
         "error": None,
     }
 
 
-def build_report(mode, requirements_path, target_path, repo_root=".", strict_evidence=False):
+def build_report(mode, requirements_path, target_path, repo_root=".", strict_evidence=False,
+                 require_budget=False, ledger_path=None):
     report = _base_report(mode, requirements_path, target_path)
 
     requirements_text, read_error = read_text(requirements_path)
     if requirements_text is None:
         report["error"] = f"cannot read requirements file '{requirements_path}': {read_error}"
+        return report
+
+    if mode == "budget":
+        # Budget mode checks the block's shape only: no target, no coverage,
+        # so a missing Must-Have is the other gates' finding, not this one's.
+        budget, failures = parse_budget(requirements_text)
+        report["budget"] = budget_json(budget)
+        report["lint_failures"] = failures
+        report["result"] = "FAIL" if failures else "PASS"
         return report
 
     tier_by_id, requirement_warnings, known_ids = parse_requirements(requirements_text)
@@ -1361,6 +1981,12 @@ def build_report(mode, requirements_path, target_path, repo_root=".", strict_evi
             + lint_fr_citations(target_text, must_have)
             + lint_adr_citation(target_text, known_ids)
         )
+        if require_budget:
+            budget_failures, report["budget"] = run_budget_lints(
+                requirements_text, target_text,
+                traceable_ids(requirements_text, tier_by_id),
+                ledger_path, requirements_path)
+            report["lint_failures"] += budget_failures
         report["result"] = "FAIL" if report["lint_failures"] else "PASS"
         return report
 
@@ -1433,6 +2059,12 @@ def _selected_mode(args):
     for mode, target in (("plan", args.plan), ("test", args.test_report), ("design", args.design)):
         if target is not None:
             return mode, target
+    if args.budget:
+        return "budget", None
+    if args.add_waiver is not None:
+        return "add-waiver", None
+    if args.reopen_budget is not None:
+        return "reopen-budget", None
     return None, None
 
 
@@ -1584,12 +2216,14 @@ def ledger_self_hash(record):
         .encode("utf-8")).hexdigest()
 
 
-def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code):
+def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code,
+                  extra=None):
     """Append ONE JSON line recording this run. Best-effort by design.
 
     A ledger that cannot be written must never change this gate's verdict —
     the ledger is an audit trail for LATER gates (check_commit_gate.py's
-    --require-ledger-gates), not a term in this one.
+    --require-ledger-gates), not a term in this one. `extra` keys (budget
+    provenance: budget_hash / waiver, requirements_file) join the record.
     """
     if not ledger_path:
         return
@@ -1602,6 +2236,7 @@ def append_ledger(ledger_path, argv, milestone, inputs, verdict, exit_code):
         "verdict": verdict,
         "exit": exit_code,
     }
+    record.update(extra or {})
     try:
         p = Path(ledger_path)
         if str(p.parent):
@@ -1635,29 +2270,40 @@ PURPOSE = ("Decides whether every Must-Have requirement is covered by plan "
 
 EPILOG = """\
 Reads:
-  --requirements <path>  requirements.md. Required in EVERY mode. Tier
-    headings are `## Must Have` / `Should Have` / ...; an ID is a bold
-    token, `**FR-3**` or `**NFR-7**`, and an NFR may carry its tier inline:
+  --requirements <path>  requirements.md. Required in EVERY mode. Tiers:
+    `## Must Have` / `Should Have` / ...; IDs are bold, `**FR-3**`; an
+    NFR may carry its tier inline:
       - **NFR-7** (Must Have) -- p95 under 200ms
-  Exactly one of the three target flags -- more than one, or none, is
-  exit 2:
-  --plan <path>          plan.md (plan mode). Tasks are `## Task 3:`
-    headings, each carrying a `**Requirements covered:**` field naming its
-    FR/NFR tokens. Plan mode also runs five gating lints.
+  Exactly one mode flag (else exit 2):
+  --plan <path>          plan.md (plan mode): `## Task 3:` headings, each
+    with a `**Requirements covered:**` field. Also five gating lints.
   --test-report <path>   test-report.md (test mode). A status is read ONLY
     from a list item:
       - FR-3: PASS -- <evidence>
-    A PASS whose evidence half cites nothing checkable (an exit code, a
-    `file::test-name`, or a `**Runtime evidence:**` / `evidence/runtime/`
-    citation) is recorded UNEVIDENCED: status-bearing, NOT covered, so the
-    Must-Have lands in `uncovered`.
+    A PASS citing nothing checkable (an exit code, a `file::test-name`,
+    an `evidence/runtime/` capture) is UNEVIDENCED: NOT covered.
   --design <path>        detailed-design.md (design mode). A Must-Have is
     covered by an in-place supersession annotation (the ID struck through,
     `~~**FR-3**~~`) whose design-register row cites an `ADR-NNNN` token or
-    an `adr/NNNN-` path. Design mode runs the supersession/citation lints
-    only. Scope limit: the TOKEN is matched, not the file, so `ADR-9999`
-    satisfies it even when no such file exists.
-  --repo <dir>           (test mode) what a `file::test-name` citation
+    an `adr/NNNN-` path (the token, not the file). Design mode runs the
+    supersession/citation lints only.
+  --budget               (budget mode) lints requirements.md's one
+    `## Complexity Budget` block: bullets **Simple version:**, **Max
+    tables:** <int>, **Mechanisms:** <kebab-names|none>, **Waivers:**
+    none | `;`-separated `<target> <em-dash> <reason> (approved
+    YYYY-MM-DD)`, target `tables+N`/`mechanism:<name>`. With --ledger, a
+    PASS records budget_hash (Waivers excluded) and requirements_file.
+  --add-waiver "<target> <em-dash> <reason>"  (Orchestrator-only; needs
+    --ledger) appends the entry, dated today, to Waivers and records it.
+  --reopen-budget "<user's words>"  (Orchestrator-only; needs --ledger)
+    records a reopen; touches no file.
+  --require-budget       (design mode; needs --ledger) also gates the
+    `## Mechanism Register` (Mechanism | Kind | Traces to | Cost |
+    Status) against the budget; Deferred rows count nothing. Every run
+    seals the budget: a later --budget counts only after a
+    --reopen-budget. Only chained ledger records before any break count.
+  Fences/HTML comments are ignored in budget and register.
+  --repo <dir>         (test mode) what a `file::test-name` citation
     resolves against; default '.'.
   --ledger <path>        append one JSON record per run.
 
@@ -1673,23 +2319,46 @@ Problem codes:
   supersession-annotation  a superseded ID carries no in-place annotation
   fr-citation              a register row names no FR/NFR it supersedes
   adr-citation             such a row cites no ADR-NNNN and no adr/NNNN-
+  Budget/add-waiver/--require-budget (task: name, or "budget"):
+  budget-missing           no `## Complexity Budget` heading
+  budget-malformed         bad/duplicate block, placeholder, bad waiver
+  --require-budget only:
+  budget-unrecorded        no ledger budget_hash for this file
+  budget-changed           block differs from the counting hash
+  budget-rebudgeted        block matches only a post-seal --budget
+  waiver-unrecorded        waiver with no identical --add-waiver record
+  register-missing         register absent/duplicate, bad Kind/Status,
+                           placeholder Cost
+  untraced-mechanism       Kept row: no live (unstruck, non-Won't) FR/NFR
+                           ID, no real `risk: <text>`
+  unregistered-table       Data Model entity with no Kind=table row
+  deferred-table-in-design  Data Model entity registered only Deferred
+  data-model-unstructured  Data Model content with no `###` entity
+  over-budget-tables       Kept tables > Max + recorded `tables+N`
+  mechanism-not-in-budget  Kept mechanism neither listed nor waived
 
 JSON keys:
-  Always printed on stdout (there is no --json flag):
+  Printed on stdout:
   mode, requirements_file, target_file, must_have, should_have, covered,
   uncovered, uncovered_should, blocked, unevidenced, warnings,
-  lint_failures ([{check, task, detail}]), result, error.
-  `uncovered` and `lint_failures` are the two gating arrays.
+  lint_failures ([{check, task, detail}]), budget, result, error.
+  `uncovered` and `lint_failures` are the two gating arrays. `budget`,
+  null unless a well-formed budget was read: {max_tables, mechanisms,
+  waivers [{target, reason, approved}], kept_tables, kept_mechanisms
+  (Kept register names), reopens [{reason, ts}]} -- the last three null
+  in budget mode. --add-waiver adds `waiver`, the entry written.
 
 Exit codes:
-  0  every Must-Have covered and no lint failed.
-  1  a Must-Have gap or any lint failure.
-  2  usage error (none or several of --plan/--test-report/--design), a
-     missing or unreadable file, or a structural contract failure (no
-     Must-Have requirements, no task blocks).
+  0  every Must-Have covered and no lint failed; waiver written; reopen
+     recorded.
+  1  a Must-Have gap or any lint failure; --add-waiver rejected.
+  2  usage error (not exactly one mode; --require-budget outside design
+     mode; a provenance mode without --ledger; a placeholder reopen), a
+     missing, unreadable, non-UTF-8 or unwritable file, or a structural
+     contract failure (no Must-Have requirements, no task blocks).
 
 Self-test:
-  python check_coverage.py --self-test   (138 cases; the same suite runs
+  python check_coverage.py --self-test   (183 cases; the same suite runs
   directly as `python test_check_coverage.py`)
 """
 
@@ -1705,15 +2374,15 @@ def main(argv):
     parser.add_argument("--plan")
     parser.add_argument("--test-report")
     parser.add_argument("--design")
-    parser.add_argument("--repo", default=".",
-                        help="repo root a test-report.md 'file::test-name' citation "
-                             "resolves against (test mode only; default: '.')")
+    parser.add_argument("--budget", action="store_true")
+    parser.add_argument("--require-budget", action="store_true")
+    parser.add_argument("--add-waiver", metavar="WAIVER")
+    parser.add_argument("--reopen-budget", metavar="REASON")
+    parser.add_argument("--repo", default=".")
     parser.add_argument("--strict-evidence", action="store_true",
-                        help="test mode: also reject a bare exit-code PASS citation "
-                             "with no file::test-name or runtime-evidence capture "
-                             "(default: accepted, per agents/quinn.md sec. 6)")
-    parser.add_argument("--ledger",
-                        help="append one JSON record per run to this path")
+                        help="test mode: also reject a bare exit-code PASS "
+                             "citation (default: accepted)")
+    parser.add_argument("--ledger")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
 
@@ -1722,17 +2391,24 @@ def main(argv):
 
     _mode, _target = _selected_mode(args)
 
-    def finish(code, verdict):
-        """One exit point: EVERY return path records a ledger line."""
+    def finish(code, verdict, extra=None):
+        """One exit point: EVERY return path records a ledger line. A
+        --require-budget run's line always names its requirements file: it
+        is what seals the budget (budget_ledger_state)."""
+        if args.require_budget and args.requirements and _mode == "design":
+            extra = dict(extra or {},
+                         requirements_file=requirements_key(args.requirements))
         append_ledger(args.ledger, argv, None,
                       [p for p in (args.requirements, _target) if p],
-                      verdict, code)
+                      verdict, code, extra)
         return code
 
     given = [t for t in (args.plan, args.test_report, args.design) if t is not None]
-    if len(given) != 1:
+    if (len(given) + int(args.budget) + int(args.add_waiver is not None)
+            + int(args.reopen_budget is not None)) != 1:
         _print_usage_error(
-            args, "exactly one of --plan, --test-report or --design is required"
+            args, "exactly one of --plan, --test-report, --design, --budget, "
+                  "--add-waiver or --reopen-budget is required"
         )
         return finish(2, "ERROR")
 
@@ -1742,13 +2418,60 @@ def main(argv):
 
     mode, target = _selected_mode(args)
 
-    report = build_report(mode, args.requirements, target, args.repo, args.strict_evidence)
+    if args.require_budget and mode != "design":
+        _print_usage_error(args, "--require-budget belongs with --design only")
+        return finish(2, "ERROR")
+
+    if (args.require_budget or mode in ("add-waiver", "reopen-budget")) and not args.ledger:
+        _print_usage_error(args, "--require-budget, --add-waiver and --reopen-budget "
+                                 "need --ledger: budget provenance lives there")
+        return finish(2, "ERROR")
+
+    if mode == "reopen-budget":
+        reason = args.reopen_budget.strip()
+        report = _base_report(mode, args.requirements, None)
+        if is_placeholder(reason):
+            report["error"] = "--reopen-budget needs the user's own words, not a placeholder"
+            print(json.dumps(report))
+            return finish(2, "ERROR")
+        report["result"] = "PASS"
+        print(json.dumps(report))
+        return finish(0, "PASS", {"reopen": reason,
+                                  "requirements_file": requirements_key(args.requirements)})
+
+    if mode == "add-waiver":
+        report = _base_report(mode, args.requirements, None)
+        entry, failures, error = add_waiver(
+            args.requirements, args.add_waiver, datetime.now().date().isoformat())
+        report["waiver"] = entry
+        report["lint_failures"] = failures
+        report["error"] = error
+        report["result"] = "ERROR" if error else "FAIL" if failures else "PASS"
+        print(json.dumps(report))
+        if error:
+            return finish(2, "ERROR")
+        if failures:
+            return finish(1, "FAIL")
+        return finish(0, "PASS", {"waiver": entry,
+                                  "requirements_file": requirements_key(args.requirements)})
+
+    report = build_report(mode, args.requirements, target, args.repo, args.strict_evidence,
+                          args.require_budget, args.ledger)
     print(json.dumps(report))
 
     if report["result"] == "ERROR":
         return finish(2, "ERROR")
     if report["result"] == "FAIL":
         return finish(1, "FAIL")
+    if mode == "budget":
+        # A well-formed block: record its hash so --require-budget can tell
+        # whether anyone but the user's Phase 1 changed it since.
+        text, _error = read_text(args.requirements)
+        budget, _failures = parse_budget(text or "")
+        if budget is not None:
+            return finish(0, "PASS", {
+                "budget_hash": budget["hash"],
+                "requirements_file": requirements_key(args.requirements)})
     return finish(0, "PASS")
 
 
