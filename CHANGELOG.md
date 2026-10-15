@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.12.0] — 2026-10-15
+
+### Added
+- **Plan-lane complexity budget and Phase 2.6 Simplicity Gate.** A ~5-step feature had grown to 17 tables / 71 tasks because nothing in `/bgpdd-plan` bounded complexity. Honing now asks for a simple version, a table cap and the named mechanisms; Rex writes a `## Complexity Budget` block into `requirements.md`; Aria reads it first and files a `## Mechanism Register` (every table and mechanism traced to an FR/NFR or a measured risk, Kept or Deferred); Phase 2.5 gains attack item 7, the removal pass; the new Phase 2.6 shows the user a design-vs-budget table before Alex starts. `/bgpdd-lite` carries the budget into Alex's brief.
+- **`check_coverage.py`**: `--budget` mode (plan and lite Phase 1); `--require-budget` on design mode (`budget-unrecorded`, `budget-changed`, `budget-rebudgeted`, `waiver-unrecorded`, `register-missing`, `untraced-mechanism`, `unregistered-table`, `deferred-table-in-design`, `data-model-unstructured`, `over-budget-tables`, `mechanism-not-in-budget`); `--add-waiver` and `--reopen-budget`, Orchestrator-only, recorded in the hash-chained ledger. The budget is sealed by the first design-gate run, and only chained records count.
+
+### Changed
+- `check_handoff.py`: Dep may report `<changed_files>none: <reason>` like Quinn; `none:` contradicted by the diff fails as `changed_files_none_contradicted`.
+- `jobs-and-messaging-patterns`: prefer a design with no publish-alongside-a-write over introducing an outbox where a lost event is tolerable.
+- `agent-audit` Metric 16's Phase 2.5 inventory is now 7 items.
+
 ## [2.11.2] — 2026-10-15
 
 ### Fixed
