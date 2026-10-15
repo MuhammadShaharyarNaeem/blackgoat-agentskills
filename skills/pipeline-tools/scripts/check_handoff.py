@@ -975,25 +975,44 @@ def parse_changed_symbols(values):
     return entries, None, bad
 
 
-def symbol_roots(roots, rel):
-    """The --repo roots a <changed_symbols> path is diffed in.
+def symbol_roots(roots, rel, in_git=None):
+    """[(root, absolute path)] a <changed_symbols> path is diffed as.
 
     The root it exists under, as `<changed_files>` resolves it; for a path
     that exists nowhere (a deleted file, EC-2), every root it lies under.
+    A non-git workspace root also holds every nested repo, so -- as
+    `<changed_files>` does -- a git --repo that holds the file wins. The
+    path is absolute because a workspace-relative spelling
+    (`Repo/src/x.cs`) is wrong inside the nested repo.
     """
-    state, _, matched_root, _ = path_status(roots, rel)
+    in_git = in_git or is_git_work_tree
+    state, _, matched_root, resolved = path_status(roots, rel)
     if state == "ok":
-        return [matched_root]
-    candidate = Path(rel)
-    containing = []
-    for root in roots:
-        resolved = candidate if candidate.is_absolute() else Path(root) / rel
-        try:
-            resolved.resolve().relative_to(Path(root).resolve())
-        except (OSError, ValueError):
-            continue
-        containing.append(root)
-    return containing
+        hits = [(matched_root, resolved)]
+    else:
+        hits = []
+        candidate = Path(rel)
+        for root in roots:
+            target = candidate if candidate.is_absolute() else Path(root) / rel
+            try:
+                target = target.resolve()
+                target.relative_to(Path(root).resolve())
+            except (OSError, ValueError):
+                continue
+            hits.append((root, target))
+    out = []
+    for root, path in hits:
+        if not in_git(root):
+            for other in roots:
+                try:
+                    path.relative_to(Path(other).resolve())
+                except (OSError, ValueError):
+                    continue
+                if in_git(other):
+                    root = other
+                    break
+        out.append((root, str(path)))
+    return out
 
 
 def repo_relative(repo, rel):
@@ -1608,15 +1627,15 @@ def build_report(text, persona, repo, since=None, fix_round=False,
             for entry in file_entries:
                 cited = f"{entry['path']}::{entry['name']}"
                 found = directory = False
-                for root in symbol_roots(repos, entry["path"]):
-                    key = (str(Path(root).resolve()), entry["path"])
+                for root, path in symbol_roots(repos, entry["path"]):
+                    key = (str(Path(root).resolve()), path)
                     if key not in lines_cache:
                         # None marks a path whose diff covers other files: a
                         # directory that no longer exists (review F17).
                         lines_cache[key] = (
                             None if git_diff_names_other_than(
-                                root, since, entry["path"])
-                            else git_symbol_lines(root, since, entry["path"]))
+                                root, since, path)
+                            else git_symbol_lines(root, since, path))
                     if lines_cache[key] is None:
                         directory = True
                         break
@@ -3014,6 +3033,35 @@ def run_self_test():
                              since=ref)
             return r, [f for f in r["findings"]
                        if f["code"] == "symbol_not_in_diff"]
+
+        def test_symbols_in_a_nested_repo_under_a_non_git_workspace(self):
+            """2026-10-16: a non-git workspace root holding a nested git repo;
+            workspace-relative paths, a tracked file modified since ref. The
+            symbol diff runs in the nested repo, in either --repo order."""
+            ws = Path(tempfile.mkdtemp()).resolve()
+            api = ws / "Api"
+            (api / "src").mkdir(parents=True)
+            (api / "src" / "a.py").write_text("def alpha():\n    return 1\n",
+                                              encoding="utf-8")
+            git = ["git", "-C", str(api)]
+            try:
+                subprocess.run(git + ["init", "-q"], check=True, timeout=120)
+            except (OSError, subprocess.SubprocessError):
+                self.skipTest("git not available")
+            for args in (["config", "user.email", "t@t.t"],
+                         ["config", "user.name", "t"], ["add", "-A"],
+                         ["commit", "-qm", "base"]):
+                subprocess.run(git + args, check=True, timeout=120)
+            (api / "src" / "a.py").write_text("def alpha():\n    return 2\n",
+                                              encoding="utf-8")
+            text = ("<handoff><status>COMPLETE</status>"
+                    "<changed_files>Api/src/a.py</changed_files>"
+                    "<changed_symbols>Api/src/a.py::alpha</changed_symbols>"
+                    "<blockers>None</blockers></handoff>")
+            for repos in ([str(ws), str(api)], [str(api), str(ws)]):
+                r = build_report(text, "mason", repos, since="HEAD")
+                self.assertEqual(r["result"], "PASS", (repos, r["findings"]))
+                self.assertEqual(r["verify_mode"], {str(api): "git"}, repos)
 
         def test_symbol_added_since_ref_passes_whole_word_only(self):
             """EC-1: `Get` must not ride on `GetUser`."""

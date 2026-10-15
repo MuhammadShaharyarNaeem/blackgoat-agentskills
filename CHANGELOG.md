@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.12.2] — 2026-10-16
+
+### Fixed
+- **`check_handoff.py` diffs `<changed_symbols>` in the nested repo.** In a non-git workspace holding nested git repos (`--repo . --repo Repo`), a symbol path resolved to the non-git root and its diff ran git there (`Could not access 'HEAD'`, exit 2). Symbols now route as `<changed_files>` already did — a git `--repo` that holds the file wins — and git receives the absolute path, so the workspace-relative spelling is right inside the nested repo.
+
 ## [2.12.1] — 2026-10-16
 
 ### Fixed
