@@ -109,9 +109,10 @@ so you can ask the user whether to update or keep it.**
   3. Instruct Echo to synthesize, in this order, within the same pass:
      a. `.docs/summary/{feature}/overview.md` — the cross-API consolidation: which API owns what, cross-service call flow, integration seams, links to each `{api}.md`. It opens with the **provenance stamp** from §1 — the date and the HEAD commit sha of each repo the feature spans, **read at write time, not copied from `context.md`**.
      b. `.docs/summary/{feature}/QA/code-workflow.md` — Mermaid sequence diagrams and step-by-step execution paths across the services.
-     c. `.docs/summary/{feature}/QA/manual-testing.md` — reverse-engineered manual test cases, using the `code-workflow.md` she just produced, per her persona.
+     c. `.docs/summary/{feature}/QA/manual-testing.md` — reverse-engineered manual test cases, using the `code-workflow.md` she just produced, per her persona, including its `## State Transitions` table.
   4. Validate Echo's returned handoff — `check_handoff.py` (§1) — before proceeding to Phase 5.
   5. **Provenance gate (Orchestrator, before closing the phase)**: run `python {PLUGIN_ROOT}/pipeline-tools/scripts/tool_registry.py for --lane bgpdd-discovery --phase 4` and execute the `check_tier1_provenance` line it prints — the same gate as Phase 1 step 8, scoped to this feature's `overview.md`. Pass one `--repo` per repo the feature spans. Exit 1 returns to Echo; do not stamp her artifact for her.
+  6. **State-transition gate (Orchestrator, before closing the phase)**: execute the `check_qa_baseline` line from the same registry listing. Exit 1 returns to Echo with the failing cells — a missing set→different case is written as a case, never waved through as `N/A`, and you do not fill the table for her. It cannot see an entity the table never lists: read the rows against `code-workflow.md`'s writes before accepting.
 
 ### Phase 4b: Runtime Environment Recipe (Orchestrator + user, main session)
 - **Delegated Agent**: None — interactive, main session. A delegated agent cannot pause to ask which device to test against.

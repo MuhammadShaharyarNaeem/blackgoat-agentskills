@@ -663,6 +663,29 @@
       ]
     },
     {
+      "name": "check_qa_baseline",
+      "script": "scripts/check_qa_baseline.py",
+      "description": "Decides whether a discovery QA baseline enumerates every mutable entity's state transitions, each cell citing a defined case or a reasoned N/A.",
+      "kind": "gate",
+      "runner": "orchestrator",
+      "agents": [],
+      "lanes": [
+        {
+          "lane": "bgpdd-discovery",
+          "phase": "4",
+          "step": "6",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_qa_baseline.py --file .docs/summary/{feature}/QA/manual-testing.md --ledger .docs/summary/gates.jsonl",
+          "gate": "Exit 1 returns to Echo with the failing cells; a missing set->different case is written as a case, never waved through as N/A, and you never fill the table for her."
+        }
+      ],
+      "reads": [
+        ".docs/summary/{feature}/QA/manual-testing.md"
+      ],
+      "writes": [
+        "gates.jsonl"
+      ]
+    },
+    {
       "name": "check_quick_close",
       "script": "scripts/check_quick_close.py",
       "description": "Decides whether a quick-lane change was declared, checked after the edit, small, froze no test, and may now be committed.",

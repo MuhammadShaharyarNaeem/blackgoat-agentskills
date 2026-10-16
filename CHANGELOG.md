@@ -5,6 +5,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Added
+- **State-transition coverage for discovery QA baselines.** Echo's `manual-testing.md` now ends with a `## State Transitions` table: one row per entity the feature writes and per independently changeable dimension, with cells for Unset → Set, Set → Unset and Set → Different, each citing a defined case or `N/A: <reason>` (or `None: <reason>` for a feature that writes nothing). A per-handler derivation had collapsed "map" and "remap to a different target" into one case; the Slide baseline missed remap-to-another-client twice.
+- **`check_qa_baseline.py`**, run at `/bgpdd-discovery` Phase 4 step 6: `transitions_missing`, `transitions_table_malformed`, `transition_cell_empty`, `transition_na_unreasoned`, `transition_case_missing`, `transition_row_duplicate`. It cannot see an entity the table never lists; the Orchestrator reads the rows against `code-workflow.md`'s writes.
+
 ## [2.12.3] — 2026-10-16
 
 ### Fixed
