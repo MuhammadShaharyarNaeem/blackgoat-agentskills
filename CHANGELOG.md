@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.12.3] — 2026-10-16
+
+### Fixed
+- **`check_commit_gate.py --commit` stages tracked files under an ignored directory.** A plain `git add` of a tracked file inside a gitignored directory (generated code checked in on purpose, e.g. LLBLGen output) stages it but exits 1 with the "paths are ignored" hint, so the gate reported ERROR. Already-tracked files are now staged with `git add -u`; new files keep a plain `git add`, so an ignored untracked file is still refused and nothing is ever force-added.
+
 ## [2.12.2] — 2026-10-16
 
 ### Fixed

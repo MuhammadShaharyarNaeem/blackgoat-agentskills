@@ -1150,11 +1150,25 @@ def declared_files_uncommitted(changed_files, repo):
 
 def perform_commit(changed_files, message, repo):
     """A verified deletion is staged with `git rm --cached`: `git add`
-    refuses a path the builder already removed from the index."""
+    refuses a path the builder already removed from the index.
+
+    An already-tracked file is staged with `git add -u`: a plain `git add`
+    of a tracked file under a gitignored directory (generated code checked
+    in on purpose) stages it but exits 1 with the "paths are ignored" hint.
+    A new file still takes a plain `git add`, so an ignored untracked file
+    is refused, never force-added."""
     present = [f for f in changed_files if (Path(repo) / f).exists()]
     gone = [f for f in changed_files if f not in present]
     if present:
-        run_git(["add", "--"] + present, repo)
+        listed = run_git(["ls-files", "-z", "--"] + present, repo).split("\0")
+        tracked_keys = {Path(repo, p).resolve() for p in listed if p}
+        tracked = [f for f in present
+                   if Path(repo, f).resolve() in tracked_keys]
+        untracked = [f for f in present if f not in tracked]
+        if tracked:
+            run_git(["add", "-u", "--"] + tracked, repo)
+        if untracked:
+            run_git(["add", "--"] + untracked, repo)
     if gone:
         run_git(["rm", "-q", "--cached", "--ignore-unmatch", "--"] + gone, repo)
     run_git(["commit", "-m", message], repo)
@@ -3829,6 +3843,56 @@ def run_self_test():
             self.assertEqual(sorted(zip(status[::2], status[1::2])),
                              [("D", "old.py"), ("D", "older.py"),
                               ("M", "src_file.py")])
+
+        def _ignored_dir_repo(self):
+            """A tracked gen/f.cs under a directory .gitignore ignores
+            (generated code checked in on purpose), modified since HEAD."""
+            run_git(["init", "-q"], str(self.dir))
+            run_git(["config", "user.email", "gate@test"], str(self.dir))
+            run_git(["config", "user.name", "gate"], str(self.dir))
+            (self.dir / "gen").mkdir()
+            (self.dir / "gen" / "f.cs").write_text("v1\n")
+            run_git(["add", "--", str(self.changed), "gen/f.cs"], str(self.dir))
+            run_git(["commit", "-q", "-m", "base"], str(self.dir))
+            (self.dir / ".gitignore").write_text("/gen\n/secret.txt\n")
+            run_git(["add", "--", ".gitignore"], str(self.dir))
+            run_git(["commit", "-q", "-m", "ignore gen"], str(self.dir))
+            self.changed.write_text("code v2\n")
+            (self.dir / "gen" / "f.cs").write_text("v2\n")
+            (self.dir / "new.py").write_text("new\n")
+            for p in (self.dir / "gen" / "f.cs", self.dir / "new.py"):
+                os.utime(p, (1000, 1000))
+            self.review.write_text(REVIEW_OK)
+            self._order(self.changed, self.review)
+
+        @unittest.skipUnless(shutil.which("git"), "git not on PATH")
+        def test_commit_stages_a_tracked_file_under_an_ignored_dir(self):
+            """2026-10-16: a plain `git add` stages it but exits 1 with the
+            "paths are ignored" hint; the gate stages tracked files with
+            `git add -u` and new ones with a plain add."""
+            self._ignored_dir_repo()
+            r = build_report(self._ns(
+                changed=[str(self.changed), "gen/f.cs", "new.py"],
+                commit=True, message="M3: regen"))
+            self.assertEqual(r["result"], "PASS", r)
+            self.assertTrue(r["committed"])
+            status = run_git(["show", "--name-status", "--pretty=format:",
+                              "HEAD"], str(self.dir)).split()
+            self.assertEqual(sorted(zip(status[::2], status[1::2])),
+                             [("A", "new.py"), ("M", "gen/f.cs"),
+                              ("M", "src_file.py")])
+
+        @unittest.skipUnless(shutil.which("git"), "git not on PATH")
+        def test_commit_never_force_adds_an_ignored_untracked_file(self):
+            self._ignored_dir_repo()
+            (self.dir / "secret.txt").write_text("s\n")
+            os.utime(self.dir / "secret.txt", (1000, 1000))
+            with self.assertRaises(GateError):
+                build_report(self._ns(
+                    changed=[str(self.changed), "secret.txt"],
+                    commit=True, message="M3: leak"))
+            self.assertNotIn("secret.txt", run_git(
+                ["ls-files"], str(self.dir)).split())
 
         @unittest.skipUnless(shutil.which("git"), "git not on PATH")
         def test_commit_refused_when_fix_already_committed(self):
