@@ -18,7 +18,7 @@ Convention #9: the persona already said "reverse-engineer the cases", and the se
 
 ## Scope limit
 
-The gate cannot see an entity the table never lists. It guarantees completeness *per listed row*, not that the rows are complete. That is why discovery Phase 4 step 6 tells the Orchestrator to read the rows against `code-workflow.md`'s writes before accepting, and why Echo's persona tells her to list every entity `code-workflow.md` shows a write to. Deriving the entity list mechanically from code would need a per-stack write detector, and none exists here.
+The gate cannot see an entity the table never lists. It guarantees completeness *per listed row*, not that the rows are complete. That is why discovery Phase 4 step 7 tells the Orchestrator to read the rows against `code-workflow.md`'s writes before accepting, and why Echo's persona tells her to list every entity `code-workflow.md` shows a write to. Deriving the entity list mechanically from code would need a per-stack write detector, and none exists here.
 
 Existing baselines written before this gate carry no table and fail `transitions_missing`. They are only re-gated when discovery re-runs and Echo rewrites the file. Readers of the baseline (`bgpdd-verify`, `bgpdd-plan`, Alex) do not run this gate.
 
@@ -28,7 +28,7 @@ The State Transitions table proves every listed change has a case. It says nothi
 
 **What it checks, and why each part.**
 - *The pack's shape.* All seven sections must exist, each exactly once, so a missing section is visible rather than silently skipped. The gate reads the bodies of Rules and Open Questions only; an empty Glossary, Roles, Entity States, Known Bugs or Risk Weights section passes. A repeated heading would let rules under the second copy go unread. Rules need an ID, a rule and a source: a rule with no source cannot be traced back to who said it.
-- *Open questions.* Every line under the heading is a `- Q-<n> — …` entry (`Q-1`, `Q-2`; a zero-padded `Q-01` is rejected, never skipped), or the section is a lone `None`. A line the gate cannot read as an entry is a failure, not a skip. Otherwise a plain bullet, a numbered item or a `Q-01` could hide an unresolved question or escape the cap. Each entry is answered by a rule or deferred with a reason. The cap of 10 (NFR-4) keeps the question round short. The rest are written as `Deferred: over the 10-question cap`, which the gate does not count.
+- *Open questions.* Every line under the heading is a `- Q-<n> — …` entry (`Q-1`, `Q-2`; a zero-padded `Q-01` is rejected, never skipped), or the section is a lone `None`. A line the gate cannot read as an entry is a failure, not a skip. Otherwise a plain bullet, a numbered item or a `Q-01` could hide an unresolved question or escape the cap. Each entry is answered by a rule (`Answered: D-<n>`, or `Answered: DS-<n>` for a shared rule in `context.md`'s `## Shared Domain Rules`, which the gate never looks up so the rule lives once, FR-10) or deferred with a reason of at least three words. The cap of 10 (NFR-4) keeps the question round short. The rest are written as `Deferred: over the 10-question cap`, which the gate does not count.
 - *One Oracle line per case.* `code` marks a case that only records today's behaviour. `D-<n>` / `DS-<n>` marks a case that checks a rule. Coverage counts a case for a rule only when its Oracle names that rule (`oracle_mismatch` otherwise), so a coverage row cannot cite a case that checks something else.
 - *Suspected defects.* An `SD-NN` case is where code and rule disagree. It must name the rule and say what the code does instead. It counts as coverage for its rule (EC-3), because the disagreement is exactly what the rule's test needs to show.
 - *Shared rules.* `DS-<n>` (in `context.md`'s `## Shared Domain Rules`) may appear in an Oracle and is never looked up or required in coverage (FR-10). The owning feature covers it.
@@ -45,7 +45,7 @@ The State Transitions table proves every listed change has a case. It says nothi
 2. A missing section fails `domain_pack_malformed` with a `domain.md:` detail.
 3. Blank Source, blank Rule, a bad ID and a repeated ID each fail `domain_pack_malformed`.
 4. A reasoned `None:` Rules needs no coverage, with or without a `None:` coverage section; a short one fails.
-5. Open questions: unresolved, a short `Deferred:` and `Answered: D-9` fail, while a reasoned `Deferred:` passes.
+5. Open questions: unresolved, a short `Deferred:` and `Answered: D-9` fail, while a reasoned `Deferred:` passes. `Answered: DS-1` passes with no local rule; `DS-01` fails, and a `DS-` row in `## Rules` stays malformed.
 6. `None`, `None.` and `None: …` pass (EC-2), and an empty section fails.
 7. Every non-entry Open Questions shape fails `domain_pack_malformed`: `Q-02`, a plain bullet, `1. Q-2`, `None` beside an entry, a continuation line (2026-10-20 red team).
 8. Zero-padded IDs that would escape the cap fail `domain_pack_malformed`.

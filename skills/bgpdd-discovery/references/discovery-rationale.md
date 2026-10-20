@@ -36,6 +36,18 @@ Tier 1 is durable and read months later by pipelines that have no way to tell a 
 
 ---
 
+## Why Echo runs twice around a question round
+
+Code alone yields tests that assert what the system *does*, bugs included: a case reverse-engineered from a handler that drops a history row will assert that the row is dropped. Only intent — what the system *should* do — can tell a behaviour from a defect, and intent lives in the user's sources and the user's head, not in the code.
+
+**Why the questions come from Echo but are asked by the main session**: Echo is the one reading the code closely enough to see where two readings of intent diverge, but a subagent cannot pause to ask the user (convention #6). So the questions surface in pass 1, as `## Open Questions` in `domain.md`; the Orchestrator asks them in the main session, where the user is; and pass 2 writes the cases against confirmed intent.
+
+**Why the answers go to `domain-sources/user.md` rather than straight into `domain.md`**: Echo stays the sole author of `domain.md`. The user's answers are one more source, recorded verbatim with their date, and pass 2 turns each into a `D-<n>` rule exactly as pass 1 turned each Scout's candidate rule into one. The exception is an answer the user says holds across features: it already lives once in `context.md` as a `DS-<n>` row, so pass 2 marks the question `Answered: DS-<n>` and writes no local rule.
+
+**Why at most 10 questions**: the user's budget is about ten minutes of one-line answers per feature. More than that becomes a spec to write, which is the work this round exists to avoid; the overflow is recorded as deferred, never dropped.
+
+---
+
 ## Why Phase 4b is interactive and in the main session
 
 Echo produced the material in Phase 4; this step turns it into a recipe *with the user*, and a delegated agent cannot pause to ask which device to test against.

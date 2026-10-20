@@ -38,7 +38,7 @@ DOMAIN_SECTIONS = ("Rules", "Glossary", "Roles", "Entity States",
 RULE_COLUMNS = ("ID", "Rule", "Source")
 RULE_ID_RE = re.compile(r"^D-[1-9]\d*$")
 QUESTION_RE = re.compile(r"^[-*]\s+\**(Q-[1-9]\d*)\b")
-ANSWERED_RE = re.compile(r"\bAnswered:\s*(D-[1-9]\d*)\b")
+ANSWERED_RE = re.compile(r"\bAnswered:\s*(DS?-[1-9]\d*)\b")
 DEFERRED_RE = re.compile(r"\bDeferred:\s*(.*)$")
 QUESTIONS_NONE_RE = re.compile(r"^None\.?$|^None\s*:", re.IGNORECASE)
 OPEN_QUESTION_CAP = 10
@@ -320,13 +320,15 @@ def check_open_questions(lines, start, rules, problem):
         if reason != OVER_CAP_REASON:
             counted += 1
         if answered:
-            if answered.group(1) not in rules:
+            if (RULE_ID_RE.match(answered.group(1))
+                    and answered.group(1) not in rules):
                 problem("domain_rule_unknown", n,
                         f"{question_id} is Answered: {answered.group(1)}, "
                         "which `## Rules` does not define")
         elif not (deferred and has_reason(reason)):
             problem("open_question_unresolved", n,
-                    f"{question_id} carries neither `Answered: D-<n>` nor "
+                    f"{question_id} carries neither `Answered: D-<n>`/"
+                    "`DS-<n>` nor "
                     f"`Deferred: <reason>` of at least {MIN_REASON_WORDS} "
                     "words")
     if counted > OPEN_QUESTION_CAP:
@@ -703,7 +705,8 @@ Reads:
   Risk Weights, Open Questions, each once. `## Rules` is a `| ID | Rule |
   Source |` table (IDs D-1, D-2, ...; no blank cell) or `None: <reason>`.
   `## Open Questions` is a lone `None`, or only `- Q-<n>` lines (Q-1,
-  not Q-01), each saying `Answered: D-<n>` or `Deferred: <reason>`; any
+  not Q-01), each saying `Answered: D-<n>`, `Answered: DS-<n>` (a shared
+  rule, never looked up) or `Deferred: <reason>` (3+ words); any
   other line is malformed. At most 10 are not
   `Deferred: over the 10-question cap`. With --domain, every case in
   --file has one `**Oracle:** code` or `**Oracle:** D-3, DS-1` line; an
@@ -1020,6 +1023,13 @@ def run_self_test():
             self.assertEqual(self.codes(
                 questions="- Q-1 — Remap? Answered: D-9\n"),
                 ["domain_rule_unknown"])
+            self.assertEqual(self.codes(
+                questions="- Q-1 — Remap? Answered: DS-1\n"), [])
+            self.assertEqual(self.codes(
+                questions="- Q-1 — Remap? Answered: DS-01\n"),
+                ["open_question_unresolved"])
+            self.assertIn("domain_pack_malformed", self.codes(
+                rules=RULES + "| DS-1 | Roles are shared | user |\n"))
 
         def test_no_open_questions_ec2(self):
             for text in ("None\n", "None.\n", "None: nothing was ambiguous\n"):

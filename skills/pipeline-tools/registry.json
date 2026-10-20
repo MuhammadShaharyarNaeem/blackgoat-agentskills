@@ -673,7 +673,7 @@
         {
           "lane": "bgpdd-discovery",
           "phase": "4",
-          "step": "6",
+          "step": "7",
           "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_qa_baseline.py --file .docs/summary/{feature}/QA/manual-testing.md --domain .docs/summary/{feature}/domain.md --ledger .docs/summary/gates.jsonl",
           "gate": "Exit 1 returns to Echo's second pass with the failing cells or rules; a missing case is written as a case, never waved through as N/A, and you never fill the tables for her."
         }
@@ -956,7 +956,7 @@
         {
           "lane": "bgpdd-discovery",
           "phase": "4",
-          "step": "5",
+          "step": "3",
           "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/check_tier1_provenance.py --summary-root .docs/summary --feature {feature} --repo <name>=<path> [--repo ...] --warn-on-drift --ledger .docs/summary/gates.jsonl",
           "gate": "Exit 1 returns to Echo; do not stamp her artifact for her."
         },
@@ -1283,7 +1283,7 @@
           "lane": "bgpdd-discovery",
           "phase": "*",
           "step": "-",
-          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/record_run.py --log .docs/summary/run-log.jsonl --pipeline bgpdd-discovery --phase \"<phase>\" --event delegation --agent <iris|scout|echo> --model <tier> --unit \"<{feature}, or the {api} for a Scout>\" …",
+          "template": "python {PLUGIN_ROOT}/pipeline-tools/scripts/record_run.py --log .docs/summary/run-log.jsonl --pipeline bgpdd-discovery --phase \"<phase>\" --event delegation --agent <iris|scout|echo> --model <tier> --unit \"<{feature}, or the {api} or {source} for a Scout>\" …",
           "gate": "`--model` is mandatory on a delegation return - exit 2 without it - and this log is what Phase 5's `/bgpdd-learn` offer reads."
         },
         {

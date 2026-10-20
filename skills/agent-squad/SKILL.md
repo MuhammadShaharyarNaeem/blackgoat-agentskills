@@ -36,7 +36,7 @@ Log: "⚠️ Context integrity check failed — rebuilt from semantic memory."
 | Agent | Name | Phase | Triggers |
 |-------|------|-------|----------|
 | Iris | Observer | Discovery | bgpdd-discovery Phase 1, or "map the tech stack" |
-| Scout | Research Worker | Discovery | bgpdd-discovery Phase 2, or "deep-dive this API" |
+| Scout | Research Worker | Discovery | bgpdd-discovery Phase 2 and 3b, or "deep-dive this API" |
 | Echo | Legacy QA Analyst | Discovery | bgpdd-discovery Phase 4, or "reverse-engineer this feature / QA baseline" |
 | Rex | Analyst | Requirements | New project, new feature, scope change |
 | Aria | Architect | Architecture | After Rex, or "design the system" |
