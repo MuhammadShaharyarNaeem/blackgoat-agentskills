@@ -33,6 +33,30 @@ NONE_RE = re.compile(r"^None\s*:\s*(.*)$", re.IGNORECASE)
 FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 MIN_REASON_WORDS = 3
 
+DOMAIN_SECTIONS = ("Rules", "Glossary", "Roles", "Entity States",
+                   "Known Bugs", "Risk Weights", "Open Questions")
+RULE_COLUMNS = ("ID", "Rule", "Source")
+RULE_ID_RE = re.compile(r"^D-[1-9]\d*$")
+QUESTION_RE = re.compile(r"^[-*]\s+\**(Q-[1-9]\d*)\b")
+ANSWERED_RE = re.compile(r"\bAnswered:\s*(D-[1-9]\d*)\b")
+DEFERRED_RE = re.compile(r"\bDeferred:\s*(.*)$")
+QUESTIONS_NONE_RE = re.compile(r"^None\.?$|^None\s*:", re.IGNORECASE)
+OPEN_QUESTION_CAP = 10
+OVER_CAP_REASON = "over the 10-question cap"
+DOMAIN_PREFIX = "domain.md:"
+
+COVERAGE_SECTION = "Domain Coverage"
+COVERAGE_COLUMNS = ("Rule", "Cases")
+ORACLE_RE = re.compile(r"^\*\*Oracle:\*\*\s*(.*)$")
+DEFECT_RE = re.compile(r"^\*\*Suspected defect:\*\*\s*(\S.*)$")
+SHARED_RULE_ID_RE = re.compile(r"^DS-[1-9]\d*$")
+SUSPECT_PREFIX = "SD-"
+ORACLE_CODE = "code"
+HEADING_RE = re.compile(r"^#{1,6}\s")
+SECTION_END_RE = re.compile(r"^#{1,2}\s")
+SEPARATOR_RE = re.compile(r":?-{3,}:?")
+CLOSING_HASHES_RE = re.compile(r"\s+#+\s*$")     # CommonMark `## X ##`
+
 
 class GateError(Exception):
     """Structural/usage failure -- maps to exit 2."""
@@ -68,15 +92,25 @@ def norm_header(cell):
     return " ".join(cell.replace("->", "→").split()).casefold()
 
 
+def read_lines(path, flag):
+    """The file's lines, fences blanked; unreadable is a GateError (exit 2)."""
+    try:
+        text = Path(path).read_text(encoding="utf-8-sig")
+    except OSError as exc:
+        raise GateError(f"cannot read {flag} {path}: {exc}")
+    return blank_fences(text.splitlines())
+
+
+def case_ids(lines):
+    """Every case ID with a heading in these lines."""
+    return {m.group(1) for line in lines
+            for m in [CASE_HEADING_RE.match(line)] if m}
+
+
 def build_report(path):
     p = Path(path)
-    try:
-        text = p.read_text(encoding="utf-8-sig")
-    except OSError as exc:
-        raise GateError(f"cannot read --file {path}: {exc}")
-    lines = blank_fences(text.splitlines())
-    defined = {m.group(1) for line in lines
-               for m in [CASE_HEADING_RE.match(line)] if m}
+    lines = read_lines(path, "--file")
+    defined = case_ids(lines)
     problems = []
 
     def problem(code, line_no, detail):
@@ -167,6 +201,294 @@ def build_report(path):
                 "the table has a header and no rows; with no mutable state "
                 "write `None: <reason>` instead")
     return report
+
+
+# --- --domain: the domain pack and the rule-coverage table ------------------
+
+def level2_headings(lines):
+    """Level-2 heading text (whitespace-collapsed, casefolded) -> indexes."""
+    found = {}
+    for i, line in enumerate(lines):
+        m = re.match(r"^##\s+(.+?)\s*$", line)
+        if m:
+            text = CLOSING_HASHES_RE.sub("", " " + m.group(1))
+            found.setdefault(" ".join(text.split()).casefold(),
+                             []).append(i)
+    return found
+
+
+def section_body(lines, start):
+    """Non-blank (line_no, text) after heading `start`, to the next #/##."""
+    body = []
+    for i in range(start + 1, len(lines)):
+        if SECTION_END_RE.match(lines[i]):
+            break
+        if lines[i].strip():
+            body.append((i + 1, lines[i]))
+    return body
+
+
+def table_of(body):
+    """(line_no, cells) for every table row in a section body."""
+    return [(n, cells) for n, line in body
+            for cells in [split_row(line)] if cells is not None]
+
+
+def is_separator(cells):
+    return all(SEPARATOR_RE.fullmatch(c) for c in cells)
+
+
+def has_reason(text):
+    return len(text.split()) >= MIN_REASON_WORDS
+
+
+def parse_rules(lines, start, problem):
+    """`## Rules`: {D-<n>: line_no}; empty for a reasoned `None:`."""
+    body = section_body(lines, start)
+    table = table_of(body)
+    rules = {}
+    if not table:
+        none = next((m for _n, line in body
+                     for m in [NONE_RE.match(line.strip())] if m), None)
+        if not (none and has_reason(none.group(1))):
+            problem("domain_pack_malformed", start + 1,
+                    "`## Rules` holds no `| ID | Rule | Source |` table and "
+                    f"no `None: <reason>` line of at least {MIN_REASON_WORDS} "
+                    "words")
+        return rules
+    header_no, header = table[0]
+    if [norm_header(c) for c in header] != [norm_header(c)
+                                            for c in RULE_COLUMNS]:
+        problem("domain_pack_malformed", header_no,
+                "`## Rules` header must be | " + " | ".join(RULE_COLUMNS)
+                + " |")
+        return rules
+    data_rows = 0
+    for n, cells in table[1:]:
+        if is_separator(cells):
+            continue
+        data_rows += 1
+        if len(cells) != len(RULE_COLUMNS):
+            problem("domain_pack_malformed", n, f"Rules row has {len(cells)} "
+                    f"cells, expected {len(RULE_COLUMNS)}")
+            continue
+        rule_id = cells[0].strip("`")
+        if not RULE_ID_RE.match(rule_id):
+            problem("domain_pack_malformed", n,
+                    f"Rules row, ID cell: {rule_id!r} is not D-<n>")
+            continue
+        if rule_id in rules:
+            problem("domain_pack_malformed", n, f"Rules row, ID cell: "
+                    f"{rule_id} repeats line {rules[rule_id]}")
+            continue
+        rules[rule_id] = n
+        for column, cell in zip(RULE_COLUMNS[1:], cells[1:]):
+            if not cell:
+                problem("domain_pack_malformed", n,
+                        f"Rules row {rule_id}, {column} cell: empty")
+    if not data_rows:
+        problem("domain_pack_malformed", header_no,
+                "`## Rules` has a header and no rows; with no rules write "
+                "`None: <reason>` instead")
+    return rules
+
+
+def check_open_questions(lines, start, rules, problem):
+    """`## Open Questions`: every entry answered or deferred, cap held."""
+    body = section_body(lines, start)
+    if len(body) == 1 and QUESTIONS_NONE_RE.match(body[0][1].strip()):
+        return
+    if not body:
+        problem("domain_pack_malformed", start + 1,
+                "`## Open Questions` holds neither `None` nor "
+                "`- Q-<n>` entries")
+        return
+    entries = []
+    for n, line in body:
+        m = QUESTION_RE.match(line.strip())
+        if m:
+            entries.append((n, line.strip(), m.group(1)))
+        else:
+            problem("domain_pack_malformed", n, "every `## Open Questions` "
+                    "line is one `- Q-<n> — ...` entry (Q-1, Q-2, ...), or "
+                    "the section is a lone `None`")
+    counted = 0
+    for n, text, question_id in entries:
+        answered = ANSWERED_RE.search(text)
+        deferred = DEFERRED_RE.search(text)
+        reason = deferred.group(1).strip() if deferred else ""
+        if reason != OVER_CAP_REASON:
+            counted += 1
+        if answered:
+            if answered.group(1) not in rules:
+                problem("domain_rule_unknown", n,
+                        f"{question_id} is Answered: {answered.group(1)}, "
+                        "which `## Rules` does not define")
+        elif not (deferred and has_reason(reason)):
+            problem("open_question_unresolved", n,
+                    f"{question_id} carries neither `Answered: D-<n>` nor "
+                    f"`Deferred: <reason>` of at least {MIN_REASON_WORDS} "
+                    "words")
+    if counted > OPEN_QUESTION_CAP:
+        problem("open_questions_over_cap", start + 1,
+                f"{counted} open questions; keep at most {OPEN_QUESTION_CAP} "
+                f"and mark the rest `Deferred: {OVER_CAP_REASON}`")
+
+
+def build_domain_report(domain_path, problems):
+    """Gate the domain pack; return its rules {D-<n>: line_no}."""
+    lines = read_lines(domain_path, "--domain")
+
+    def problem(code, line_no, detail):
+        where = DOMAIN_PREFIX + (f"{line_no}:" if line_no else "")
+        problems.append({"problem": code, "line": line_no,
+                         "detail": f"{where} {detail}"})
+
+    headings = level2_headings(lines)
+    for name in DOMAIN_SECTIONS:
+        found = headings.get(name.casefold(), [])
+        if not found:
+            problem("domain_pack_malformed", None, f"no `## {name}` section")
+        for repeat in found[1:]:
+            problem("domain_pack_malformed", repeat + 1, f"`## {name}` "
+                    f"repeats line {found[0] + 1}; write one section")
+    rules = {}
+    if "rules" in headings:
+        rules = parse_rules(lines, headings["rules"][0], problem)
+    if "open questions" in headings:
+        check_open_questions(lines, headings["open questions"][0], rules,
+                             problem)
+    return rules
+
+
+def case_blocks(lines):
+    """Each case heading's block: its Oracle lines and defect presence."""
+    blocks, current = [], None
+    for i, line in enumerate(lines):
+        m = CASE_HEADING_RE.match(line)
+        if m:
+            current = {"id": m.group(1), "line": i + 1, "oracles": [],
+                       "defect": False}
+            blocks.append(current)
+        elif HEADING_RE.match(line):
+            current = None
+        elif current is not None:
+            text = line.strip()
+            oracle = ORACLE_RE.match(text)
+            if oracle:
+                current["oracles"].append((i + 1, oracle.group(1).strip()))
+            elif DEFECT_RE.match(text):
+                current["defect"] = True
+    return blocks
+
+
+def check_case_oracle(block, rules, named, problem):
+    """One case's Oracle line; adds the D-<n> it names to `named`."""
+    case_id = block["id"]
+    if not block["oracles"]:
+        problem("oracle_missing", block["line"], f"{case_id} has no "
+                "`**Oracle:**` line: `code`, or the D-<n>/DS-<n> it checks")
+        return
+    if len(block["oracles"]) > 1:
+        problem("oracle_malformed", block["oracles"][1][0],
+                f"{case_id} has {len(block['oracles'])} `**Oracle:**` "
+                "lines; exactly one")
+        return
+    n, value = block["oracles"][0]
+    if value != ORACLE_CODE:
+        ids = [x.strip().strip("`") for x in value.split(",")]
+        if not all(RULE_ID_RE.match(x) or SHARED_RULE_ID_RE.match(x)
+                   for x in ids):
+            problem("oracle_malformed", n, f"{case_id}: {value!r} is "
+                    "neither `code` nor a comma list of D-<n>/DS-<n> IDs")
+            return
+        for rule_id in ids:
+            if not RULE_ID_RE.match(rule_id):
+                continue                    # DS-<n>: no lookup (FR-10)
+            named.add(rule_id)
+            if rule_id not in rules:
+                problem("domain_rule_unknown", n, f"{case_id}: Oracle "
+                        f"names {rule_id}, which domain.md does not define")
+    if case_id.startswith(SUSPECT_PREFIX) and (
+            value == ORACLE_CODE or not block["defect"]):
+        problem("suspected_defect_malformed", block["line"],
+                f"{case_id} needs an Oracle naming the rule it contradicts "
+                "and a `**Suspected defect:** <text>` line")
+
+
+def check_coverage_cell(n, rule_id, cell, defined, oracles, problem):
+    """One Cases cell: case IDs whose Oracle names the rule, or `N/A:`."""
+    na = NA_RE.match(cell)
+    if na:
+        if not has_reason(na.group(1)):
+            problem("domain_coverage_malformed", n, f"{rule_id}: `N/A:` "
+                    f"needs a reason of at least {MIN_REASON_WORDS} words")
+        return
+    if not cell:
+        problem("domain_coverage_malformed", n,
+                f"{rule_id}: name a case ID or `N/A: <reason>`")
+        return
+    for case_id in [x.strip().strip("`") for x in cell.split(",")]:
+        if not CASE_ID_RE.match(case_id):
+            problem("domain_coverage_malformed", n, f"{rule_id}: "
+                    f"{case_id!r} is neither a case ID nor `N/A: <reason>`")
+        elif case_id not in defined:
+            problem("domain_case_missing", n,
+                    f"{rule_id}: {case_id} is not a case heading in this file")
+        elif rule_id not in oracles.get(case_id, ()):
+            problem("oracle_mismatch", n, f"{rule_id}: {case_id}'s "
+                    f"`**Oracle:**` line does not name {rule_id}")
+
+
+def check_domain_coverage(lines, defined, rules, problems):
+    """Oracle lines and `## Domain Coverage`; return the uncovered rules."""
+    def problem(code, line_no, detail):
+        problems.append({"problem": code, "line": line_no, "detail": detail})
+
+    oracles = {}
+    for block in case_blocks(lines):
+        check_case_oracle(block, rules,
+                          oracles.setdefault(block["id"], set()), problem)
+    start = next((i for i, line in enumerate(lines)
+                  if re.match(r"^##\s+" + re.escape(COVERAGE_SECTION)
+                              + r"\s*$", line.strip(), re.IGNORECASE)), None)
+    covered, seen = set(), set()
+    table = table_of(section_body(lines, start)) if start is not None else []
+    if table and [norm_header(c) for c in table[0][1]] != [
+            norm_header(c) for c in COVERAGE_COLUMNS]:
+        problem("domain_coverage_malformed", table[0][0],
+                "header must be | " + " | ".join(COVERAGE_COLUMNS) + " |")
+        table = []
+    for n, cells in table[1:]:
+        if is_separator(cells):
+            continue
+        if len(cells) != len(COVERAGE_COLUMNS):
+            problem("domain_coverage_malformed", n, f"row has {len(cells)} "
+                    f"cells, expected {len(COVERAGE_COLUMNS)}")
+            continue
+        rule_id = cells[0].strip("`")
+        if not RULE_ID_RE.match(rule_id):
+            problem("domain_coverage_malformed", n,
+                    f"Rule cell {rule_id!r} is not D-<n>")
+            continue
+        if rule_id in seen:
+            problem("domain_coverage_malformed", n,
+                    f"{rule_id} is listed twice")
+            continue
+        seen.add(rule_id)
+        if rule_id not in rules:
+            problem("domain_rule_unknown", n,
+                    f"{rule_id} is not defined in domain.md's `## Rules`")
+            continue
+        covered.add(rule_id)
+        check_coverage_cell(n, rule_id, cells[1], defined, oracles, problem)
+    uncovered = [rule_id for rule_id in rules if rule_id not in covered]
+    for rule_id in uncovered:
+        problem("domain_rule_uncovered",
+                None if start is None else start + 1,
+                f"{rule_id} has no `## {COVERAGE_SECTION}` row: cite a case "
+                "whose Oracle names it, or `N/A: <reason>`")
+    return uncovered
 
 
 # --- the gate ledger: byte-identical helpers (pipeline-tools/SKILL.md) -----
@@ -353,9 +675,9 @@ class PurposeFirstParser(argparse.ArgumentParser):
         return purpose + "\n\n" + body if purpose else body
 
 
-PURPOSE = ("Decides whether a discovery QA baseline enumerates every mutable "
-           "entity's state transitions, each cell citing a defined case or a "
-           "reasoned N/A.")
+PURPOSE = ("Decides whether a discovery QA baseline covers every entity's "
+           "state transitions and, with --domain, every domain rule, each "
+           "through a defined case or reasoned N/A.")
 
 EPILOG = """\
 Reads:
@@ -376,6 +698,21 @@ Reads:
   that every listed dimension gets its change case or an explicit,
   reviewable N/A -- not that the list of entities is complete.
 
+  --domain <path>  the feature's .docs/summary/{feature}/domain.md. Needs
+  the level-2 sections Rules, Glossary, Roles, Entity States, Known Bugs,
+  Risk Weights, Open Questions, each once. `## Rules` is a `| ID | Rule |
+  Source |` table (IDs D-1, D-2, ...; no blank cell) or `None: <reason>`.
+  `## Open Questions` is a lone `None`, or only `- Q-<n>` lines (Q-1,
+  not Q-01), each saying `Answered: D-<n>` or `Deferred: <reason>`; any
+  other line is malformed. At most 10 are not
+  `Deferred: over the 10-question cap`. With --domain, every case in
+  --file has one `**Oracle:** code` or `**Oracle:** D-3, DS-1` line; an
+  SD-NN case names its rule and has a `**Suspected defect:**` line. Its
+  `## Domain Coverage` table `| Rule | Cases |` gives every D-<n> case IDs
+  whose Oracle names it, or `N/A: <reason>`. DS-<n> is never looked up.
+  Domain-pack details start `domain.md:`. Without --domain, none of this
+  runs and output is unchanged.
+
 Problem codes:
   transitions_missing          no section, or a section with neither a table
                                with rows nor a reasoned `None:` line
@@ -386,17 +723,36 @@ Problem codes:
   transition_na_unreasoned     `N/A:` with fewer than 3 words of reason
   transition_case_missing      a cited ID with no case heading in the file
   transition_row_duplicate     the same entity/dimension listed twice
+  domain_pack_malformed        a missing or repeated section, a bad Rules
+                               table or row, or an Open Questions line
+                               that is neither a Q entry nor a lone None
+  open_question_unresolved     a question neither answered nor deferred
+  open_questions_over_cap      more than 10 questions not over-cap-deferred
+  domain_rule_unknown          an Answered:, Oracle or coverage row naming
+                               a D-<n> that Rules does not define
+  oracle_missing               a case with no `**Oracle:**` line
+  oracle_malformed             two Oracle lines, or a value that is neither
+                               `code` nor D-<n>/DS-<n> IDs
+  suspected_defect_malformed   an SD- case with Oracle `code` or no
+                               `**Suspected defect:**` text
+  domain_coverage_malformed    wrong header or cell count, a bad or repeated
+                               Rule, or a cell neither case IDs nor `N/A:`
+  domain_case_missing          a cited ID with no case heading in the file
+  oracle_mismatch              a cited case whose Oracle omits the rule
+  domain_rule_uncovered        a D-<n> with no Domain Coverage row
 
 JSON keys:
-  file, cases_defined, rows, none_reason, problems, result, error
+  file, cases_defined, rows, none_reason, problems, result, error;
+  with --domain also domain, rules_defined, rules_uncovered
 
 Exit codes:
-  0  every row's three cells resolve, or a reasoned `None:`
+  0  every row's three cells resolve, or a reasoned `None:`; with
+     --domain, every rule covered and the pack well formed
   1  any problem above
-  2  usage error, or --file unreadable
+  2  usage error, or --file / --domain unreadable
 
 Self-test:
-  python check_qa_baseline.py --self-test   (12 cases)
+  python check_qa_baseline.py --self-test
 """
 
 
@@ -405,6 +761,8 @@ def main(argv):
         prog="check_qa_baseline.py", description=PURPOSE, epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--file", help="the QA baseline (manual-testing.md)")
+    parser.add_argument("--domain", dest="domain",
+                        help="the feature's domain pack (domain.md)")
     parser.add_argument("--milestone",
                         help="recorded in the ledger record; not a scope")
     parser.add_argument("--ledger",
@@ -417,7 +775,7 @@ def main(argv):
     def finish(code, verdict):
         """One exit point: EVERY return path records a ledger line."""
         append_ledger(args.ledger, argv, args.milestone,
-                      [args.file] if args.file else [], verdict, code)
+                      [args.file, args.domain], verdict, code)
         return code
 
     if not args.file:
@@ -426,6 +784,13 @@ def main(argv):
         return finish(2, "ERROR")
     try:
         report = build_report(args.file)
+        if args.domain is not None:
+            rules = build_domain_report(args.domain, report["problems"])
+            lines = read_lines(args.file, "--file")
+            report["domain"] = str(Path(args.domain)).replace("\\", "/")
+            report["rules_defined"] = len(rules)
+            report["rules_uncovered"] = check_domain_coverage(
+                lines, case_ids(lines), rules, report["problems"])
     except GateError as exc:
         print(json.dumps({"result": "ERROR", "error": str(exc)}))
         return finish(2, "ERROR")
@@ -549,7 +914,300 @@ def run_self_test():
                 "## Notes\n\n| x | y |\n", encoding="utf-8")
             self.assertEqual(build_report(str(self.file))["problems"], [])
 
-    suite = unittest.TestLoader().loadTestsFromTestCase(QaBaselineTests)
+    RULES = ("| ID | Rule | Source |\n|---|---|---|\n"
+             "| D-1 | A mapped client can be remapped | user, 2026-10-20 |\n"
+             "| D-2 | Unmapping keeps the history row | user, 2026-10-20 |\n")
+    QUESTION = "- Q-1 — Remap or reject? Answered: D-1\n"
+    D_CASES = ("## Happy Path\n\n### HP-01 — Remap a client (P0)\n"
+               "**Oracle:** D-1\n\n### HP-02 — Unmap a client (P0)\n"
+               "**Oracle:** D-2\n")
+    COVER_HEAD = "## Domain Coverage\n\n| Rule | Cases |\n|---|---|\n"
+    COVERAGE = COVER_HEAD + "| D-1 | HP-01 |\n| D-2 | HP-02 |\n"
+    LEGACY_KEYS = ["file", "cases_defined", "rows", "none_reason", "problems",
+                   "result", "error"]
+
+    class DomainTests(unittest.TestCase):
+        def setUp(self):
+            self.dir = Path(tempfile.mkdtemp())
+            self.file = self.dir / "manual-testing.md"
+            self.domain = self.dir / "domain.md"
+
+        def tearDown(self):
+            shutil.rmtree(self.dir, ignore_errors=True)
+
+        def write(self, rules=RULES, questions=QUESTION, drop=None,
+                  cases=D_CASES, coverage=COVERAGE):
+            body = {"Rules": rules, "Glossary": "None.\n",
+                    "Roles": "None.\n", "Entity States": "None.\n",
+                    "Known Bugs": "None.\n", "Risk Weights": "None.\n",
+                    "Open Questions": questions}
+            self.domain.write_text("# Domain pack\n\n" + "".join(
+                f"## {name}\n{text}\n" for name, text in body.items()
+                if name != drop), encoding="utf-8")
+            self.file.write_text(
+                "# QA\n\n" + cases + "\n## State Transitions\n\nNone: a "
+                "fixture with no mutable state\n\n" + coverage,
+                encoding="utf-8")
+
+        def run_main(self, extra=()):
+            import contextlib
+            import io
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = main(["--file", str(self.file), "--domain",
+                             str(self.domain), *extra])
+            return code, json.loads(out.getvalue())
+
+        def codes(self, **kw):
+            self.write(**kw)
+            code, report = self.run_main()
+            codes = sorted(p["problem"] for p in report["problems"])
+            self.assertEqual(code, 1 if codes else 0)
+            return codes
+
+        def test_full_pack_and_coverage_pass(self):
+            self.write()
+            code, report = self.run_main()
+            self.assertEqual((code, report["problems"]), (0, []))
+            self.assertEqual((report["rules_defined"],
+                              report["rules_uncovered"]), (2, []))
+            self.assertEqual(report["domain"],
+                             str(self.domain).replace("\\", "/"))
+
+        def test_missing_domain_section_fails(self):
+            self.write(drop="Risk Weights")
+            _code, report = self.run_main()
+            self.assertEqual([p["problem"] for p in report["problems"]],
+                             ["domain_pack_malformed"])
+            self.assertTrue(report["problems"][0]["detail"]
+                            .startswith("domain.md:"))
+
+        def test_bad_rules_rows_fail(self):
+            for row in ("| D-2 | Unmapping keeps the history row | |\n",
+                        "| D-2 |  | user |\n",
+                        "| D-02 | Unmapping keeps history | user |\n",
+                        "| D-1 | Unmapping keeps history | user |\n"):
+                with self.subTest(row=row):
+                    self.assertIn("domain_pack_malformed", self.codes(
+                        rules=RULES.rsplit("| D-2", 1)[0] + row))
+
+        def test_rules_none_passes_without_coverage(self):
+            self.assertEqual(self.codes(
+                rules="None: no rules found here\n", questions="None\n",
+                cases=D_CASES.replace("D-1", "code").replace("D-2", "code"),
+                coverage=""), [])
+            self.assertEqual(self.codes(
+                rules="None: no rules found here\n", questions="None\n",
+                cases=D_CASES.replace("D-1", "code").replace("D-2", "code"),
+                coverage="## Domain Coverage\n\nNone: no rules in the pack\n"),
+                [])
+            self.assertEqual(self.codes(rules="None: none\n"),
+                             sorted(["domain_pack_malformed",
+                                     "domain_rule_unknown",
+                                     "domain_rule_unknown",
+                                     "domain_rule_unknown",
+                                     "domain_rule_unknown",
+                                     "domain_rule_unknown"]))
+
+        def test_open_question_dispositions(self):
+            self.assertEqual(self.codes(questions="- Q-1 — Remap?\n"),
+                             ["open_question_unresolved"])
+            self.assertEqual(self.codes(
+                questions="- Q-1 — Remap? Deferred: user not sure yet\n"), [])
+            self.assertEqual(self.codes(
+                questions="- Q-1 — Remap? Deferred: later\n"),
+                ["open_question_unresolved"])
+            self.assertEqual(self.codes(
+                questions="- Q-1 — Remap? Answered: D-9\n"),
+                ["domain_rule_unknown"])
+
+        def test_no_open_questions_ec2(self):
+            for text in ("None\n", "None.\n", "None: nothing was ambiguous\n"):
+                with self.subTest(text=text):
+                    self.assertEqual(self.codes(questions=text), [])
+            self.assertEqual(self.codes(questions="\n"),
+                             ["domain_pack_malformed"])
+
+        def test_every_open_questions_line_is_gated(self):
+            """2026-10-20 red team: these shapes were silently ignored."""
+            for text in ("- Q-02 — Remap? Deferred: user not sure yet\n",
+                         "- Should remap be allowed at all?\n",
+                         "1. Q-2 — Remap? Deferred: user not sure yet\n",
+                         QUESTION + "- Q-02 — Remap? Deferred: not sure\n",
+                         QUESTION + "- Should remap be allowed at all?\n",
+                         QUESTION + "1. Q-2 — Remap? Deferred: not sure\n",
+                         "None\n- Q-1 — Remap or reject?\n",
+                         QUESTION + "None\n",
+                         QUESTION + "  more prose about Q-1\n"):
+                with self.subTest(text=text):
+                    self.assertIn("domain_pack_malformed",
+                                  self.codes(questions=text))
+
+        def test_zero_padded_ids_cannot_escape_the_cap(self):
+            entries = "".join(f"- Q-{n} — ? Deferred: user not sure yet\n"
+                              for n in range(1, 11)) + "".join(
+                f"- Q-0{n} — ? Deferred: user not sure yet\n"
+                for n in range(1, 6))
+            self.assertIn("domain_pack_malformed",
+                          self.codes(questions=entries))
+
+        def test_repeated_domain_section_fails(self):
+            self.assertIn("domain_pack_malformed", self.codes(
+                rules=RULES + "\n## Rules\n| ID | Rule | Source |\n"
+                "|---|---|---|\n| D-3 | Hidden rule | user |\n"))
+
+        def test_closing_hash_heading_is_the_same_section(self):
+            """Round 2 red team: `## X ##` is CommonMark for `## X`."""
+            self.assertIn("domain_pack_malformed", self.codes(
+                questions=QUESTION + "\n## Open Questions ##\n"
+                "- Q-2 — x?\n"))
+            self.assertIn("domain_pack_malformed", self.codes(
+                rules="None: no rules found here\n\n## Rules ##\n" + RULES))
+            self.write()
+            self.domain.write_text(self.domain.read_text(encoding="utf-8")
+                                   .replace("## Risk Weights\n",
+                                            "## Risk Weights ##\n"),
+                                   encoding="utf-8")
+            self.assertEqual(self.run_main()[1]["problems"], [])
+
+        def test_suspected_defect_cited_for_another_rule_mismatches(self):
+            sd = ("\n### SD-01 — History row dropped (P0)\n**Oracle:** D-2\n"
+                  "**Suspected defect:** unmap deletes the row; contradicts "
+                  "D-2: unmapping keeps the history row\n")
+            self.assertEqual(self.codes(
+                cases=D_CASES + sd,
+                coverage=COVER_HEAD + "| D-1 | HP-01, SD-01 |\n"
+                "| D-2 | SD-01 |\n"), ["oracle_mismatch"])
+
+        def test_open_questions_cap(self):
+            entries = "".join(f"- **Q-{n}** — ? Deferred: user not sure yet\n"
+                              for n in range(1, 12))
+            self.assertEqual(self.codes(questions=entries),
+                             ["open_questions_over_cap"])
+            capped = entries.rsplit("Deferred:", 1)[0] + (
+                "Deferred: " + OVER_CAP_REASON + "\n")
+            self.assertEqual(self.codes(questions=capped), [])
+
+        def test_report_keys_without_and_with_domain(self):
+            import contextlib
+            import io
+            self.write()
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                main(["--file", str(self.file)])
+            self.assertEqual(list(json.loads(out.getvalue())), LEGACY_KEYS)
+            _code, report = self.run_main()
+            self.assertEqual(list(report), LEGACY_KEYS[:5] + [
+                "domain", "rules_defined", "rules_uncovered"]
+                + LEGACY_KEYS[5:])
+
+        def test_unreadable_domain_and_ledger_inputs(self):
+            self.write()
+            ledger = self.dir / "gates.jsonl"
+            self.assertEqual(self.run_main(["--ledger", str(ledger)])[0], 0)
+            self.domain.unlink()
+            self.assertEqual(self.run_main(["--ledger", str(ledger)])[0], 2)
+            import contextlib
+            import io
+            with contextlib.redirect_stdout(io.StringIO()):
+                main(["--file", str(self.file), "--ledger", str(ledger)])
+            records = [json.loads(l) for l in
+                       ledger.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([len(r["inputs"]) for r in records], [2, 2, 1])
+            self.assertEqual(records[1]["verdict"], "ERROR")
+
+        def test_empty_domain_path_is_an_error(self):
+            """--domain "" is a flag given, not absent: exit 2, never PASS."""
+            self.write()
+            import contextlib
+            import io
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = main(["--file", str(self.file), "--domain", ""])
+            self.assertEqual(code, 2)
+
+        def test_uncovered_rule_then_na(self):
+            self.write(coverage=COVER_HEAD + "| D-1 | HP-01 |\n")
+            code, report = self.run_main()
+            self.assertEqual(code, 1)
+            self.assertEqual([(p["problem"], "D-2" in p["detail"])
+                              for p in report["problems"]],
+                             [("domain_rule_uncovered", True)])
+            self.assertEqual(report["rules_uncovered"], ["D-2"])
+            self.assertEqual(self.codes(
+                coverage=COVER_HEAD + "| D-1 | HP-01 |\n"
+                "| D-2 | N/A: covered by another feature |\n"), [])
+            self.assertEqual(self.codes(
+                coverage=COVER_HEAD + "| D-1 | HP-01 |\n| D-2 | N/A: no |\n"),
+                ["domain_coverage_malformed"])
+            self.assertEqual(self.codes(coverage=""),
+                             ["domain_rule_uncovered", "domain_rule_uncovered"])
+
+        def test_suspected_defect_covers_its_rule_ec3(self):
+            sd = ("\n### SD-01 — History row dropped on unmap (P0)\n"
+                  "**Oracle:** D-2\n**Suspected defect:** unmap deletes the "
+                  "row; contradicts D-2: unmapping keeps the history row\n")
+            self.assertEqual(self.codes(
+                cases=D_CASES + sd,
+                coverage=COVER_HEAD + "| D-1 | HP-01 |\n| D-2 | SD-01 |\n"),
+                [])
+
+        def test_suspected_defect_malformed(self):
+            for sd in ("**Oracle:** code\n**Suspected defect:** it breaks\n",
+                       "**Oracle:** D-2\n",
+                       "**Oracle:** D-2\n**Suspected defect:**\n"):
+                with self.subTest(sd=sd):
+                    self.assertEqual(self.codes(
+                        cases=D_CASES + "\n### SD-01 — Dropped (P1)\n" + sd),
+                        ["suspected_defect_malformed"])
+
+        def test_oracle_lines(self):
+            self.assertEqual(self.codes(
+                cases=D_CASES + "\n### EC-03 — No oracle (P2)\n"),
+                ["oracle_missing"])
+            for oracle in ("**Oracle:** D-1\n**Oracle:** D-2\n",
+                           "**Oracle:** maybe\n", "**Oracle:**\n",
+                           "**Oracle:** D-1; D-2\n"):
+                with self.subTest(oracle=oracle):
+                    self.assertEqual(self.codes(
+                        cases=D_CASES + "\n### EC-03 — X (P2)\n" + oracle),
+                        ["oracle_malformed"])
+            self.assertEqual(self.codes(
+                cases=D_CASES + "\n### EC-03 — X (P2)\n**Oracle:** D-9\n"),
+                ["domain_rule_unknown"])
+            self.assertEqual(self.codes(
+                cases=D_CASES + "\n### EC-03 — X (P2)\n**Oracle:** DS-4\n"),
+                [])
+            self.assertEqual(self.codes(
+                cases=D_CASES + "\n### EC-03 — X (P2)\n"
+                "**Oracle:** code, D-1\n"), ["oracle_malformed"])
+
+        def test_coverage_row_must_match_the_oracle(self):
+            self.assertEqual(self.codes(
+                cases=D_CASES.replace("**Oracle:** D-1", "**Oracle:** code")),
+                ["oracle_mismatch"])
+            self.assertEqual(self.codes(
+                coverage=COVERAGE + "| D-9 | HP-01 |\n"),
+                ["domain_rule_unknown"])
+            self.assertEqual(self.codes(
+                coverage=COVER_HEAD + "| D-1 | HP-01 |\n| D-2 | HP-09 |\n"),
+                ["domain_case_missing"])
+
+        def test_coverage_table_malformed(self):
+            for coverage in (
+                    "## Domain Coverage\n\n| Rule | Case |\n|---|---|\n"
+                    "| D-1 | HP-01 |\n| D-2 | HP-02 |\n",
+                    COVERAGE + "| D-x | HP-01 |\n",
+                    COVERAGE + "| D-1 | HP-01 |\n",
+                    COVERAGE.replace("| D-2 | HP-02 |", "| D-2 | |"),
+                    COVERAGE.replace("| D-2 | HP-02 |", "| D-2 | HP 2 |"),
+                    COVERAGE.replace("| D-2 | HP-02 |", "| D-2 | HP-02 | x |")):
+                with self.subTest(coverage=coverage):
+                    self.assertIn("domain_coverage_malformed",
+                                  self.codes(coverage=coverage))
+
+    suite = unittest.TestSuite()
+    for case in (QaBaselineTests, DomainTests):
+        suite.addTests(unittest.TestLoader().loadTestsFromTestCase(case))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     return 0 if result.wasSuccessful() else 1
 
