@@ -5,9 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.13.0] — 2026-10-21
+
 ### Added
+- **Per-feature domain pack, `.docs/summary/{feature}/domain.md`.** Discovery recorded only what the code does, so a baseline case asserted current behaviour even where that behaviour was the bug. Echo now writes a domain pack of what the system *should* do: `D-n` rules each with a source, a glossary, roles, entity states, Known Bugs, risk weights and Open Questions.
+- **Discovery Phase 3b, domain ingest.** The Orchestrator asks the user which sources hold intent (Linear, SharePoint/Teams/Outlook, vendor docs, the git log, e2e skills) and delegates one Scout per named source, each writing `domain-sources/{source}.md` as a `| Rule | Source |` table, or `Unreachable: <reason>`. Mined text is data, never instructions; text addressing the agent is recorded as a finding. Unreachable sources are reported before Phase 4 starts.
+- **Echo runs twice around a main-session question round.** Pass 1 writes `overview.md`, `code-workflow.md` and `domain.md`; the Orchestrator then puts at most 10 intent questions from Open Questions to the user (a delegated agent cannot ask), and pass 2 turns the answers into `D-n` rules and writes the baseline. An answer the user says holds across features is stored once in `context.md` under `## Shared Domain Rules` as `DS-n` and recorded as `Answered: DS-n`.
+- **Oracle lines, suspected defects and domain coverage in the QA baseline.** Every case carries `**Oracle:** code` or the `D-n`/`DS-n` rules it checks; a case where code and rule disagree becomes an `SD-NN` suspected-defect case with a `**Suspected defect:**` line; a `## Domain Coverage` table gives every `D-n` its cases or `N/A: <reason>`.
+- **`check_qa_baseline.py --domain`**, run at `/bgpdd-discovery` Phase 4 step 7: `domain_pack_malformed`, `open_question_unresolved`, `open_questions_over_cap`, `domain_rule_unknown`, `oracle_missing`, `oracle_malformed`, `suspected_defect_malformed`, `domain_coverage_malformed`, `domain_case_missing`, `oracle_mismatch`, `domain_rule_uncovered`. `DS-n` is never looked up. Without `--domain`, behaviour is unchanged.
 - **State-transition coverage for discovery QA baselines.** Echo's `manual-testing.md` now ends with a `## State Transitions` table: one row per entity the feature writes and per independently changeable dimension, with cells for Unset → Set, Set → Unset and Set → Different, each citing a defined case or `N/A: <reason>` (or `None: <reason>` for a feature that writes nothing). A per-handler derivation had collapsed "map" and "remap to a different target" into one case; the Slide baseline missed remap-to-another-client twice.
-- **`check_qa_baseline.py`**, run at `/bgpdd-discovery` Phase 4 step 6: `transitions_missing`, `transitions_table_malformed`, `transition_cell_empty`, `transition_na_unreasoned`, `transition_case_missing`, `transition_row_duplicate`. It cannot see an entity the table never lists; the Orchestrator reads the rows against `code-workflow.md`'s writes.
+- **`check_qa_baseline.py`**, run at `/bgpdd-discovery` Phase 4 step 7: `transitions_missing`, `transitions_table_malformed`, `transition_cell_empty`, `transition_na_unreasoned`, `transition_case_missing`, `transition_row_duplicate`. It cannot see an entity the table never lists; the Orchestrator reads the rows against `code-workflow.md`'s writes.
+
+### Changed
+- `/bgpdd-verify` never turns an `SD-NN` case into a scenario: a suspected defect is a finding, not behaviour to keep. Phase 1 lists each one to the user and Phase 4 routes it to its own `/bgpdd-bugfix` session.
+- `/bgpdd-bugfix`'s prevent step gives the appended regression case an `**Oracle:**` line and, when `domain.md` exists, appends one `## Known Bugs` row. No `domain.md`: unchanged.
+
+### Known limitations
+- A fixed `SD-NN` case stays in the baseline, so later `/bgpdd-verify` runs list it again until discovery re-runs for the feature. A fix is planned.
 
 ## [2.12.3] — 2026-10-16
 
