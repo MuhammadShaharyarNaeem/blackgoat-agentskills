@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.13.1] — 2026-10-21
+
+### Fixed
+- **A fixed suspected defect is no longer re-listed by every `/bgpdd-verify` run** (2.13.0's Known limitation). An `SD-NN` case stayed in the baseline after its fix with nothing saying it was fixed, so verify listed it and routed it to `/bgpdd-bugfix` again until discovery re-ran. `/bgpdd-bugfix`'s prevent step now appends `**Fixed by:** <case-id> (<YYYY-MM-DD>)` under the `SD-NN` case it fixed, citing the regression case it appended. This is a labelled widening (convention #8) of the prevent step's append-only exception: one case plus at most one marker line. Echo retires a marked SD on its next discovery run.
+- **`/bgpdd-verify` reads open SDs from `manual-testing.md` itself.** Open means an `SD-` case with no `**Fixed by:**` line; a marked SD is neither listed nor routed. Phase 4 reads the list from the file, never from session context, so a run that took the Phase 0 re-verify shortcut still routes every open SD.
+
+### Added
+- **`check_qa_baseline.py --domain` gates the marker:** `fixed_by_misplaced` (outside an `SD-` case, or in a table), `fixed_by_duplicate` (repeated in one case), `fixed_by_malformed` (a near-miss label, or a value not `<ID> (<date>)`), `fixed_by_case_missing` (citing no case heading), `fixed_by_cites_sd` (citing an `SD-` case). Without `--domain`, behaviour is unchanged.
+
+### Known limitations
+- No lane runs `check_qa_baseline.py` on markers yet. Discovery runs it, but `/bgpdd-bugfix` (which writes the marker) and `/bgpdd-verify` (which reads it) do not, so a malformed marker is caught only at the next discovery run.
+- An SD can be marked fixed by an unrelated case: nothing checks that the cited case's `**Oracle:**` overlaps the SD's.
+
 ## [2.13.0] — 2026-10-21
 
 ### Added

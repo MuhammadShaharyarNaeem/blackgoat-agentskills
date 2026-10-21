@@ -31,6 +31,7 @@ The State Transitions table proves every listed change has a case. It says nothi
 - *Open questions.* Every line under the heading is a `- Q-<n> — …` entry (`Q-1`, `Q-2`; a zero-padded `Q-01` is rejected, never skipped), or the section is a lone `None`. A line the gate cannot read as an entry is a failure, not a skip. Otherwise a plain bullet, a numbered item or a `Q-01` could hide an unresolved question or escape the cap. Each entry is answered by a rule (`Answered: D-<n>`, or `Answered: DS-<n>` for a shared rule in `context.md`'s `## Shared Domain Rules`, which the gate never looks up so the rule lives once, FR-10) or deferred with a reason of at least three words. The cap of 10 (NFR-4) keeps the question round short. The rest are written as `Deferred: over the 10-question cap`, which the gate does not count.
 - *One Oracle line per case.* `code` marks a case that only records today's behaviour. `D-<n>` / `DS-<n>` marks a case that checks a rule. Coverage counts a case for a rule only when its Oracle names that rule (`oracle_mismatch` otherwise), so a coverage row cannot cite a case that checks something else.
 - *Suspected defects.* An `SD-NN` case is where code and rule disagree. It must name the rule and say what the code does instead. It counts as coverage for its rule (EC-3), because the disagreement is exactly what the rule's test needs to show.
+- *The fixed marker.* When `/bgpdd-bugfix` fixes an SD, its prevent step appends one `**Fixed by:** <RR-id> (<YYYY-MM-DD>)` line inside that SD case, and `/bgpdd-verify` treats an SD as open only while that line is absent. A marker retires a finding, so a wrong one silently hides a live defect: the gate rejects a marker outside an `SD-` case or inside a table row (`fixed_by_misplaced`), a second one in the same case (`fixed_by_duplicate`, one fix closes one SD), a value that is not `<case ID> (<YYYY-MM-DD>)` with a real calendar date and paired backticks if any (`fixed_by_malformed`), one citing an ID with no case heading in the file (`fixed_by_case_missing`), and one citing an `SD-` case, itself or another, which retires a finding with no regression case behind it (`fixed_by_cites_sd`). Inside an `SD-` case the label is detected loosely (any case, `*`/`_` emphasis, a bullet, numbered, quote or table prefix, the colon inside or outside the bold or full-width, `Fixed-by`, NBSP, zero-width or doubled spaces) and anything short of the exact `**Fixed by:**` is `fixed_by_malformed`: verify's reader is an LLM, and it would count a lower-cased or bulleted marker as closing the SD while an exact-match gate never saw it (2026-10-21 review, I-1, S-5). Outside an SD case only the exact label counts (as `fixed_by_misplaced`): verify reads markers only inside SD cases, and ordinary prose such as `Fixed by: PR 412` in a Regression Risks case must not fail a baseline that has no marker (re-review I-4, FR-6). Digits in the value are ASCII only. A marker inside a fence is ignored, like all fenced content. A marked SD still counts as coverage for its rule: the case still records the rule's disagreement, and Echo retires it on the next discovery run. With no marker in the file the output is identical to the pre-marker gate.
 - *Shared rules.* `DS-<n>` (in `context.md`'s `## Shared Domain Rules`) may appear in an Oracle and is never looked up or required in coverage (FR-10). The owning feature covers it.
 
 **Unchanged without the flag.** Without `--domain`, the run is byte-identical to the pre-flag gate in stdout, exit code and ledger inputs (FR-9). Legacy baselines have no Oracle lines and behave exactly as before, whatever their result was: the nine eval-fixture baselines fail `transitions_missing` on both the old and the new script.
@@ -39,7 +40,7 @@ The State Transitions table proves every listed change has a case. It says nothi
 
 ## Self-test inventory
 
-**33 tests: 12 for transitions, 21 for `--domain`.** The 21 `--domain` tests, in method order:
+**43 tests: 12 for transitions, 31 for `--domain`.** The 31 `--domain` tests, in method order:
 
 1. A full pack with coverage passes and reports `domain`, `rules_defined`, `rules_uncovered`.
 2. A missing section fails `domain_pack_malformed` with a `domain.md:` detail.
@@ -61,6 +62,16 @@ The State Transitions table proves every listed change has a case. It says nothi
 18. Three `suspected_defect_malformed` forms.
 19. `oracle_missing`, `oracle_malformed` (four forms plus `code, D-1`), `domain_rule_unknown` from an Oracle, and `DS-4` passing unresolved.
 20. `oracle_mismatch`, `domain_rule_unknown` from a coverage row, and `domain_case_missing`.
-21. Six `domain_coverage_malformed` forms.
+21. A well-formed `**Fixed by:**` marker passes, with or without a backticked ID, and the marked SD still covers its rule.
+22. Fifteen near-miss labels inside an SD fail `fixed_by_malformed`: lower case, `By`, the colon outside the bold, unbolded, a bullet, a quote, `__…__`, NBSP, doubled space, no colon (review I-1), `**Fixed-by:**`, `Fixed-by:`, a `1.` prefix, a full-width colon, and a zero-width space (re-review S-5).
+23. `Fixed by:` prose, `Fixed by _…_` prose and a `Fixed by:` table cell inside RR-01 pass, since loose matching runs only inside SD cases (re-review I-4).
+24. A marker as its own GO/DO/ASSERT row, and one inside the ASSERT cell, fail `fixed_by_misplaced` (review I-1).
+25. A marker citing the SD itself or another SD fails `fixed_by_cites_sd` (review I-2).
+26. A marker citing an ID with no case heading fails `fixed_by_case_missing`.
+27. An exact marker in a non-SD case, and one under a category heading outside any case, fail `fixed_by_misplaced`.
+28. A second marker in one SD case fails `fixed_by_duplicate` (FR-7).
+29. Nine `fixed_by_malformed` values: no date, free text, empty, a non-ISO date, two impossible dates (S-1), an unpaired backtick on either side (S-4), and an Arabic-Indic digit in the date (re-review nit).
+30. A marker citing a missing ID inside a fence is ignored (EC-2).
+31. Six `domain_coverage_malformed` forms.
 
 The 12 transitions tests: a full two-row table passes. The Slide gap (an empty Set → Different cell) fails. A reasoned `N/A` passes, while a bare `N/A` and a short reason fail. A cited ID with no heading fails, including one defined only inside a fence. A missing section, an empty `None:`, and a header-only table each fail. A wrong header and a wrong cell count fail. The ASCII `->` header is accepted. A duplicate row fails. CLI exit codes 0/2 each write a chained ledger record. A BOM and a following `##` section bound the table.

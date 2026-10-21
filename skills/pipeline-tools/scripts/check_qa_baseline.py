@@ -51,6 +51,13 @@ ORACLE_RE = re.compile(r"^\*\*Oracle:\*\*\s*(.*)$")
 DEFECT_RE = re.compile(r"^\*\*Suspected defect:\*\*\s*(\S.*)$")
 SHARED_RULE_ID_RE = re.compile(r"^DS-[1-9]\d*$")
 SUSPECT_PREFIX = "SD-"
+FIXED_BY_RE = re.compile(r"^\*\*Fixed by:\*\*(.*)$")
+FIXED_BY_LOOSE_RE = re.compile(   # any case, emphasis, prefix or spacing
+    r"^(?:[\s>|*+_-]|[0-9]+[.)])*fixed[\s_​-]+by"
+    r"(?:[\s*_]*[:：]|\s*[*_]+)", re.IGNORECASE)
+FIXED_BY_VALUE_RE = re.compile(
+    r"^(?:`([A-Z]{2,}-\d{2,})`|([A-Z]{2,}-\d{2,}))\s+"
+    r"\((\d{4}-\d{2}-\d{2})\)$", re.ASCII)
 ORACLE_CODE = "code"
 HEADING_RE = re.compile(r"^#{1,6}\s")
 SECTION_END_RE = re.compile(r"^#{1,2}\s")
@@ -418,6 +425,75 @@ def check_case_oracle(block, rules, named, problem):
                 "and a `**Suspected defect:** <text>` line")
 
 
+def is_calendar_date(text):
+    try:
+        datetime.strptime(text, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
+
+
+def check_fixed_by_value(n, current, text, defined, problem):
+    """An exact-label marker's value: a real date and a defined non-SD case."""
+    value = FIXED_BY_VALUE_RE.match(text)
+    if not value or not is_calendar_date(value.group(3)):
+        problem("fixed_by_malformed", n, f"{current}: {text!r} is not "
+                "`<case ID> (<YYYY-MM-DD>)` with a real date")
+        return
+    cited = value.group(1) or value.group(2)
+    if cited.startswith(SUSPECT_PREFIX):
+        problem("fixed_by_cites_sd", n, f"{current}: {cited} is a suspected "
+                "defect, not the regression case that fixed it")
+    elif cited not in defined:
+        problem("fixed_by_case_missing", n, f"{current}: "
+                f"{cited} is not a case heading in this file")
+
+
+def check_fixed_by(lines, defined, problem):
+    """`**Fixed by:** <ID> (<date>)`: once per SD case, citing a real case.
+
+    Inside an SD case the label is detected loosely (any case, emphasis,
+    prefix or spacing), so a near-miss a reader would take for a marker is
+    malformed rather than invisible. Elsewhere only the exact label counts,
+    so ordinary "Fixed by:" prose in other cases stays legal. A marker in
+    a table row is misplaced.
+    """
+    current, marked = None, set()
+    for i, line in enumerate(lines):
+        heading = CASE_HEADING_RE.match(line)
+        if heading or HEADING_RE.match(line):
+            current = heading.group(1) if heading else None
+            continue
+        in_sd = current is not None and current.startswith(SUSPECT_PREFIX)
+        label = FIXED_BY_LOOSE_RE if in_sd else FIXED_BY_RE
+        cells = split_row(line)
+        if cells is not None:
+            if any(label.match(cell) for cell in cells):
+                problem("fixed_by_misplaced", i + 1, "a `**Fixed by:**` "
+                        "marker sits in a table row; it is its own line "
+                        "inside an SD-NN case")
+            continue
+        text = line.strip()
+        if not label.match(text):
+            continue
+        if current is None or not current.startswith(SUSPECT_PREFIX):
+            problem("fixed_by_misplaced", i + 1, "a `**Fixed by:**` line "
+                    f"sits in {current or 'no case'}; only an SD-NN case "
+                    "carries one")
+        elif current in marked:
+            problem("fixed_by_duplicate", i + 1, f"{current} has a second "
+                    "`**Fixed by:**` line; one fix closes one SD")
+        else:
+            marked.add(current)
+            exact = FIXED_BY_RE.match(text)
+            if exact:
+                check_fixed_by_value(i + 1, current, exact.group(1).strip(),
+                                     defined, problem)
+            else:
+                problem("fixed_by_malformed", i + 1, f"{current}: {text!r} "
+                        "is not spelled `**Fixed by:**`")
+
+
 def check_coverage_cell(n, rule_id, cell, defined, oracles, problem):
     """One Cases cell: case IDs whose Oracle names the rule, or `N/A:`."""
     na = NA_RE.match(cell)
@@ -451,6 +527,7 @@ def check_domain_coverage(lines, defined, rules, problems):
     for block in case_blocks(lines):
         check_case_oracle(block, rules,
                           oracles.setdefault(block["id"], set()), problem)
+    check_fixed_by(lines, defined, problem)
     start = next((i for i, line in enumerate(lines)
                   if re.match(r"^##\s+" + re.escape(COVERAGE_SECTION)
                               + r"\s*$", line.strip(), re.IGNORECASE)), None)
@@ -696,9 +773,7 @@ Reads:
   instead of a table. Fenced blocks are blanked first; the file is read
   as utf-8-sig.
 
-  What this cannot see: an entity the table never lists. It guarantees
-  that every listed dimension gets its change case or an explicit,
-  reviewable N/A -- not that the list of entities is complete.
+  What this cannot see: an entity the table never lists.
 
   --domain <path>  the feature's .docs/summary/{feature}/domain.md. Needs
   the level-2 sections Rules, Glossary, Roles, Entity States, Known Bugs,
@@ -713,6 +788,8 @@ Reads:
   SD-NN case names its rule and has a `**Suspected defect:**` line. Its
   `## Domain Coverage` table `| Rule | Cases |` gives every D-<n> case IDs
   whose Oracle names it, or `N/A: <reason>`. DS-<n> is never looked up.
+  One `**Fixed by:** <ID> (<YYYY-MM-DD>)` line may close an SD case
+  (<ID> a non-SD case here, a real date); it still covers its rule.
   Domain-pack details start `domain.md:`. Without --domain, none of this
   runs and output is unchanged.
 
@@ -743,6 +820,12 @@ Problem codes:
   domain_case_missing          a cited ID with no case heading in the file
   oracle_mismatch              a cited case whose Oracle omits the rule
   domain_rule_uncovered        a D-<n> with no Domain Coverage row
+  fixed_by_misplaced           Fixed by outside SD- cases, or in a table
+  fixed_by_duplicate           Fixed by repeated in one case
+  fixed_by_malformed           a near-miss label (any case, emphasis,
+                               prefix), or a value not `<ID> (<date>)`
+  fixed_by_case_missing        Fixed by citing no case heading
+  fixed_by_cites_sd            Fixed by citing an SD- case
 
 JSON keys:
   file, cases_defined, rows, none_reason, problems, result, error;
@@ -1201,6 +1284,102 @@ def run_self_test():
             self.assertEqual(self.codes(
                 coverage=COVER_HEAD + "| D-1 | HP-01 |\n| D-2 | HP-09 |\n"),
                 ["domain_case_missing"])
+
+        def fixed(self, marker, sd_tail="", extra=""):
+            """Codes for an SD-01 carrying `marker`, beside RR-01 (FR-4)."""
+            sd = ("\n## Suspected Defects\n\n### SD-01 — History row dropped "
+                  "(P0)\n**Oracle:** D-2\n**Suspected defect:** unmap deletes "
+                  "the row; contradicts D-2: unmapping keeps the history row\n"
+                  + marker + sd_tail + "\n## Regression Risks\n\n### RR-01 — "
+                  "Unmap keeps history (P0)\n**Oracle:** D-2\n" + extra)
+            return self.codes(cases=D_CASES + sd, coverage=COVER_HEAD
+                              + "| D-1 | HP-01 |\n| D-2 | HP-02, SD-01 |\n")
+
+        def test_fixed_by_marker_passes_and_still_covers(self):
+            self.assertEqual(self.fixed(
+                "**Fixed by:** RR-01 (2026-10-21)\n"), [])
+            self.assertEqual(self.fixed(
+                "**Fixed by:** `RR-01` (2026-10-21)\n"), [])
+
+        def test_fixed_by_near_miss_label_is_malformed(self):
+            """Review I-1: a near-miss spelling verify would read as closed."""
+            for marker in ("**fixed by:**", "**Fixed By:**", "**Fixed by**:",
+                           "Fixed by:", "- **Fixed by:**", "> **Fixed by:**",
+                           "__Fixed by:__", "**Fixed by:**",
+                           "**Fixed  by:**", "**Fixed by**",
+                           "**Fixed-by:**", "Fixed-by:", "1. **Fixed by:**",
+                           "**Fixed by：**", "**Fixed​by:**"):
+                with self.subTest(marker=marker):
+                    self.assertEqual(self.fixed(
+                        marker + " RR-01 (2026-10-21)\n"),
+                        ["fixed_by_malformed"])
+
+        def test_fixed_by_prose_outside_an_sd_passes(self):
+            """Re-review I-4: loose matching runs only inside SD cases."""
+            for prose in ("Fixed by: upgrading the vendor SDK in 4.2.\n",
+                          "Fixed by _accident_ in 4.1, then regressed.\n",
+                          "| GO | DO | ASSERT |\n|---|---|---|\n"
+                          "| Orders | Fixed by: PR 412 | ok |\n"):
+                with self.subTest(prose=prose):
+                    self.assertEqual(self.fixed(
+                        "**Fixed by:** RR-01 (2026-10-21)\n", extra=prose),
+                        [])
+
+        def test_fixed_by_in_the_step_table_is_misplaced(self):
+            """Review I-1: a marker in a GO/DO/ASSERT row or cell."""
+            table = "| GO | DO | ASSERT |\n|---|---|---|\n"
+            for row in ("| **Fixed by:** RR-01 (2026-10-21) | | |\n",
+                        "| Clients | unmap A | **fixed by:** RR-01 "
+                        "(2026-10-21) |\n"):
+                with self.subTest(row=row):
+                    self.assertEqual(self.fixed(table + row),
+                                     ["fixed_by_misplaced"])
+
+        def test_fixed_by_citing_an_sd_fails(self):
+            """Review I-2: an SD retired by itself or another SD."""
+            sd2 = ("\n### SD-02 — Remap drops audit (P1)\n**Oracle:** D-2\n"
+                   "**Suspected defect:** remap drops audit; contradicts "
+                   "D-2\n")
+            for cited in ("SD-01", "SD-02"):
+                with self.subTest(cited=cited):
+                    self.assertEqual(self.fixed(
+                        f"**Fixed by:** {cited} (2026-10-21)\n", extra=sd2),
+                        ["fixed_by_cites_sd"])
+
+        def test_fixed_by_case_missing(self):
+            self.assertEqual(self.fixed("**Fixed by:** RR-99 (2026-10-21)\n"),
+                             ["fixed_by_case_missing"])
+
+        def test_fixed_by_misplaced(self):
+            self.assertEqual(self.fixed(
+                "", extra="**Fixed by:** RR-01 (2026-10-21)\n"),
+                ["fixed_by_misplaced"])
+            self.assertEqual(self.codes(cases=D_CASES.replace(
+                "## Happy Path\n", "## Happy Path\n**Fixed by:** HP-01 "
+                "(2026-10-21)\n")), ["fixed_by_misplaced"])
+
+        def test_fixed_by_duplicate_fr7(self):
+            self.assertEqual(self.fixed(
+                "**Fixed by:** RR-01 (2026-10-21)\n",
+                sd_tail="**Fixed by:** RR-01 (2026-10-22)\n"),
+                ["fixed_by_duplicate"])
+
+        def test_fixed_by_malformed(self):
+            for marker in ("**Fixed by:** RR-01\n", "**Fixed by:** soon\n",
+                           "**Fixed by:**\n",
+                           "**Fixed by:** RR-01 (21-10-2026)\n",
+                           "**Fixed by:** RR-01 (2026-13-45)\n",
+                           "**Fixed by:** RR-01 (2026-02-30)\n",
+                           "**Fixed by:** `RR-01 (2026-10-21)\n",
+                           "**Fixed by:** RR-01` (2026-10-21)\n",
+                           "**Fixed by:** RR-01 (٢026-10-21)\n"):
+                with self.subTest(marker=marker):
+                    self.assertEqual(self.fixed(marker),
+                                     ["fixed_by_malformed"])
+
+        def test_fixed_by_inside_a_fence_is_ignored_ec2(self):
+            self.assertEqual(self.fixed(
+                "```\n**Fixed by:** RR-99 (2026-10-21)\n```\n"), [])
 
         def test_coverage_table_malformed(self):
             for coverage in (

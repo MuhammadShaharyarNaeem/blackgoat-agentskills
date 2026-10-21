@@ -193,12 +193,25 @@ shape, under Regression Risks.
 
 **This is the second of that file's two sanctioned exceptions, and it is
 labelled as one in all three places.** `agents/echo.md` names both writers
-(shipping Step 6.4 post-launch; this prevent step, one appended case) and
-`bgpdd-shipping`'s Path Model acknowledges this one explicitly. The bugfix
-write-back is the narrower of the two: a single case, appended, only after the
-commit gate exited 0, recording behaviour just proven by a gated GREEN. It never
-rewrites or removes an existing case — that remains shipping's job, which
-reconciles against Alex's invalidated/superseded findings.
+(shipping Step 6.4 post-launch; this prevent step, one appended case plus at
+most one marker line) and `bgpdd-shipping`'s Path Model acknowledges this one
+explicitly. The bugfix write-back is the narrower of the two: a single case,
+appended, only after the commit gate exited 0, recording behaviour just proven
+by a gated GREEN. It never rewrites or removes an existing case — that remains
+shipping's job, which reconciles against Alex's invalidated/superseded findings.
+
+**The `**Fixed by:**` marker widens that bound by one line, deliberately
+(convention #8).** When the bug was a suspected-defect case `SD-NN`, the step
+also appends `**Fixed by:** <RR-id> (<YYYY-MM-DD>)` inside that case and changes
+nothing else in it. Without it, a fixed SD stayed in the baseline until
+discovery re-ran, so every `/bgpdd-verify` in between listed it again and routed
+it back here; and verify's open-SD list lived only in session context, so a
+re-verify that skipped Phase 1 saw none. Deleting the case instead was rejected:
+retiring a case is Echo's authorship, and the SD still records the rule's
+disagreement that its coverage row cites. A marker is an append, so the write
+stays additive; `check_qa_baseline.py --domain` refuses one that cites no real
+case, sits outside an SD, or repeats, because a wrong marker silently hides a
+live defect.
 
 The permanent version of the same prevention is `/bgpdd-verify {feature}`, which
 turns the case into an executed spec. The close names it as the next command
