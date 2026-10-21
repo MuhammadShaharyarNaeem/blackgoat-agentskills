@@ -46,8 +46,16 @@ NFR_TIER_RE = re.compile(r"-\s*\*\*(NFR-\d+)\*\*\s*\((Must|Should|Could)[^)]*\)"
 TASK_HEADING_RE = re.compile(r"^##\s*Task\s*\[?(\d+)\]?\s*:", re.IGNORECASE | re.MULTILINE)
 COVERED_FIELD_RE = re.compile(r"\*\*Requirements covered:\*\*", re.IGNORECASE)
 ID_TOKEN_RE = re.compile(r"\b(?:FR|NFR)-\d+\b", re.IGNORECASE)
-FAIL_TOKEN_RE = re.compile(r"\b(?:FAILED|FAIL)\b|❌", re.IGNORECASE)
-PASS_TOKEN_RE = re.compile(r"\b(?:PASSED|PASS)\b|✅", re.IGNORECASE)
+# A status token is a standalone word. The same letters joined to a name by
+# `-`, `_`, `/` or `\` on either side, or followed by `.<word char>`, are part
+# of that name (`m3-exit-fail.md`, `test_fail_path.py`), not a status: plain
+# `\b` treats `-` and `.` as boundaries and read them as FAIL. A sentence-end
+# period (`status: FAIL.`) still counts, and so does a token inside an inline
+# code span (`1 failed, 3 passed`): hiding it would let a real FAIL pass.
+_TOKEN_BEFORE = r"(?<![\w\-/\\])"
+_TOKEN_AFTER = r"(?![\w\-/\\]|\.\w)"
+FAIL_TOKEN_RE = re.compile(_TOKEN_BEFORE + r"(?:FAILED|FAIL)" + _TOKEN_AFTER + r"|❌", re.IGNORECASE)
+PASS_TOKEN_RE = re.compile(_TOKEN_BEFORE + r"(?:PASSED|PASS)" + _TOKEN_AFTER + r"|✅", re.IGNORECASE)
 # BLOCKED: a check whose precondition was absent, so nothing ran. Required by
 # agents/quinn.md §6 and base-persona.md's Evidence Integrity section; without
 # a machine-visible slot an honest agent must either write FAIL (which asserts
@@ -59,7 +67,7 @@ PASS_TOKEN_RE = re.compile(r"\b(?:PASSED|PASS)\b|✅", re.IGNORECASE)
 # ledger omission already means "not run" — parse_test_report() already warns
 # on a status-less mention and leaves the ID uncovered — so a fourth token
 # would add a second spelling for a state the gate already reports.
-BLOCKED_TOKEN_RE = re.compile(r"\bBLOCKED\b", re.IGNORECASE)
+BLOCKED_TOKEN_RE = re.compile(_TOKEN_BEFORE + r"BLOCKED" + _TOKEN_AFTER, re.IGNORECASE)
 STRUCK_ID_RE = re.compile(r"~~[^~]*?\*\*((?:FR|NFR)-\d+)\*\*[^~]*?~~", re.IGNORECASE)
 
 # --- test-mode ledger-line grammar ----------------------------------------
@@ -784,6 +792,70 @@ def lint_runtime_criterion(text):
             task_label = title
             surface = milestone_surface(heading_line, "\n".join(lines[start:end]))
         failures.extend(_checkpoint_failures(task_label, label, surface, block))
+    return failures + lint_exit_criterion_commands(lines, milestones)
+
+
+# Copied verbatim from mark_milestone.py (family convention: one file each, no
+# shared module) so the plan gate and the close gate agree on what a criterion
+# is and when its command parses.
+# is_exit_criterion_line() is the whole detection rule: a line is a criterion
+# when it names "RUNTIME EXIT CRITERION ... run `<cmd>`" anywhere OR only
+# non-word characters, numbered-list markers (1. / 2)) and checkboxes
+# ([ ] / [x] / [X]) precede the phrase (so any bullet, quote, heading, table
+# pipe or emphasis). A line where a word comes before the phrase and no
+# command follows (a RUNTIME PROBE justification) is not one.
+EXIT_CRITERION_LINE_RE = re.compile(
+    r"^(?:[^\w]|\d+[.)]|\[[ xX]\])*RUNTIME EXIT CRITERION", re.IGNORECASE)
+EXIT_CRITERION_CMD_RE = re.compile(
+    r"RUNTIME EXIT CRITERION\s*[^`]*?\brun\s+`(?P<cmd>[^`]+)`", re.IGNORECASE)
+
+
+def is_exit_criterion_line(content):
+    """True when the line declares a RUNTIME EXIT CRITERION (rule above)."""
+    return bool(EXIT_CRITERION_LINE_RE.match(content)
+                or EXIT_CRITERION_CMD_RE.search(content))
+
+
+def lint_exit_criterion_commands(lines, milestones):
+    """Every RUNTIME EXIT CRITERION line must carry a parseable `run `<cmd>``.
+
+    The plan-time twin of mark_milestone.py --require-exit-capture's
+    exit_criterion_unparseable refusal. Fenced lines are blanked first (a
+    toggle on every fence line, as mark_milestone.py's blank_fenced_lines
+    does). Absence of a criterion is not linted — the same scope limit as
+    lint_runtime_criterion.
+    """
+    checkpoints = [(index, index + len(block.split("\n")), label)
+                   for index, label, block in checkpoint_blocks(lines)]
+    failures = []
+    in_fence = False
+    for index, line in enumerate(lines):
+        if FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence or not is_exit_criterion_line(line):
+            continue
+        if EXIT_CRITERION_CMD_RE.search(line):
+            continue
+        owner = next((m for m in milestones if m[2] <= index < m[3]), None)
+        checkpoint = next((c for c in checkpoints if c[0] <= index < c[1]), None)
+        if owner is not None:
+            task_label = owner[0]
+        elif checkpoint is not None:
+            task_label = checkpoint[2]
+        else:
+            task_label = "plan"
+        failures.append(
+            _failure(
+                "runtime-criterion",
+                task_label,
+                f"line {index + 1} {line.strip()!r} is a RUNTIME EXIT CRITERION "
+                f"whose command cannot be parsed; mark_milestone.py "
+                f"--require-exit-capture would refuse it as "
+                f"exit_criterion_unparseable — write it as "
+                f"'RUNTIME EXIT CRITERION — run `<cmd>`'",
+            )
+        )
     return failures
 
 
@@ -2043,7 +2115,7 @@ def run_self_test():
 
     scripts_dir = str(Path(__file__).parent)
     loader = unittest.TestLoader()
-    suite = loader.discover(scripts_dir, pattern="test_check_coverage.py", top_level_dir=scripts_dir)
+    suite = loader.discover(scripts_dir, pattern="test_check_coverage*.py", top_level_dir=scripts_dir)
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
     return 0 if result.wasSuccessful() else 1
@@ -2313,7 +2385,8 @@ Problem codes:
   literal-count      a task's literal/count claim is unsupported
   consumes-provides  a task's boundary contract has no producer/consumer
   path-hygiene       a task names a path that is malformed or unscoped
-  runtime-criterion  a task states no runtime-observable criterion
+  runtime-criterion  no runtime-observable criterion, or an exit
+                     criterion with no parseable run `<cmd>`
   domain-tag         a task carries no [UI] / [API] domain tag
   Design mode:
   supersession-annotation  a superseded ID carries no in-place annotation
@@ -2358,7 +2431,7 @@ Exit codes:
      contract failure (no Must-Have requirements, no task blocks).
 
 Self-test:
-  python check_coverage.py --self-test   (183 cases; the same suite runs
+  python check_coverage.py --self-test   (the same suite runs
   directly as `python test_check_coverage.py`)
 """
 

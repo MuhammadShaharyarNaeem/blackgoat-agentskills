@@ -22,6 +22,11 @@ Field rules:
   Either `yes` routes PLAN: that is build work, not a bugfix.
 - **`- Estimated changed files:`** — an integer. Over the lane's bound (5)
   routes PLAN. Omitting the line warns and leaves the bound to the commit gate.
+- **`- Fail direction:`** — required only when a root-cause file produces a
+  verdict; `closed — <shapes permitted to pass>`. Read by no gate (deliberately
+  prose, convention #8: allowlist-vs-denylist is not mechanically
+  classifiable); it exists so the direction is decided at RCA time, not
+  discovered at review.
 - A field line **inside a fenced block** asserts nothing (the gate blanks
   fences). Last mention of a key file-wide wins, so an appended `## Correction`
   section supersedes an earlier line.
@@ -66,6 +71,7 @@ reaches what code path and why that path is wrong. Not a symptom restatement.>
 - New capability: <yes | no>
 - Schema or contract change: <yes | no>
 - Estimated changed files: <N>
+- Fail direction: <closed — the shapes permitted to pass; only when a root-cause file produces a verdict — delete otherwise>
 
 ## Size waiver
 

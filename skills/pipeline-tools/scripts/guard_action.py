@@ -338,6 +338,28 @@ unrelated cwd, and never a deny on the strength of the error itself.
     read-only forms (`git tag -l`, `git stash list`) are then over-blocked:
     an over-block costs one `--explain`, an under-block costs a rewritten
     history.
+  * HEREDOC BODIES. Before rule 1 matches, `strip_data_heredocs()` removes
+    heredoc bodies (the lines after `<<WORD` / `<<-WORD` / `<<'WORD'` /
+    `<<"WORD"` up to the exact terminator line; `<<-` strips leading tabs
+    only) only on an ALLOWLIST: every heredoc in the command is received by
+    a bare `cat`, `tee` or `python`/`python3`/`py` word (optional `/` path,
+    optional `.exe`) on one simple-command line at nesting depth zero. That
+    line holds no pipe, `;`, `&`, `&&`, `||`, `|&`, paren, `$(`, backtick or
+    trailing `\\` (redirections such as `> f` and `2>&1`, and flags, are
+    fine); no earlier line opens a compound command (`{`, `(`, `do`, `then`,
+    `if`, `case`, a function) or ends in `|`, `&` or `\\`; no line after the
+    terminator resumes it (`|`, `&`, `)`, `}`, `done`, `fi`, `esac`); the
+    receiver carries no `$`, quote, `X=1` prefix or `sudo`/`env`/`exec`
+    wrapper; an unquoted-delimiter body holds no `$(`/backtick. Quote state
+    is tracked across lines with backslash escapes, and an operator inside
+    quotes or a comment is no operator. Anything else -- any other receiver
+    (a shell, `"$SHELL"`, `cmd`, `read`, `exec 3<<`), an unterminated body,
+    an inexact terminator (a CRLF one included), a quote open at the
+    operator, `$(`/backtick/`$'` on any command line, any parse error --
+    leaves the whole command scanned: the allowlist fails toward the deny.
+    Accepted under-blocks, the script-file class of QUOTED COMMANDS above: a
+    python body that itself runs git, and data an allowlisted heredoc writes
+    that a later call runs (`sh x.sh`, `eval`, a function defined earlier).
   * BASH WRITE EXTRACTION IS HEURISTIC. It reads a command string, not a
     shell. A path built by variable expansion (`$LEDGER`), reached through a
     script file, produced by a here-document, or written by an editor spawned
@@ -473,6 +495,29 @@ CD_VERBS = ("cd", "chdir", "pushd", "set-location", "sl", "push-location")
 MSYS_DRIVE_RE = re.compile(r"^/([A-Za-z])(?:/(.*))?$")
 GIT_TIMEOUT_SECONDS = 5
 COMMAND_SEPARATORS = re.compile(r"[;&|\n]")
+# Rule 1's heredoc operator: `<<WORD`, `<<-WORD`, `<<'WORD'`, `<<"WORD"` --
+# never the `<<<` here-string. See HEREDOC BODIES in the docstring.
+HEREDOC_OP_RE = re.compile(
+    r"<<(-?)\s*(['\"]?)([A-Za-z_][\w.-]*)\2(?=$|[\s;&|<>)])")
+# The only receivers whose heredoc body is data: a bare `cat`, `tee` or
+# python-family word, with an optional `/` path prefix and `.exe` suffix.
+HEREDOC_DATA_RECEIVER_RE = re.compile(
+    r"(?:[A-Za-z]:)?(?:[\w.~-]*/)*(?:cat|tee|python3?|py)(?:\.exe)?")
+# A redirection that carries `&` but joins no command: `2>&1`, `>&2`, `&>f`.
+HEREDOC_REDIRECT_AMP_RE = re.compile(r"\d*[<>]&\d*-?|&>>?")
+# Text that makes a line anything but one simple command.
+HEREDOC_NOT_SIMPLE_RE = re.compile(r"[|;&()`]")
+# A word that opens or closes a compound command, or a subshell paren.
+HEREDOC_COMPOUND_RE = re.compile(
+    r"[()]|(?:^|[\s;&|])(?:[{}]|do|done|then|fi|if|case|esac|while|until"
+    r"|for|select|function|else|elif)(?=$|[\s;&|])")
+# A command line whose command continues onto the next line.
+HEREDOC_LINE_CONTINUES_RE = re.compile(r"[|&\\]\s*$")
+# The first non-blank line after the terminators, continuing that command.
+HEREDOC_PIPELINE_RESUMES_RE = re.compile(
+    r"^\s*(?:[|&)}]|(?:done|fi|esac|else|elif)(?=$|[\s;&|)]))")
+# An expansion bash runs inside an unquoted-delimiter body.
+HEREDOC_EXPANSION_RE = re.compile(r"\$\(|`")
 
 # --- Bash write extraction (rules 2 and 4); see BASH WRITES in the docstring.
 # One shell token: a double-quoted run, a single-quoted run, or a bare run.
@@ -1272,13 +1317,153 @@ def path_exists(path, cwd):
         return False
 
 
+class _HeredocDoubt(Exception):
+    """A heredoc shape this reader cannot parse with confidence."""
+
+
+def _live_heredoc_ops(line, quote):
+    """(operators, quote state at line end, bare text) for one command line.
+
+    `quote` carries `'`/`"` state across lines from the start of the command;
+    a backslash escapes the next character outside single quotes. Operators
+    count only outside quotes and comments. The bare text is the line with
+    its comment dropped and every quoted or escaped character replaced by
+    `_`; a trailing unescaped `\\` stays. Raises _HeredocDoubt on `$(`, a
+    backtick, `$'`, or a `<<` that is not a plain operator: their quoting is
+    not modelled here.
+    """
+    ops, bare = [], []
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote == "'":
+            if ch == "'":
+                quote = None
+            bare.append("_")
+        elif ch == "\\":
+            bare.append("\\" if i == len(line) - 1 else "_")
+            i += 1
+        elif ch == "`" or line.startswith("$(", i) or line.startswith("$'", i):
+            raise _HeredocDoubt()
+        elif quote == '"':
+            if ch == '"':
+                quote = None
+            bare.append("_")
+        elif ch in "'\"":
+            quote = ch
+            bare.append("_")
+        elif ch == "#" and (i == 0 or line[i - 1] in " \t;&|("):
+            break
+        elif line.startswith("<<<", i):
+            bare.append("<<<")
+            i += 3
+            continue
+        elif line.startswith("<<", i):
+            match = HEREDOC_OP_RE.match(line, i)
+            if not match:
+                raise _HeredocDoubt()
+            ops.append(match)
+            bare.append(match.group(0))
+            i = match.end()
+            continue
+        else:
+            bare.append(ch)
+        i += 1
+    return ops, quote, "".join(bare)
+
+
+def _is_data_receiver_line(bare):
+    """True when `bare` is one simple command whose first word is a data
+    consumer (HEREDOC_DATA_RECEIVER_RE).
+
+    No pipe, `;`, `&`, paren, backtick or trailing `\\`; a `&` inside a
+    redirection (`2>&1`, `&>f`) is not a separator. The receiver is a bare
+    literal: a `$`, a quote (already `_` in `bare`) or an `X=1` prefix fails.
+    """
+    text = HEREDOC_REDIRECT_AMP_RE.sub(" ", bare)
+    if HEREDOC_NOT_SIMPLE_RE.search(text) or HEREDOC_LINE_CONTINUES_RE.search(text):
+        return False
+    first = re.match(r"\s*([^\s<>]*)", text).group(1)
+    return bool(HEREDOC_DATA_RECEIVER_RE.fullmatch(first))
+
+
+def _heredoc_end(lines, start, op):
+    """Index of `op`'s exact terminator line at or after `start`.
+
+    `<<WORD` needs a line equal to WORD; `<<-WORD` strips leading tabs only.
+    A line equal to WORD only after other whitespace is stripped, or no
+    terminator at all, raises _HeredocDoubt.
+    """
+    word, strip_tabs = op.group(3), bool(op.group(1))
+    for end in range(start, len(lines)):
+        text = lines[end].lstrip("\t") if strip_tabs else lines[end]
+        if text == word:
+            return end
+        if lines[end].strip() == word:
+            raise _HeredocDoubt()
+    raise _HeredocDoubt()
+
+
+def strip_data_heredocs(command):
+    """`command` minus its heredoc bodies, when every one is fed to a data
+    consumer; otherwise `command` unchanged.
+
+    A body is data only on an allowlist: its operator line is one simple
+    command led by a bare `cat`/`tee`/python word (_is_data_receiver_line);
+    no earlier command line opens a compound command or a paren, or ends in
+    `|`, `&` or `\\`; the first non-blank, non-comment line after the
+    terminator does not resume the command (`|`, `&`, `)`, `}`, `done`,
+    `fi`, `esac`, `else`, `elif`); and an unquoted-delimiter body holds no
+    `$(`/backtick. Any other heredoc, and any doubt -- an unterminated body,
+    an inexact terminator, a quote open at the operator, an unmodelled
+    construct, any error -- returns `command` unchanged, so rule 1 scans it
+    all. See HEREDOC BODIES in the module docstring.
+    """
+    try:
+        lines = (command or "").split("\n")
+        kept = []
+        quote = None
+        nested = continues = False
+        idx = 0
+        while idx < len(lines):
+            line = lines[idx]
+            kept.append(line)
+            idx += 1
+            ops, quote, bare = _live_heredoc_ops(line, quote)
+            if ops:
+                if quote or nested or continues or not _is_data_receiver_line(bare):
+                    raise _HeredocDoubt()
+                for op in ops:
+                    end = _heredoc_end(lines, idx, op)
+                    if not op.group(2) and any(
+                            HEREDOC_EXPANSION_RE.search(body)
+                            for body in lines[idx:end]):
+                        raise _HeredocDoubt()
+                    idx = end + 1
+                after = next((l for l in lines[idx:]
+                              if l.strip() and not l.lstrip().startswith("#")),
+                             "")
+                if HEREDOC_PIPELINE_RESUMES_RE.match(after):
+                    raise _HeredocDoubt()
+            if bare.strip():
+                nested = nested or bool(HEREDOC_COMPOUND_RE.search(bare))
+                continues = bool(HEREDOC_LINE_CONTINUES_RE.search(bare))
+        if quote:
+            raise _HeredocDoubt()
+        return "\n".join(kept)
+    except Exception:
+        return command
+
+
 def git_write_invocation(command):
     """The history-writing invocation in `command`, or None.
 
     A `--help` / `-h` in the same shell segment is documentation, not a
     commit. `gh pr merge` is matched by its own regex and reported under that
-    name -- it writes the same history through a different binary.
+    name -- it writes the same history through a different binary. A heredoc
+    body fed to an allowlisted data consumer is not scanned.
     """
+    command = strip_data_heredocs(command)
     for regex, label in ((GIT_WRITE_RE, None), (GH_WRITE_RE, "gh pr merge")):
         for match in regex.finditer(command):
             tail = COMMAND_SEPARATORS.split(command[match.start():], 1)[0]
@@ -1312,7 +1497,7 @@ def commit_target_dir(command, cwd):
     when nothing moves it. See WORKTREE TARGET in the module docstring.
     """
     current = cwd
-    for segment in COMMAND_SEPARATORS.split(command or ""):
+    for segment in COMMAND_SEPARATORS.split(strip_data_heredocs(command or "")):
         tokens = bash_tokens(segment.strip().lstrip("("))
         if not tokens:
             continue
@@ -1746,7 +1931,10 @@ EPILOG = """Reads:
     is the commit's directory after any leading cd/Set-Location/pushd and
     `git -C`; lanes are detected under THAT worktree, not the hook's cwd
     (any git error: under <target> itself). --explain --command CMD prints
-    the resolved target.
+    the resolved target. A heredoc body is left unscanned only on an
+    allowlist: a bare cat/tee/python receiver on one simple command at
+    depth zero (no pipe, ;, &, $(, compound or continuation); anything
+    else, or any doubt, scans the whole command.
   Rule 9 only: .docs/learn/*/forge-handoff.md (fresh = a learn run) and
     that root's gates.jsonl (check_learn_approval.py record/close PASS).
 
@@ -1782,7 +1970,7 @@ Exit codes:
   1  --self-test, at least one case failed
 
 Self-test:
-  python guard_action.py --self-test   (130 cases; needs git on PATH)
+  python guard_action.py --self-test   (135 cases; needs git on PATH)
 """
 
 
@@ -2115,6 +2303,116 @@ def run_self_test():
                         "git cherry-pick abc123"):
                 self.assertEqual(self.decide("Bash", {"command": cmd})[0], "deny",
                                  cmd)
+
+        def test_127_heredoc_file_text_mentioning_a_merge_allowed(self):
+            self.make_bugfix()
+            for cmd in (
+                    "cat > notes.md <<'EOF'\nthen a local git merge lands it\nEOF",
+                    "cat > notes.md <<EOF\ngit merge main\nEOF",
+                    "cat > notes.md <<\"EOF\"\ngit commit -m x\nEOF",
+                    "cat > notes.md <<-EOF\n\tgit rebase main\n\tEOF",
+                    "tee a.md <<A <<B\ngit merge x\nA\ngit tag v1\nB",
+                    # a quoted delimiter expands nothing in its body
+                    "cat > n.md <<'EOF'\nrun `git merge` or $(git tag)\nEOF",
+                    "cat > n.md <<'EOF'\necho \"unbalanced ' quote\nEOF",
+                    # allowlisted receivers with redirections and flags
+                    "python - <<'PYEOF'\nprint('git merge main')\nPYEOF",
+                    "python3.exe - <<'PY'\nx = 'git merge main'\nPY",
+                    "/usr/bin/cat > n.md 2>&1 <<'EOF'\ngit merge main\nEOF",
+                    "tee -a log.md >/dev/null <<'EOF'\ngit merge main\nEOF",
+                    "cat > \"$OUT\" <<'EOF'\ngit merge main\nEOF",
+                    "cd docs && ls\n# write it\ncat > a.md <<'A'\ngit merge x\n"
+                    "A\ncat > b.md <<'B'\ngit tag v1\nB"):
+                self.assertEqual(self.decide("Bash", {"command": cmd})[0],
+                                 "allow", cmd)
+
+        def test_128_heredoc_fed_to_a_shell_still_denied(self):
+            self.make_bugfix()
+            for cmd in ("bash <<'EOF'\ngit merge main\nEOF",
+                        "sh <<EOF\ngit commit -m x\nEOF",
+                        "cat <<EOF | bash\ngit merge main\nEOF",
+                        "/usr/bin/zsh <<-EOF\n\tgit rebase x\n\tEOF",
+                        "pwsh.exe -Command - <<EOF\ngit commit -m x\nEOF",
+                        # the receiver is reached past the operator's line
+                        "cat <<EOF |\ngit merge main\nEOF\nbash",
+                        "cat <<EOF \\\n| bash\ngit merge main\nEOF",
+                        "cat <<EOF\ngit merge main\nEOF\n| bash",
+                        "eval $(cat <<EOF\ngit merge main\nEOF\n)",
+                        "eval \"$(cat <<EOF\ngit merge main\nEOF\n)\"",
+                        "source /dev/stdin <<EOF\ngit merge main\nEOF",
+                        ". /dev/stdin <<EOF\ngit merge main\nEOF",
+                        # an unquoted delimiter expands $( ) in the body
+                        "cat > n.md <<EOF\n$(git merge main)\nEOF",
+                        # a compound command or continuation feeds a shell
+                        "{\ncat <<EOF\ngit merge main\nEOF\n} | bash",
+                        "{ cat <<EOF\ngit merge main\nEOF\n} | bash",
+                        "for i in 1; do cat <<EOF\ngit merge main\nEOF\n"
+                        "done | bash",
+                        "if true; then cat <<EOF\ngit merge main\nEOF\n"
+                        "fi | bash",
+                        "if true\nthen\ncat <<EOF\ngit merge main\nEOF\n"
+                        "echo x\nfi | bash",
+                        "cat <<EOF | # feed it\ngit merge main\nEOF\nbash",
+                        "cat <<EOF |&\ngit merge main\nEOF\nbash",
+                        "bash \\\n<<EOF\ngit merge main\nEOF",
+                        "source \\\n/dev/stdin <<EOF\ngit merge main\nEOF",
+                        "echo x |\n\ncat <<EOF\ngit merge main\nEOF",
+                        # a receiver off the allowlist, or not a bare word
+                        "\"$SHELL\" <<EOF\ngit merge main\nEOF",
+                        "$SHELL -s <<EOF\ngit merge main\nEOF",
+                        "\"bash\" <<EOF\ngit merge main\nEOF",
+                        "cat <<EOF | \"/usr/bin/bash\"\ngit merge main\nEOF",
+                        "cmd <<EOF\ngit merge main\nEOF",
+                        "wsl <<EOF\ngit merge main\nEOF",
+                        "fish <<EOF\ngit merge main\nEOF",
+                        "tcsh <<EOF\ngit merge main\nEOF",
+                        "busybox ash <<EOF\ngit merge main\nEOF",
+                        "cat <<EOF | sudo -s\ngit merge main\nEOF",
+                        "sudo cat <<EOF\ngit merge main\nEOF",
+                        "X=1 cat <<EOF\ngit merge main\nEOF",
+                        "tee >(bash) <<EOF\ngit merge main\nEOF",
+                        # stored, then run by a later command in the same call
+                        "read -r -d '' X <<'EOF'\ngit merge main\nEOF\neval \"$X\"",
+                        "exec 3<<EOF\ngit merge main\nEOF\nbash <&3",
+                        "f() { bash; }\ncat <<EOF | f\ngit merge main\nEOF",
+                        "cat() { bash; }\ncat <<EOF\ngit merge main\nEOF"):
+                self.assertEqual(self.decide("Bash", {"command": cmd})[:2],
+                                 ("deny", "commit_through_the_gate"), cmd)
+
+        def test_129_real_merge_after_a_heredoc_still_denied(self):
+            self.make_bugfix()
+            for cmd in ("cat > n.md <<'EOF'\ntext\nEOF\ngit merge main",
+                        "cat > n.md <<EOF\ntext\nEOF\necho ok && git commit -m x",
+                        # unterminated: the rest stays scanned
+                        "cat > n.md <<EOF\ngit merge main",
+                        # an operator inside quotes or a comment is no heredoc
+                        "echo \"<<EOF\"\ngit merge main\nEOF",
+                        "echo hi # <<EOF\ngit merge main\nEOF",
+                        # quote state is tracked across lines and escapes
+                        "echo \"\\\" <<EOF\"\ngit merge main\nEOF",
+                        "echo \"\n<<EOF\n\"\ngit merge main\nEOF",
+                        # an inexact terminator never resyncs the reader
+                        "cat <<EOF\n EOF\ncat <<X\nEOF\ngit merge main\nX",
+                        "cat <<EOF\n\tEOF\ncat <<X\nEOF\ngit merge main\nX"):
+                self.assertEqual(self.decide("Bash", {"command": cmd})[:2],
+                                 ("deny", "commit_through_the_gate"), cmd)
+
+        def test_130_commit_inside_a_python_heredoc_body_allowed(self):
+            self.make_bugfix()
+            cmd = ("python - <<'EOF'\nprint('git commit -m x')\n"
+                   "git commit -m y\nEOF")
+            self.assertEqual(self.decide("Bash", {"command": cmd})[0], "allow")
+
+        def test_131_heredoc_stripping_and_target_parsing(self):
+            base = os.path.normpath("/base")
+            self.assertEqual(
+                strip_data_heredocs("cat <<EOF\ngit merge x\nEOF\nls"),
+                "cat <<EOF\nls")
+            self.assertEqual(strip_data_heredocs("x <<<word"), "x <<<word")
+            # a body's `cd` no longer moves the commit's target
+            self.assertEqual(
+                commit_target_dir("cat > f <<EOF\ncd a\nEOF\ngit commit", base),
+                base)
 
         def test_09_global_option_bypass_is_closed(self):
             self.make_feature()

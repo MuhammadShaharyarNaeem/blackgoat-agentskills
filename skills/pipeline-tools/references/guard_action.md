@@ -107,9 +107,35 @@ Each of these is accepted, not overlooked. Every one of them fails **open**.
   native path, so this bites hand-built payloads, not the real hook.
 - **Quoted commands.** Rule 1 matches the command **string**, so
   `echo "git commit"` is denied (over-block) while a commit reached through a
-  shell alias, a script file or a heredoc is not (under-block). The regex does
-  cover global options (`git -C <dir> commit`, `git -c user.name=x commit`),
-  which is the one bypass common enough to matter.
+  shell alias, a script file, or a program that runs git from a heredoc data
+  body (`python - <<EOF` calling `subprocess`) is not (under-block). The regex
+  does cover global options (`git -C <dir> commit`, `git -c user.name=x
+  commit`), which is the one bypass common enough to matter.
+- **Heredoc bodies.** Before rule 1 matches, `strip_data_heredocs()` removes
+  heredoc bodies only on an **allowlist** of data consumers, so file text that
+  mentions a merge is no longer denied. Every heredoc in the command must be
+  received by a bare `cat`, `tee` or `python`/`python3`/`py` word (optional
+  `/` path, optional `.exe`) on one simple-command line at nesting depth zero:
+  no pipe, `;`, `&`, `&&`, `||`, `|&`, paren, `$(`, backtick or trailing `\`
+  on that line (redirections such as `> f` and `2>&1`, and flags like
+  `tee -a`, are fine); no earlier line opening a compound command (`{`, `(`,
+  `do`, `then`, `if`, `case`, a function) or ending in `|`, `&` or `\`; no
+  line after the terminator resuming it (`|`, `&`, `)`, `}`, `done`, `fi`,
+  `esac`); no `$`, quote, `X=1` prefix or `sudo`/`env`/`exec` wrapper on the
+  receiver; no `$(`/backtick in an unquoted-delimiter body. The terminator
+  must match exactly (`<<-` strips leading tabs only), and quote state is
+  tracked across lines with backslash escapes. Anything else — any other
+  receiver (a shell, `"$SHELL"`, `cmd`, `wsl`, `read`, `exec 3<<`), an
+  unterminated body, an inexact terminator such as a CRLF one, a quote open at
+  the operator, `$(`/backtick/`$'` on any command line, a parse error — leaves
+  the whole command scanned: an over-block, never an under-block. A shell
+  denylist was tried first and failed two reviews; no list of shells is
+  complete. **Accepted residuals** (the script-file class above): a python
+  body that itself runs git, and data an allowlisted heredoc writes that a
+  later command or call executes — `sh x.sh`, a `read X <<EOF` + `eval` or an
+  `exec 3<<EOF` split across calls, a function receiver defined in an earlier
+  call. Within one command those forms are denied, because `read`, `exec`, a
+  function definition and a pipe all fall off the allowlist.
 - **Non-tool paths.** Anything not travelling through a guarded tool call — the
   user's own terminal, an MCP server that shells out, `Bash` redirecting into
   `gates.jsonl` (asserted in `test_29`) — is out of reach by construction.
@@ -363,3 +389,5 @@ Self-test count: 119 → 126 — lane in cwd + `-C` to another worktree allows; 
 - **Fails open without a transcript.** When the hook payload names no `transcript_path` file that exists, `check_learn_approval.py --record` cannot run (exit 2), so no approval record can ever be made; rule 9 then allows rather than deny a legitimately approved apply, and `bgpdd-learn` Step 4's prose rule stands alone (the same fail-open stance as § Fail-open is a hard requirement). `test_126` pins it, and that an existing transcript keeps the deny. The Cursor payload shape and `--format cursor` were removed with Cursor support (test 37 retired), so the count stays 130.
 
 Self-test count: 126 → 130 — denied before approval (Edit, Write, a CLAUDE.md, a Bash redirect); an approved destination allowed (absolute and `{PLUGIN_ROOT}/` forms) while another persona is denied; disarmed with no run, after a close, and when stale; non-rule-layer paths (`src/`, a `references/` page, README) unaffected.
+
+Self-test count: 130 → 135 — rule 1 heredoc bodies (bugfix `guard-heredoc-merge`): data bodies to an allowlisted `cat`/`tee`/`python` receiver allowed across `<<`, `<<-`, `'EOF'`, `"EOF"`, two operators on one line, a quoted delimiter's `$(`/backtick text, a path prefix, `.exe`, redirections and flags; every other shape denied (a named, quoted or `$`-expanded shell, `cmd`/`wsl`/`fish`/`tcsh`/`busybox ash`/`sudo`, an `X=1` prefix, `eval $(…)`, `source`/`.`, a pipe or `|&` on the operator line even before a comment, a `\`- or `|`-joined earlier line, a compound command closed by `}`/`done`/`fi` and piped on, `tee >(bash)`, an unquoted-delimiter `$( )`, and `read`+`eval`, `exec 3<<`, function receivers in the same command); a real command after a heredoc, an unterminated body, a quoted or commented operator, cross-line and escaped quotes, and an inexact terminator all denied; the stripper and `commit_target_dir` checked directly.

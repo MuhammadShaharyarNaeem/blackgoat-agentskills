@@ -153,6 +153,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -714,6 +715,29 @@ def git_changed_since(repo, ref):
     return changed
 
 
+def git_ignored(repo, paths):
+    """The subset of repo-relative `paths` git ignores, in one check-ignore
+    call (--stdin -z). A tracked path is never reported: exclude rules do not
+    apply to it. Exit 1 is git's "none ignored"; any other non-zero exit, a
+    missing git or a timeout is a GateError."""
+    if not paths:
+        return set()
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "check-ignore", "-z", "--stdin"],
+            input="\0".join(paths).encode("utf-8") + b"\0",
+            capture_output=True, timeout=120)
+    except FileNotFoundError:
+        raise GateError("git executable not found; --since cannot be checked")
+    except subprocess.TimeoutExpired:
+        raise GateError("git check-ignore timed out after 120s")
+    if proc.returncode not in (0, 1):
+        raise GateError(f"git check-ignore in {repo} failed: "
+                        f"{proc.stderr.decode('utf-8', 'replace').strip()}")
+    return {normalize_path(name) for name in
+            proc.stdout.decode("utf-8", "replace").split("\0") if name.strip()}
+
+
 # A workspace root with no .git (a multi-repo discovery workspace writing
 # .docs/summary/) has no diff to consult, so --since verifies a
 # <changed_files> path resolved there by mtime against the launch instant.
@@ -723,6 +747,18 @@ def git_changed_since(repo, ref):
 # price, a fresh file failing would be worse.
 MTIME_SLACK_SECONDS = 2.0
 INSTANT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}")
+
+
+def predates(path, cutoff):
+    """True only when `path` itself (lstat: a symlink is its own blob, never
+    its target) is a file or symlink last modified before epoch `cutoff`.
+    Missing, a directory, or unreadable: False, so the path stays counted."""
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return False
+    return ((stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode))
+            and info.st_mtime < cutoff)
 
 
 def files_modified_since(root, threshold):
@@ -1495,6 +1531,7 @@ def build_report(text, persona, repo, since=None, fix_round=False,
         reference = ((since_instant, "since") if since_instant else
                      (launched_at, "transcript") if launched_at else None)
         touched_cache = {}
+        diff_misses = {}
         git_roots = {}
 
         def in_git(root):
@@ -1554,11 +1591,40 @@ def build_report(text, persona, repo, since=None, fix_round=False,
             root_abs = Path(matched_root).resolve()
             repo_rel = normalize_path(str(resolved_path.relative_to(root_abs)))
             if repo_rel not in touched_cache[root_key]:
-                finding("changed_files_not_in_diff",
-                        f"<changed_files> names {rel}, which git does not "
-                        f"report as changed or committed since {since} in "
-                        f"{matched_root}",
-                        path=rel, since=since)
+                diff_misses.setdefault(root_key, (matched_root, []))[1].append(
+                    (rel, repo_rel, resolved_path))
+        # A git-ignored path (.docs/ evidence) is in no diff and no untracked
+        # list, so it is judged by mtime against the launch instant, exactly
+        # as a non-git root is; one check-ignore call per root.
+        for matched_root, misses in diff_misses.values():
+            ignored = git_ignored(matched_root, [m[1] for m in misses])
+            for rel, repo_rel, resolved_path in misses:
+                if repo_rel not in ignored:
+                    finding("changed_files_not_in_diff",
+                            f"<changed_files> names {rel}, which git does not "
+                            f"report as changed or committed since {since} in "
+                            f"{matched_root}",
+                            path=rel, since=since)
+                    continue
+                if reference is None:
+                    raise GateError(
+                        f"{rel} is git-ignored in {matched_root}, so it is "
+                        f"checked by mtime, and --since {since} has no launch "
+                        "instant to compare against: pass --transcript")
+                instant, source = reference
+                report["mtime_reference"] = {"instant": instant.isoformat(),
+                                             "source": source}
+                # predates() is False for a directory or unreadable path;
+                # here that must fail, not pass.
+                if not (resolved_path.is_file() or resolved_path.is_symlink()) \
+                        or predates(resolved_path,
+                                    instant.timestamp() - MTIME_SLACK_SECONDS):
+                    finding("changed_files_not_in_diff",
+                            f"<changed_files> names {rel}, git-ignored in "
+                            f"{matched_root}, is not a file modified at or "
+                            f"after the launch instant {instant.isoformat()} "
+                            f"({source}, {MTIME_SLACK_SECONDS:g}s slack)",
+                            path=rel, since=since, mode="mtime-ignored")
         if report["changed_files_none_reason"] is not None:
             # none: claims the empty set; the diff must agree outside the
             # docs root, or the "docs-only run" is a builder run that hid
@@ -1573,6 +1639,15 @@ def build_report(text, persona, repo, since=None, fix_round=False,
                     if root_key not in touched_cache:
                         touched_cache[root_key] = git_changed_since(root, since)
                     touched = touched_cache[root_key]
+                    if reference is not None:
+                        # The same sha can predate the launch by uncommitted
+                        # edits (a builder never commits): a path last
+                        # modified before the launch instant is not this
+                        # run's. A deleted or unreadable path stays.
+                        cutoff = reference[0].timestamp() - MTIME_SLACK_SECONDS
+                        root_abs = Path(root).resolve()
+                        touched = {p for p in touched
+                                   if not predates(root_abs / p, cutoff)}
                 else:
                     if reference is None:
                         raise GateError(
@@ -1699,6 +1774,7 @@ def build_report(text, persona, repo, since=None, fix_round=False,
 # runtime's record of what a tool returned.
 
 DELEGATION_TOOL_NAMES = ("Task", "Agent", "SendMessage")
+RESUME_TOOL_NAME = "SendMessage"  # continues a launched agent: input `to`
 NOTIFICATION_TOOL_ID_RE = re.compile(r"<tool-use-id>\s*(\S+?)\s*</tool-use-id>")
 
 
@@ -1829,13 +1905,53 @@ def delegation_source(messages, block, handbacks=(), launched=None,
     human's queued mid-turn message. Never assistant text, and never another
     tool's result -- `cat handoff.md` would return text the model wrote itself.
     `launched_at` is the delegating call's transcript timestamp (from
-    `stamps`, see tool_use_timestamps), or None."""
+    `stamps`, see tool_use_timestamps), or None -- or, when a later
+    SendMessage resumed that agent before the report landed, the latest
+    such resume's (see launch_stamp)."""
     needle = collapse_ws(block)
     if not needle:
         return None
     stamps = stamps or {}
     calls = {e["id"]: e for _l, r, k, _t, e in messages
              if r == "assistant" and k == "tool_use"}
+    agent_of = {tool_id: agent_id
+                for agent_id, tool_id in (launched or {}).items()}
+
+    def launch_stamp(call, before_line):
+        """The latest start of the agent `call` launched, before
+        `before_line`: the call itself, or a later SendMessage whose input
+        `to` is that agent's id, sent after that agent returned (a hand-back
+        from it, or a completion notification naming one of its calls, since
+        the previous start). A send to a running agent, or one never
+        answered, is no relaunch. Unknown agent: the call's own stamp."""
+        agent_id = (agent_of.get(call["id"])
+                    or (call["input"].get("to")
+                        if call.get("name") == RESUME_TOOL_NAME else None))
+        best = stamps.get(call["id"])
+        if not agent_id:
+            return best
+        sends = [(line_no, extra["id"]) for line_no, role, kind, _t, extra
+                 in messages
+                 if role == "assistant" and kind == "tool_use"
+                 and extra.get("name") == RESUME_TOOL_NAME
+                 and (extra.get("input") or {}).get("to") == agent_id]
+        own_ids = {call["id"]} | {tool_id for _l, tool_id in sends}
+        returns = [line_no for line_no, sender, _t in handbacks
+                   if sender == agent_id]
+        returns += [line_no for line_no, role, kind, text, _e in messages
+                    if role == "user" and kind == "text"
+                    and own_ids & set(NOTIFICATION_TOOL_ID_RE.findall(text))]
+        start = next((line_no for line_no, _r, _k, _t, extra in messages
+                      if extra.get("id") == call["id"]), None)
+        if start is None:
+            return best
+        for line_no, tool_id in sends:
+            if line_no >= before_line:
+                break
+            if (line_no > start and stamps.get(tool_id)
+                    and any(start < r < line_no for r in returns)):
+                start, best = line_no, stamps[tool_id]
+        return best
     # A user-role hand-back entry is judged only by the hand-back loop below,
     # never accepted here as a human paste.
     handback_lines = {line_no for line_no, _s, _t in handbacks}
@@ -1849,7 +1965,7 @@ def delegation_source(messages, block, handbacks=(), launched=None,
                 return {"line": line_no, "via": "delegation_result",
                         "tool": call["name"],
                         "subagent_type": call["input"].get("subagent_type"),
-                        "launched_at": stamps.get(call["id"])}
+                        "launched_at": launch_stamp(call, line_no)}
         elif kind == "text":
             ids = NOTIFICATION_TOOL_ID_RE.findall(text)
             call = calls.get(ids[0]) if ids else None
@@ -1857,7 +1973,7 @@ def delegation_source(messages, block, handbacks=(), launched=None,
                 return {"line": line_no, "via": "delegation_notification",
                         "tool": call["name"],
                         "subagent_type": call["input"].get("subagent_type"),
-                        "launched_at": stamps.get(call["id"])}
+                        "launched_at": launch_stamp(call, line_no)}
             return {"line": line_no, "via": "user_message",
                     "tool": None, "subagent_type": None, "launched_at": None}
     # A queued hand-back (see transcript_handbacks): accepted only when its
@@ -1870,7 +1986,7 @@ def delegation_source(messages, block, handbacks=(), launched=None,
             return {"line": line_no, "via": "delegation_handback",
                     "tool": call["name"],
                     "subagent_type": call["input"].get("subagent_type"),
-                    "launched_at": stamps.get(call["id"])}
+                    "launched_at": launch_stamp(call, line_no)}
     return None
 
 
@@ -1904,13 +2020,13 @@ Reads:
     <artifact>; dep, quinn -> <changed_files> + <artifact>; forge ->
     <changed_skills>; others -> <artifact>. Always <status>, <blockers>;
     <fix_verification> under --fix-round; <consumers> (mason, nova) under
-    --require consumers. agents/blackgoat.md is a usage error.
-      <status>    COMPLETE | PARTIAL | BLOCKED -- DELIVERY state, not a
+    --require consumers. agents/blackgoat.md: usage error.
+      <status>    COMPLETE | PARTIAL | BLOCKED: DELIVERY state, not a
                   verdict.
       <blockers>  on PARTIAL or BLOCKED, at least one line
                     blocked_on: <category> - <reason>
                   <category>: environment, credentials, dependency, spec,
-                  defect. Absent is element_missing only.
+                  defect. Absent: element_missing only.
       <consumers> lines in path::symbol grammar.
       <changed_files>  paths, or (dep/quinn only, docs-only run;
                   convention #8) one line none: <non-empty reason> = the
@@ -1925,15 +2041,17 @@ Reads:
     exist inside a --repo; the latter two also under a --docs-root, its
     parent, the cwd.
   --since  <changed_files> must be a subset of git diff --name-only <ref>
-    plus untracked. A root outside every git work tree is checked by mtime
-    instead: modified at or after (2 s slack) --since as an ISO-8601
-    instant, else the --transcript launch; neither is exit 2. A git root
-    needs a ref. Each <changed_symbols> Name must appear as a whole word
-    on a +, - or context line (or an open enclosing line) of git diff -M -W
-    <ref> -- <path> under git's built-in drivers (untracked = all-added;
+    plus untracked. A non-git root or git-ignored path is checked by
+    mtime: modified since (2s slack) --since as an ISO-8601 instant, else
+    the --transcript launch or latest SendMessage resume; neither is exit
+    2. Git roots need a sha, not an instant; none: ignores files predating
+    that launch. Each
+    <changed_symbols> Name
+    must appear as a whole word on a +, - or context line (or an open
+    enclosing line) of git diff -M -W <ref> -- <path> under git's built-in drivers (untracked = all-added;
     none: unchecked; convention #8); other names are invented.
   Scaffolding sweep  COMPLETE text <artifact>/<changed_skills> files: no
-    base-persona placeholder (underscore joined to TODO),
+    placeholder (underscore joined to TODO),
     TODO-colon-pending, HTML comment opening TODO/skeleton, or line
     EXPLAINING markers; fences count, inline code not.
   --transcript  Claude Code session JSONL, sidechains skipped. The
@@ -1981,7 +2099,7 @@ Exit codes:
      unreadable --transcript
 
 Self-test:
-  python check_handoff.py --self-test   (129 cases)
+  check_handoff.py --self-test   (138 cases)
 """
 
 
@@ -2123,7 +2241,8 @@ def main(argv):
             report["result"] = "FAIL"
         extra["delegation_source"] = source_entry
 
-    if "mtime" in report["verify_mode"].values():
+    if ("mtime" in report["verify_mode"].values()
+            or report["mtime_reference"] is not None):
         extra["verify_mode"] = report["verify_mode"]
         extra["mtime_reference"] = report["mtime_reference"]
     if report.get("changed_files_none_reason"):
@@ -3420,6 +3539,186 @@ def run_self_test():
             self.assertEqual(self.codes(r), ["changed_files_none_contradicted"])
             self.assertEqual(r["findings"][0]["path"], "src/a.py")
 
+        def test_none_in_git_skips_an_uncommitted_edit_older_than_launch(self):
+            """handoff-verifier-none: the builder's uncommitted fix predates
+            the verifier's launch on the same sha, so it is not the
+            verifier's change; an edit after launch, or no instant, still
+            contradicts none:."""
+            ref = self.make_repo()
+            (self.dir / "src" / "a.py").write_text("builder fix",
+                                                   encoding="utf-8")
+            self._age("src/a.py", 3600)
+            launch = parse_instant(self._iso(-60))
+            text = self._files_none("none: GREEN re-run")
+            r = build_report(text, "quinn", self.dir, since=ref,
+                             launched_at=launch)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            # no launch instant: fail-safe, unchanged
+            r = build_report(text, "quinn", self.dir, since=ref)
+            self.assertEqual(self.codes(r), ["changed_files_none_contradicted"])
+            self.assertEqual(r["findings"][0]["path"], "src/a.py")
+            # an edit after the launch instant is the verifier's own
+            (self.dir / "src" / "b.py").write_text("verifier edit",
+                                                   encoding="utf-8")
+            r = build_report(text, "quinn", self.dir, since=ref,
+                             launched_at=launch)
+            self.assertEqual(self.codes(r), ["changed_files_none_contradicted"])
+            self.assertEqual(r["findings"][0]["path"], "src/b.py")
+            # a deletion has no mtime: still counted
+            (self.dir / "src" / "b.py").write_text("b", encoding="utf-8")
+            self._age("src/b.py", 3600)
+            (self.dir / "src" / "a.py").unlink()
+            r = build_report(text, "quinn", self.dir, since=ref,
+                             launched_at=launch)
+            self.assertEqual(self.codes(r), ["changed_files_none_contradicted"])
+            self.assertEqual(r["findings"][0]["path"], "src/a.py")
+
+        def test_none_launch_instant_is_the_latest_sendmessage_resume(self):
+            """handoff-verifier-none round 2: Quinn's GREEN is a SendMessage
+            continuation of her RED delegation, so the launch instant is the
+            resume, not the original Agent call."""
+            import contextlib
+            import io
+            ref = self.make_repo()
+            (self.dir / "src" / "a.py").write_text("builder fix",
+                                                   encoding="utf-8")
+            self._age("src/a.py", 3600)  # after the Agent call, before resume
+            text = self._files_none("none: GREEN re-run")
+            (self.dir / ".docs").mkdir()
+            handoff = self.dir / ".docs" / "h.md"
+            handoff.write_text(text, encoding="utf-8")
+            agent = self._call("t1", "Agent", subagent_type="x:quinn")
+            agent["timestamp"] = self._iso(-7200).replace("+00:00", "Z")
+            handback = {"type": "user", "isMeta": True,
+                        "message": {"role": "user", "content": text},
+                        "origin": self._peer("a1b2")}
+
+            def gate(*between):
+                entries = (agent, self._launch("t1", "a1b2"), *between,
+                           handback)
+                # under .docs/, so the transcript is not itself a change
+                transcript = str(self.dir / ".docs" / "session.jsonl")
+                Path(transcript).write_text(
+                    "\n".join(json.dumps(e) for e in entries) + "\n",
+                    encoding="utf-8")
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    code = main(["--handoff", str(handoff), "--persona",
+                                 "quinn", "--repo", str(self.dir), "--since",
+                                 ref, "--transcript", transcript])
+                return code, json.loads(buf.getvalue())
+
+            red = {"type": "user", "isMeta": True,
+                   "message": {"role": "user", "content": "RED captured"},
+                   "origin": self._peer("a1b2")}
+            resume = self._call("s1", "SendMessage", to="a1b2", message="go")
+            resume["timestamp"] = self._iso(-60).replace("+00:00", "Z")
+            code, r = gate(red, resume)
+            self.assertEqual(code, 0, r)
+            self.assertEqual(r["delegation_source"]["launched_at"],
+                             resume["timestamp"])
+            # no resume of THIS agent: the Agent call's instant, as before
+            other = self._call("s2", "SendMessage", to="zz99", message="go")
+            other["timestamp"] = resume["timestamp"]
+            for between in ((), (other,)):
+                code, r = gate(*between)
+                self.assertEqual(code, 1, r)
+                self.assertEqual(r["delegation_source"]["launched_at"],
+                                 agent["timestamp"])
+                self.assertEqual(self.codes(r),
+                                 ["changed_files_none_contradicted"])
+
+        def test_none_resume_counts_only_after_the_agent_returned(self):
+            """handoff-verifier-none round 3 (Luna F1/F2): a SendMessage is a
+            relaunch only after a hand-back or completion notification from
+            that agent since its previous start; the latest such send before
+            the report wins, and a send after the report is ignored."""
+            import contextlib
+            import io
+            ref = self.make_repo()
+            (self.dir / "src" / "a.py").write_text("verifier's own edit",
+                                                   encoding="utf-8")
+            self._age("src/a.py", 3600)
+            text = self._files_none("none: GREEN re-run")
+            (self.dir / ".docs").mkdir()
+            handoff = self.dir / ".docs" / "h.md"
+            handoff.write_text(text, encoding="utf-8")
+            agent = self._call("t1", "Agent", subagent_type="x:quinn")
+            agent["timestamp"] = self._iso(-7200).replace("+00:00", "Z")
+
+            def peer(content):
+                return {"type": "user", "isMeta": True,
+                        "message": {"role": "user", "content": content},
+                        "origin": self._peer("a1b2")}
+
+            def send(tool_id, offset):
+                entry = self._call(tool_id, "SendMessage", to="a1b2",
+                                   message="go")
+                entry["timestamp"] = self._iso(offset).replace("+00:00", "Z")
+                return entry
+
+            def gate(*entries):
+                transcript = self.dir / ".docs" / "session.jsonl"
+                transcript.write_text("\n".join(json.dumps(e) for e in (
+                    agent, self._launch("t1", "a1b2"), *entries)) + "\n",
+                    encoding="utf-8")
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    code = main(["--handoff", str(handoff), "--persona",
+                                 "quinn", "--repo", str(self.dir), "--since",
+                                 ref, "--transcript", str(transcript)])
+                return code, json.loads(buf.getvalue())
+
+            final = peer(text)
+            s1, s2, s3 = send("s1", -120), send("s2", -60), send("s3", -30)
+            notified = {"type": "user", "message": {"role": "user",
+                        "content": "<task-notification><tool-use-id>t1"
+                                   "</tool-use-id>done</task-notification>"}}
+            cases = (
+                # several valid resumes: the latest wins
+                ((peer("RED"), s1, peer("round 2"), s2, final), s2),
+                # a completion notification also marks the agent returned
+                ((notified, s1, final), s1),
+                # s2 reached a running agent (no return since s1)
+                ((peer("RED"), s1, s2, final), s1),
+                # a send after the report line is not its launch
+                ((peer("RED"), s1, final, s3), s1))
+            for entries, expected in cases:
+                code, r = gate(*entries)
+                self.assertEqual(code, 0, r)
+                self.assertEqual(r["delegation_source"]["launched_at"],
+                                 expected["timestamp"])
+            # a send queued to a still-running agent, or a failed send: the
+            # Agent call's instant stays, so the verifier's edit contradicts
+            for outcome in ({"success": True, "message": "Message queued"},
+                            {"success": False, "message": "agent not found"}):
+                ack = self._result("s1", outcome["message"])
+                ack["toolUseResult"] = outcome
+                code, r = gate(s1, ack, final)
+                self.assertEqual(code, 1, r)
+                self.assertEqual(r["delegation_source"]["launched_at"],
+                                 agent["timestamp"])
+                self.assertEqual(self.codes(r),
+                                 ["changed_files_none_contradicted"])
+
+        def test_mtime_filter_uses_lstat_and_keeps_unreadable_paths(self):
+            """Luna F3: `predates` judges a symlink by itself, and a path it
+            cannot stat stays counted (fail-safe), never a crash."""
+            old = self.dir / "old.txt"
+            old.write_text("old", encoding="utf-8")
+            self._age("old.txt", 3600)
+            cutoff = datetime.now(timezone.utc).timestamp() - 60
+            self.assertTrue(predates(old, cutoff))
+            self.assertFalse(predates(self.dir / "gone.txt", cutoff))
+            self.assertFalse(predates(self.dir, cutoff))
+            link = self.dir / "link.txt"
+            try:
+                os.symlink(old, link)
+            except (OSError, NotImplementedError):
+                return  # no symlink privilege on this host
+            # fresh link to an old target: judged by the link, so counted
+            self.assertFalse(predates(link, cutoff))
+
         def test_none_contradicted_by_mtime_in_a_non_git_root(self):
             """Red-team h_none: Dep edits deploy/Dockerfile, claims none:."""
             launch = datetime.now(timezone.utc).isoformat()
@@ -3787,6 +4086,55 @@ def run_self_test():
             with self.assertRaises(GateError):
                 build_report(self._scout("src/a.py"), "scout", self.dir,
                              since=self._iso(-60))
+
+        # --- --since: a git-ignored path (handoff-ignored-docs) -----------
+        def _ignored_repo(self):
+            (self.dir / ".gitignore").write_text("/.docs/\n", encoding="utf-8")
+            ref = self.make_repo()
+            (self.dir / ".docs" / "ev").mkdir(parents=True)
+            (self.dir / ".docs" / "ev" / "cap.md").write_text(
+                "c", encoding="utf-8")
+            (self.dir / "src" / "a.py").write_text("a2", encoding="utf-8")
+            return ref
+
+        def test_ignored_path_written_after_launch_passes_by_mtime(self):
+            ref = self._ignored_repo()
+            r = build_report(self._deletion("src/a.py, .docs/ev/cap.md"),
+                             "mason", self.dir, since=ref,
+                             launched_at=parse_instant(self._iso(-60)))
+            self.assertEqual(r["result"], "PASS", r["findings"])
+            self.assertEqual(r["verify_mode"], {str(self.dir): "git"})
+            self.assertEqual(r["mtime_reference"]["source"], "transcript")
+
+        def test_ignored_path_older_than_launch_fails(self):
+            ref = self._ignored_repo()
+            self._age(".docs/ev/cap.md", 3600)
+            r = build_report(self._deletion("src/a.py, .docs/ev/cap.md"),
+                             "mason", self.dir, since=ref,
+                             launched_at=parse_instant(self._iso(-60)))
+            self.assertEqual(self.codes(r), ["changed_files_not_in_diff"])
+            self.assertEqual(r["findings"][0]["path"], ".docs/ev/cap.md")
+            self.assertEqual(r["findings"][0]["mode"], "mtime-ignored")
+
+        def test_ignored_path_with_no_launch_instant_is_an_error(self):
+            ref = self._ignored_repo()
+            with self.assertRaises(GateError) as ctx:
+                build_report(self._deletion(".docs/ev/cap.md"), "mason",
+                             self.dir, since=ref)
+            self.assertIn("--transcript", str(ctx.exception))
+            # the tracked-only handoff needs no instant, as before
+            r = build_report(self._deletion("src/a.py"), "mason", self.dir,
+                             since=ref)
+            self.assertEqual(r["result"], "PASS", r["findings"])
+
+        def test_tracked_path_not_in_diff_still_fails_beside_ignored(self):
+            ref = self._ignored_repo()
+            r = build_report(self._deletion("src/b.py, .docs/ev/cap.md"),
+                             "mason", self.dir, since=ref,
+                             launched_at=parse_instant(self._iso(-60)))
+            self.assertEqual(self.codes(r), ["changed_files_not_in_diff"])
+            self.assertEqual(r["findings"][0]["path"], "src/b.py")
+            self.assertNotIn("mode", r["findings"][0])
 
         def test_non_git_workspace_with_a_git_subrepo_mixes_modes(self):
             sub = self.dir / "api"

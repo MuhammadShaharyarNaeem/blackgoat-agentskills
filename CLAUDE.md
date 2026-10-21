@@ -48,3 +48,7 @@ Step-by-step authoring procedure: `skills/agent-squad/references/authoring-agent
 - Run the **`agent-audit`** skill against any agent/methodology you touched — it owns the current heuristic list and its coverage table. It starts with a **mechanical preflight** (`check_frontmatter.py`, `check_dependency_tables.py`, a registration diff against the runtime, every `--self-test`, the ledger grep) before any prose is read. Fill every row of its coverage table; every `FAIL` must flip to `PASS` before you're done.
 - Independently confirm all `{PLUGIN_ROOT}` dependency paths resolve to existing files — `python skills/pipeline-tools/scripts/check_dependency_tables.py skills` is the sanctioned way to run this check.
 - Grep the tree to confirm no `SKILL-CONTRACT.md` and no `base-persona-{builder,devops,meta,qa}` variant files were introduced (exclude `references/` — `skills/agent-squad/references/base-persona-rationale.md` is a legitimate rationale doc, not a variant).
+
+## Procedural Memories (Learned Lessons)
+
+- This plugin runs bugs one at a time in the main checkout on one feature branch; do not use `/bgpdd-bugfix-batch` or any git worktree here. `guard_action.py`'s lane rules see only lanes under the session's own working directory, so a worktree's lane runs unguarded, and a worktree under `~/.claude/skills` shadows the installed plugin. Never offer worktrees as the recommended option for this repository.

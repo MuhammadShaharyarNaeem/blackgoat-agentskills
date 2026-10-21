@@ -620,9 +620,23 @@ def check_ledger_gates(ledger_path, gate_names, milestone):
 # --capture --ledger --milestone is the only writer of the CAPTURED record
 # that proves it ran (guard_action.py rule 4 denies a hand write).
 
-EXIT_CRITERION_RE = re.compile(r"RUNTIME EXIT CRITERION", re.IGNORECASE)
+# is_exit_criterion_line() is the whole detection rule: a line is a criterion
+# when it names "RUNTIME EXIT CRITERION ... run `<cmd>`" anywhere OR only
+# non-word characters, numbered-list markers (1. / 2)) and checkboxes
+# ([ ] / [x] / [X]) precede the phrase (so any bullet, quote, heading, table
+# pipe or emphasis). A line where a word comes before the phrase and no
+# command follows (a RUNTIME PROBE justification) is not one.
+EXIT_CRITERION_LINE_RE = re.compile(
+    r"^(?:[^\w]|\d+[.)]|\[[ xX]\])*RUNTIME EXIT CRITERION", re.IGNORECASE)
 EXIT_CRITERION_CMD_RE = re.compile(
     r"RUNTIME EXIT CRITERION\s*[^`]*?\brun\s+`(?P<cmd>[^`]+)`", re.IGNORECASE)
+
+
+def is_exit_criterion_line(content):
+    """True when the line declares a RUNTIME EXIT CRITERION (rule above)."""
+    return bool(EXIT_CRITERION_LINE_RE.match(content)
+                or EXIT_CRITERION_CMD_RE.search(content))
+
 # next_milestone.py's parse_milestones() block rule, restated as a predicate:
 # a level-2 heading ends the block unless it starts with Task or Checkpoint.
 BLOCK_END_RE = re.compile(r"^#{1,2}(?!#)\s*(?!task|checkpoint)\S",
@@ -639,7 +653,7 @@ def milestone_exit_criteria(lines, index):
     for content in contents[index + 1:]:
         if MILESTONE_HEADING_RE.match(content) or BLOCK_END_RE.match(content):
             break
-        if EXIT_CRITERION_RE.search(content):
+        if is_exit_criterion_line(content):
             m = EXIT_CRITERION_CMD_RE.search(content)
             out.append((content.strip(),
                         m.group("cmd").strip() if m else None))
@@ -890,12 +904,12 @@ PURPOSE = ("Appends or removes a milestone's completion marker in the plan, "
 EPILOG = """Reads:
   --plan -- a plan with "## Milestone <n>..." or "### Milestone <n>..."
     headings; completion is the literal " [x]" appended to the heading. The
-    title matches case-insensitively and WHOLE-TOKEN, so "Milestone 1" never
-    matches "Milestone 10". utf-8-sig; line endings and BOM survive.
+    title matches case-insensitively, WHOLE-TOKEN ("Milestone 1" never
+    matches "Milestone 10"). utf-8-sig; line endings and BOM survive.
   --ledger -- the gate ledger. Its hash chain is
     walked FIRST (ledger_chain_broken); then each required gate's LATEST
     record scoped to this milestone must carry "verdict": "PASS" -- the
-    VERDICT only, deliberately not a re-hash of inputs. Gate backing is ON
+    VERDICT only, not a re-hash of inputs. Gate backing is ON
     BY DEFAULT (--require-gates check_commit_gate.py), so a bare
     --plan --milestone with no --ledger is exit 2, never a silent pass.
     --require-gates none (also off / no / -) is the explicit opt-out;
@@ -906,9 +920,10 @@ EPILOG = """Reads:
     token (full title or leading identifier; last matching section wins),
     3-6 bullets, a fenced block, and a summarize_run mention or a table
     row. Shared byte-for-byte with update_state.py.
-  --require-exit-capture -- every "RUNTIME EXIT CRITERION ... run `<cmd>`"
-    line in the milestone's next_milestone.py block needs, in --ledger, a
-    run_quiet.py CAPTURED record for this milestone whose command_argv
+  --require-exit-capture -- every line naming "RUNTIME EXIT CRITERION ...
+    run `<cmd>`" or matching ^(?:[^\\w]|\\d+[.)]|\\[[ xX]\\])*RUNTIME EXIT
+    CRITERION in the milestone's next_milestone.py block needs, in
+    --ledger, a run_quiet.py CAPTURED record for it whose command_argv
     token-matches <cmd>; the latest must exit 0.
 
 Writes:
@@ -919,7 +934,7 @@ Writes:
      {"<path>": "<sha256>"}, "verdict": "PASS|FAIL|ERROR", "exit", "prev",
      "self"}. --reopen adds "action": "reopen", the evidence path, its
     sha256 and the reason, and leaves the original close record in place.
-    Best-effort: a ledger that cannot be written never changes the verdict.
+    Best-effort: an unwritable ledger never changes the verdict.
 
 Problem codes:
   milestone_not_found   no heading matches --milestone / --reopen
@@ -951,13 +966,13 @@ JSON keys:
 Exit codes:
   0  the marker was appended (or, under --reopen, removed)
   1  a refusal -- any problem code above
-  2  missing --plan, missing --milestone/--reopen, an unreadable plan, no
+  2  missing --plan or --milestone/--reopen, an unreadable plan, no
      milestone headings, --require-gates or --require-exit-capture with no
      --ledger, --reopen without --evidence / --reason / --ledger, --reopen
      beside --require-commit or --require-game-tape, or a git failure
 
 Self-test:
-  python mark_milestone.py --self-test   (55 cases)
+  python mark_milestone.py --self-test   (61 cases)
 """
 
 
@@ -1776,6 +1791,101 @@ def run_self_test():
             r = build_report(self._args(ledger=str(self.ledger),
                                         require_exit_capture=True))
             self.assertIn("no_exit_criterion", self._codes(r))
+
+        def test_a_line_mentioning_the_phrase_is_not_a_criterion(self):
+            """2026-10-20 milestone-criterion-mention: a RUNTIME PROBE
+            justification that refers to the criterion is not one."""
+            self.EXIT_PLAN = self.EXIT_PLAN.replace(
+                "expect `3 passing`",
+                "expect `3 passing`\n- RUNTIME PROBE: justification: the "
+                "RUNTIME EXIT CRITERION command above reads its exit code.")
+            self._capture(["npm", "test", "--", "--grep", "orders"])
+            r = self._exit()
+            self.assertEqual(r["result"], "PASS", r["problems"])
+            self.assertEqual(r["exit_criteria"],
+                             ["npm test -- --grep orders"])
+
+        def test_anchored_criterion_forms_are_criteria(self):
+            for line in ("- [ ] RUNTIME EXIT CRITERION — run `a b`",
+                         "- [x] RUNTIME EXIT CRITERION — run `a b`",
+                         "- RUNTIME EXIT CRITERION run `a b`",
+                         "* **RUNTIME EXIT CRITERION** — run `a b`",
+                         "**RUNTIME EXIT CRITERION** — run `a b`",
+                         "1. RUNTIME EXIT CRITERION — run `a b`",
+                         "2) runtime exit criterion — run `a b`",
+                         "RUNTIME EXIT CRITERION — run `a b`",
+                         # off-anchor forms that name a command stay enforced
+                         "Run the RUNTIME EXIT CRITERION — run `a b`",
+                         "> RUNTIME EXIT CRITERION — run `a b`",
+                         "### RUNTIME EXIT CRITERION — run `a b`",
+                         "- *RUNTIME EXIT CRITERION* — run `a b`",
+                         "- _RUNTIME EXIT CRITERION_ — run `a b`",
+                         "- __RUNTIME EXIT CRITERION__ — run `a b`",
+                         "– RUNTIME EXIT CRITERION — run `a b`",
+                         "• RUNTIME EXIT CRITERION — run `a b`",
+                         "- **[ ] RUNTIME EXIT CRITERION — run `a b`**",
+                         "- [ ]RUNTIME EXIT CRITERION — run `a b`",
+                         "-RUNTIME EXIT CRITERION — run `a b`",
+                         "| RUNTIME EXIT CRITERION — run `a b` | x |"):
+                lines = [("## Milestone 1: X", ""), (line, "")]
+                self.assertEqual(milestone_exit_criteria(lines, 0),
+                                 [(line, "a b")], line)
+            # only non-word characters before the phrase and no parseable
+            # command: a criterion that fails closed (unparseable)
+            for line in ("- `RUNTIME EXIT CRITERION` — run `a b`",
+                         "> RUNTIME EXIT CRITERION: `npm test`",
+                         "### RUNTIME EXIT CRITERION: `a b`",
+                         "| RUNTIME EXIT CRITERION | `a b` |",
+                         "- **`RUNTIME EXIT CRITERION`** — run `a b`",
+                         "- [x] RUNTIME EXIT CRITERION — tbd",
+                         "- [X] RUNTIME EXIT CRITERION",
+                         "- [ ] RUNTIME EXIT CRITERION",
+                         "1. RUNTIME EXIT CRITERION — tbd",
+                         "2) RUNTIME EXIT CRITERION"):
+                self.assertEqual(
+                    milestone_exit_criteria([("## Milestone 1: X", ""),
+                                             (line, "")], 0),
+                    [(line, None)], line)
+            for line in ("- RUNTIME PROBE: see the RUNTIME EXIT CRITERION",
+                         "- RUNTIME PROBE: justification: the RUNTIME EXIT "
+                         "CRITERION command above reads its exit code.",
+                         "> the RUNTIME EXIT CRITERION above reads exit",
+                         # `_` is a word character outside the allowed
+                         # prefix: with no command it is not a criterion
+                         "- _RUNTIME EXIT CRITERION_ — tbd"):
+                lines = [("## Milestone 1: X", ""), (line, "")]
+                self.assertEqual(milestone_exit_criteria(lines, 0), [], line)
+
+        def test_off_anchor_criterion_beside_a_captured_one_refuses(self):
+            """Luna F-1: a quoted criterion is never skipped just because
+            the block also has a grammar-form one that was captured."""
+            self.EXIT_PLAN = self.EXIT_PLAN.replace(
+                "expect `3 passing`",
+                "expect `3 passing`\n> RUNTIME EXIT CRITERION — run "
+                "`pytest -k other`")
+            self._capture(["npm", "test", "--", "--grep", "orders"])
+            r = self._exit()
+            self.assertIn("exit_criterion_not_run", self._codes(r))
+            self.assertEqual(r["exit_criteria"],
+                             ["npm test -- --grep orders", "pytest -k other"])
+
+        def test_commandless_quoted_criterion_beside_captured_refuses(self):
+            """Luna R2-F1: a `>` criterion with no command is never skipped
+            because the block also has a captured grammar-form one."""
+            self.EXIT_PLAN = self.EXIT_PLAN.replace(
+                "expect `3 passing`",
+                "expect `3 passing`\n> RUNTIME EXIT CRITERION: `npm test`")
+            self._capture(["npm", "test", "--", "--grep", "orders"])
+            self.assertIn("exit_criterion_unparseable",
+                          self._codes(self._exit()))
+
+        def test_anchored_criterion_without_command_is_unparseable(self):
+            self.EXIT_PLAN = self.EXIT_PLAN.replace(
+                "expect `3 passing`",
+                "expect `3 passing`\n- [ ] RUNTIME EXIT CRITERION — tbd")
+            self._capture(["npm", "test", "--", "--grep", "orders"])
+            self.assertIn("exit_criterion_unparseable",
+                          self._codes(self._exit()))
 
         def test_require_exit_capture_without_ledger_is_exit_2(self):
             import contextlib

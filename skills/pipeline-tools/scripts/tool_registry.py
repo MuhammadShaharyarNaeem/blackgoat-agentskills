@@ -86,7 +86,7 @@ Self-test:
 
 KINDS = ("gate", "writer", "detector", "lint", "driver", "hook")
 RUNNERS = ("orchestrator", "self-gating", "either")
-EXCEPTED_SCRIPTS = ("test_check_coverage.py",)
+EXCEPTED_SCRIPTS = ("test_check_coverage.py", "test_check_coverage_exit_criterion.py", "test_check_coverage_status_tokens.py")
 MAX_DESCRIPTION_WORDS = 25
 MAX_HELP_WORDS = 700
 MANDATORY_HEADINGS = ("Exit codes:", "Self-test:")

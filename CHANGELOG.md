@@ -5,6 +5,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.13.2] — 2026-10-21
+
+### Fixed
+- **`guard_action.py` no longer refuses a heredoc that only mentions git.** Rule 1 scanned the whole Bash command, heredoc bodies included, so writing a file whose text mentions a merge or commit was denied as a hand git command. A heredoc body is now skipped only when its receiver is a plain `cat`, `tee` or python-family command on a single simple-command line at depth zero. Any other shape, or any parse doubt, scans the whole command, so a real git command chained or piped out of the heredoc is still refused.
+- **`check_handoff.py` verifies git-ignored `<changed_files>` paths by mtime.** A path git reports as ignored (this repo's `/.docs/`) never appeared in diff + untracked, so it always failed `changed_files_not_in_diff`. It is now checked by mtime against the `--transcript` launch instant, like a non-git root; with no launch instant the gate exits 2 naming `--transcript`. `--since <ISO>` in a git tree stays refused.
+- **`check_handoff.py` no longer blames a verifier's `none:` for the builder's uncommitted edits.** In a git tree, `none:` is checked only against files modified at or after the delegation's launch instant (from `--transcript`); a `SendMessage` resume counts as a relaunch only after that agent has returned. Deletions, unreadable paths and runs without a launch instant stay counted (fail-safe).
+- **`mark_milestone.py --require-exit-capture`: a line that only mentions RUNTIME EXIT CRITERION is not a criterion.** A `RUNTIME PROBE` justification referring to "the RUNTIME EXIT CRITERION command above" was refused as `exit_criterion_unparseable`. A line is now a criterion when it carries a parseable run `` `<cmd>` ``, or when only non-word characters, list numbers or checkbox marks precede the phrase.
+- **`check_coverage.py --plan` lints exit-criterion grammar at plan time.** The plan gate never read RUNTIME EXIT CRITERION lines, so a command `mark_milestone.py` could not parse passed planning and was refused only after the milestone's commit. Every exit-criterion line with no parseable run `` `<cmd>` `` now fails as a runtime-criterion lint, using detection copied byte-identically from `mark_milestone.py`.
+- **`check_coverage.py` test mode: a status word inside a filename is not a status.** The "fail" in a cited capture such as `m3-exit-fail.md` read as FAIL, so the PASS line was counted uncovered. FAIL/FAILED, BLOCKED and PASS/PASSED now count only as standalone words: joined to a name by `-`, `_`, `/` or `\`, or followed by `.<word char>`, they are part of the name. A status inside backticks still counts.
+
+### Changed
+- `base-persona.md` § Evidence Integrity: an enumeration in a verdict path lists what may pass, never what must be stopped. A brief that asks for a denylist in verdict-producing code is flagged, not implemented.
+- `/bgpdd-bugfix` Phase 2 and `rca-template.md`: when a root-cause file produces a verdict, `## Fix shape` carries `- Fail direction: closed — <the shapes permitted to pass>`. No gate reads it (deliberately prose, convention #8); it settles the direction at RCA time instead of at review.
+- `orchestrator-contract.md` §3: a reply drafted for the user to send never claims an action the user took.
+- `CLAUDE.md`: bugs in this repository run one at a time in the main checkout on one branch, with no `/bgpdd-bugfix-batch` and no git worktree.
+- `check_coverage.py --self-test` discovers `test_check_coverage_exit_criterion.py` and `test_check_coverage_status_tokens.py`; `tool_registry.py` excepts both from the contract check.
+
+### Known limitations
+- A criterion line with a word before the phrase and no `run` is now invisible to both gates.
+- A FAIL joined by `-` in a PASS line's prose is now ignored.
+
 ## [2.13.1] — 2026-10-21
 
 ### Fixed
